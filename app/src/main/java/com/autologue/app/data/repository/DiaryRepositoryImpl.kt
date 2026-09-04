@@ -1,0 +1,116 @@
+package com.autologue.app.data.repository
+
+import com.autologue.app.data.local.db.dao.DiaryDao
+import com.autologue.app.data.local.entity.DiaryEntryEntity
+import com.autologue.app.domain.model.DiaryEntry
+import com.autologue.app.domain.model.PlaceCluster
+import com.autologue.app.domain.repository.DiaryRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.ZoneId
+import javax.inject.Inject
+
+class DiaryRepositoryImpl @Inject constructor(
+    private val diaryDao: DiaryDao
+) : DiaryRepository {
+
+    override fun getDiaryEntriesFlow(): Flow<List<DiaryEntry>> {
+        return diaryDao.getAllEntries().map { entities -> entities.map { it.toDomain() } }
+    }
+
+    override fun getDiaryEntriesByDateRange(startDate: LocalDate, endDate: LocalDate): Flow<List<DiaryEntry>> {
+        val startEpoch = startDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val endEpoch = endDate.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        return diaryDao.getEntriesByDateRange(startEpoch, endEpoch).map { entities -> entities.map { it.toDomain() } }
+    }
+
+    override suspend fun getDiaryEntryById(id: Long): DiaryEntry? = withContext(Dispatchers.IO) {
+        diaryDao.getEntryById(id)?.toDomain()
+    }
+
+    override suspend fun insertDiaryEntry(entry: DiaryEntry): Long = withContext(Dispatchers.IO) {
+        val date = entry.date.toLocalDate()
+        val startDateTime = date.atStartOfDay()
+        val endDateTime = date.atTime(23, 59, 59, 999999999)
+
+        val existing = diaryDao.getEntryByDateRangeSingle(startDateTime, endDateTime)
+        if (existing != null) {
+            val isUserCustomTitle = !existing.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) && existing.title.isNotBlank()
+            val merged = existing.copy(
+                title = if (isUserCustomTitle) existing.title else entry.title,
+                summary = if (existing.summary.isNotBlank()) existing.summary else entry.summary,
+                placeName = entry.placeName ?: existing.placeName,
+                address = entry.address ?: existing.address,
+                latitude = entry.latitude ?: existing.latitude,
+                longitude = entry.longitude ?: existing.longitude,
+                photoUris = (existing.photoUris + entry.photoUris).distinct(),
+                totalExpense = entry.totalExpense,
+                drivingDistanceKm = if (entry.drivingDistanceKm > 0) entry.drivingDistanceKm else existing.drivingDistanceKm,
+                hasGolfRound = entry.hasGolfRound || existing.hasGolfRound,
+                tags = (existing.tags + entry.tags).distinct(),
+                routeSteps = entry.routeSteps.ifEmpty { existing.routeSteps },
+                movementSummary = entry.movementSummary ?: existing.movementSummary
+            )
+            diaryDao.updateEntry(merged)
+            return@withContext existing.id
+        }
+        diaryDao.insertEntry(entry.toEntity())
+    }
+
+    override suspend fun updateDiaryEntry(entry: DiaryEntry) = withContext(Dispatchers.IO) {
+        diaryDao.updateEntry(entry.toEntity())
+    }
+
+    override suspend fun deleteDiaryEntry(id: Long) = withContext(Dispatchers.IO) {
+        diaryDao.deleteEntryById(id)
+    }
+
+    override suspend fun cleanDuplicates(): Int = withContext(Dispatchers.IO) {
+        val all = diaryDao.getAllEntriesSync()
+        val seen = mutableSetOf<LocalDate>()
+        var deletedCount = 0
+        for (entry in all) {
+            val d = entry.date.toLocalDate()
+            if (d in seen) {
+                diaryDao.deleteEntryById(entry.id)
+                deletedCount++
+            } else {
+                seen.add(d)
+            }
+        }
+        deletedCount
+    }
+
+    override suspend fun generateClustersForDate(date: LocalDate): List<PlaceCluster> = withContext(Dispatchers.IO) {
+        listOf(
+            PlaceCluster(
+                placeName = "오피스 허브",
+                address = "서울특별시 강남구 테헤란로",
+                latitude = 37.5000,
+                longitude = 127.0365,
+                startTime = date.atTime(9, 0),
+                endTime = date.atTime(18, 0),
+                photoUris = emptyList()
+            )
+        )
+    }
+
+    private fun DiaryEntryEntity.toDomain() = DiaryEntry(
+        id = id, date = date, title = title, summary = summary,
+        placeName = placeName, address = address, latitude = latitude, longitude = longitude,
+        photoUris = photoUris, totalExpense = totalExpense, drivingDistanceKm = drivingDistanceKm,
+        hasGolfRound = hasGolfRound, tags = tags,
+        routeSteps = routeSteps, movementSummary = movementSummary
+    )
+
+    private fun DiaryEntry.toEntity() = DiaryEntryEntity(
+        id = id, date = date, title = title, summary = summary,
+        placeName = placeName, address = address, latitude = latitude, longitude = longitude,
+        photoUris = photoUris, totalExpense = totalExpense, drivingDistanceKm = drivingDistanceKm,
+        hasGolfRound = hasGolfRound, tags = tags,
+        routeSteps = routeSteps, movementSummary = movementSummary
+    )
+}
