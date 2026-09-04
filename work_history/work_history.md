@@ -100,7 +100,42 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 
 ---
 
-## 5. 변경 파일 목록 (Key Source Files)
+## 6. 실 모바일(독립 스마트폰) 크래시 방지 및 동기화 UX 개선 (2026-09-04)
+
+### 6.1. 무증상 강제 종료(크래시) 원인 분석 및 근본 해결
+- **문제점**: 실 모바일 기기에 설치 후 탭 이동 시 별도 에러 메시지 없이 앱이 즉시 강제 종료되는 현상 발생.
+- **원인 규명**:
+  1. `MainActivity.kt`에서 앱 구동 시 `scanHistoricalPhotos(daysBack = null)`로 사용자 기기의 수천 장의 사진을 무제한으로 스캔하고 백그라운드에서 ML Kit OCR을 동시 실행함.
+  2. 비트맵 메모리가 급격히 고갈(OOM)되어 Android OS의 **Low Memory Killer(LMK)가 프로세스를 SIGKILL로 무경고 즉시 종료**시킴.
+  3. `GolfViewModel.kt`에서 Flow `collectLatest` 블록 내부에서 DB insert를 호출하여 재진입 무한루프 및 스레드/메모리 누수 발생.
+  4. Hilt와 WorkManager의 기본 `WorkManagerInitializer` 간의 프로바이더 초기화 충돌.
+- **조치 사항**:
+  1. `MainActivity.kt`: 무제한 사진 스캔/OCR 코드를 전면 제거하고 안전한 기간 한정 동기화(`SyncHistoricalDataUseCase`)로 대체.
+  2. `HistoricalDataImporter.kt`: SMS 및 사진 스캔 시 기본 `daysBack = 7`, `limit = 40`으로 안전 상한선 적용.
+  3. `SyncHistoricalDataUseCase.kt`: OCR 분석 후보 사진을 최대 10장(`take(10)`)으로 제한하여 메모리 스파이크 차단.
+  4. `GolfViewModel.kt`: 초기 샘플 라운드 주입을 `seedSampleRoundIfNeeded()`로 1회 격리 분리하여 재귀 루프 차단.
+  5. `AutoLogueApp.kt`: PC와 USB(adb)로 연결되지 않은 독립 스마트폰 환경에서도 비정상 종료 시 앱 내부 파일(`crash_log.txt`)에 스택트레이스를 영구 기록하는 `setupGlobalCrashHandler()` 탑재.
+  6. `AndroidManifest.xml`: `tools:node="remove"`로 충돌을 일으키던 기본 WorkManager 초기화자 안전 제거.
+
+### 6.2. 앱 구동 시 7일 자동 수집 시각화 (로딩 애니메이션 배너)
+- `DiaryViewModel.kt`:
+  - `DiaryUiState`에 `isAutoSyncing`, `autoSyncStage` 필드 추가.
+  - `autoSyncRecentWeek(context)` 호출 시 실시간 동기화 단계(문자 분석, 사진 위치 색인 등)를 Flow로 방출.
+- `DiaryScreen.kt`:
+  - 상단에 실시간 원형 프로그레스 인디케이터와 상태 메시지를 표시하는 `SyncingBannerCard` 탑재.
+  - 동기화 진행 중 사용자가 백그라운드 작업을 직관적으로 인지할 수 있도록 개선.
+
+### 6.3. 과거 기록 수동 동기화 UI 및 기간 선택 다이얼로그 추가
+- 상단바 동기화 아이콘(`Icons.Default.Sync`) 및 타임라인 빈 화면(Empty State) 버튼 클릭 시 `ManualSyncPeriodDialog` 표출.
+- 동기화 기간 선택 옵션 제공:
+  - **최근 7일** (추천 · 빠르고 안전한 일상 복원)
+  - **최근 14일** (2주치 일상 및 지출 복원)
+  - **최근 30일** (최대 1달치 활동 분석)
+- 선택된 기간에 맞춰 안전 상한선 내에서 결제 내역과 사진 위치를 정밀 동기화.
+
+---
+
+## 7. 변경 파일 목록 (Key Source Files)
 
 | 경로 | 역할 및 변경 내용 |
 | :--- | :--- |
@@ -110,12 +145,20 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 | `app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt` | [수정] 중복 데이터/쓰레기 레코드 삭제, 평일 가짜 골프장 출퇴근 복구 |
 | `app/src/main/java/com/autologue/app/data/ocr/GolfLockerSlipOcrAnalyzer.kt` | [수정] 단어 단위 정규식 도입으로 영문 포함 일반 사진 오탐 차단 |
 | `app/src/main/java/com/autologue/app/domain/usecase/golf/ProcessGolfLockerSlipUseCase.kt` | [수정] 140km 획일적 기본값 제거, 골프장 검증 시에만 1회 주행 기록 생성 |
+| `app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt` | [수정] `SyncingBannerCard` 로딩 애니메이션, `ManualSyncPeriodDialog` 추가 |
+| `app/src/main/java/com/autologue/app/presentation/diary/DiaryViewModel.kt` | [수정] `isAutoSyncing`, `isManualSyncDialogOpen`, 수동 동기화 기간 파라미터화 |
+| `app/src/main/java/com/autologue/app/data/sync/HistoricalDataImporter.kt` | [수정] 무제한 스캔 방지, daysBack 및 take 상한선 적용 |
+| `app/src/main/java/com/autologue/app/domain/usecase/sync/SyncHistoricalDataUseCase.kt` | [수정] OCR 분석 대상 take(10) 메모리 보호 상한선 적용 |
+| `app/src/main/java/com/autologue/app/presentation/golf/GolfViewModel.kt` | [수정] Flow collect 재진입 무한루프 분리 및 Flow `first()` import 추가 |
+| `app/src/main/java/com/autologue/app/AutoLogueApp.kt` | [수정] 독립 스마트폰 디버깅용 파일 기반 전역 CrashHandler 탑재 |
+| `app/src/main/AndroidManifest.xml` | [수정] WorkManagerInitializer 충돌 방지 노드 설정 |
 | `settings.gradle.kts` | [수정] `rootProject.name = "lifeLog"` 명명 |
-| `work_history/work_history.md` | [신규] 전체 작업 히스토리 및 기술 사양 기록 |
+| `work_history/work_history.md` | [수정] 전체 작업 히스토리 및 기술 사양 기록 |
 
 ---
 
-## 6. 향후 계획 (Next Steps)
-1. 실기기(Galaxy 디바이스) 연동 지속 테스트 및 백그라운드 워커 동기화 점검
-2. 골프장 스코어카드 핸디캡 자동 계산 및 친구 공유 기능 고도화
-3. 국세청 차량 운행기록부 표준 양식(Excel) 내보내기 기능 추가
+## 8. 빌드 및 배포 검증 결과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 34s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+

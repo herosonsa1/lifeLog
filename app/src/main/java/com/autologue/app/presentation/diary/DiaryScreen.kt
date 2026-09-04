@@ -132,7 +132,7 @@ fun DiaryScreen(
         }
 
         if (smsGranted || photoGranted) {
-            viewModel.triggerHistoricalSync(context)
+            viewModel.openManualSyncDialog()
         } else {
             Toast.makeText(context, "과거 기록을 불러오려면 권한 허용이 필요합니다.", Toast.LENGTH_LONG).show()
         }
@@ -143,7 +143,7 @@ fun DiaryScreen(
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
         if (allGranted) {
-            viewModel.triggerHistoricalSync(context)
+            viewModel.openManualSyncDialog()
         } else {
             permissionLauncher.launch(permissionsToRequest)
         }
@@ -249,6 +249,11 @@ fun DiaryScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Real-time Auto/Manual Syncing Banner
+            if (uiState.isAutoSyncing) {
+                SyncingBannerCard(stage = uiState.autoSyncStage)
+            }
+
             // Contextual Notification Listener Bar
             if (!isNotificationEnabled) {
                 Row(
@@ -465,6 +470,16 @@ fun DiaryScreen(
                 },
                 containerColor = AppColors.surface,
                 shape = AppShapes.modal
+            )
+        }
+
+        // Manual Sync Period Dialog
+        if (uiState.isManualSyncDialogOpen) {
+            ManualSyncPeriodDialog(
+                onDismiss = { viewModel.closeManualSyncDialog() },
+                onConfirm = { days ->
+                    viewModel.executeManualSync(daysBack = days, context = context)
+                }
             )
         }
 
@@ -1323,3 +1338,134 @@ fun SyncProgressDialog(
         shape = AppShapes.modal
     )
 }
+
+@Composable
+fun SyncingBannerCard(
+    stage: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = AppColors.surfaceVariant,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = AppColors.primary
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "일상 기록 동기화 중...",
+                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
+                )
+                Text(
+                    text = stage.ifBlank { "데이터를 분석하고 있습니다..." },
+                    style = AppTypography.captionMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+    HairlineDivider()
+}
+
+@Composable
+fun ManualSyncPeriodDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit
+) {
+    var selectedDays by remember { mutableStateOf(7) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "과거 기록 동기화",
+                style = AppTypography.h2
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Text(
+                    text = "결제 문자(SMS) 및 사진 위치 정보를 분석하여 타임라인과 이동 경로를 복원합니다.\n동기화할 기간을 선택하세요.",
+                    style = AppTypography.bodySecondary
+                )
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    val periods = listOf(
+                        7 to "최근 7일 (추천 · 빠르고 안전)",
+                        14 to "최근 14일 (2주치 일상 복원)",
+                        30 to "최근 30일 (최대 1달치 분석)"
+                    )
+
+                    periods.forEach { (days, label) ->
+                        val isSelected = selectedDays == days
+                        Surface(
+                            shape = AppShapes.card,
+                            color = if (isSelected) AppColors.primary.copy(alpha = 0.08f) else AppColors.surface,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isSelected) AppColors.primary else AppColors.border
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedDays = days }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { selectedDays = days },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = AppColors.primary,
+                                        unselectedColor = AppColors.secondary
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(Spacing.xs))
+                                Text(
+                                    text = label,
+                                    style = AppTypography.body.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) AppColors.primary else AppColors.textPrimary
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(selectedDays) },
+                colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary, contentColor = PureWhite),
+                shape = AppShapes.button
+            ) {
+                Text("동기화 시작", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("취소", fontSize = 12.sp, color = AppColors.secondary)
+            }
+        },
+        containerColor = AppColors.surface,
+        shape = AppShapes.modal
+    )
+}
+

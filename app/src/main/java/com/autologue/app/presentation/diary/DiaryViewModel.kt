@@ -50,6 +50,9 @@ data class DiaryUiState(
     val monthlyCalendarData: MonthlySummary? = null,
     val isSyncDialogVisible: Boolean = false,
     val syncProgress: SyncProgress? = null,
+    val isAutoSyncing: Boolean = false,
+    val autoSyncStage: String = "",
+    val isManualSyncDialogOpen: Boolean = false,
     val isExportingExcel: Boolean = false,
     val exportResult: ExportResult? = null,
     val selectedDiaryDetail: DiaryEntry? = null,
@@ -377,7 +380,38 @@ class DiaryViewModel @Inject constructor(
         if (hasAutoSynced && !force) return
         hasAutoSynced = true
         viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(
+                isAutoSyncing = true,
+                autoSyncStage = "최근 7일 일상 기록(결제 문자 & 사진) 동기화 시작..."
+            )
             syncHistoricalDataUseCase(context, daysBack = 7).collect { progress ->
+                _uiState.value = _uiState.value.copy(
+                    isAutoSyncing = !progress.isDone,
+                    autoSyncStage = progress.stage,
+                    syncProgress = progress
+                )
+                if (progress.isDone) {
+                    updateFilteredEntries()
+                    loadMonthlyCalendar(_uiState.value.currentYearMonth)
+                }
+            }
+        }
+    }
+
+    fun openManualSyncDialog() {
+        _uiState.value = _uiState.value.copy(isManualSyncDialogOpen = true)
+    }
+
+    fun closeManualSyncDialog() {
+        _uiState.value = _uiState.value.copy(isManualSyncDialogOpen = false)
+    }
+
+    fun executeManualSync(daysBack: Int, context: Context) {
+        closeManualSyncDialog()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(isSyncDialogVisible = true)
+            syncHistoricalDataUseCase(context, daysBack = daysBack).collect { progress ->
+                _uiState.value = _uiState.value.copy(syncProgress = progress)
                 if (progress.isDone) {
                     updateFilteredEntries()
                     loadMonthlyCalendar(_uiState.value.currentYearMonth)
@@ -387,12 +421,7 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun triggerHistoricalSync(context: Context) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSyncDialogVisible = true)
-            syncHistoricalDataUseCase(context).collect { progress ->
-                _uiState.value = _uiState.value.copy(syncProgress = progress)
-            }
-        }
+        executeManualSync(daysBack = 7, context = context)
     }
 
     fun dismissSyncDialog() {

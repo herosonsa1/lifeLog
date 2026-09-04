@@ -121,18 +121,6 @@ class MainActivity : ComponentActivity() {
                 val allTxs = transactionRepository.getAllTransactionsFlow().first()
                 val syncedCount = vehicleRepository.syncRefuelingFromTransactions(allTxs)
                 Log.d("AUTOLOGUE_INIT", "Synced $syncedCount refueling logs to car ledger")
-
-                // 2. Scan photos via MediaStore ContentResolver
-                val photos = historicalDataImporter.scanHistoricalPhotos(this@MainActivity, daysBack = null)
-                Log.d("AUTOLOGUE_INIT", "Found ${photos.size} photos in MediaStore")
-                for (photo in photos) {
-                    val uri = Uri.parse(photo.uri)
-                    val result = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(uri, fallbackDate = photo.time.toLocalDate())
-                    Log.d("AUTOLOGUE_INIT", "OCR Result for ${photo.uri}: isSlip=${result.isLockerSlip}, club=${result.clubName}, locker=${result.lockerNumber}")
-                    if (result.isLockerSlip) {
-                        processGolfLockerSlipUseCase(result, photo.uri)
-                    }
-                }
             } catch (e: Exception) {
                 Log.e("AUTOLOGUE_INIT", "Error during syncInitialData", e)
             }

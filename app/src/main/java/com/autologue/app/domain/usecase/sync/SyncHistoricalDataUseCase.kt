@@ -60,20 +60,20 @@ class SyncHistoricalDataUseCase @Inject constructor(
         val photos = importer.scanHistoricalPhotos(context, daysBack = daysBack)
         val photoCount = photos.size
 
-        // 라커룸 안내지 사진 자동 OCR 감지 및 전역 적재
-        for (photo in photos) {
-            val isGolfCandidate = photo.uri.contains("Golf", ignoreCase = true) ||
-                photo.uri.contains("locker", ignoreCase = true) ||
-                (photo.placeName ?: "").contains("골프") ||
-                photo.tags.any { it.contains("골프") }
+        // 라커룸 안내지 사진 자동 OCR 감지 및 전역 적재 (최대 10장 제한으로 과부하 방지)
+        val golfCandidates = photos.filter { photo ->
+            photo.uri.contains("Golf", ignoreCase = true) ||
+            photo.uri.contains("locker", ignoreCase = true) ||
+            (photo.placeName ?: "").contains("골프") ||
+            photo.tags.any { it.contains("골프") }
+        }.take(10)
 
-            if (isGolfCandidate) {
-                runCatching {
-                    val uri = android.net.Uri.parse(photo.uri)
-                    val slipResult = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(uri, fallbackDate = photo.time.toLocalDate())
-                    if (slipResult.isLockerSlip) {
-                        processGolfLockerSlipUseCase(slipResult, photo.uri)
-                    }
+        for (photo in golfCandidates) {
+            runCatching {
+                val uri = android.net.Uri.parse(photo.uri)
+                val slipResult = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(uri, fallbackDate = photo.time.toLocalDate())
+                if (slipResult.isLockerSlip) {
+                    processGolfLockerSlipUseCase(slipResult, photo.uri)
                 }
             }
         }

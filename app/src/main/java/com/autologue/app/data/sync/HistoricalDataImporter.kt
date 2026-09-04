@@ -24,7 +24,7 @@ class HistoricalDataImporter @Inject constructor(
     private val dailyRouteAggregator: DailyRouteAggregator
 ) {
 
-    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = null, limit: Int = 1000): List<Transaction> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 7, limit: Int = 300): List<Transaction> = withContext(Dispatchers.IO) {
         val result = mutableListOf<Transaction>()
         try {
             val projection = arrayOf(
@@ -37,12 +37,11 @@ class HistoricalDataImporter @Inject constructor(
             val uri = Uri.parse("content://sms")
             val sortOrder = "${Telephony.Sms.DATE} DESC"
 
-            val minDateMillis = if (daysBack != null && daysBack > 0) {
-                System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
-            } else null
+            val actualDays = daysBack ?: 7
+            val minDateMillis = System.currentTimeMillis() - (actualDays.toLong() * 24 * 60 * 60 * 1000L)
 
-            val selection = if (minDateMillis != null) "${Telephony.Sms.DATE} >= ?" else null
-            val selectionArgs = if (minDateMillis != null) arrayOf(minDateMillis.toString()) else null
+            val selection = "${Telephony.Sms.DATE} >= ?"
+            val selectionArgs = arrayOf(minDateMillis.toString())
 
             context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
                 val addressCol = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
@@ -74,7 +73,7 @@ class HistoricalDataImporter @Inject constructor(
         result
     }
 
-    suspend fun scanHistoricalPhotos(context: Context, daysBack: Int? = null, limit: Int = 1000): List<ScannedPhoto> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalPhotos(context: Context, daysBack: Int? = 7, limit: Int = 40): List<ScannedPhoto> = withContext(Dispatchers.IO) {
         val scanned = mutableListOf<ScannedPhoto>()
         try {
             val projection = arrayOf(
@@ -86,14 +85,10 @@ class HistoricalDataImporter @Inject constructor(
             val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
-            val minDateMillis = if (daysBack != null && daysBack > 0) {
-                System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
-            } else null
-
-            val selection = if (minDateMillis != null) {
-                val minDateSec = minDateMillis / 1000L
-                "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
-            } else null
+            val actualDays = daysBack ?: 7
+            val minDateMillis = System.currentTimeMillis() - (actualDays.toLong() * 24 * 60 * 60 * 1000L)
+            val minDateSec = minDateMillis / 1000L
+            val selection = "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
 
             context.contentResolver.query(uri, projection, selection, null, sortOrder)?.use { cursor ->
                 val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)

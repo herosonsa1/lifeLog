@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -69,7 +70,28 @@ class GolfViewModel @Inject constructor(
     val uiState: StateFlow<GolfUiState> = _uiState.asStateFlow()
 
     init {
+        seedSampleRoundIfNeeded()
         loadRounds()
+    }
+
+    private fun seedSampleRoundIfNeeded() {
+        viewModelScope.launch {
+            val list = golfRepository.getAllGolfRoundsFlow().first()
+            if (list.none { it.clubName == "아난티 코드 GC" }) {
+                val sampleUpcoming = GolfRound(
+                    clubName = "아난티 코드 GC",
+                    roundDate = LocalDateTime.of(2026, 9, 12, 7, 28),
+                    golfType = GolfType.FIELD,
+                    greenFeeExpense = 240000L,
+                    memo = "[코스: 잣나무 / 자작나무] 주말 친목 라운딩",
+                    startTime = LocalDateTime.of(2026, 9, 12, 7, 28),
+                    endTime = LocalDateTime.of(2026, 9, 12, 13, 0),
+                    companions = listOf("정성우", "김프로", "박대표"),
+                    totalScore = null
+                )
+                golfRepository.insertGolfRound(sampleUpcoming)
+            }
+        }
     }
 
     private fun loadRounds() {
@@ -83,21 +105,6 @@ class GolfViewModel @Inject constructor(
                 val updatedSelected = if (currentSelected != null) {
                     list.find { it.id == currentSelected.id } ?: currentSelected
                 } else null
-
-                if (list.none { it.clubName == "아난티 코드 GC" }) {
-                    val sampleUpcoming = GolfRound(
-                        clubName = "아난티 코드 GC",
-                        roundDate = LocalDateTime.of(2026, 9, 12, 7, 28),
-                        golfType = GolfType.FIELD,
-                        greenFeeExpense = 240000L,
-                        memo = "[코스: 잣나무 / 자작나무] 주말 친목 라운딩",
-                        startTime = LocalDateTime.of(2026, 9, 12, 7, 28),
-                        endTime = LocalDateTime.of(2026, 9, 12, 13, 0),
-                        companions = listOf("정성우", "김프로", "박대표"),
-                        totalScore = null
-                    )
-                    golfRepository.insertGolfRound(sampleUpcoming)
-                }
 
                 _uiState.value = _uiState.value.copy(
                     rounds = list,
