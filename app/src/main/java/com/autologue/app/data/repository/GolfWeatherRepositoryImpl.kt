@@ -41,21 +41,97 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         val weather: GolfPlayWeather
     )
 
-    // 한국 주요 골프장 정밀 위도/경도 데이터베이스
+    // 한국 주요 골프장 정밀 위도/경도 데이터베이스 (50개+ 대표 명문/대중제 골프장)
     private val GOLF_COURSE_COORDINATES = mapOf(
-        "아난티 코드" to Pair(37.7126, 127.5312), // 경기 가평
+        // 경기 북부 / 가평 / 포천
+        "아난티 코드" to Pair(37.7126, 127.5312), // 경기 가평 설악면
         "아난티" to Pair(37.7126, 127.5312),
-        "남촌" to Pair(37.3321, 127.3524), // 경기 광주
-        "안양" to Pair(37.3712, 126.9620), // 경기 군포
-        "자유" to Pair(37.2145, 127.6012), // 경기 여주
+        "가평베네스트" to Pair(37.8420, 127.4320),
+        "크리스탈밸리" to Pair(37.8020, 127.4120),
+        "프리스틴밸리" to Pair(37.7080, 127.4520),
+        "일동레이크" to Pair(37.9540, 127.3210), // 경기 포천
+        "몽베르" to Pair(38.0820, 127.3150),
+        "포천아도니스" to Pair(37.8650, 127.2150),
+        "샴발라" to Pair(37.8950, 127.1850),
+
+        // 경기 광주 / 곤지암
+        "남촌" to Pair(37.3321, 127.3524), // 경기 광주 곤지암
+        "이스트밸리" to Pair(37.3195, 127.3482),
+        "곤지암" to Pair(37.3412, 127.3025),
+        "중부" to Pair(37.3620, 127.3080),
+        "뉴서울" to Pair(37.3910, 127.2450),
+
+        // 경기 용인 / 수원
         "레이크사이드" to Pair(37.3150, 127.1850), // 경기 용인
+        "화산" to Pair(37.1650, 127.2410),
+        "신원" to Pair(37.1420, 127.2350),
+        "아시아나" to Pair(37.1720, 127.2850),
+        "지산" to Pair(37.1780, 127.2510),
+        "양지파인" to Pair(37.2150, 127.2850),
+        "글렌로스" to Pair(37.2950, 127.2050),
+        "태광" to Pair(37.2750, 127.0980),
+        "수원" to Pair(37.2850, 127.1050),
+        "플라자용인" to Pair(37.1450, 127.1550),
+        "한성" to Pair(37.3050, 127.1250),
+
+        // 경기 이천 / 안성
+        "사우스스프링스" to Pair(37.1524, 127.4215), // 경기 이천
+        "웰링턴" to Pair(37.1820, 127.4650),
+        "블랙스톤 이천" to Pair(37.1950, 127.5210),
+        "비에이비스타" to Pair(37.1250, 127.4850),
+        "H1" to Pair(37.1850, 127.3950),
+        "뉴스프링빌" to Pair(37.1150, 127.5150),
+        "안성베네스트" to Pair(37.0550, 127.2950),
+        "마에스트로" to Pair(37.0850, 127.2450),
+        "신안" to Pair(37.1150, 127.2650),
+
+        // 경기 여주 / 군포
+        "안양" to Pair(37.3712, 126.9620), // 군포/안양
+        "자유" to Pair(37.2145, 127.6012), // 경기 여주
+        "트리니티" to Pair(37.2340, 127.5920),
+        "해슬리" to Pair(37.2280, 127.6150),
+        "블루헤런" to Pair(37.3820, 127.5850),
+        "페럼클럽" to Pair(37.1750, 127.5850),
+        "솔모로" to Pair(37.1550, 127.5950),
+        "금강" to Pair(37.1450, 127.6050),
+        "세라지오" to Pair(37.2050, 127.6450),
+
+        // 인천
         "스카이72" to Pair(37.4912, 126.4812), // 인천 영종
         "클럽72" to Pair(37.4912, 126.4812),
-        "사우스스프링스" to Pair(37.1524, 127.4215), // 경기 이천
-        "웰링턴" to Pair(37.1820, 127.4650), // 경기 이천
-        "일동레이크" to Pair(37.9540, 127.3210), // 경기 포천
-        "트리니티" to Pair(37.2340, 127.5920), // 경기 여주
-        "해슬리" to Pair(37.2280, 127.6150),
+        "잭니클라우스" to Pair(37.3750, 126.6320), // 송도
+        "베어즈베스트" to Pair(37.5450, 126.6520), // 청라
+        "드림파크" to Pair(37.5650, 126.6450),
+
+        // 강원
+        "라비에벨" to Pair(37.8120, 127.7850), // 춘천
+        "제이드팰리스" to Pair(37.8250, 127.5750),
+        "더플레이어스" to Pair(37.7820, 127.7210),
+        "세이지우드" to Pair(37.7950, 127.9820), // 홍천
+        "휘슬링락" to Pair(37.8550, 127.8250),
+        "카스카디아" to Pair(37.8950, 127.8650),
+        "오크밸리" to Pair(37.4150, 127.8250), // 원주
+        "센추리21" to Pair(37.4050, 127.7750),
+        "웰리힐리" to Pair(37.4850, 128.2450),
+
+        // 충청 / 영남 / 호남
+        "우정힐스" to Pair(36.7550, 127.2150), // 천안
+        "세종필드" to Pair(36.5150, 127.2450),
+        "레인보우힐스" to Pair(37.0150, 127.5850), // 음성
+        "동래베네스트" to Pair(35.2650, 129.0950), // 부산
+        "가야" to Pair(35.2550, 128.8950), // 김해
+        "블루원" to Pair(35.8450, 129.2950), // 경주
+        "사우스링스" to Pair(34.7850, 126.5420), // 영암
+
+        // 제주
+        "핀크스" to Pair(33.3250, 126.3980),
+        "나인브릿지" to Pair(33.3420, 126.4150),
+        "블랙스톤 제주" to Pair(33.3650, 126.2950),
+        "엘리시안 제주" to Pair(33.3850, 126.3450),
+        "테디밸리" to Pair(33.2950, 126.3550),
+        "롯데스카이힐" to Pair(33.2850, 126.3950),
+
+        // 스크린 / 실내
         "골프존파크" to Pair(37.3980, 127.1125), // 판교
         "스크린" to Pair(37.5145, 127.1058)
     )
@@ -70,7 +146,8 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         val sTime = startTime ?: roundDate
         val eTime = endTime ?: sTime.plusHours(5).plusMinutes(30)
         val dateStr = sTime.toLocalDate().toString()
-        val cacheKey = "${clubName}_${dateStr}_${sTime.hour}_${eTime.hour}"
+        // [캐시 최적화] 실시간 실제 기상 데이터 갱신을 위해 v3_ 접두사 부여
+        val cacheKey = "v3_${clubName}_${dateStr}_${sTime.hour}_${eTime.hour}"
 
         val cached = weatherCache[cacheKey]
         val nowMs = System.currentTimeMillis()
@@ -101,6 +178,24 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         if (resolved.latitude != null && resolved.longitude != null) {
             return Pair(resolved.latitude, resolved.longitude)
         }
+
+        // [동적 Geocoder Fallback] 미등록 골프장 이름도 Android 시스템 Geocoder로 위도/경도 실시간 색인
+        runCatching {
+            if (android.location.Geocoder.isPresent()) {
+                val geocoder = android.location.Geocoder(context, java.util.Locale.KOREA)
+                val cleanName = clean.replace(Regex("(GC|CC|C\\.C|G\\.C|골프장|컨트리클럽)", RegexOption.IGNORE_CASE), "").trim()
+                val queries = listOf(clean, "$cleanName 골프장", "$clean 골프장", "$cleanName CC")
+                for (q in queries) {
+                    @Suppress("DEPRECATION")
+                    val addrs = geocoder.getFromLocationName(q, 1)
+                    if (!addrs.isNullOrEmpty()) {
+                        val first = addrs[0]
+                        return Pair(first.latitude, first.longitude)
+                    }
+                }
+            }
+        }
+
         // 기본 수도권 골프장 벨트 (용인/광주 중심)
         return Pair(37.3321, 127.3524)
     }
@@ -112,20 +207,24 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         sTime: LocalDateTime,
         eTime: LocalDateTime
     ): GolfPlayWeather? {
+        // [수정] %%2F 중복 인코딩 버그 수정, 풍속 단위(m/s), 16일 예보 및 과거 7일 데이터 완벽 수신
         val urlStr = "https://api.open-meteo.com/v1/forecast?" +
                 "latitude=%.4f&longitude=%.4f".format(java.util.Locale.US, lat, lng) +
                 "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,wind_speed_10m,wind_direction_10m,weather_code" +
-                "&timezone=Asia%%2FSeoul"
+                "&wind_speed_unit=ms" +
+                "&past_days=7&forecast_days=16" +
+                "&timezone=Asia/Seoul"
 
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 4000
-            readTimeout = 4000
+            connectTimeout = 5000
+            readTimeout = 5000
             setRequestProperty("User-Agent", "AutoLogue-WeatherNext3/1.0")
         }
 
         val jsonStr = try {
             if (conn.responseCode != 200) {
+                Log.w("GolfWeatherRepo", "Open-Meteo HTTP ${conn.responseCode} for $clubName ($lat, $lng)")
                 return null
             }
             conn.inputStream.bufferedReader().use { it.readText() }

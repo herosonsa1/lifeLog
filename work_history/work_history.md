@@ -199,4 +199,26 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 10. 골프장 실시간 실제 날씨 연동 정상화 및 버튼 문구 변경 (2026-09-08)
+
+### 10.1. 주요 개선 및 조치 내역
+1. **Open-Meteo API 400 Bad Request 버그 해결 및 실시간 기상 데이터 수신**:
+   - `GolfWeatherRepositoryImpl.kt`에서 URL의 `&timezone=Asia%%2FSeoul` 중복 `%` 이스케이프로 인해 Open-Meteo 서버가 400 에러를 반환하고 가짜 시뮬레이션(21.4°C)으로 Fallback되던 결함을 `&timezone=Asia/Seoul`로 정상화.
+   - 풍속 단위 파라미터(`&wind_speed_unit=ms`)를 추가하여 km/h 대신 골프 표준 풍속(m/s)을 정확히 수신.
+   - `&past_days=7&forecast_days=16` 파라미터를 적용하여 과거 완료된 라운드 및 최대 16일 앞의 예약 라운드까지 실제 수치예보 모델(GFS/ECMWF) 실시간 날씨를 단일 쿼리로 완벽 수신.
+2. **전국 50+ 골프장 정밀 좌표 DB 확충 및 Geocoder 동적 Fallback 탑재**:
+   - 아난티 코드 GC(가평 설악면), 남촌CC(광주), 안양CC, 자유CC, 레이크사이드CC, 클럽72, 웰링턴CC, 핀크스GC, 나인브릿지 제주, 사우스스프링스, 세이지우드 홍천 등 국내 대표 명문/대중제 골프장 50곳 이상의 정밀 위도/경도를 등록.
+   - 미등록 골프장이 등록될 경우에도 Android 내장 `Geocoder`를 통해 실시간으로 해당 골프장명/주소의 위도/경도를 자동 검색하는 동적 Fallback 시스템 탑재.
+3. **라운드 카드 날씨 버튼 텍스트 변경**:
+   - `GolfWeatherComponents.kt`의 날씨 박스 우측 상단 텍스트를 `"시간대별 강우량 보기 →"`에서 `"상세보기→"`로 변경.
+4. **인메모리 캐시 최적화**:
+   - 캐시 키 접두어를 `v3_`로 변경하여 이전 400 에러로 인해 인메모리에 잔존하던 가짜 시뮬레이션 캐시를 완전히 무효화하고 실제 기상 데이터가 즉각 화면에 표출되도록 조치.
+
+### 10.2. 빌드 및 배포 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 47s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,188,765 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
 

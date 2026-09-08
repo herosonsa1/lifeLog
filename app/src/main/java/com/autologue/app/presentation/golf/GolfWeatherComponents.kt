@@ -111,7 +111,7 @@ fun GolfWeatherSummaryBadge(
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "시간대별 강우량 보기 →",
+                        text = "상세보기→",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF2563EB)
