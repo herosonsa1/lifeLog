@@ -324,3 +324,29 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 45s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,207,433 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 15. 골프 예약 등록 티오프 시간 24시간 표기형식 직접 입력 전환 (2026-09-08)
+
+### 15.1. 사용자 핵심 요청 및 배경
+- 타임피커 다이얼로그(`TimePickerDialog`) 팝업에서 좁은 화면 해상도로 인해 '오전'/'오후' 라벨이 '오'/'오'로 세로로 찌그러지고 잘려 보이는 시각적 결함 발생(`media_1788833986230.png`).
+- 복잡하고 번거로운 시계 다이얼 대신, **24시간 표기형식(예: 07:30, 13:30)으로 직접 입력**하는 방식으로 변경 요청.
+
+### 15.2. 주요 개선 및 구현 내역
+1. **24시간 표기형식 직접 입력 필드 (`OutlinedTextField`) 도입**:
+   - `TimePickerDialog` 팝업을 완전히 제거하고, 시간 직접 입력 필드로 개편.
+   - 레이블: `"시간 (24시)"`, 플레이스홀더: `"07:30"`, 기본값: `"07:30"`.
+   - 숫자 키패드(`KeyboardType.Number`) 및 자동 콜론 포맷팅(예: `0730` 타이핑 시 자동으로 `07:30` 치환) 적용.
+2. **달력 피커와 시간 입력창의 완벽한 56dp 그리드 정렬**:
+   - 좌측: `[ 📅 예약 날짜: 9월 9일 (수) ]` 시스템 네이티브 `DatePickerDialog` 팝업 버튼 (`height(56.dp)`).
+   - 우측: `[ ⏰ 시간 (24시): 07:30 ]` 24시간 형식 직접 입력창.
+   - 두 컴포넌트의 높이(56dp)와 정렬을 완벽히 일치시켜 모던하고 단정한 UI 구축.
+3. **지능형 24시간 파싱 엔진 (`parse24HourTime`) 탑재**:
+   - `07:30`, `13:30`, `7:30`, `0730`, `1330` 등 다양한 입력 패턴을 안전하게 파싱하여 `LocalTime.of(hour, minute)`으로 변환.
+   - 예외 입력 방어 및 기본값(07:30) 폴백 보장.
+
+### 15.3. 빌드 및 배포 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 24s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,208,611 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`

@@ -1797,9 +1797,40 @@ fun AddGolfReservationDialog(
     var suggestions by remember { mutableStateOf<List<GolfCoursePreset>>(emptyList()) }
     var showSuggestions by remember { mutableStateOf(false) }
 
-    // 날짜 및 시간 선택 상태 (기본값: 내일 오전 7:30)
+    // 날짜 선택 상태 (기본값: 내일)
     var selectedDate by remember { mutableStateOf(LocalDate.now().plusDays(1)) }
-    var selectedTime by remember { mutableStateOf(LocalTime.of(7, 30)) }
+    // 24시간 표기형식 시간 직접 입력 상태 (기본값: "07:30")
+    var timeText by remember { mutableStateOf("07:30") }
+
+    fun parse24HourTime(input: String): LocalTime {
+        val clean = input.trim().replace(":", "")
+        return try {
+            when {
+                clean.length == 4 -> {
+                    val h = clean.substring(0, 2).toInt().coerceIn(0, 23)
+                    val m = clean.substring(2, 4).toInt().coerceIn(0, 59)
+                    LocalTime.of(h, m)
+                }
+                clean.length == 3 -> {
+                    val h = clean.substring(0, 1).toInt().coerceIn(0, 23)
+                    val m = clean.substring(1, 3).toInt().coerceIn(0, 59)
+                    LocalTime.of(h, m)
+                }
+                input.contains(":") -> {
+                    val parts = input.split(":")
+                    val h = parts[0].trim().toInt().coerceIn(0, 23)
+                    val m = parts.getOrNull(1)?.trim()?.toInt()?.coerceIn(0, 59) ?: 0
+                    LocalTime.of(h, m)
+                }
+                else -> {
+                    val h = clean.toIntOrNull()?.coerceIn(0, 23) ?: 7
+                    LocalTime.of(h, 30)
+                }
+            }
+        } catch (e: Exception) {
+            LocalTime.of(7, 30)
+        }
+    }
 
     // 구글 캘린더 스타일의 골프장 장소 실시간 검색 (프리셋 정규화 매칭 + Geocoder 폴백)
     LaunchedEffect(clubName) {
@@ -1888,18 +1919,6 @@ fun AddGolfReservationDialog(
             selectedDate.year,
             selectedDate.monthValue - 1,
             selectedDate.dayOfMonth
-        )
-    }
-
-    val timePickerDialog = remember {
-        android.app.TimePickerDialog(
-            context,
-            { _, h, min ->
-                selectedTime = LocalTime.of(h, min)
-            },
-            selectedTime.hour,
-            selectedTime.minute,
-            false
         )
     }
 
@@ -2146,11 +2165,12 @@ fun AddGolfReservationDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // 티오프 일시 (달력 및 시간 피커)
-                Text("티오프 일시 (달력/시간 선택)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF334155))
+                // 티오프 일시 (달력 날짜 선택 & 24시간 형식 시간 직접 입력)
+                Text("티오프 일시 (날짜 선택 / 24시간 형식 직접 입력)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF334155))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     // 날짜 선택 버튼 (달력 팝업)
                     Surface(
@@ -2158,10 +2178,12 @@ fun AddGolfReservationDialog(
                         shape = RoundedCornerShape(10.dp),
                         color = Color(0xFFF8FAFC),
                         border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
-                        modifier = Modifier.weight(1.2f)
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .height(56.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -2183,36 +2205,31 @@ fun AddGolfReservationDialog(
                         }
                     }
 
-                    // 시간 선택 버튼 (시간 팝업)
-                    Surface(
-                        onClick = { timePickerDialog.show() },
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFFF8FAFC),
-                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
-                        modifier = Modifier.weight(0.9f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 11.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                    // 시간 직접 입력 필드 (24시간 표기형식, 예: 07:30, 13:30)
+                    OutlinedTextField(
+                        value = timeText,
+                        onValueChange = { newVal ->
+                            val filtered = newVal.filter { it.isDigit() || it == ':' }.take(5)
+                            timeText = if (filtered.length == 4 && !filtered.contains(":")) {
+                                "${filtered.substring(0, 2)}:${filtered.substring(2, 4)}"
+                            } else {
+                                filtered
+                            }
+                        },
+                        label = { Text("시간 (24시)") },
+                        placeholder = { Text("07:30") },
+                        leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Schedule,
                                 contentDescription = null,
                                 tint = Color(0xFF2563EB),
                                 modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column {
-                                Text("티오프 시간", fontSize = 10.sp, color = Color(0xFF64748B))
-                                Text(
-                                    text = selectedTime.format(DateTimeFormatter.ofPattern("a h:mm", Locale.KOREA)),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A)
-                                )
-                            }
-                        }
-                    }
+                        },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(0.9f)
+                    )
                 }
 
                 OutlinedTextField(
@@ -2280,6 +2297,7 @@ fun AddGolfReservationDialog(
                     val finalLat = selectedLatitude ?: resolvedPreset?.latitude
                     val finalLng = selectedLongitude ?: resolvedPreset?.longitude
 
+                    val selectedTime = parse24HourTime(timeText)
                     val teeOff = LocalDateTime.of(selectedDate, selectedTime)
                     val comps = companionsText.split(",").map { it.trim() }.filter { it.isNotBlank() }
                     val fee = feeText.toLongOrNull() ?: 0L
