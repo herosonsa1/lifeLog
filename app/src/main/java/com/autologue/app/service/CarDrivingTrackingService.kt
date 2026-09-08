@@ -64,7 +64,9 @@ class CarDrivingTrackingService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var trackingJob: Job? = null
 
+    private val stateLock = Any()
     private var isTracking = false
+    private var isStopping = false
     private var activeVehicleId: String = "car_1"
     private var activeVehicleName: String = "차량"
     private var activeLicensePlate: String = ""
@@ -114,7 +116,11 @@ class CarDrivingTrackingService : Service() {
             val intent = Intent(context, CarDrivingTrackingService::class.java).apply {
                 action = ACTION_STOP_TRACKING
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: Throwable) {
+                Log.e(TAG, "stopTracking startService 실패", e)
+            }
         }
 
         /**
@@ -124,7 +130,11 @@ class CarDrivingTrackingService : Service() {
             val intent = Intent(context, CarDrivingTrackingService::class.java).apply {
                 action = ACTION_RECORD_POINT
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: Throwable) {
+                Log.e(TAG, "recordPoint startService 실패", e)
+            }
         }
     }
 
@@ -161,17 +171,23 @@ class CarDrivingTrackingService : Service() {
     }
 
     private fun startTrackingInternal(vehicleId: String, vehicleName: String, licensePlate: String) {
-        if (isTracking) {
-            Log.d(TAG, "이미 주행 추적 중입니다: $activeVehicleName")
-            return
+        synchronized(stateLock) {
+            if (isTracking) {
+                Log.d(TAG, "이미 주행 추적 중입니다: $activeVehicleName")
+                return
+            }
+            if (isStopping) {
+                Log.d(TAG, "이전 주행 종료 정리 중이므로 새로운 추적을 잠시 대기합니다.")
+                return
+            }
+            isTracking = true
+            isStopping = false
+            activeVehicleId = vehicleId
+            activeVehicleName = vehicleName
+            activeLicensePlate = licensePlate
+            startTimeMillis = System.currentTimeMillis()
+            waypoints.clear()
         }
-
-        isTracking = true
-        activeVehicleId = vehicleId
-        activeVehicleName = vehicleName
-        activeLicensePlate = licensePlate
-        startTimeMillis = System.currentTimeMillis()
-        waypoints.clear()
 
         // 1. 포그라운드 서비스 알림 등록 (Android 14+ 위치 타입 명시)
         val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
@@ -211,13 +227,27 @@ class CarDrivingTrackingService : Service() {
     }
 
     private fun stopTrackingInternal() {
-        if (!isTracking) {
-            Log.d(TAG, "추적 중이 아닙니다.")
-            stopSelf()
-            return
+        synchronized(stateLock) {
+            if (isStopping) {
+                Log.d(TAG, "이미 주행 종료 처리가 진행 중입니다. (중복 stop 명령 무시)")
+                return
+            }
+            if (!isTracking) {
+                Log.d(TAG, "추적 중이 아닙니다. 서비스 안전 종료")
+                serviceScope.launch(Dispatchers.Main) {
+                    try {
+                        ServiceCompat.stopForeground(this@CarDrivingTrackingService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "안전 종료 실패", e)
+                    }
+                }
+                return
+            }
+            isStopping = true
+            isTracking = false
         }
 
-        isTracking = false
         trackingJob?.cancel()
 
         serviceScope.launch {
@@ -226,7 +256,10 @@ class CarDrivingTrackingService : Service() {
                 captureCurrentWaypoint(isDeparture = false, isDestination = true)
 
                 // 2. 총 운행 시간 및 거리 산출
-                val durationMin = ((System.currentTimeMillis() - startTimeMillis) / 60000).coerceAtLeast(1)
+                val nowTime = System.currentTimeMillis()
+                val durationMin = if (startTimeMillis > 0L) {
+                    ((nowTime - startTimeMillis) / 60000).coerceAtLeast(1)
+                } else 1L
 
                 // 2분 미만의 초단기 연결 해제는 단순 시동 켬/끔으로 간주하여 무시
                 if (durationMin < 2 && waypoints.size <= 2) {
@@ -309,8 +342,20 @@ class CarDrivingTrackingService : Service() {
             } catch (t: Throwable) {
                 Log.e(TAG, "주행 종료 처리 중 오류", t)
             } finally {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                // [안정성 보장] 메인 UI 스레드로 전환하여 안전하게 서비스 포그라운드 해제 및 종료
+                withContext(Dispatchers.Main) {
+                    try {
+                        ServiceCompat.stopForeground(this@CarDrivingTrackingService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                        Log.d(TAG, "CarDrivingTrackingService 안전 정상 종료 완료")
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "서비스 stopSelf/stopForeground 중 오류", e)
+                    } finally {
+                        synchronized(stateLock) {
+                            isStopping = false
+                        }
+                    }
+                }
             }
         }
     }
@@ -330,11 +375,11 @@ class CarDrivingTrackingService : Service() {
                 return
             }
 
-            val config = userLocationPreferences.config.value
-            val homeLat = config.homeLat
-            val homeLng = config.homeLng
-            val compLat = config.companyLat
-            val compLng = config.companyLng
+            val config = runCatching { userLocationPreferences.config.value }.getOrNull()
+            val homeLat = config?.homeLat ?: 0.0
+            val homeLng = config?.homeLng ?: 0.0
+            val compLat = config?.companyLat ?: 0.0
+            val compLng = config?.companyLng ?: 0.0
 
             val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
             val vehicleTag = activeVehicleName.split(" ").firstOrNull() ?: activeVehicleName
@@ -353,11 +398,24 @@ class CarDrivingTrackingService : Service() {
                 val distComp = distanceMeter(compLat, compLng, wp.latitude, wp.longitude)
 
                 val (stepTitle, locName, tags) = when {
+                    validList.size == 1 -> {
+                        // 단 1개 지점만 수집된 경우
+                        val name = when {
+                            homeLat != 0.0 && distHome < 800 -> config?.homeName?.ifBlank { "우리집" } ?: "우리집"
+                            compLat != 0.0 && distComp < 800 -> config?.companyName?.ifBlank { "회사" } ?: "회사"
+                            else -> resolved.placeName.ifBlank { "주행 거점" }
+                        }
+                        Triple(
+                            "$brandEmoji [$activeVehicleName] 주행 기록 (단일 거점)",
+                            name,
+                            listOf("차량주행", "$brandEmoji $vehicleTag", "주행거점")
+                        )
+                    }
                     index == 0 -> {
                         // 출발 지점
                         val name = when {
-                            homeLat != 0.0 && distHome < 800 -> config.homeName.ifBlank { "우리집" }
-                            compLat != 0.0 && distComp < 800 -> config.companyName.ifBlank { "회사" }
+                            homeLat != 0.0 && distHome < 800 -> config?.homeName?.ifBlank { "우리집" } ?: "우리집"
+                            compLat != 0.0 && distComp < 800 -> config?.companyName?.ifBlank { "회사" } ?: "회사"
                             else -> resolved.placeName.ifBlank { "출발 지점" }
                         }
                         Triple(
@@ -369,8 +427,8 @@ class CarDrivingTrackingService : Service() {
                     index == validList.lastIndex -> {
                         // 최종 도착 지점
                         val name = when {
-                            compLat != 0.0 && distComp < 800 -> config.companyName.ifBlank { "회사" }
-                            homeLat != 0.0 && distHome < 800 -> config.homeName.ifBlank { "우리집" }
+                            compLat != 0.0 && distComp < 800 -> config?.companyName?.ifBlank { "회사" } ?: "회사"
+                            homeLat != 0.0 && distHome < 800 -> config?.homeName?.ifBlank { "우리집" } ?: "우리집"
                             else -> resolved.placeName.ifBlank { "도착 지점" }
                         }
                         Triple(
@@ -442,36 +500,53 @@ class CarDrivingTrackingService : Service() {
     }
 
     private fun updateOngoingNotification() {
-        val elapsedMin = ((System.currentTimeMillis() - startTimeMillis) / 60000).coerceAtLeast(1)
-        val currentDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints.toList())
-        val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
-        val content = "블루투스 감지 탑승 중 · ${elapsedMin}분 경과 (현재까지 약 %.1f km, %d개 위치 기록)".format(currentDist, waypoints.size)
+        runCatching {
+            val elapsedMin = ((System.currentTimeMillis() - startTimeMillis) / 60000).coerceAtLeast(1)
+            val currentDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints.toList())
+            val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
+            val content = "블루투스 감지 탑승 중 · ${elapsedMin}분 경과 (현재까지 약 %.1f km, %d개 위치 기록)".format(currentDist, waypoints.size)
 
-        val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
-        val notification = buildNotification(
-            "$brandEmoji [$activeVehicleName$carPlatePrefix] 주행 기록 중",
-            content
-        )
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, notification)
+            val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
+            val notification = buildNotification(
+                "$brandEmoji [$activeVehicleName$carPlatePrefix] 주행 기록 중",
+                content
+            )
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, notification)
+        }.onFailure { e ->
+            Log.e(TAG, "진행 중 알림 갱신 실패", e)
+        }
     }
 
     private fun showTripCompleteNotification(distanceKm: Double, durationMin: Long) {
-        val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
-        val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
-        val title = "$brandEmoji [$activeVehicleName$carPlatePrefix] 주행 기록 완료"
-        val content = "총 ${durationMin}분 운행 · %.1f km 자동 기록 및 차계부 반영 완료".format(distanceKm)
+        runCatching {
+            val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
+            val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
+            val title = "$brandEmoji [$activeVehicleName$carPlatePrefix] 주행 기록 완료"
+            val content = "총 ${durationMin}분 운행 · %.1f km 자동 기록 및 차계부 반영 완료".format(distanceKm)
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(content)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .build()
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
 
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID + 1, notification)
+            // [안정성 보장] Adaptive Icon 대신 시스템 표준 2D 정적 아이콘을 사용하여 삼성 One UI 및 API 26+ OS 렌더러 크래시 원천 차단
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setContentTitle(title)
+                .setContentText(content)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID + 1, notification)
+        }.onFailure { e ->
+            Log.e(TAG, "주행 완료 알림 표출 실패", e)
+        }
     }
 
     private fun buildNotification(title: String, content: String): Notification {
@@ -482,8 +557,9 @@ class CarDrivingTrackingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // [안정성 보장] Adaptive Icon 대신 시스템 표준 2D 정적 아이콘 사용
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentTitle(title)
             .setContentText(content)
             .setOngoing(true)

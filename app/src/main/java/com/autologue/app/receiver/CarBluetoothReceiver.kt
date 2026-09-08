@@ -114,18 +114,32 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                 }
 
             BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                val now = System.currentTimeMillis()
+                val lastDisconnect = prefs.getLong("last_disconnect_time", 0L)
+                val isDriving = prefs.getBoolean("is_driving", false)
+
+                // 1. 3초 이내에 동일/멀티 프로필(A2DP, HFP 등)로부터 연이어 수신된 중복 disconnect 브로드캐스트는 무시 (Debounce 3,000ms)
+                if (now - lastDisconnect < 3000L) {
+                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제 디바운스 스킵 (연속 수신 방어): $deviceName (${now - lastDisconnect}ms 전 수신됨)")
+                    return
+                }
+                prefs.edit().putLong("last_disconnect_time", now).apply()
+
+                // 2. 실제로 주행 중이었을 때만 주행 종료 및 거리 계산 서비스 호출
+                if (!isDriving) {
+                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제 수신되었으나 주행 중 상태가 아니므로 무시: $deviceName")
+                    return
+                }
+
                 Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제: $deviceName. 도착 지점 및 주행 완료 처리 시작")
-                
-                // 백그라운드 GPS 추적 서비스에 정지 및 기록 신호 전송
+                prefs.edit().putBoolean("is_driving", false).apply()
+
+                // 백그라운드 GPS 추적 서비스에 정지 및 기록 신호 안전 전송
                 try {
                     com.autologue.app.service.CarDrivingTrackingService.stopTracking(context)
                 } catch (e: Throwable) {
                     Log.e("CarBluetoothReceiver", "CarDrivingTrackingService 정지 신호 전송 실패", e)
                 }
-
-                val isDriving = prefs.getBoolean("is_driving", false)
-                prefs.edit().putBoolean("is_driving", false).apply()
-                if (!isDriving) return
 
                 Log.d("CarBluetoothReceiver", "CarDrivingTrackingService에 주행 종료 및 정밀 거리 기록 위임 완료")
             }

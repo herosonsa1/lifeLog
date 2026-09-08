@@ -708,3 +708,41 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 39s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,303,565 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 27. 백그라운드 차량 주행 종료 시 앱 중단(Crash) 결함 원천 해결 및 생명주기 안전망 구축 (2026-09-08)
+
+### 27.1. 사용자 핵심 요청 및 이상 증상
+- 백그라운드에서 차량 주행 종료(블루투스 연결 해제 / 시동 끔) 직후 "AutoLogue이(가) 계속 중단됨" 시스템 크래시 팝업 발생 제보 (`media_1788863670832.png`).
+
+### 27.2. 원인 규명 (Root Cause Analysis)
+1. **블루투스 다중 프로필(A2DP, HFP, AVRCP) 해제 시 브로드캐스트 중복 수신 및 조기 `stopSelf()` 폭탄**:
+   - 차량 블루투스 연결 해제 시 안드로이드 OS는 `BluetoothDevice.ACTION_ACL_DISCONNECTED` 인텐트를 2~3회 연속 발송함.
+   - 기존 `CarBluetoothReceiver`는 `is_driving` 확인 전에 무조건 `stopTracking()`을 매번 서비스로 전송함.
+   - `CarDrivingTrackingService`에서 1회차 호출이 백그라운드 코루틴으로 DB 저장과 정밀 거리 계산을 시작하자마자, 0.1초 뒤 2회차 호출이 들어와 `!isTracking` 가드에 걸려 서비스를 즉시 `stopSelf()`로 강제 파괴함.
+   - 이로 인해 비동기 트랜잭션 도중 서비스가 급사(Sudden Death)하고 안드로이드 시스템이 크래시 팝업을 표출함.
+2. **Notification SmallIcon에 Adaptive Icon (`R.mipmap.ic_launcher`) 지정으로 인한 OS 렌더러 크래시**:
+   - 주행 완료 알림(`showTripCompleteNotification`)에서 `R.mipmap.ic_launcher`를 사용했으나, 이는 Android 8.0+에서 `<adaptive-icon>` XML 리소스이므로 삼성 갤럭시 및 최신 기종에서 NotificationManager가 상태바 아이콘을 그릴 때 시스템 에러(`BadNotificationPostingException`)가 유발됨.
+3. **백그라운드 IO 스레드에서 Service 수명주기 메서드 직접 호출**:
+   - `CoroutineScope(Dispatchers.IO)` 내부에서 UI 스레드 동기화 없이 `stopForeground`와 `stopSelf`를 호출하여 OS 바인더 상태 불일치 발생.
+
+### 27.3. 주요 개선 및 해결 내역
+1. **`CarBluetoothReceiver.kt` 3초 디바운스 및 `is_driving` 선행 가드 배치**:
+   - 동일 기기에서 3초 이내에 연이어 들어오는 중복 disconnect 브로드캐스트를 100% 무시(Debounce 3,000ms).
+   - `is_driving == true`일 때만 단 1회 `stopTracking()`을 안전하게 호출하도록 순서 변경.
+2. **`CarDrivingTrackingService.kt` 상태 머신 동시성 락 및 안전한 종료 시퀀스**:
+   - `stateLock`, `isTracking`, `isStopping` 상태 머신 도입으로 이미 종료 처리 중일 때 중복 stop 명령이 들어와도 `stopSelf()`를 조기 호출하지 않고 완전 무시.
+   - DB 저장(`saveWaypointsToDiary`)과 알림 표출이 완전히 완료된 후, `withContext(Dispatchers.Main)`에서 안전하게 `ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)` 및 `stopSelf()` 실행.
+3. **알림 SmallIcon 시스템 표준 2D 아이콘 교체 및 예외 방어**:
+   - `setSmallIcon`을 모든 안드로이드 기기에서 100% 호환되는 표준 2D 아이콘(`android.R.drawable.ic_menu_compass`)으로 교체.
+   - 알림 표출 시 `runCatching` 및 `PendingIntent` 결합으로 OS 예외를 완전 방어.
+4. **단일 지점(1개 지점) 수집 시 출발/도착 안전 분기 탑재**:
+   - `validList.size == 1`인 극단적 케이스에서도 예외 없이 단일 거점 주행 기록으로 정상 생성되도록 방어.
+
+### 27.4. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 100% 통과 (`BUILD SUCCESSFUL in 59s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 21s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,356,134 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
