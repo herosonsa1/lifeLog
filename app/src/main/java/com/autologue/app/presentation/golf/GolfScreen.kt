@@ -35,6 +35,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -1651,29 +1652,73 @@ data class GolfCoursePreset(
     val longitude: Double
 )
 
+// 골프장 이름 정규화 유틸리티 (공백, 기호, CC/GC/골프장 등 유연 매칭)
+private fun normalizeGolfName(name: String): String {
+    return name.replace(Regex("[\\s·_\\-.,/]+"), "")
+        .replace("골프장", "", ignoreCase = true)
+        .replace("컨트리클럽", "", ignoreCase = true)
+        .replace("클럽하우스", "", ignoreCase = true)
+        .replace("골프클럽", "", ignoreCase = true)
+        .lowercase(Locale.KOREA)
+}
+
 private val GOLF_COURSE_PRESETS = listOf(
-    GolfCoursePreset("아난티 코드 GC", "경기도 가평군 설악면 유명로 961-345", 37.7126, 127.5312),
-    GolfCoursePreset("가평베네스트 GC", "경기도 가평군 상면 물골길 102", 37.8420, 127.4320),
-    GolfCoursePreset("크리스탈밸리 CC", "경기도 가평군 상면 대보간선로 602-111", 37.8020, 127.4120),
-    GolfCoursePreset("프리스틴밸리 GC", "경기도 가평군 설악면 유명로 1243-199", 37.7080, 127.4520),
-    GolfCoursePreset("남촌 CC", "경기도 광주시 곤지암읍 도척윗로 500", 37.3321, 127.3524),
-    GolfCoursePreset("이스트밸리 CC", "경기도 광주시 곤지암읍 건업길 92", 37.3195, 127.3482),
-    GolfCoursePreset("곤지암 GC", "경기도 광주시 도척면 도척윗로 278-1", 37.3412, 127.3025),
-    GolfCoursePreset("중부 CC", "경기도 광주시 곤지암읍 경충대로 451", 37.3620, 127.3080),
-    GolfCoursePreset("뉴서울 CC", "경기도 광주시 삼동 순암로 298", 37.3910, 127.2450),
+    // 경기 용인 / 수원 / 화성
+    GolfCoursePreset("코리아 CC", "경기도 용인시 처인구 이동읍 서리로 12", 37.1510, 127.2080),
+    GolfCoursePreset("골드 CC", "경기도 용인시 기흥구 기흥단지로 398", 37.2180, 127.1350),
+    GolfCoursePreset("기흥 CC", "경기도 화성시 동탄면 중리 산 1-1", 37.2110, 127.1280),
+    GolfCoursePreset("한원 CC", "경기도 용인시 처인구 남사읍 전원로 1", 37.1680, 127.1290),
+    GolfCoursePreset("리베라 CC", "경기도 화성시 동탄중앙로 193", 37.1980, 127.1190),
+    GolfCoursePreset("플라자 CC 용인", "경기도 용인시 처인구 남사읍 봉무로153번길 40", 37.1450, 127.1550),
+    GolfCoursePreset("세현 CC", "경기도 용인시 처인구 이동읍 삼가로 99", 37.1850, 127.2280),
+    GolfCoursePreset("은화삼 CC", "경기도 용인시 처인구 백옥대로 860-38", 37.2120, 127.2150),
+    GolfCoursePreset("해솔리아 CC", "경기도 용인시 처인구 이동읍 백옥대로 729", 37.1820, 127.2180),
+    GolfCoursePreset("써닝포인트 CC", "경기도 용인시 처인구 백암면 고안로51번길 205", 37.1420, 127.2150),
     GolfCoursePreset("레이크사이드 CC", "경기도 용인시 처인구 모현읍 능원로 181", 37.3150, 127.1850),
     GolfCoursePreset("화산 CC", "경기도 용인시 처인구 이동읍 화산로 239", 37.1650, 127.2410),
     GolfCoursePreset("신원 CC", "경기도 용인시 처인구 이동읍 이원로 225", 37.1420, 127.2350),
     GolfCoursePreset("아시아나 CC", "경기도 용인시 처인구 양지면 양지로 290", 37.1720, 127.2850),
     GolfCoursePreset("지산 CC", "경기도 용인시 처인구 원삼면 맹리로 63", 37.1780, 127.2510),
+    GolfCoursePreset("양지파인 CC", "경기도 용인시 처인구 양지면 남평로 112", 37.2150, 127.2850),
     GolfCoursePreset("글렌로스 GC", "경기도 용인시 처인구 포곡읍 에버랜드로 562번길 69", 37.2950, 127.2050),
     GolfCoursePreset("수원 CC", "경기도 용인시 기흥구 중부대로 495", 37.2850, 127.1050),
     GolfCoursePreset("태광 CC", "경기도 용인시 기흥구 흥덕4로 77", 37.2750, 127.0980),
     GolfCoursePreset("한성 CC", "경기도 용인시 기흥구 구흥로 115", 37.3050, 127.1250),
+
+    // 경기 가평 / 포천 / 파주 / 북부
+    GolfCoursePreset("아난티 코드 GC", "경기도 가평군 설악면 유명로 961-345", 37.7126, 127.5312),
+    GolfCoursePreset("가평베네스트 GC", "경기도 가평군 상면 물골길 102", 37.8420, 127.4320),
+    GolfCoursePreset("크리스탈밸리 CC", "경기도 가평군 상면 대보간선로 602-111", 37.8020, 127.4120),
+    GolfCoursePreset("프리스틴밸리 GC", "경기도 가평군 설악면 유명로 1243-199", 37.7080, 127.4520),
+    GolfCoursePreset("서원밸리 CC", "경기도 파주시 광탄면 서원길 325", 37.7850, 126.9250),
+    GolfCoursePreset("서원힐스 CC", "경기도 파주시 광탄면 서원길 325", 37.7850, 126.9250),
+    GolfCoursePreset("송추 CC", "경기도 양주시 광적면 쇠빛로 29-105", 37.7650, 126.9450),
+    GolfCoursePreset("레이크우드 CC", "경기도 양주시 만송로 244", 37.8050, 127.0850),
+    GolfCoursePreset("티클라우드 CC", "경기도 동두천시 평화로2910번길 148-63", 37.9150, 127.1050),
+    GolfCoursePreset("일동레이크 GC", "경기도 포천시 일동면 화동로 738", 37.9540, 127.3210),
+    GolfCoursePreset("몽베르 CC", "경기도 포천시 영북면 산정호수로 359-12", 38.0820, 127.3150),
+    GolfCoursePreset("베어크리크 포천", "경기도 포천시 화현면 운악청계로 148-88", 37.8750, 127.2850),
+    GolfCoursePreset("포레스트힐 CC", "경기도 포천시 화현면 봉화로 253", 37.8950, 127.2350),
+    GolfCoursePreset("필로스 CC", "경기도 포천시 일동면 운악청계로 1507", 37.8850, 127.2950),
+
+    // 경기 광주 / 곤지암
+    GolfCoursePreset("남촌 CC", "경기도 광주시 곤지암읍 도척윗로 500", 37.3321, 127.3524),
+    GolfCoursePreset("이스트밸리 CC", "경기도 광주시 곤지암읍 건업길 92", 37.3195, 127.3482),
+    GolfCoursePreset("곤지암 GC", "경기도 광주시 도척면 도척윗로 278-1", 37.3412, 127.3025),
+    GolfCoursePreset("중부 CC", "경기도 광주시 곤지암읍 경충대로 451", 37.3620, 127.3080),
+    GolfCoursePreset("뉴서울 CC", "경기도 광주시 삼동 순암로 298", 37.3910, 127.2450),
+
+    // 경기 이천 / 안성
     GolfCoursePreset("사우스스프링스 CC", "경기도 이천시 모가면 남이천로 150", 37.1524, 127.4215),
     GolfCoursePreset("웰링턴 CC", "경기도 이천시 모가면 사실로 725", 37.1820, 127.4650),
     GolfCoursePreset("블랙스톤 이천 GC", "경기도 이천시 장호원읍 장감로 130번길 135", 37.1950, 127.5210),
     GolfCoursePreset("비에이비스타 CC", "경기도 이천시 모가면 어농로 272", 37.1250, 127.4850),
+    GolfCoursePreset("뉴스프링빌 CC", "경기도 이천시 모가면 사실로 579", 37.1150, 127.5150),
+    GolfCoursePreset("안성베네스트 GC", "경기도 안성시 금광면 삼흥로 660", 37.0550, 127.2950),
+    GolfCoursePreset("마에스트로 CC", "경기도 안성시 양성면 안성맞춤대로 2138-140", 37.0850, 127.2450),
+    GolfCoursePreset("신안 CC", "경기도 안성시 고삼면 고삼호수로 360", 37.1150, 127.2650),
+
+    // 경기 군포 / 여주 / 양평
     GolfCoursePreset("안양 CC", "경기도 군포시 군포로 364", 37.3712, 126.9620),
     GolfCoursePreset("자유 CC", "경기도 여주시 가남읍 자유로 390", 37.2145, 127.6012),
     GolfCoursePreset("트리니티 클럽", "경기도 여주시 가남읍 삼군1길 53", 37.2340, 127.5920),
@@ -1682,15 +1727,29 @@ private val GOLF_COURSE_PRESETS = listOf(
     GolfCoursePreset("페럼클럽", "경기도 여주시 점동면 점동로 392", 37.1750, 127.5850),
     GolfCoursePreset("솔모로 CC", "경기도 여주시 가남읍 솔모로그린길 80", 37.1550, 127.5950),
     GolfCoursePreset("금강 CC", "경기도 여주시 가남읍 여주남로 541", 37.1450, 127.6050),
+    GolfCoursePreset("세라지오 GC", "경기도 여주시 여양로 530", 37.2050, 127.6450),
+    GolfCoursePreset("스카이밸리 CC", "경기도 여주시 북내면 운촌길 254", 37.3350, 127.6850),
+    GolfCoursePreset("신라 CC", "경기도 여주시 북내면 덕산길 108", 37.3250, 127.6550),
+    GolfCoursePreset("여주 CC", "경기도 여주시 월평로 78", 37.2650, 127.6250),
+    GolfCoursePreset("루트52 CC", "경기도 여주시 북내면 중암리 52", 37.2850, 127.6850),
+    GolfCoursePreset("이포 CC", "경기도 여주시 금사면 이포리 산 1-1", 37.3650, 127.5450),
+    GolfCoursePreset("소피아그린 CC", "경기도 여주시 점동면 점동로 1168", 37.1850, 127.6150),
+    GolfCoursePreset("아리지 CC", "경기도 여주시 가남읍 설가로 383", 37.2250, 127.5650),
+
+    // 인천
     GolfCoursePreset("스카이72 / 클럽72", "인천광역시 중구 공항동로 135", 37.4912, 126.4812),
     GolfCoursePreset("잭니클라우스 GC", "인천광역시 연수구 아카데미로 209", 37.3750, 126.6320),
     GolfCoursePreset("베어즈베스트 청라 GC", "인천광역시 서구 청라대로 377번길 26", 37.5450, 126.6520),
-    GolfCoursePreset("일동레이크 GC", "경기도 포천시 일동면 화동로 738", 37.9540, 127.3210),
-    GolfCoursePreset("몽베르 CC", "경기도 포천시 영북면 산정호수로 359-12", 38.0820, 127.3150),
+
+    // 강원
     GolfCoursePreset("라비에벨 CC", "강원특별자치도 춘천시 동산면 종자리로 436", 37.8120, 127.7850),
     GolfCoursePreset("제이드팰리스 GC", "강원특별자치도 춘천시 남산면 북한강변길 398", 37.8250, 127.5750),
     GolfCoursePreset("더플레이어스 GC", "강원특별자치도 춘천시 동산면 사암리 131", 37.7820, 127.7210),
+    GolfCoursePreset("라데나 CC", "강원특별자치도 춘천시 칠전길 72", 37.8450, 127.7050),
+    GolfCoursePreset("베어크리크 춘천", "강원특별자치도 춘천시 신동면 김유정로 1368", 37.8350, 127.7350),
     GolfCoursePreset("세이지우드 홍천", "강원특별자치도 홍천군 두촌면 광석로 898-87", 37.7950, 127.9820),
+    GolfCoursePreset("소노펠리체 CC", "강원특별자치도 홍천군 서면 팔봉리 1290-14", 37.6450, 127.6850),
+    GolfCoursePreset("비발디파크 CC", "강원특별자치도 홍천군 서면 한치골길 262", 37.6450, 127.6850),
     GolfCoursePreset("오크밸리 CC", "강원특별자치도 원주시 지정면 오크밸리1길 66", 37.4150, 127.8250),
     GolfCoursePreset("오크밸리 GC", "강원특별자치도 원주시 지정면 오크밸리1길 66", 37.4150, 127.8250),
     GolfCoursePreset("오크밸리 클럽하우스", "강원특별자치도 원주시 지정면 오크밸리1길 66", 37.4150, 127.8250),
@@ -1699,9 +1758,19 @@ private val GOLF_COURSE_PRESETS = listOf(
     GolfCoursePreset("센추리21 CC", "강원특별자치도 원주시 문막읍 궁촌리 산 77", 37.4050, 127.7750),
     GolfCoursePreset("휘슬링락 CC", "강원특별자치도 춘천시 남산면 김유정로 430", 37.8550, 127.8250),
     GolfCoursePreset("카스카디아 CC", "강원특별자치도 홍천군 북방면 노일로 340", 37.8950, 127.8650),
+    GolfCoursePreset("엘리시안 강촌", "강원특별자치도 춘천시 남산면 북한강변길 688", 37.8180, 127.5950),
+    GolfCoursePreset("샌드파인 GC", "강원특별자치도 강릉시 저동골길 53", 37.7950, 128.8950),
+    GolfCoursePreset("파인리즈 CC", "강원특별자치도 고성군 토성면 토성로 820", 38.2550, 128.5350),
+
+    // 제주
     GolfCoursePreset("핀크스 GC", "제주특별자치도 서귀포시 안덕면 산록남로 863", 33.3250, 126.3980),
     GolfCoursePreset("나인브릿지 제주", "제주특별자치도 서귀포시 안덕면 광평로 34-156", 33.3420, 126.4150),
     GolfCoursePreset("블랙스톤 제주", "제주특별자치도 제주시 한림읍 한창로 925-122", 33.3650, 126.2950),
+    GolfCoursePreset("엘리시안 제주", "제주특별자치도 제주시 애월읍 평화로 1738-116", 33.3850, 126.3450),
+    GolfCoursePreset("테디밸리 CC", "제주특별자치도 서귀포시 안덕면 한창로 365", 33.2950, 126.3550),
+    GolfCoursePreset("롯데스카이힐 제주", "제주특별자치도 서귀포시 상예로 530", 33.2850, 126.3950),
+
+    // 영호남 / 기타
     GolfCoursePreset("사우스링스 영암", "전라남도 영암군 삼호읍 에프원로 130", 34.7850, 126.5420),
     GolfCoursePreset("골프존파크 판교점", "경기도 성남시 분당구 판교역로 192", 37.3980, 127.1125)
 )
@@ -1731,23 +1800,43 @@ fun AddGolfReservationDialog(
     var selectedDate by remember { mutableStateOf(LocalDate.now().plusDays(1)) }
     var selectedTime by remember { mutableStateOf(LocalTime.of(7, 30)) }
 
-    // 구글 캘린더 스타일의 골프장 장소 실시간 검색 (프리셋 + Geocoder)
+    // 구글 캘린더 스타일의 골프장 장소 실시간 검색 (프리셋 정규화 매칭 + Geocoder 폴백)
     LaunchedEffect(clubName) {
         val q = clubName.trim()
         if (q.length >= 2 && (selectedAddress == null || !clubName.contains(selectedAddress?.take(4) ?: "###"))) {
-            val matchedPresets = GOLF_COURSE_PRESETS.filter {
-                it.name.contains(q, ignoreCase = true) || it.address.contains(q, ignoreCase = true)
+            val normQuery = normalizeGolfName(q)
+            val queryWithoutSuffix = normQuery.replace("cc", "").replace("gc", "")
+
+            // 1단계: 프리셋 데이터베이스에서 스마트 유연 검색
+            val matchedPresets = GOLF_COURSE_PRESETS.filter { preset ->
+                val normName = normalizeGolfName(preset.name)
+                val normAddr = normalizeGolfName(preset.address)
+                normName.contains(normQuery) || 
+                (queryWithoutSuffix.length >= 2 && normName.contains(queryWithoutSuffix)) ||
+                (normName.length >= 2 && normQuery.contains(normName.replace("cc", "").replace("gc", ""))) ||
+                normAddr.contains(normQuery)
+            }.sortedByDescending { preset ->
+                val normName = normalizeGolfName(preset.name)
+                when {
+                    normName == normQuery -> 100
+                    normName.startsWith(queryWithoutSuffix) -> 80
+                    normName.contains(queryWithoutSuffix) -> 60
+                    else -> 40
+                }
             }
+
             if (matchedPresets.isNotEmpty()) {
-                suggestions = matchedPresets.take(6)
+                suggestions = matchedPresets.take(5)
                 showSuggestions = true
             } else {
+                // 2단계: Geocoder를 통한 구글 지도/위치 검색 폴백
                 withContext(Dispatchers.IO) {
                     runCatching {
                         if (android.location.Geocoder.isPresent()) {
                             val geocoder = android.location.Geocoder(context, Locale.KOREA)
                             @Suppress("DEPRECATION")
-                            val addrs = geocoder.getFromLocationName("$q 골프장", 5)
+                            val addrs = geocoder.getFromLocationName(q, 3)
+                                ?: geocoder.getFromLocationName("$q 골프장", 3)
                             if (!addrs.isNullOrEmpty()) {
                                 val dynamicSuggestions = mutableListOf<GolfCoursePreset>()
                                 val firstAddr = addrs[0]
@@ -1758,8 +1847,7 @@ fun AddGolfReservationDialog(
                                     .replace(Regex("\\s+"), " ")
                                     .trim()
 
-                                // [핵심 수정] Geocoder의 featureName('KR', 지번 번호 등) 오염 원천 차단
-                                // 사용자 검색어(q)를 기반으로 실제 구장명 옵션(CC, GC, 클럽하우스)을 자동 생성
+                                // Geocoder featureName 오염 원천 방지 및 실제 구장명 포맷팅
                                 val baseName = q.replace(Regex("(CC|GC|C\\.C|G\\.C|골프장|클럽하우스|컨트리클럽)", RegexOption.IGNORE_CASE), "").trim()
                                 val candidates = if (q.contains("CC", ignoreCase = true) || q.contains("GC", ignoreCase = true) || q.contains("클럽하우스")) {
                                     listOf(q)
@@ -1826,7 +1914,7 @@ fun AddGolfReservationDialog(
             ) {
                 Text("골프장명과 일정을 등록하면 실시간 D-Day 및 정확한 날씨 예보를 제공합니다.", fontSize = 12.sp, color = Color(0xFF64748B))
 
-                // 골프장명 입력 필드 (구글 캘린더 스타일 위치 검색)
+                // 골프장명 입력 필드 & 캘린더 스타일 위치 추천 칩 (media_1788831189823.png 스타일)
                 Column(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = clubName,
@@ -1839,7 +1927,7 @@ fun AddGolfReservationDialog(
                             }
                         },
                         label = { Text("골프장명 (위치 검색)") },
-                        placeholder = { Text("골프장명을 검색하세요 (예: 아난티 코드)") },
+                        placeholder = { Text("골프장명을 검색하세요 (예: 코리아cc)") },
                         leadingIcon = {
                             Icon(imageVector = Icons.Default.Place, contentDescription = null, tint = Color(0xFF059669))
                         },
@@ -1860,64 +1948,176 @@ fun AddGolfReservationDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // 좌표/주소 확정 배지
+                    // [위치 확정 상태] 캘린더 스타일 둥근 캡슐 바 (초록색 에메랄드 테마)
                     if (!selectedAddress.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Surface(
-                            shape = RoundedCornerShape(6.dp),
+                            shape = RoundedCornerShape(24.dp),
                             color = Color(0xFFECFDF5),
-                            border = BorderStroke(1.dp, Color(0xFFA7F3D0))
+                            border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
                             ) {
-                                Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF059669), modifier = Modifier.size(13.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "위치 확정: $selectedAddress",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF065F46),
-                                    fontWeight = FontWeight.Medium
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFD1FAE5)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF059669),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = clubName,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF065F46)
+                                    )
+                                    Text(
+                                        text = selectedAddress ?: "",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF047857),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        selectedAddress = null
+                                        selectedLatitude = null
+                                        selectedLongitude = null
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Clear,
+                                        contentDescription = "해제",
+                                        tint = Color(0xFF059669),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // 구글 캘린더 스타일 실시간 장소 검색 추천 리스트
-                    if (showSuggestions && suggestions.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                    // [위치 추천 상태] 캘린더 스타일 둥근 알약형 위치 추천 바 (사용자 캡쳐 화면 media_1788831189823.png 1:1 완벽 구현)
+                    if (selectedAddress == null && showSuggestions && suggestions.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val mainSuggestion = suggestions.first()
+
+                        // 메인 추천 캡슐 바 (둥근 모서리 + 원형 핀 아이콘 + 장소명)
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color.White,
-                            border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
-                            shadowElevation = 4.dp,
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(24.dp),
+                            color = Color(0xFFF1F5F9),
+                            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    clubName = mainSuggestion.name
+                                    selectedAddress = mainSuggestion.address
+                                    selectedLatitude = mainSuggestion.latitude
+                                    selectedLongitude = mainSuggestion.longitude
+                                    showSuggestions = false
+                                }
                         ) {
-                            Column {
-                                suggestions.forEachIndexed { index, item ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                clubName = item.name
-                                                selectedAddress = item.address
-                                                selectedLatitude = item.latitude
-                                                selectedLongitude = item.longitude
-                                                showSuggestions = false
-                                            }
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(imageVector = Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFF2563EB), modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column {
-                                            Text(item.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF0F172A))
-                                            Text(item.address, fontSize = 11.sp, color = Color(0xFF64748B))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFE2E8F0)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Place,
+                                        contentDescription = null,
+                                        tint = Color(0xFF334155),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = mainSuggestion.name,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF0F172A)
+                                    )
+                                    Text(
+                                        text = mainSuggestion.address,
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF64748B),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFF2563EB).copy(alpha = 0.1f)
+                                ) {
+                                    Text(
+                                        text = "선택",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF2563EB),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // 2순위 이상 추가 후보가 있을 경우 서브 칩 목록 표출
+                        if (suggestions.size > 1) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(suggestions.drop(1)) { subItem ->
+                                    Surface(
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = Color(0xFFF8FAFC),
+                                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                                        modifier = Modifier.clickable {
+                                            clubName = subItem.name
+                                            selectedAddress = subItem.address
+                                            selectedLatitude = subItem.latitude
+                                            selectedLongitude = subItem.longitude
+                                            showSuggestions = false
                                         }
-                                    }
-                                    if (index < suggestions.size - 1) {
-                                        HorizontalDivider(color = Color(0xFFF1F5F9))
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.LocationOn,
+                                                contentDescription = null,
+                                                tint = Color(0xFF64748B),
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = subItem.name,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF334155)
+                                            )
+                                        }
                                     }
                                 }
                             }
