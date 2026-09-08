@@ -239,7 +239,8 @@ class DiaryViewModel @Inject constructor(
                             photos = existingPhotos,
                             transactions = dayTxs,
                             golfRounds = dayGolf,
-                            vehicleLogs = dayVehicles
+                            vehicleLogs = dayVehicles,
+                            existingRouteSteps = entry.routeSteps
                         ).copy(
                             id = entry.id,
                             summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구")) "" else entry.summary
@@ -251,7 +252,8 @@ class DiaryViewModel @Inject constructor(
                                 photos = existingPhotos,
                                 transactions = dayTxs,
                                 golfRounds = dayGolf,
-                                vehicleLogs = dayVehicles
+                                vehicleLogs = dayVehicles,
+                                existingRouteSteps = entry.routeSteps
                             ).copy(id = entry.id)
                         } else upgraded
 

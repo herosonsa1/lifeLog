@@ -38,7 +38,8 @@ class DailyRouteAggregator @Inject constructor(
         photos: List<ScannedPhoto>,
         transactions: List<Transaction>,
         golfRounds: List<GolfRound> = emptyList(),
-        vehicleLogs: List<VehicleLog> = emptyList()
+        vehicleLogs: List<VehicleLog> = emptyList(),
+        existingRouteSteps: List<RouteStep> = emptyList()
     ): DiaryEntry {
         val steps = mutableListOf<RouteStep>()
 
@@ -144,34 +145,41 @@ class DailyRouteAggregator @Inject constructor(
             )
         }
 
-        // 4. Map Vehicle Logs
-        for (vLog in vehicleLogs) {
-            val note = vLog.note ?: ""
-            // [차량명 (차량번호)] 파싱 (예: "[벤츠 A클래스 (169저7737)]" 또는 "[벤츠 A클래스]")
-            val matchedBracket = Regex("\\[(.*?)\\]").find(note)?.groupValues?.get(1)
-            val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(matchedBracket ?: note)
-            val carDisplayTitle = if (matchedBracket != null) {
-                "차량 주행 $brandEmoji [$matchedBracket]"
-            } else {
-                "차량 주행"
-            }
-            val stepDesc = when {
-                note.isNotBlank() -> note
-                else -> "주행 거리 %.1f km".format(vLog.tripDistanceKm)
-            }
-            val vehicleTag = matchedBracket ?: "차량"
+        // 4. Map Vehicle Logs (GPS 좌표가 있는 정밀 주행 스텝이 이미 존재하면 보존하고, 없을 때만 vLog 기반 단일 스텝 추가)
+        val existingDrivingGpsSteps = existingRouteSteps.filter {
+            it.stepType == RouteStepType.DRIVING && it.latitude != null && it.longitude != null
+        }
+        if (existingDrivingGpsSteps.isNotEmpty()) {
+            steps.addAll(existingDrivingGpsSteps)
+        } else {
+            for (vLog in vehicleLogs) {
+                val note = vLog.note ?: ""
+                // [차량명 (차량번호)] 파싱 (예: "[벤츠 A클래스 (169저7737)]" 또는 "[벤츠 A클래스]")
+                val matchedBracket = Regex("\\[(.*?)\\]").find(note)?.groupValues?.get(1)
+                val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(matchedBracket ?: note)
+                val carDisplayTitle = if (matchedBracket != null) {
+                    "차량 주행 $brandEmoji [$matchedBracket]"
+                } else {
+                    "차량 주행"
+                }
+                val stepDesc = when {
+                    note.isNotBlank() -> note
+                    else -> "주행 거리 %.1f km".format(vLog.tripDistanceKm)
+                }
+                val vehicleTag = matchedBracket ?: "차량"
 
-            steps.add(
-                RouteStep(
-                    id = UUID.randomUUID().toString(),
-                    time = vLog.timestamp,
-                    stepType = RouteStepType.DRIVING,
-                    title = carDisplayTitle,
-                    description = stepDesc,
-                    category = "차계부",
-                    tags = listOf("차량주행", "$brandEmoji $vehicleTag")
+                steps.add(
+                    RouteStep(
+                        id = UUID.randomUUID().toString(),
+                        time = vLog.timestamp,
+                        stepType = RouteStepType.DRIVING,
+                        title = carDisplayTitle,
+                        description = stepDesc,
+                        category = "차계부",
+                        tags = listOf("차량주행", "$brandEmoji $vehicleTag")
+                    )
                 )
-            )
+            }
         }
 
         // Sort all steps chronologically

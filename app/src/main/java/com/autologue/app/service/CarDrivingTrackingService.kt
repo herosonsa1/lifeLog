@@ -20,8 +20,13 @@ import com.autologue.app.MainActivity
 import com.autologue.app.R
 import com.autologue.app.data.preferences.MultiVehiclePreferences
 import com.autologue.app.data.preferences.UserLocationPreferences
+import com.autologue.app.data.sync.PlaceResolver
+import com.autologue.app.domain.model.DiaryEntry
+import com.autologue.app.domain.model.RouteStep
+import com.autologue.app.domain.model.RouteStepType
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
+import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.util.DrivingWaypoint
 import com.autologue.app.util.LocationDistanceUtils
@@ -31,6 +36,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDateTime
 import java.util.Collections
+import java.util.UUID
 import javax.inject.Inject
 
 /**
@@ -48,6 +54,12 @@ class CarDrivingTrackingService : Service() {
 
     @Inject
     lateinit var multiVehiclePreferences: MultiVehiclePreferences
+
+    @Inject
+    lateinit var diaryRepository: DiaryRepository
+
+    @Inject
+    lateinit var placeResolver: PlaceResolver
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var trackingJob: Job? = null
@@ -287,6 +299,9 @@ class CarDrivingTrackingService : Service() {
                     Log.d(TAG, "일반 주행 자동 기록 완료: [$activeVehicleName$carPlatePrefix] ${finalTripKm}km (${waypoints.size}개 좌표)")
                 }
 
+                // 다이어리 이동동선에 10분 주기 GPS Waypoint들을 RouteStep으로 저장
+                saveWaypointsToDiary(finalTripKm, durationMin)
+
                 // 완료 알림 표출
                 showTripCompleteNotification(finalTripKm, durationMin)
                 clearSavedWaypoints()
@@ -297,6 +312,115 @@ class CarDrivingTrackingService : Service() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
+        }
+    }
+
+    /**
+     * 수집된 10분 주기 GPS Waypoint들을 지명 역지오코딩 및 브랜드 엠블럼과 결합하여
+     * 당일 다이어리의 RouteStep 목록으로 자동 영구 저장합니다.
+     * 구글 지도 웹뷰(GoogleMapRouteView)에 마커 핀과 경로로 즉시 표시됩니다.
+     */
+    private suspend fun saveWaypointsToDiary(finalTripKm: Double, durationMin: Long) {
+        try {
+            val validList = synchronized(waypoints) {
+                waypoints.filter { it.latitude != 0.0 && it.longitude != 0.0 }
+            }
+            if (validList.isEmpty()) {
+                Log.d(TAG, "유효한 GPS 좌표가 없어 다이어리 RouteStep 저장을 스킵합니다.")
+                return
+            }
+
+            val config = userLocationPreferences.config.value
+            val homeLat = config.homeLat
+            val homeLng = config.homeLng
+            val compLat = config.companyLat
+            val compLng = config.companyLng
+
+            val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
+            val vehicleTag = activeVehicleName.split(" ").firstOrNull() ?: activeVehicleName
+            val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
+
+            val newRouteSteps = mutableListOf<RouteStep>()
+
+            validList.forEachIndexed { index, wp ->
+                val time = java.time.LocalDateTime.ofInstant(
+                    java.time.Instant.ofEpochMilli(wp.timestamp),
+                    java.time.ZoneId.systemDefault()
+                )
+                val resolved = placeResolver.resolveGeoLocation(this@CarDrivingTrackingService, wp.latitude, wp.longitude)
+
+                val distHome = distanceMeter(homeLat, homeLng, wp.latitude, wp.longitude)
+                val distComp = distanceMeter(compLat, compLng, wp.latitude, wp.longitude)
+
+                val (stepTitle, locName, tags) = when {
+                    index == 0 -> {
+                        // 출발 지점
+                        val name = when {
+                            homeLat != 0.0 && distHome < 800 -> config.homeName.ifBlank { "우리집" }
+                            compLat != 0.0 && distComp < 800 -> config.companyName.ifBlank { "회사" }
+                            else -> resolved.placeName.ifBlank { "출발 지점" }
+                        }
+                        Triple(
+                            "$brandEmoji [$activeVehicleName] 출발",
+                            name,
+                            listOf("차량주행", "$brandEmoji $vehicleTag", "출발지점")
+                        )
+                    }
+                    index == validList.lastIndex -> {
+                        // 최종 도착 지점
+                        val name = when {
+                            compLat != 0.0 && distComp < 800 -> config.companyName.ifBlank { "회사" }
+                            homeLat != 0.0 && distHome < 800 -> config.homeName.ifBlank { "우리집" }
+                            else -> resolved.placeName.ifBlank { "도착 지점" }
+                        }
+                        Triple(
+                            "$brandEmoji [$activeVehicleName] 도착 (총 %.1f km)".format(finalTripKm),
+                            name,
+                            listOf("차량주행", "$brandEmoji $vehicleTag", "도착지점")
+                        )
+                    }
+                    else -> {
+                        // 중간 10분 주기 경유 지점
+                        val elapsed = index * 10
+                        Triple(
+                            "$brandEmoji [$activeVehicleName] 주행 경유 (${elapsed}분 경과)",
+                            resolved.placeName.ifBlank { "주행 경유지 $index" },
+                            listOf("차량주행", "$brandEmoji $vehicleTag", "10분GPS추적")
+                        )
+                    }
+                }
+
+                newRouteSteps.add(
+                    RouteStep(
+                        id = UUID.randomUUID().toString(),
+                        time = time,
+                        stepType = RouteStepType.DRIVING,
+                        title = stepTitle,
+                        description = "10분 단위 GPS 백그라운드 수신 · 위치: (%.4f, %.4f)".format(wp.latitude, wp.longitude),
+                        locationName = locName,
+                        address = resolved.address,
+                        latitude = wp.latitude,
+                        longitude = wp.longitude,
+                        category = "차계부",
+                        tags = tags
+                    )
+                )
+            }
+
+            val today = java.time.LocalDate.now()
+            val diaryEntry = DiaryEntry(
+                date = today.atTime(java.time.LocalTime.now()),
+                title = "$today 일상 및 주행 기록",
+                summary = "$brandEmoji [$activeVehicleName$carPlatePrefix] 블루투스 연동 자동 주행 (${durationMin}분 운행, 10분 주기 GPS ${validList.size}개 지점 추적 완료)",
+                drivingDistanceKm = finalTripKm,
+                routeSteps = newRouteSteps,
+                tags = listOf("차량주행", "$brandEmoji $vehicleTag")
+            )
+
+            diaryRepository.insertDiaryEntry(diaryEntry)
+            Log.d(TAG, "다이어리 RouteStep ${newRouteSteps.size}개 자동 영구 저장 완료: [$activeVehicleName]")
+        } catch (e: Throwable) {
+            Log.e(TAG, "다이어리 RouteStep 저장 중 오류 발생", e)
         }
     }
 

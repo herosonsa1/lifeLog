@@ -42,7 +42,16 @@ class DiaryRepositoryImpl @Inject constructor(
         if (existing != null) {
             val isUserCustomTitle = !existing.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) && existing.title.isNotBlank()
             val mergedPhotos = (existing.photoUris + entry.photoUris).distinct().filterNot { excludedPhotoPreferences.isExcluded(it) }
-            val mergedSteps = (entry.routeSteps.ifEmpty { existing.routeSteps }).map { step ->
+            val combinedSteps = if (entry.routeSteps.isEmpty()) {
+                existing.routeSteps
+            } else if (existing.routeSteps.isEmpty()) {
+                entry.routeSteps
+            } else {
+                (existing.routeSteps + entry.routeSteps)
+                    .distinctBy { it.id.ifBlank { "${it.time}_${it.title}_${it.latitude}_${it.longitude}" } }
+                    .sortedBy { it.time }
+            }
+            val mergedSteps = combinedSteps.map { step ->
                 step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
             }
             val merged = existing.copy(
