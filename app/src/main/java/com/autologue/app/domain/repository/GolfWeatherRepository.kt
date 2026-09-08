@@ -12,6 +12,8 @@ interface GolfWeatherRepository {
         roundDate: LocalDateTime,
         startTime: LocalDateTime? = null,
         endTime: LocalDateTime? = null,
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        latitude: Double? = null,
+        longitude: Double? = null
     ): GolfPlayWeather
 }

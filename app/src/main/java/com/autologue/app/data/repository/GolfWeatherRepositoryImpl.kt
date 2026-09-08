@@ -141,21 +141,26 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         roundDate: LocalDateTime,
         startTime: LocalDateTime?,
         endTime: LocalDateTime?,
-        forceRefresh: Boolean
+        forceRefresh: Boolean,
+        latitude: Double?,
+        longitude: Double?
     ): GolfPlayWeather = withContext(Dispatchers.IO) {
         val sTime = startTime ?: roundDate
         val eTime = endTime ?: sTime.plusHours(5).plusMinutes(30)
         val dateStr = sTime.toLocalDate().toString()
-        // [캐시 최적화] 실시간 실제 기상 데이터 갱신을 위해 v3_ 접두사 부여
-        val cacheKey = "v3_${clubName}_${dateStr}_${sTime.hour}_${eTime.hour}"
+        val (lat, lng) = if (latitude != null && longitude != null) {
+            Pair(latitude, longitude)
+        } else {
+            resolveCoordinates(clubName)
+        }
+        // [캐시 최적화] 실시간 실제 기상 데이터 갱신을 위해 v3_ 및 좌표 기반 접두사 부여
+        val cacheKey = "v3_${clubName}_${lat.toInt()}_${lng.toInt()}_${dateStr}_${sTime.hour}_${eTime.hour}"
 
         val cached = weatherCache[cacheKey]
         val nowMs = System.currentTimeMillis()
         if (!forceRefresh && cached != null && (nowMs - cached.timestamp < 15 * 60 * 1000L)) {
             return@withContext cached.weather
         }
-
-        val (lat, lng) = resolveCoordinates(clubName)
 
         val liveResult = runCatching {
             fetchOpenMeteoForecast(clubName, lat, lng, sTime, eTime)

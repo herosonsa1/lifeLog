@@ -221,4 +221,35 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,188,765 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 11. 골프 예약 등록 UX 혁신 및 위치/날씨 연동 고도화 (2026-09-08)
+
+### 11.1. 주요 개선 및 구현 내역
+1. **골프 예약 등록 더미 데이터 제거 & 명확한 Placeholder 가이드**:
+   - `AddGolfReservationDialog`의 모든 입력 필드(`clubName`, `courseName`, `companionsText`, `feeText`, `memoText`)에 하드코딩되어 있던 더미 텍스트를 제거하고 깨끗한 빈 값으로 초기화.
+   - 각 필드마다 입력 예시 및 가이드를 제공하는 직관적인 Placeholder 적용.
+2. **추천구장 배지 제거**:
+   - 다이얼로그 상단의 불필요한 추천구장 태그 행(`quickClubs`)을 완전히 제거하여 화면을 깔끔하게 정돈.
+3. **티오프 일시 달력(DatePicker) 및 시간(TimePicker) 팝업 선택 전환**:
+   - 기존의 년/월/일/시/분 5개 텍스트 입력창을 제거.
+   - `[ 📅 예약 날짜 ]` 버튼 클릭 시 시스템 네이티브 `DatePickerDialog`를 표출하여 달력에서 터치 한 번으로 날짜 선택.
+   - `[ ⏰ 티오프 시간 ]` 버튼 클릭 시 `TimePickerDialog`를 표출하여 오전/오후 및 시간을 편리하게 선택.
+4. **구글 캘린더 스타일 골프장명 실시간 검색 및 지도 위치(좌표/주소) 연동**:
+   - 골프장명을 입력할 때 전국 50+ 주요 골프장 DB 및 Android `Geocoder`를 통해 실시간 연관 장소(골프장명 + 상세 주소) 추천 리스트를 드롭다운 카드로 표시.
+   - 사용자가 항목을 터치하면 골프장명이 자동 입력되고 해당 위치의 정밀 위도/경도 및 상세 주소가 확정되어 `[ 📍 위치 확정: 주소 ]` 배지가 표출됨.
+   - 확정된 위도/경도가 `GolfRound` 모델 및 Room DB에 영속 저장되어, 사용자가 지정한 위치의 날씨가 정확하게 수신되도록 보장.
+5. **화면 로딩 시마다 최신 실시간 날씨 자동 업데이트**:
+   - `GolfScreen` 진입/새로고침 시 `LaunchedEffect(Unit)`를 통해 최신 기상청/Open-Meteo 모델 예측치를 자동 재동기화(`forceRefresh = true`).
+   - 예약 등록 직후에도 등록된 위치의 실시간 날씨를 즉각 수집하여 대시보드에 반영.
+6. **날씨 상세보기 중복 이동 경로 일원화**:
+   - 날씨 요약 박스 우측 상단의 `"상세보기→"` 버튼으로 날씨 상세 화면 진입을 일원화.
+   - 하단 퀵 차트의 중복 클릭 리스너 및 타이틀 우측의 혼란을 주던 하이라이트 문구를 정리하여 깔끔한 인라인 차트로 제공.
+
+### 11.2. 빌드 및 배포 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 39s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,700,763 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 

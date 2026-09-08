@@ -144,7 +144,9 @@ class GolfViewModel @Inject constructor(
                         roundDate = round.roundDate,
                         startTime = round.startTime,
                         endTime = round.endTime,
-                        forceRefresh = forceRefresh
+                        forceRefresh = forceRefresh,
+                        latitude = round.latitude,
+                        longitude = round.longitude
                     )
                 }.getOrNull()
                 if (weather != null) {
@@ -168,7 +170,9 @@ class GolfViewModel @Inject constructor(
                         roundDate = round.roundDate,
                         startTime = round.startTime,
                         endTime = round.endTime,
-                        forceRefresh = true
+                        forceRefresh = true,
+                        latitude = round.latitude,
+                        longitude = round.longitude
                     )
                 }.getOrNull()
                 _uiState.value = _uiState.value.copy(
@@ -390,7 +394,9 @@ class GolfViewModel @Inject constructor(
         teeOffTime: LocalDateTime,
         companions: List<String>,
         estimatedGreenFee: Long,
-        memo: String
+        memo: String,
+        latitude: Double? = null,
+        longitude: Double? = null
     ) {
         viewModelScope.launch {
             val formattedMemo = if (courseName.isNotBlank()) "[코스: $courseName] $memo".trim() else memo.trim()
@@ -398,6 +404,8 @@ class GolfViewModel @Inject constructor(
                 clubName = clubName.trim(),
                 roundDate = teeOffTime,
                 golfType = GolfType.FIELD,
+                latitude = latitude,
+                longitude = longitude,
                 greenFeeExpense = estimatedGreenFee,
                 memo = formattedMemo.ifBlank { null },
                 startTime = teeOffTime,
@@ -407,6 +415,8 @@ class GolfViewModel @Inject constructor(
             )
             golfRepository.insertGolfRound(newRound)
             closeReservationDialog()
+            // 등록 직후 최신 날씨 즉시 수집
+            loadWeatherForRounds(listOf(newRound), forceRefresh = true)
         }
     }
 

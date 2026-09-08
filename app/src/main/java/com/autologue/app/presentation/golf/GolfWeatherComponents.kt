@@ -284,13 +284,6 @@ fun GolfHourlyRainfallChart(
                     color = Color(0xFF0F172A)
                 )
             }
-
-            Text(
-                text = "🟦 플레이 시간대 하이라이트",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color(0xFF2563EB)
-            )
         }
 
         Spacer(modifier = Modifier.height(12.dp))
