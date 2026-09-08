@@ -5,6 +5,7 @@ import android.content.Context
 import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,6 +13,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -51,6 +55,13 @@ import kotlin.math.*
 enum class CommutePickerTab {
     HOME, COMPANY, ROUTE
 }
+
+data class CommuteLocationSuggestion(
+    val name: String,
+    val address: String,
+    val latitude: Double,
+    val longitude: Double
+)
 
 @Composable
 fun CommuteMapPickerDialog(
@@ -105,6 +116,136 @@ fun CommuteMapPickerDialog(
         distanceText = "%.1f".format(Locale.US, calculated)
     }
 
+    // 구글 지도 실시간 장소/주소 검색 상태
+    var homeSearchQuery by remember { mutableStateOf(homeAddress) }
+    var compSearchQuery by remember { mutableStateOf(compAddress) }
+    var homeSuggestions by remember { mutableStateOf<List<CommuteLocationSuggestion>>(emptyList()) }
+    var compSuggestions by remember { mutableStateOf<List<CommuteLocationSuggestion>>(emptyList()) }
+    var showHomeSuggestions by remember { mutableStateOf(false) }
+    var showCompSuggestions by remember { mutableStateOf(false) }
+
+    // 집 위치 실시간 Geocoder 검색
+    LaunchedEffect(homeSearchQuery) {
+        val q = homeSearchQuery.trim()
+        if (q.length >= 2 && q != homeAddress) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    if (Geocoder.isPresent()) {
+                        val geocoder = Geocoder(context, Locale.KOREA)
+                        @Suppress("DEPRECATION")
+                        val addrs = geocoder.getFromLocationName(q, 5)
+                        if (!addrs.isNullOrEmpty()) {
+                            val results = addrs.mapNotNull { addr ->
+                                val fullAddr = addr.getAddressLine(0) ?: ""
+                                val cleanAddr = fullAddr
+                                    .replace("대한민국 ", "")
+                                    .replace(Regex("\\bKR\\b"), "")
+                                    .replace(Regex("\\s+"), " ")
+                                    .trim()
+                                val placeName = when {
+                                    !addr.featureName.isNullOrBlank() && !addr.featureName.matches(Regex("^[0-9\\-]+$")) -> addr.featureName
+                                    cleanAddr.isNotBlank() -> cleanAddr.split(" ").takeLast(2).joinToString(" ")
+                                    else -> q
+                                }
+                                CommuteLocationSuggestion(
+                                    name = placeName,
+                                    address = cleanAddr.ifBlank { fullAddr },
+                                    latitude = addr.latitude,
+                                    longitude = addr.longitude
+                                )
+                            }.distinctBy { "${it.latitude},${it.longitude}" }
+                            withContext(Dispatchers.Main) {
+                                homeSuggestions = results
+                                showHomeSuggestions = results.isNotEmpty()
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                showHomeSuggestions = false
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            showHomeSuggestions = false
+        }
+    }
+
+    // 회사 위치 실시간 Geocoder 검색
+    LaunchedEffect(compSearchQuery) {
+        val q = compSearchQuery.trim()
+        if (q.length >= 2 && q != compAddress) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    if (Geocoder.isPresent()) {
+                        val geocoder = Geocoder(context, Locale.KOREA)
+                        @Suppress("DEPRECATION")
+                        val addrs = geocoder.getFromLocationName(q, 5)
+                        if (!addrs.isNullOrEmpty()) {
+                            val results = addrs.mapNotNull { addr ->
+                                val fullAddr = addr.getAddressLine(0) ?: ""
+                                val cleanAddr = fullAddr
+                                    .replace("대한민국 ", "")
+                                    .replace(Regex("\\bKR\\b"), "")
+                                    .replace(Regex("\\s+"), " ")
+                                    .trim()
+                                val placeName = when {
+                                    !addr.featureName.isNullOrBlank() && !addr.featureName.matches(Regex("^[0-9\\-]+$")) -> addr.featureName
+                                    cleanAddr.isNotBlank() -> cleanAddr.split(" ").takeLast(2).joinToString(" ")
+                                    else -> q
+                                }
+                                CommuteLocationSuggestion(
+                                    name = placeName,
+                                    address = cleanAddr.ifBlank { fullAddr },
+                                    latitude = addr.latitude,
+                                    longitude = addr.longitude
+                                )
+                            }.distinctBy { "${it.latitude},${it.longitude}" }
+                            withContext(Dispatchers.Main) {
+                                compSuggestions = results
+                                showCompSuggestions = results.isNotEmpty()
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                showCompSuggestions = false
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            showCompSuggestions = false
+        }
+    }
+
+    fun selectHomeLocation(suggestion: CommuteLocationSuggestion) {
+        homeLat = suggestion.latitude
+        homeLng = suggestion.longitude
+        homeAddress = suggestion.address
+        if (homeName.isBlank() || homeName == "우리집") {
+            homeName = suggestion.name
+        }
+        homeSearchQuery = suggestion.name
+        mapCenterLat = suggestion.latitude
+        mapCenterLng = suggestion.longitude
+        showHomeSuggestions = false
+        updateCalculatedDistance()
+    }
+
+    fun selectCompLocation(suggestion: CommuteLocationSuggestion) {
+        compLat = suggestion.latitude
+        compLng = suggestion.longitude
+        compAddress = suggestion.address
+        if (compName.isBlank() || compName == "회사") {
+            compName = suggestion.name
+        }
+        compSearchQuery = suggestion.name
+        mapCenterLat = suggestion.latitude
+        mapCenterLng = suggestion.longitude
+        showCompSuggestions = false
+        updateCalculatedDistance()
+    }
+
     // 역지오코딩: 위경도로부터 도로명/지번 주소 자동 변환
     fun reverseGeocode(lat: Double, lng: Double, onResult: (String) -> Unit) {
         scope.launch(Dispatchers.IO) {
@@ -149,11 +290,17 @@ fun CommuteMapPickerDialog(
                 if (activeTab == CommutePickerTab.HOME) {
                     homeLat = lat
                     homeLng = lng
-                    reverseGeocode(lat, lng) { homeAddress = it }
+                    reverseGeocode(lat, lng) { 
+                        homeAddress = it
+                        homeSearchQuery = it
+                    }
                 } else if (activeTab == CommutePickerTab.COMPANY) {
                     compLat = lat
                     compLng = lng
-                    reverseGeocode(lat, lng) { compAddress = it }
+                    reverseGeocode(lat, lng) { 
+                        compAddress = it
+                        compSearchQuery = it
+                    }
                 }
                 mapCenterLat = lat
                 mapCenterLng = lng
@@ -283,11 +430,17 @@ fun CommuteMapPickerDialog(
                                     if (activeTab == CommutePickerTab.HOME) {
                                         homeLat = tapLat
                                         homeLng = tapLng
-                                        reverseGeocode(tapLat, tapLng) { homeAddress = it }
+                                        reverseGeocode(tapLat, tapLng) { 
+                                            homeAddress = it
+                                            homeSearchQuery = it
+                                        }
                                     } else if (activeTab == CommutePickerTab.COMPANY) {
                                         compLat = tapLat
                                         compLng = tapLng
-                                        reverseGeocode(tapLat, tapLng) { compAddress = it }
+                                        reverseGeocode(tapLat, tapLng) { 
+                                            compAddress = it
+                                            compSearchQuery = it
+                                        }
                                     }
                                     updateCalculatedDistance()
                                 }
@@ -388,9 +541,43 @@ fun CommuteMapPickerDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("🏠 우리집 설정 (지도 탭하여 핀 이동)", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.carLedger))
+                                Text("🏠 우리집 설정 (지도 탭 또는 구글지도 검색)", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.carLedger))
                                 Text("위도: %.4f, 경도: %.4f".format(homeLat, homeLng), style = AppTypography.captionMuted)
                             }
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            // [구글지도 실시간 장소/주소 검색창] 골프장 검색 스타일 1:1 탑재
+                            OutlinedTextField(
+                                value = homeSearchQuery,
+                                onValueChange = { homeSearchQuery = it },
+                                label = { Text("우리집 위치 / 구글 지도 검색") },
+                                placeholder = { Text("장소명이나 주소 검색 (예: 잠실 롯데타워, 방이동)") },
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MenuColors.carLedger)
+                                },
+                                trailingIcon = {
+                                    if (homeSearchQuery.isNotBlank()) {
+                                        IconButton(onClick = {
+                                            homeSearchQuery = ""
+                                            showHomeSuggestions = false
+                                        }) {
+                                            Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            // 위치 추천 캡슐 바 (골프장 검색과 100% 동일한 구글 캘린더 스타일)
+                            if (showHomeSuggestions && homeSuggestions.isNotEmpty()) {
+                                LocationSuggestionView(
+                                    suggestions = homeSuggestions,
+                                    accentColor = MenuColors.carLedger,
+                                    onSelect = { selectHomeLocation(it) }
+                                )
+                            }
+
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                                 AutoLogueTextField(
@@ -402,7 +589,7 @@ fun CommuteMapPickerDialog(
                                 AutoLogueTextField(
                                     value = homeAddress,
                                     onValueChange = { homeAddress = it },
-                                    label = "집 주소 (자동/수동)",
+                                    label = "집 주소 (선택/수동)",
                                     modifier = Modifier.weight(1.5f)
                                 )
                             }
@@ -413,9 +600,43 @@ fun CommuteMapPickerDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("🏢 직장/회사 설정 (지도 탭하여 핀 이동)", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.diary))
+                                Text("🏢 직장/회사 설정 (지도 탭 또는 구글지도 검색)", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.diary))
                                 Text("위도: %.4f, 경도: %.4f".format(compLat, compLng), style = AppTypography.captionMuted)
                             }
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            // [구글지도 실시간 장소/주소 검색창] 골프장 검색 스타일 1:1 탑재
+                            OutlinedTextField(
+                                value = compSearchQuery,
+                                onValueChange = { compSearchQuery = it },
+                                label = { Text("회사 위치 / 구글 지도 검색") },
+                                placeholder = { Text("회사명이나 주소 검색 (예: 판교역, 테헤란로 152)") },
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = MenuColors.diary)
+                                },
+                                trailingIcon = {
+                                    if (compSearchQuery.isNotBlank()) {
+                                        IconButton(onClick = {
+                                            compSearchQuery = ""
+                                            showCompSuggestions = false
+                                        }) {
+                                            Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            // 위치 추천 캡슐 바 (골프장 검색과 100% 동일한 구글 캘린더 스타일)
+                            if (showCompSuggestions && compSuggestions.isNotEmpty()) {
+                                LocationSuggestionView(
+                                    suggestions = compSuggestions,
+                                    accentColor = MenuColors.diary,
+                                    onSelect = { selectCompLocation(it) }
+                                )
+                            }
+
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                                 AutoLogueTextField(
@@ -427,7 +648,7 @@ fun CommuteMapPickerDialog(
                                 AutoLogueTextField(
                                     value = compAddress,
                                     onValueChange = { compAddress = it },
-                                    label = "회사 주소 (자동/수동)",
+                                    label = "회사 주소 (선택/수동)",
                                     modifier = Modifier.weight(1.5f)
                                 )
                             }
@@ -700,4 +921,115 @@ fun calculateRoundTripDistanceKm(lat1: Double, lon1: Double, lat2: Double, lon2:
     val oneWayKm = straightDistanceKm * roadCurveFactor
     return (oneWayKm * 2.0).coerceAtLeast(1.0)
 }
+
+/**
+ * 구글 캘린더 스타일의 위치 추천 캡슐 바 (골프장 검색과 100% 동일한 패밀리룩 UI)
+ */
+@Composable
+private fun LocationSuggestionView(
+    suggestions: List<CommuteLocationSuggestion>,
+    accentColor: Color,
+    onSelect: (CommuteLocationSuggestion) -> Unit
+) {
+    if (suggestions.isEmpty()) return
+    val main = suggestions.first()
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        // 메인 추천 캡슐 바
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFFF1F5F9),
+            border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onSelect(main) }
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(accentColor.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Place,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = main.name,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF0F172A)
+                    )
+                    Text(
+                        text = main.address,
+                        fontSize = 10.sp,
+                        color = Color(0xFF64748B),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = accentColor.copy(alpha = 0.12f)
+                ) {
+                    Text(
+                        text = "선택",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = accentColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+        }
+
+        // 2순위 이상 서브 추천 목록 (가로 스크롤 칩)
+        if (suggestions.size > 1) {
+            Spacer(modifier = Modifier.height(6.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(suggestions.drop(1)) { subItem ->
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFFF8FAFC),
+                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                        modifier = Modifier.clickable { onSelect(subItem) }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = subItem.name,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF334155)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 

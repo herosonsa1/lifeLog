@@ -392,3 +392,33 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,748,770 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 17. 출퇴근 지도 거점(집/회사) 구글지도 실시간 위치 검색 및 자동 지정 연동 (2026-09-08)
+
+### 17.1. 사용자 핵심 요청 사항
+- 출퇴근 지도 거점 및 경로 설정 다이얼로그(`CommuteMapPickerDialog.kt`)에서, 집 및 회사 위치 지정 시에도 **골프장 위치 검색과 동일하게 구글지도의 위치값으로 검색하고 지정**할 수 있도록 기능 탑재 요청 (`media_1788840707215.png`).
+
+### 17.2. 주요 개선 및 구현 내역
+1. **구글지도 실시간 위치 검색 엔진 및 모델 구축 (`CommuteMapPickerDialog.kt`)**:
+   - `CommuteLocationSuggestion` 데이터 클래스(장소명, 주소, 위도, 경도) 신설.
+   - 집(`homeSearchQuery`) 및 회사(`compSearchQuery`) 각각에 대해 2글자 이상 입력 시 백그라운드 코루틴(`Dispatchers.IO`)에서 `Geocoder.getFromLocationName(q, 5)`을 실시간 호출하는 지능형 검색 엔진 탑재.
+   - "대한민국 ", "KR" 국가 코드 및 중복 좌표 자동 정제, 지번/도로명 주소 파싱 및 안전한 폴백 보장.
+2. **구글 캘린더 스타일 위치 추천 UI 1:1 패밀리룩 탑재 (`LocationSuggestionView`)**:
+   - 골프장 검색 화면과 100% 동일한 고급스러운 구글 캘린더 스타일 위치 추천 UI 컴포넌트 구축.
+   - **메인 추천 캡슐 바**: 둥근 알약형(`RoundedCornerShape(24.dp)`) 컨테이너 + 원형 핀 아이콘 + 볼드체 장소명 + 정제된 도로명 주소 + 탭별 테마색 `[선택]` 칩 버튼.
+   - **서브 추천 가로 스크롤 목록**: 2순위 이상 후보가 존재할 경우 `LazyRow`를 통해 즉시 터치하여 선택할 수 있는 서브 칩 제공.
+3. **원클릭 좌표 및 지도 연동 메커니즘**:
+   - 추천 항목 선택 시:
+     - 도로명 주소 자동 입력 및 거점 명칭 스마트 채움.
+     - 거점의 위도/경도(`homeLat`/`homeLng` 또는 `compLat`/`compLng`) 즉시 갱신.
+     - **지도 카메라 중심 및 핀 위치가 해당 좌표로 자동 이동**(`mapCenterLat = lat`, `mapCenterLng = lng`).
+     - 출퇴근 왕복 주행거리(`updateCalculatedDistance()`) 실시간 자동 재계산.
+     - 지도 직접 탭(`detectTapGestures`) 및 GPS 현재 위치 버튼 클릭 시에도 역지오코딩과 검색어 필드가 자연스럽게 동기화되도록 완벽 연계.
+
+### 17.3. 빌드 및 배포 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 1m 2s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,237,917 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
