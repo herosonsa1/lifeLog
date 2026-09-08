@@ -469,9 +469,10 @@ fun SaaSCarLogRow(log: VehicleLog) {
                     }
                 )
                 if (carTag != null) {
+                    val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(log.note)
                     Spacer(modifier = Modifier.width(Spacing.xs))
                     MetricBadge(
-                        text = "🚗 $carTag",
+                        text = "$brandEmoji $carTag",
                         textColor = Indigo700,
                         backgroundColor = Indigo50
                     )

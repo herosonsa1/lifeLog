@@ -162,7 +162,8 @@ class CarDrivingTrackingService : Service() {
         waypoints.clear()
 
         // 1. 포그라운드 서비스 알림 등록 (Android 14+ 위치 타입 명시)
-        val initialNotification = buildNotification("🚗 [$activeVehicleName] 탑승 운행 시작", "블루투스 감지 탑승 중 · 10분 주기 GPS 경로 수집 시작")
+        val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
+        val initialNotification = buildNotification("$brandEmoji [$activeVehicleName] 탑승 운행 시작", "블루투스 감지 탑승 중 · 10분 주기 GPS 경로 수집 시작")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceCompat.startForeground(
                 this,
@@ -322,8 +323,9 @@ class CarDrivingTrackingService : Service() {
         val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
         val content = "블루투스 감지 탑승 중 · ${elapsedMin}분 경과 (현재까지 약 %.1f km, %d개 위치 기록)".format(currentDist, waypoints.size)
 
+        val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
         val notification = buildNotification(
-            "🚗 [$activeVehicleName$carPlatePrefix] 주행 기록 중",
+            "$brandEmoji [$activeVehicleName$carPlatePrefix] 주행 기록 중",
             content
         )
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -332,7 +334,8 @@ class CarDrivingTrackingService : Service() {
 
     private fun showTripCompleteNotification(distanceKm: Double, durationMin: Long) {
         val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
-        val title = "🚗 [$activeVehicleName$carPlatePrefix] 주행 기록 완료"
+        val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
+        val title = "$brandEmoji [$activeVehicleName$carPlatePrefix] 주행 기록 완료"
         val content = "총 ${durationMin}분 운행 · %.1f km 자동 기록 및 차계부 반영 완료".format(distanceKm)
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)

@@ -416,8 +416,13 @@ fun GoogleMapRouteView(
                                     RouteStepType.GOLF -> Triple("⛳ 골프 라운드", Forest50, Forest700)
                                     RouteStepType.DRIVING -> {
                                         val carTag = step.tags.firstOrNull { it != "차량주행" && it != "차량" }
-                                        if (carTag != null) Triple("🚗 $carTag", Amber50, Amber700)
-                                        else Triple("🚗 차량 주행", Amber50, Amber700)
+                                        val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(carTag ?: step.title)
+                                        if (carTag != null) {
+                                            val cleanTag = if (carTag.startsWith("⭐") || carTag.startsWith("🛡️") || carTag.startsWith("🚗")) carTag else "$brandEmoji $carTag"
+                                            Triple(cleanTag, Amber50, Amber700)
+                                        } else {
+                                            Triple("$brandEmoji 차량 주행", Amber50, Amber700)
+                                        }
                                     }
                                     RouteStepType.MEMO -> Triple("📝 메모 기록", Slate100, Slate700)
                                     else -> Triple("📍 이동 거점", Slate100, Slate700)

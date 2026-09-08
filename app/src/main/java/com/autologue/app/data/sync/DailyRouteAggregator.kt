@@ -149,8 +149,9 @@ class DailyRouteAggregator @Inject constructor(
             val note = vLog.note ?: ""
             // [차량명 (차량번호)] 파싱 (예: "[벤츠 A클래스 (169저7737)]" 또는 "[벤츠 A클래스]")
             val matchedBracket = Regex("\\[(.*?)\\]").find(note)?.groupValues?.get(1)
+            val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(matchedBracket ?: note)
             val carDisplayTitle = if (matchedBracket != null) {
-                "차량 주행 [$matchedBracket]"
+                "차량 주행 $brandEmoji [$matchedBracket]"
             } else {
                 "차량 주행"
             }
@@ -168,7 +169,7 @@ class DailyRouteAggregator @Inject constructor(
                     title = carDisplayTitle,
                     description = stepDesc,
                     category = "차계부",
-                    tags = listOf("차량주행", vehicleTag)
+                    tags = listOf("차량주행", "$brandEmoji $vehicleTag")
                 )
             )
         }
@@ -224,9 +225,14 @@ class DailyRouteAggregator @Inject constructor(
         if (totalExpense > 0) tags.add("지출기록")
         if (photos.isNotEmpty()) tags.add("사진 ${photos.size}장")
         val vehicleNames = vehicleLogs.mapNotNull { vLog ->
-            Regex("\\[(.*?)\\]").find(vLog.note ?: "")?.groupValues?.get(1)?.split(" ")?.firstOrNull()
+            val raw = Regex("\\[(.*?)\\]").find(vLog.note ?: "")?.groupValues?.get(1)
+            if (raw != null) {
+                val emoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(raw)
+                val shortName = raw.split(" ").firstOrNull() ?: raw
+                "$emoji $shortName"
+            } else null
         }.distinct()
-        vehicleNames.forEach { tags.add("🚗 $it") }
+        vehicleNames.forEach { tags.add(it) }
         if (totalDistance > 0) tags.add("%.1fkm 주행".format(totalDistance))
 
         return DiaryEntry(

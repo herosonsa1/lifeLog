@@ -114,9 +114,14 @@ fun VehicleManageDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(Spacing.md)
                 ) {
+                    val car1Emoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(car1Name)
+                    val car1Desc = com.autologue.app.util.VehicleBrandUtils.getBrandEmblemDescription(car1Name)
+                    val car2Emoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(car2Name)
+                    val car2Desc = com.autologue.app.util.VehicleBrandUtils.getBrandEmblemDescription(car2Name)
+
                     // Vehicle 1 Card
                     VehicleEditCard(
-                        cardTitle = "🚗 차량 1 (주 차량/출퇴근)",
+                        cardTitle = "$car1Emoji 차량 1 (주 차량/출퇴근) · $car1Desc",
                         name = car1Name,
                         onNameChange = { car1Name = it },
                         plate = car1Plate,
@@ -131,7 +136,7 @@ fun VehicleManageDialog(
 
                     // Vehicle 2 Card
                     VehicleEditCard(
-                        cardTitle = "🚙 차량 2 (보조 차량/세컨카)",
+                        cardTitle = "$car2Emoji 차량 2 (보조 차량/세컨카) · $car2Desc",
                         name = car2Name,
                         onNameChange = { car2Name = it },
                         plate = car2Plate,

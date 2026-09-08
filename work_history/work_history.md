@@ -551,6 +551,39 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 22. 차량 브랜드별 엠블럼 이모지 차별화 적용 (벤츠 삼각별 ⭐ vs 볼보 아이언마크 🛡️) (2026-09-08)
+
+### 22.1. 사용자 핵심 요청 사항
+- 획일적인 `🚗` 이모지 대신, 메르세데스-벤츠와 볼보 차량을 서로 다른 고유 브랜드 엠블럼 이모지로 차별화 적용 요청.
+
+### 22.2. 주요 개선 및 구현 내역
+1. **차량 브랜드 엠블럼 판별 유틸리티 신설 (`VehicleBrandUtils.kt`)**:
+   - `getBrandEmoji(vehicleName)`: 차량 이름 및 모델명을 자동 분석하여 고유 엠블럼 이모지 반환.
+     - 메르세데스-벤츠 (Benz, Mercedes, A클래스, C클래스, E클래스, S클래스 등): **삼각별 (Three-Pointed Star) ➔ `⭐`**
+     - 볼보 (Volvo, V60, XC, S90, Polestar 등): **아이언 마크 및 안전 방패 (Iron Mark & Shield) ➔ `🛡️`**
+     - 기타 브랜드: BMW(`🔵`), 아우디(`🔗`), 제네시스(`🪽`), 테슬라(`⚡`), 포르쉐(`🐎`) 등 확장 지원.
+   - `getBrandEmblemDescription`: 브랜드 공식 엠블럼 설명 문자열 제공 ("벤츠 삼각별", "볼보 아이언마크").
+2. **차량 프로필 모델 확장 (`MultiVehiclePreferences.kt`)**:
+   - `VehicleProfile`에 `customEmoji` 필드 및 동적 엠블럼 게터 `emblemEmoji` 추가.
+3. **보유 차량 관리 다이얼로그 엠블럼 표출 (`VehicleManageDialog.kt`)**:
+   - 차량 1: `⭐ 차량 1 (주 차량/출퇴근) · 벤츠 삼각별`
+   - 차량 2: `🛡️ 차량 2 (보조 차량/세컨카) · 볼보 아이언마크`
+4. **포그라운드 주행 추적 알림 및 서비스 (`CarDrivingTrackingService.kt`)**:
+   - 탑승 차량의 브랜드 엠블럼을 동적 조회하여 알림 제목 및 텍스트 반영 (`⭐ [벤츠 A클래스 (169저7737)] 주행 기록 중`, `🛡️ [볼보 V60cc (331노3442)] 주행 기록 중`).
+5. **차계부 및 다이어리 동선 UI 동기화 (`CarLedgerScreen.kt`, `DailyRouteAggregator.kt`, `GoogleMapRouteView.kt`)**:
+   - 차계부 주행 내역 카드: `⭐ 벤츠 A클래스`, `🛡️ 볼보 V60cc` 엠블럼 뱃지 표출.
+   - 다이어리 태그 및 타임라인: `⭐ 벤츠`, `🛡️ 볼보` 엠블럼 태그 부여 및 구글 지도 상세 카드 연동.
+
+### 22.3. 빌드 및 배포 검증
+- **단위 테스트**: `VehicleBrandUtilsTest` 신설 (벤츠 삼각별 `⭐`, 볼보 아이언마크 `🛡️` 등 브랜드별 엠블럼 매칭 100% 검증 완료)
+- **전체 단위 테스트**: `./gradlew testDebugUnitTest` 100% 통과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 20s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 
 
 
