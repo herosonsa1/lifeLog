@@ -1787,7 +1787,8 @@ fun AddGolfReservationDialog(
     var feeText by remember { mutableStateOf("") }
     var memoText by remember { mutableStateOf("") }
 
-    // 위치 좌표 및 주소 상태
+    // 위치 좌표, 주소 및 선택된 공식 프리셋 상태
+    var selectedPreset by remember { mutableStateOf<GolfCoursePreset?>(null) }
     var selectedLatitude by remember { mutableStateOf<Double?>(null) }
     var selectedLongitude by remember { mutableStateOf<Double?>(null) }
     var selectedAddress by remember { mutableStateOf<String?>(null) }
@@ -1920,14 +1921,15 @@ fun AddGolfReservationDialog(
                         value = clubName,
                         onValueChange = {
                             clubName = it
-                            if (selectedAddress != null && !it.contains(clubName)) {
+                            if (selectedPreset != null && it != selectedPreset?.name) {
+                                selectedPreset = null
                                 selectedAddress = null
                                 selectedLatitude = null
                                 selectedLongitude = null
                             }
                         },
                         label = { Text("골프장명 (위치 검색)") },
-                        placeholder = { Text("골프장명을 검색하세요 (예: 코리아cc)") },
+                        placeholder = { Text("골프장명을 검색하세요 (예: 코리아cc, 오크밸리)") },
                         leadingIcon = {
                             Icon(imageVector = Icons.Default.Place, contentDescription = null, tint = Color(0xFF059669))
                         },
@@ -1935,6 +1937,7 @@ fun AddGolfReservationDialog(
                             if (clubName.isNotBlank()) {
                                 IconButton(onClick = {
                                     clubName = ""
+                                    selectedPreset = null
                                     selectedAddress = null
                                     selectedLatitude = null
                                     selectedLongitude = null
@@ -1949,8 +1952,10 @@ fun AddGolfReservationDialog(
                     )
 
                     // [위치 확정 상태] 캘린더 스타일 둥근 캡슐 바 (초록색 에메랄드 테마)
-                    if (!selectedAddress.isNullOrBlank()) {
+                    if (!selectedAddress.isNullOrBlank() || selectedPreset != null) {
                         Spacer(modifier = Modifier.height(6.dp))
+                        val displayName = selectedPreset?.name ?: clubName
+                        val displayAddress = selectedAddress ?: selectedPreset?.address ?: ""
                         Surface(
                             shape = RoundedCornerShape(24.dp),
                             color = Color(0xFFECFDF5),
@@ -1978,21 +1983,24 @@ fun AddGolfReservationDialog(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = clubName,
+                                        text = displayName,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF065F46)
                                     )
-                                    Text(
-                                        text = selectedAddress ?: "",
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF047857),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    if (displayAddress.isNotBlank()) {
+                                        Text(
+                                            text = displayAddress,
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF047857),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                                 IconButton(
                                     onClick = {
+                                        selectedPreset = null
                                         selectedAddress = null
                                         selectedLatitude = null
                                         selectedLongitude = null
@@ -2011,7 +2019,7 @@ fun AddGolfReservationDialog(
                     }
 
                     // [위치 추천 상태] 캘린더 스타일 둥근 알약형 위치 추천 바 (사용자 캡쳐 화면 media_1788831189823.png 1:1 완벽 구현)
-                    if (selectedAddress == null && showSuggestions && suggestions.isNotEmpty()) {
+                    if (selectedAddress == null && selectedPreset == null && showSuggestions && suggestions.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(6.dp))
                         val mainSuggestion = suggestions.first()
 
@@ -2023,7 +2031,9 @@ fun AddGolfReservationDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
+                                    // [핵심] 칩 클릭 시 사용자가 입력한 비공식 텍스트 대신 공식 구장명(예: "오크밸리 CC")으로 즉시 치환
                                     clubName = mainSuggestion.name
+                                    selectedPreset = mainSuggestion
                                     selectedAddress = mainSuggestion.address
                                     selectedLatitude = mainSuggestion.latitude
                                     selectedLongitude = mainSuggestion.longitude
@@ -2093,7 +2103,9 @@ fun AddGolfReservationDialog(
                                         color = Color(0xFFF8FAFC),
                                         border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
                                         modifier = Modifier.clickable {
+                                            // [핵심] 서브 칩 클릭 시에도 공식 구장명으로 즉시 치환
                                             clubName = subItem.name
+                                            selectedPreset = subItem
                                             selectedAddress = subItem.address
                                             selectedLatitude = subItem.latitude
                                             selectedLongitude = subItem.longitude
@@ -2235,15 +2247,43 @@ fun AddGolfReservationDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val finalClubName = clubName.trim()
-                    if (finalClubName.isBlank()) {
+                    val rawClubName = clubName.trim()
+                    if (rawClubName.isBlank()) {
                         Toast.makeText(context, "골프장명을 입력하거나 검색해 주세요.", Toast.LENGTH_SHORT).show()
                         return@Button
                     }
+
+                    // [핵심] 스마트 공식 구장명 자동 치환 엔진
+                    // 사용자가 "오크밸리", "오크밸리cc", "코리아" 등으로 입력했더라도
+                    // 1) 선택된 프리셋 2) 제1 추천 항목 3) 프리셋 DB 정규화 매칭을 통해 공식 등록 구장명(예: "오크밸리 CC", "코리아 CC")으로 자동 치환
+                    val resolvedPreset = selectedPreset
+                        ?: suggestions.firstOrNull { preset ->
+                            val normPreset = normalizeGolfName(preset.name)
+                            val normInput = normalizeGolfName(rawClubName)
+                            val cleanPreset = normPreset.replace("cc", "").replace("gc", "")
+                            val cleanInput = normInput.replace("cc", "").replace("gc", "")
+                            normPreset == normInput ||
+                            (cleanInput.length >= 2 && cleanPreset.contains(cleanInput)) ||
+                            (cleanPreset.length >= 2 && cleanInput.contains(cleanPreset))
+                        }
+                        ?: GOLF_COURSE_PRESETS.firstOrNull { preset ->
+                            val normPreset = normalizeGolfName(preset.name)
+                            val normInput = normalizeGolfName(rawClubName)
+                            val cleanPreset = normPreset.replace("cc", "").replace("gc", "")
+                            val cleanInput = normInput.replace("cc", "").replace("gc", "")
+                            normPreset == normInput ||
+                            (cleanInput.length >= 2 && cleanPreset.contains(cleanInput)) ||
+                            (cleanPreset.length >= 2 && cleanInput.contains(cleanPreset))
+                        }
+
+                    val finalClubName = resolvedPreset?.name ?: rawClubName
+                    val finalLat = selectedLatitude ?: resolvedPreset?.latitude
+                    val finalLng = selectedLongitude ?: resolvedPreset?.longitude
+
                     val teeOff = LocalDateTime.of(selectedDate, selectedTime)
                     val comps = companionsText.split(",").map { it.trim() }.filter { it.isNotBlank() }
                     val fee = feeText.toLongOrNull() ?: 0L
-                    onConfirm(finalClubName, courseName.trim(), teeOff, comps, fee, memoText.trim(), selectedLatitude, selectedLongitude)
+                    onConfirm(finalClubName, courseName.trim(), teeOff, comps, fee, memoText.trim(), finalLat, finalLng)
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
             ) {

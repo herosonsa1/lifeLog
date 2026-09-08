@@ -298,3 +298,29 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 43s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,205,301 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 14. 골프장 예약 시 공식 등록 구장명 자동 치환 및 2중 정규화 보정 (2026-09-08)
+
+### 14.1. 사용자 문제 제기 및 배경
+- 사용자가 골프장 검색 시 추천 항목으로 `오크밸리 CC`가 표출되었으나, 예약 등록 완료 후 확인했을 때 사용자가 직접 입력한 텍스트(예: `오크밸리` 또는 비공식 입력명)로 저장되는 현상 발생.
+
+### 14.2. 주요 개선 및 해결 내역
+1. **스마트 공식 구장명 자동 치환 엔진 탑재 (`GolfScreen.kt`)**:
+   - `selectedPreset` 상태를 신설하여 추천 칩 클릭 시 사용자가 입력한 비공식 텍스트를 공식 등록 구장명(예: `오크밸리 CC`, `코리아 CC`)으로 즉시 치환.
+   - 텍스트필드 하단의 확정 캡슐 바에도 공식 명칭(`selectedPreset.name`)이 명확하게 노출되도록 보강.
+   - 사용자가 추천 칩을 명시적으로 클릭하지 않고 바로 [예약 등록] 버튼을 누르더라도:
+     - 1순위: 선택된 프리셋
+     - 2순위: 현재 노출 중인 제1 추천 항목 (`suggestions.firstOrNull()`)
+     - 3순위: 전체 프리셋 DB 정규화 퍼지 매칭 (`GOLF_COURSE_PRESETS`)
+     - 을 순차 적용하여, 사용자가 `오크밸리`, `오크밸리cc` 등으로 입력했더라도 무조건 공식 구장명인 **"오크밸리 CC"**로 자동 치환되어 저장되도록 완벽 구현.
+     - 위도/경도(`latitude`, `longitude`)도 해당 구장의 정밀 좌표로 100% 자동 매핑되어 날씨까지 정상 연동.
+2. **ViewModel 2중 방어 및 기존 데이터 자동 마이그레이션 (`GolfViewModel.kt`)**:
+   - `resolveOfficialGolfCourse(rawName)` 함수를 구현하여, `addGolfReservation` 호출 시 구장명을 공식 등록 명칭과 정밀 좌표로 2차 검증/보정.
+   - `init` 블록에 `normalizeExistingRoundsOnce()`를 추가하여, 기존에 비공식 명칭(예: `오크밸리`)으로 저장되어 있던 라운드 데이터도 앱 시작 시 공식 구장명(`오크밸리 CC`) 및 정밀 좌표로 1회 안전하게 자동 업데이트되도록 처리.
+
+### 14.3. 빌드 및 배포 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 45s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,207,433 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`

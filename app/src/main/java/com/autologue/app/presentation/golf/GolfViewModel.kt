@@ -85,7 +85,25 @@ class GolfViewModel @Inject constructor(
 
     init {
         seedSampleRoundIfNeeded()
+        normalizeExistingRoundsOnce()
         loadRounds()
+    }
+
+    private fun normalizeExistingRoundsOnce() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = golfRepository.getAllGolfRoundsFlow().first()
+            for (round in list) {
+                val (officialName, coords) = resolveOfficialGolfCourse(round.clubName)
+                if (officialName != round.clubName || (round.latitude == null && coords != null)) {
+                    val updated = round.copy(
+                        clubName = officialName,
+                        latitude = round.latitude ?: coords?.first,
+                        longitude = round.longitude ?: coords?.second
+                    )
+                    golfRepository.updateGolfRound(updated)
+                }
+            }
+        }
     }
 
     private fun seedSampleRoundIfNeeded() {
@@ -399,13 +417,18 @@ class GolfViewModel @Inject constructor(
         longitude: Double? = null
     ) {
         viewModelScope.launch {
+            // [정규화 보정] "오크밸리", "오크밸리cc" 등 비공식 입력이 들어오더라도 공식 명칭 및 좌표로 자동 보정
+            val (officialClubName, resolvedCoords) = resolveOfficialGolfCourse(clubName.trim())
+            val finalLat = latitude ?: resolvedCoords?.first
+            val finalLng = longitude ?: resolvedCoords?.second
+
             val formattedMemo = if (courseName.isNotBlank()) "[코스: $courseName] $memo".trim() else memo.trim()
             val newRound = GolfRound(
-                clubName = clubName.trim(),
+                clubName = officialClubName,
                 roundDate = teeOffTime,
                 golfType = GolfType.FIELD,
-                latitude = latitude,
-                longitude = longitude,
+                latitude = finalLat,
+                longitude = finalLng,
                 greenFeeExpense = estimatedGreenFee,
                 memo = formattedMemo.ifBlank { null },
                 startTime = teeOffTime,
@@ -418,6 +441,51 @@ class GolfViewModel @Inject constructor(
             // 등록 직후 최신 날씨 즉시 수집
             loadWeatherForRounds(listOf(newRound), forceRefresh = true)
         }
+    }
+
+    // [정규화 엔진] 사용자가 입력한 구장명을 공식 등록 구장명(예: "오크밸리 CC") 및 정밀 좌표로 자동 변환
+    private fun resolveOfficialGolfCourse(rawName: String): Pair<String, Pair<Double, Double>?> {
+        val q = rawName.trim()
+        val norm = q.replace(Regex("[\\s·_\\-.,/]+"), "")
+            .replace("골프장", "", ignoreCase = true)
+            .replace("컨트리클럽", "", ignoreCase = true)
+            .replace("클럽하우스", "", ignoreCase = true)
+            .lowercase(java.util.Locale.KOREA)
+        val clean = norm.replace("cc", "").replace("gc", "")
+
+        val knownCourses = listOf(
+            Triple("오크밸리 CC", Pair(37.4150, 127.8250), listOf("오크밸리", "오크밸리cc", "오크밸리gc")),
+            Triple("코리아 CC", Pair(37.1510, 127.2080), listOf("코리아", "코리아cc", "코리아gc")),
+            Triple("골드 CC", Pair(37.2180, 127.1350), listOf("골드", "골드cc", "골드gc")),
+            Triple("아난티 코드 GC", Pair(37.7126, 127.5312), listOf("아난티", "아난티코드", "아난티코드gc")),
+            Triple("남촌 CC", Pair(37.3321, 127.3524), listOf("남촌", "남촌cc")),
+            Triple("이스트밸리 CC", Pair(37.3195, 127.3482), listOf("이스트밸리", "이스트밸리cc")),
+            Triple("곤지암 GC", Pair(37.3412, 127.3025), listOf("곤지암", "곤지암gc")),
+            Triple("레이크사이드 CC", Pair(37.3150, 127.1850), listOf("레이크사이드", "레이크사이드cc")),
+            Triple("수원 CC", Pair(37.2850, 127.1050), listOf("수원", "수원cc")),
+            Triple("태광 CC", Pair(37.2750, 127.0980), listOf("태광", "태광cc")),
+            Triple("한성 CC", Pair(37.3050, 127.1250), listOf("한성", "한성cc")),
+            Triple("기흥 CC", Pair(37.2110, 127.1280), listOf("기흥", "기흥cc")),
+            Triple("한원 CC", Pair(37.1680, 127.1290), listOf("한원", "한원cc")),
+            Triple("리베라 CC", Pair(37.1980, 127.1190), listOf("리베라", "리베라cc")),
+            Triple("플라자 CC 용인", Pair(37.1450, 127.1550), listOf("플라자", "플라자용인", "플라자cc")),
+            Triple("서원밸리 CC", Pair(37.7850, 126.9250), listOf("서원밸리", "서원밸리cc")),
+            Triple("송추 CC", Pair(37.7650, 126.9450), listOf("송추", "송추cc")),
+            Triple("라데나 CC", Pair(37.8450, 127.7050), listOf("라데나", "라데나cc")),
+            Triple("사우스스프링스 CC", Pair(37.1524, 127.4215), listOf("사우스스프링스", "사우스스프링스cc")),
+            Triple("블랙스톤 이천 GC", Pair(37.1950, 127.5210), listOf("블랙스톤", "블랙스톤이천")),
+            Triple("스카이72 / 클럽72", Pair(37.4912, 126.4812), listOf("스카이72", "클럽72")),
+            Triple("잭니클라우스 GC", Pair(37.3750, 126.6320), listOf("잭니클라우스", "잭니클라우스gc")),
+            Triple("베어크리크 포천", Pair(37.8750, 127.2850), listOf("베어크리크", "베어크리크포천"))
+        )
+
+        for ((official, coords, aliases) in knownCourses) {
+            val normOfficial = official.replace(Regex("[\\s·_\\-.,/]+"), "").lowercase(java.util.Locale.KOREA)
+            if (normOfficial == norm || aliases.any { it == norm || it == clean }) {
+                return Pair(official, coords)
+            }
+        }
+        return Pair(q, null)
     }
 
     private fun autoDiscoverPhotosForRound(round: GolfRound) {
