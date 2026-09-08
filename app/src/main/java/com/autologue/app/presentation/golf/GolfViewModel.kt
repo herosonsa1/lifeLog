@@ -85,7 +85,7 @@ class GolfViewModel @Inject constructor(
     val uiState: StateFlow<GolfUiState> = _uiState.asStateFlow()
 
     init {
-        seedSampleRoundIfNeeded()
+        cleanUpDummyRounds()
         normalizeExistingRoundsOnce()
         loadRounds()
     }
@@ -107,22 +107,16 @@ class GolfViewModel @Inject constructor(
         }
     }
 
-    private fun seedSampleRoundIfNeeded() {
-        viewModelScope.launch {
+    /**
+     * 과거 목업용으로 자동 시딩되었던 가짜 '아난티 코드 GC' 더미 예약 데이터를 DB에서 깨끗하게 정제합니다.
+     */
+    private fun cleanUpDummyRounds() {
+        viewModelScope.launch(Dispatchers.IO) {
             val list = golfRepository.getAllGolfRoundsFlow().first()
-            if (list.none { it.clubName == "아난티 코드 GC" }) {
-                val sampleUpcoming = GolfRound(
-                    clubName = "아난티 코드 GC",
-                    roundDate = LocalDateTime.of(2026, 9, 12, 7, 28),
-                    golfType = GolfType.FIELD,
-                    greenFeeExpense = 240000L,
-                    memo = "[코스: 잣나무 / 자작나무] 주말 친목 라운딩",
-                    startTime = LocalDateTime.of(2026, 9, 12, 7, 28),
-                    endTime = LocalDateTime.of(2026, 9, 12, 13, 0),
-                    companions = listOf("정성우", "김프로", "박대표"),
-                    totalScore = null
-                )
-                golfRepository.insertGolfRound(sampleUpcoming)
+            for (round in list) {
+                if (round.clubName == "아난티 코드 GC" && round.memo?.contains("주말 친목 라운딩") == true) {
+                    golfRepository.deleteGolfRound(round.id)
+                }
             }
         }
     }

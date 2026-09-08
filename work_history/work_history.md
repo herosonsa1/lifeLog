@@ -887,4 +887,34 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 32. 골프 가짜 더미 데이터(스마트스코어 심층분석·목업 차트·가짜 예약) 완전 제거 및 실제 데이터 기반 동적 연동 (2026-09-08)
+
+### 32.1. 사용자 제보 및 결함 분석
+- **사용자 제보**: *"dummy 데이터 같은데? 특히 스마트스코어 심층분석은 실제 데이터로 뽑을 수 있는 정보가 아닌것 같아."* (`media_1788871759741.png`)
+- **원인 규명**:
+  1. `SmartScoreAnalyticsCard`: GIR(파온율 38.5%), FIR(안착률 62.0%), 평균 퍼트수(32.4P), 베스트 라베, 스코어 분포 비율 등은 스마트스코어 카트 태블릿 전산이나 샷 트래킹 센서 전용 데이터로, 사진 EXIF와 영수증 기반의 본 라이프로그 앱에서는 수집 불가능한 가짜 지표가 하드코딩되어 있었음.
+  2. `최근 라운드 스코어 트렌드`: 사용자의 실제 라운드 기록(91타 1건)이 반영되지 않고, 남촌CC 88타, 아리지 90타, 필로스 89타, 라데나 87타 가짜 데이터가 고정 출력됨.
+  3. `GolfViewModel.seedSampleRoundIfNeeded`: 사용자가 예약하지 않은 "아난티 코드 GC" 가짜 예약이 DB에 임의 자동 삽입되고 있었음.
+
+### 32.2. 주요 개선 및 해결 내역
+1. **가짜 `SmartScoreAnalyticsCard` 완전 삭제**:
+   - 수집 불가능한 가짜 GIR/FIR/퍼트수/스코어분포 카드 및 컴포넌트 완전 제거.
+2. **실제 데이터 기반 `RealScoreTrendCard` 개편 (`GolfScreen.kt`)**:
+   - `uiState.rounds` 중 `totalScore != null`인 실제 완료 라운드를 날짜순으로 추출.
+   - **2건 이상 누적 시**: 실제 코스명, 실제 타수, 실제 일자로 동적 막대 차트 렌더링 및 최근 평균 타수 배지 표출.
+   - **1건 등록 시 (현재 상태)**: 가짜 80대 그래프 대신 "실제 등록 1건" 배지와 함께 `일반 사진 (서 코스) · 91타` 실제 기록 및 "2건 이상 등록 시 스코어 추이 차트가 자동 생성됩니다" 정직한 안내 제공.
+   - **0건 시**: 불필요한 차트 카드 미표출.
+3. **가짜 예약 시딩 로직 제거 및 기존 잔존 더미 자동 청소 (`GolfViewModel.kt`)**:
+   - `seedSampleRoundIfNeeded` 삭제.
+   - `cleanUpDummyRounds` 구현: 앱 실행 시 과거 시딩되었던 가짜 "아난티 코드 GC" 더미 예약을 DB에서 자동 영구 삭제.
+
+### 32.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 100% 통과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 

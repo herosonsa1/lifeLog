@@ -256,101 +256,9 @@ fun GolfScreen(
                 }
             }
 
-            // Level 1-B: SmartScore Deep Analytics Dashboard
+            // Level 1-B: Real Dynamic Score Trend Analytics (실제 사용자 라운드 기반)
             item {
-                SmartScoreAnalyticsCard()
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                HairlineDivider()
-            }
-
-            // Score Trend & Handicap Analytics Card
-            item {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color(0xFFF8FAFC),
-                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "📈 최근 라운드 스코어 트렌드",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1E293B)
-                            )
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = Color(0xFFECFDF5),
-                                border = BorderStroke(1.dp, Color(0xFFA7F3D0))
-                            ) {
-                                Text(
-                                    text = "안정적 80대 타수 유지",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF059669),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceAround,
-                            verticalAlignment = Alignment.Bottom
-                        ) {
-                            val trendData = listOf(
-                                Triple("남촌CC", 88, "8.31"),
-                                Triple("아리지", 90, "6.20"),
-                                Triple("필로스", 89, "8.09"),
-                                Triple("라데나", 87, "8.21")
-                            )
-                            trendData.forEach { (course, score, date) ->
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Bottom
-                                ) {
-                                    Text(
-                                        text = "${score}타",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (score <= 88) Color(0xFF059669) else Color(0xFF2563EB)
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .width(28.dp)
-                                            .height(((score - 65) * 1.8).dp)
-                                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
-                                            .background(
-                                                if (score <= 88) Color(0xFF10B981) else Color(0xFF60A5FA)
-                                            )
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = course,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color(0xFF475569)
-                                    )
-                                    Text(
-                                        text = date,
-                                        fontSize = 9.sp,
-                                        color = Color(0xFF94A3B8)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                RealScoreTrendCard(rounds = uiState.rounds)
                 Spacer(modifier = Modifier.height(Spacing.xs))
                 HairlineDivider()
             }
@@ -1389,7 +1297,21 @@ fun UpcomingGolfCard(
 }
 
 @Composable
-fun SmartScoreAnalyticsCard(modifier: Modifier = Modifier) {
+fun RealScoreTrendCard(
+    rounds: List<GolfRound>,
+    modifier: Modifier = Modifier
+) {
+    val scoredRounds = remember(rounds) {
+        rounds.filter { it.totalScore != null && it.totalScore!! > 0 }
+            .sortedBy { it.roundDate }
+    }
+
+    if (scoredRounds.isEmpty()) {
+        return
+    }
+
+    val recentScored = remember(scoredRounds) { scoredRounds.takeLast(5) }
+
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = Color(0xFFF8FAFC),
@@ -1404,85 +1326,141 @@ fun SmartScoreAnalyticsCard(modifier: Modifier = Modifier) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("📊 스마트스코어 심층 분석", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
-                }
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = Color(0xFFEFF6FF),
-                    border = BorderStroke(1.dp, Color(0xFF93C5FD))
-                ) {
-                    Text(
-                        text = "16.2 HDCP (보기 플레이어)",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1D4ED8),
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
+                Text(
+                    text = "📈 최근 라운드 스코어 트렌드",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF1E293B)
+                )
+
+                if (recentScored.size >= 2) {
+                    val avg = recentScored.map { it.totalScore!! }.average()
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFFECFDF5),
+                        border = BorderStroke(1.dp, Color(0xFFA7F3D0))
+                    ) {
+                        Text(
+                            text = "최근 ${recentScored.size}회 평균 %.1f타".format(avg),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF059669),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFFEFF6FF),
+                        border = BorderStroke(1.dp, Color(0xFF93C5FD))
+                    ) {
+                        Text(
+                            text = "실제 등록 1건",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1D4ED8),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StatItemBox(title = "GIR(파온율)", value = "38.5%", desc = "평균 6.9홀", modifier = Modifier.weight(1f))
-                StatItemBox(title = "FIR(안착률)", value = "62.0%", desc = "평균 8.7홀", modifier = Modifier.weight(1f))
-                StatItemBox(title = "평균 퍼트수", value = "32.4P", desc = "홀당 1.8개", modifier = Modifier.weight(1f))
-                StatItemBox(title = "베스트 라베", value = "87타", desc = "라데나 GC", modifier = Modifier.weight(1f))
-            }
+            if (recentScored.size >= 2) {
+                val minS = recentScored.minOf { it.totalScore!! }
+                val base = (minS - 10).coerceAtLeast(60)
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    Text("스코어 분포 비율", fontSize = 10.sp, color = Color(0xFF64748B))
-                    Text("버디 5% · 파 45% · 보기 35% · 더블+ 15%", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF334155))
+                    recentScored.forEach { round ->
+                        val score = round.totalScore!!
+                        val courseName = round.getDisplayClubName()
+                            .replace(" CC", "")
+                            .replace(" GC", "")
+                            .replace("골프클럽", "")
+                            .trim()
+                            .take(5)
+                        val dateStr = round.roundDate.format(DateTimeFormatter.ofPattern("M.d"))
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Bottom
+                        ) {
+                            Text(
+                                text = "${score}타",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (score <= 88) Color(0xFF059669) else Color(0xFF2563EB)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .width(28.dp)
+                                    .height(((score - base) * 2.2).coerceIn(20.0, 95.0).dp)
+                                    .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                                    .background(
+                                        if (score <= 88) Color(0xFF10B981) else Color(0xFF60A5FA)
+                                    )
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = courseName,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF475569)
+                            )
+                            Text(
+                                text = dateStr,
+                                fontSize = 9.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
+            } else {
+                // 라운드 스코어 1건일 때: 정직한 정보 제공
+                val single = recentScored.first()
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(modifier = Modifier.weight(0.05f).fillMaxHeight().background(Color(0xFFE11D48)))
-                    Box(modifier = Modifier.weight(0.45f).fillMaxHeight().background(Color(0xFF10B981)))
-                    Box(modifier = Modifier.weight(0.35f).fillMaxHeight().background(Color(0xFF3B82F6)))
-                    Box(modifier = Modifier.weight(0.15f).fillMaxHeight().background(Color(0xFF94A3B8)))
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFEFF6FF)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("⛳", fontSize = 16.sp)
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${single.getDisplayClubName()} · ${single.totalScore}타",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1E293B)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "라운드가 2건 이상 등록되면 최근 스코어 추이 차트가 자동으로 생성됩니다.",
+                                fontSize = 11.sp,
+                                color = Color(0xFF64748B)
+                            )
+                        }
+                    }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun StatItemBox(
-    title: String,
-    value: String,
-    desc: String,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFFFFFFFF),
-        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-        modifier = modifier
-    ) {
-        Column(
-            modifier = Modifier.padding(8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(text = title, fontSize = 10.sp, color = Color(0xFF64748B))
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(text = value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
-            Spacer(modifier = Modifier.height(1.dp))
-            Text(text = desc, fontSize = 9.sp, color = Color(0xFF94A3B8))
         }
     }
 }
