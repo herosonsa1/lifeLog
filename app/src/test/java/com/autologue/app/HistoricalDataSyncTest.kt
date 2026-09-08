@@ -35,4 +35,34 @@ class HistoricalDataSyncTest {
         // 2026-08-01 is Saturday (6)
         assertEquals(java.time.DayOfWeek.SATURDAY, firstDay.dayOfWeek)
     }
+
+    @Test
+    fun deduplicateRouteSteps_mergesIdenticalPhotoStepsCorrectly() {
+        val photoUris = (1..32).map { "content://media/external/images/media/$it" }
+        val time = java.time.LocalDateTime.of(2026, 9, 7, 6, 30)
+
+        // 앱 동기화/업데이트 반복으로 동일한 장소·시간의 사진 32장 스텝이 8회 중복 누적된 시나리오
+        val duplicateSteps = (1..8).map { index ->
+            com.autologue.app.domain.model.RouteStep(
+                id = java.util.UUID.randomUUID().toString(),
+                time = time,
+                stepType = com.autologue.app.domain.model.RouteStepType.PHOTO,
+                title = "충청북 주덕읍",
+                description = "사진 32장 촬영",
+                locationName = "충청북 주덕읍",
+                address = "대한민국 충청북도 충주시 주덕읍 화곡리 1091",
+                latitude = 37.0,
+                longitude = 127.8,
+                photoUris = photoUris
+            )
+        }
+
+        val cleaned = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(duplicateSteps)
+
+        // 8개 중복 스텝이 완벽히 1개로 병합되었는지 검증
+        assertEquals(1, cleaned.size)
+        assertEquals("충청북 주덕읍", cleaned[0].title)
+        assertEquals(32, cleaned[0].photoUris.size)
+        assertEquals("사진 32장 촬영", cleaned[0].description)
+    }
 }

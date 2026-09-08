@@ -255,7 +255,7 @@ class DiaryViewModel @Inject constructor(
                                         longitude = lng
                                     )
                                 }
-                            }
+                            }.distinctBy { it.uri }
 
                         val upgraded = dailyRouteAggregator.aggregateForDate(
                             date = date,

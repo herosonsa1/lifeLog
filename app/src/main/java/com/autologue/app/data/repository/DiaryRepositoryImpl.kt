@@ -42,15 +42,14 @@ class DiaryRepositoryImpl @Inject constructor(
         if (existing != null) {
             val isUserCustomTitle = !existing.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) && existing.title.isNotBlank()
             val mergedPhotos = (existing.photoUris + entry.photoUris).distinct().filterNot { excludedPhotoPreferences.isExcluded(it) }
-            val combinedSteps = if (entry.routeSteps.isEmpty()) {
+            val rawCombined = if (entry.routeSteps.isEmpty()) {
                 existing.routeSteps
             } else if (existing.routeSteps.isEmpty()) {
                 entry.routeSteps
             } else {
-                (existing.routeSteps + entry.routeSteps)
-                    .distinctBy { it.id.ifBlank { "${it.time}_${it.title}_${it.latitude}_${it.longitude}" } }
-                    .sortedBy { it.time }
+                existing.routeSteps + entry.routeSteps
             }
+            val combinedSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(rawCombined)
             val mergedSteps = combinedSteps.map { step ->
                 step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
             }
@@ -73,8 +72,9 @@ class DiaryRepositoryImpl @Inject constructor(
             return@withContext existing.id
         }
         val cleanEntry = entry.copy(
-            photoUris = entry.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) },
-            routeSteps = entry.routeSteps.map { step ->
+            photoUris = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) },
+            tags = entry.tags.distinct(),
+            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).map { step ->
                 step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
             }
         )
@@ -82,7 +82,14 @@ class DiaryRepositoryImpl @Inject constructor(
     }
 
     override suspend fun updateDiaryEntry(entry: DiaryEntry) = withContext(Dispatchers.IO) {
-        diaryDao.updateEntry(entry.toEntity())
+        val cleanEntry = entry.copy(
+            photoUris = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) },
+            tags = entry.tags.distinct(),
+            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).map { step ->
+                step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+            }
+        )
+        diaryDao.updateEntry(cleanEntry.toEntity())
     }
 
     override suspend fun deleteDiaryEntry(id: Long) = withContext(Dispatchers.IO) {
@@ -92,17 +99,32 @@ class DiaryRepositoryImpl @Inject constructor(
     override suspend fun cleanDuplicates(): Int = withContext(Dispatchers.IO) {
         val all = diaryDao.getAllEntriesSync()
         val seen = mutableSetOf<LocalDate>()
-        var deletedCount = 0
+        var modifiedCount = 0
         for (entry in all) {
             val d = entry.date.toLocalDate()
             if (d in seen) {
                 diaryDao.deleteEntryById(entry.id)
-                deletedCount++
+                modifiedCount++
             } else {
                 seen.add(d)
+                // 내부 중복 데이터(routeSteps, photoUris, tags) 정리
+                val cleanPhotos = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) }
+                val cleanTags = entry.tags.distinct()
+                val cleanSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).map { step ->
+                    step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+                }
+                if (cleanSteps.size != entry.routeSteps.size || cleanPhotos.size != entry.photoUris.size || cleanTags.size != entry.tags.size) {
+                    val updated = entry.copy(
+                        photoUris = cleanPhotos,
+                        tags = cleanTags,
+                        routeSteps = cleanSteps
+                    )
+                    diaryDao.updateEntry(updated)
+                    modifiedCount++
+                }
             }
         }
-        deletedCount
+        modifiedCount
     }
 
     override suspend fun generateClustersForDate(date: LocalDate): List<PlaceCluster> = withContext(Dispatchers.IO) {

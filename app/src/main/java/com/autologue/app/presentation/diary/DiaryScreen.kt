@@ -883,7 +883,14 @@ fun DiaryDetailDialog(
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("방문 장소", style = AppTypography.caption)
-                            Text("${entry.routeSteps.size}곳", style = AppTypography.h3)
+                            val distinctPlaceCount = remember(entry.routeSteps, entry.placeName) {
+                                val places = entry.routeSteps
+                                    .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
+                                    .filter { !it.contains("촬영") }
+                                    .distinct()
+                                if (places.isNotEmpty()) places.size else if (!entry.placeName.isNullOrBlank()) 1 else 0
+                            }
+                            Text("${distinctPlaceCount}곳", style = AppTypography.h3)
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             val displayKm = if (entry.drivingDistanceKm > 0) entry.drivingDistanceKm else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)

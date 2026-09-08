@@ -43,8 +43,9 @@ class DailyRouteAggregator @Inject constructor(
     ): DiaryEntry {
         val steps = mutableListOf<RouteStep>()
 
-        // 1. Cluster photos by time (~45 min) and place
-        val sortedPhotos = photos.sortedBy { it.time }
+        // 1. Cluster photos by time (~45 min) and place (중복 사진 URI 사전 제거)
+        val cleanPhotos = photos.distinctBy { it.uri }
+        val sortedPhotos = cleanPhotos.sortedBy { it.time }
         val photoClusters = mutableListOf<MutableList<ScannedPhoto>>()
 
         for (photo in sortedPhotos) {
@@ -69,7 +70,7 @@ class DailyRouteAggregator @Inject constructor(
             val repAddress = cluster.firstNotNullOfOrNull { it.address } ?: "서울특별시 송파구 방이동"
             val repLat = cluster.firstNotNullOfOrNull { it.latitude } ?: 37.5145
             val repLng = cluster.firstNotNullOfOrNull { it.longitude } ?: 127.1058
-            val uris = cluster.map { it.uri }
+            val uris = cluster.map { it.uri }.distinct()
             val companions = cluster.flatMap { it.companions }.distinct()
             val tags = cluster.flatMap { it.tags }.distinct()
 
@@ -182,11 +183,11 @@ class DailyRouteAggregator @Inject constructor(
             }
         }
 
-        // Sort all steps chronologically
-        steps.sortBy { it.time }
+        // 5. 지능형 중복 제거 및 시간순 정렬
+        val uniqueSteps = deduplicateRouteSteps(steps)
 
         // Extract Distinct Place Names for Itinerary Chain (결제 정보는 지도 이동 경로에서 제외하고 실제 방문 장소만 추출)
-        val distinctPlaces = steps
+        val distinctPlaces = uniqueSteps
             .filter { it.stepType != RouteStepType.TRANSACTION }
             .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
             .filter { !it.contains("촬영") }
@@ -199,39 +200,39 @@ class DailyRouteAggregator @Inject constructor(
         }
 
         // Generate Smart Title
-        val hasGolf = golfRounds.isNotEmpty() || steps.any { it.stepType == RouteStepType.GOLF || it.title.contains("CC") }
-        val repStep = steps.firstOrNull { it.stepType != RouteStepType.TRANSACTION && it.latitude != null }
+        val hasGolf = golfRounds.isNotEmpty() || uniqueSteps.any { it.stepType == RouteStepType.GOLF || it.title.contains("CC") }
+        val repStep = uniqueSteps.firstOrNull { it.stepType != RouteStepType.TRANSACTION && it.latitude != null }
         val mainPlace = distinctPlaces.firstOrNull() ?: repStep?.locationName ?: "서울 방이동"
 
         val title = when {
             hasGolf -> {
-                val golfPlace = steps.firstOrNull { it.stepType == RouteStepType.GOLF || it.title.contains("CC") }?.title ?: "골프 라운드"
+                val golfPlace = uniqueSteps.firstOrNull { it.stepType == RouteStepType.GOLF || it.title.contains("CC") }?.title ?: "골프 라운드"
                 val other = distinctPlaces.firstOrNull { !it.contains("CC") && !it.contains("골프") }
                 if (other != null) "$golfPlace & $other" else "$golfPlace 기록"
             }
             distinctPlaces.size >= 2 -> "${distinctPlaces.first()} & ${distinctPlaces[1]}"
             distinctPlaces.size == 1 -> "${distinctPlaces.first()} 일정"
-            photos.isNotEmpty() -> "${mainPlace} 일정"
+            cleanPhotos.isNotEmpty() -> "${mainPlace} 일정"
             else -> "${date.monthValue}월 ${date.dayOfMonth}일의 다이어리"
         }
 
         // Extract All Photos, Companions, Tags
-        val allPhotoUris = photos.map { it.uri }
+        val allPhotoUris = cleanPhotos.map { it.uri }.distinct()
         val totalExpense = validExpenseTxs.sumOf { it.amount }
         val vehicleLogDistance = vehicleLogs.sumOf { it.tripDistanceKm }
-        val estimatedRouteDistance = LocationDistanceUtils.calculateRouteDrivingDistanceKm(steps)
+        val estimatedRouteDistance = LocationDistanceUtils.calculateRouteDrivingDistanceKm(uniqueSteps)
         val totalDistance = if (vehicleLogDistance > 0) vehicleLogDistance else estimatedRouteDistance
 
         // Generate Smart Summary Paragraph
-        val summary = buildSummaryNarrative(date, steps, distinctPlaces, photos.size, totalExpense)
+        val summary = buildSummaryNarrative(date, uniqueSteps, distinctPlaces, cleanPhotos.size, totalExpense)
 
         val tags = mutableListOf<String>()
-        val allCompanions = steps.flatMap { it.companions }.distinct()
+        val allCompanions = uniqueSteps.flatMap { it.companions }.distinct()
         allCompanions.forEach { tags.add("👤 $it") }
 
         if (hasGolf) tags.add("골프")
         if (totalExpense > 0) tags.add("지출기록")
-        if (photos.isNotEmpty()) tags.add("사진 ${photos.size}장")
+        if (cleanPhotos.isNotEmpty()) tags.add("사진 ${cleanPhotos.size}장")
         val vehicleNames = vehicleLogs.mapNotNull { vLog ->
             val raw = Regex("\\[(.*?)\\]").find(vLog.note ?: "")?.groupValues?.get(1)
             if (raw != null) {
@@ -244,7 +245,7 @@ class DailyRouteAggregator @Inject constructor(
         if (totalDistance > 0) tags.add("%.1fkm 주행".format(totalDistance))
 
         return DiaryEntry(
-            date = date.atTime(steps.firstOrNull()?.time?.toLocalTime() ?: java.time.LocalTime.of(12, 0)),
+            date = date.atTime(uniqueSteps.firstOrNull()?.time?.toLocalTime() ?: java.time.LocalTime.of(12, 0)),
             title = title,
             summary = summary,
             placeName = distinctPlaces.firstOrNull(),
@@ -256,7 +257,7 @@ class DailyRouteAggregator @Inject constructor(
             drivingDistanceKm = totalDistance,
             hasGolfRound = hasGolf,
             tags = tags,
-            routeSteps = steps,
+            routeSteps = uniqueSteps,
             movementSummary = movementSummary
         )
     }
@@ -346,6 +347,109 @@ class DailyRouteAggregator @Inject constructor(
                 }
             }
             return false
+        }
+
+        /**
+         * RouteStep 리스트의 중복(동일 사진, 동일 위치/시간대, 동일 결제/주행/골프)을
+         * 지능적으로 통합 및 제거하여 단일 정제 리스트로 반환합니다.
+         */
+        fun deduplicateRouteSteps(steps: List<RouteStep>): List<RouteStep> {
+            if (steps.isEmpty()) return emptyList()
+
+            val result = mutableListOf<RouteStep>()
+            for (step in steps) {
+                val matchIndex = result.indexOfFirst { existing -> isDuplicateStep(existing, step) }
+                if (matchIndex >= 0) {
+                    result[matchIndex] = mergeSteps(result[matchIndex], step)
+                } else {
+                    result.add(step)
+                }
+            }
+            return result.sortedBy { it.time }
+        }
+
+        private fun isDuplicateStep(a: RouteStep, b: RouteStep): Boolean {
+            if (a.stepType != b.stepType) return false
+            if (a.id.isNotBlank() && a.id == b.id) return true
+
+            when (a.stepType) {
+                RouteStepType.PHOTO -> {
+                    // 1. 공통 사진 URI가 하나라도 존재하면 100% 동일한 사진 스텝
+                    if (a.photoUris.isNotEmpty() && b.photoUris.isNotEmpty()) {
+                        val hasCommonPhoto = a.photoUris.any { it in b.photoUris }
+                        if (hasCommonPhoto) return true
+                    }
+                    val sameDay = a.time.toLocalDate() == b.time.toLocalDate()
+                    if (!sameDay) return false
+
+                    val minDiff = java.time.Duration.between(a.time, b.time).abs().toMinutes()
+                    val cleanTitleA = a.title.replace("사진 촬영", "").trim()
+                    val cleanTitleB = b.title.replace("사진 촬영", "").trim()
+                    val sameTitleOrPlace = (cleanTitleA.isNotBlank() && cleanTitleA == cleanTitleB) ||
+                        (!a.locationName.isNullOrBlank() && a.locationName == b.locationName)
+                    if (sameTitleOrPlace && minDiff <= 30) return true
+
+                    if (a.latitude != null && a.longitude != null && b.latitude != null && b.longitude != null) {
+                        val latDiff = kotlin.math.abs(a.latitude - b.latitude)
+                        val lngDiff = kotlin.math.abs(a.longitude - b.longitude)
+                        if (latDiff < 0.002 && lngDiff < 0.002 && minDiff <= 30) return true
+                    }
+                    return false
+                }
+                RouteStepType.TRANSACTION -> {
+                    val sameTime = a.time.toLocalDate() == b.time.toLocalDate() &&
+                        a.time.hour == b.time.hour && a.time.minute == b.time.minute
+                    return sameTime && a.title == b.title && a.amount == b.amount
+                }
+                RouteStepType.GOLF -> {
+                    return a.time.toLocalDate() == b.time.toLocalDate() && a.title == b.title
+                }
+                RouteStepType.DRIVING -> {
+                    if (a.latitude != null && a.longitude != null && b.latitude != null && b.longitude != null) {
+                        val latDiff = kotlin.math.abs(a.latitude - b.latitude)
+                        val lngDiff = kotlin.math.abs(a.longitude - b.longitude)
+                        val secDiff = java.time.Duration.between(a.time, b.time).abs().seconds
+                        return latDiff < 0.0001 && lngDiff < 0.0001 && secDiff <= 120
+                    }
+                    return a.time.toLocalDate() == b.time.toLocalDate() && a.title == b.title
+                }
+                RouteStepType.MEMO -> {
+                    return a.time == b.time && a.title == b.title
+                }
+            }
+        }
+
+        private fun mergeSteps(existing: RouteStep, incoming: RouteStep): RouteStep {
+            val mergedPhotos = (existing.photoUris + incoming.photoUris).distinct()
+            val mergedCompanions = (existing.companions + incoming.companions).distinct()
+            val mergedTags = (existing.tags + incoming.tags).distinct()
+            val earliestTime = if (existing.time.isBefore(incoming.time)) existing.time else incoming.time
+
+            val updatedDescription = when (existing.stepType) {
+                RouteStepType.PHOTO -> {
+                    buildString {
+                        append("사진 ${mergedPhotos.size}장 촬영")
+                        if (mergedCompanions.isNotEmpty()) {
+                            append(" · 동행: ${mergedCompanions.joinToString(", ")}")
+                        }
+                    }
+                }
+                else -> existing.description ?: incoming.description
+            }
+
+            return existing.copy(
+                time = earliestTime,
+                title = if (existing.title.isNotBlank()) existing.title else incoming.title,
+                description = updatedDescription,
+                locationName = existing.locationName ?: incoming.locationName,
+                address = existing.address ?: incoming.address,
+                latitude = existing.latitude ?: incoming.latitude,
+                longitude = existing.longitude ?: incoming.longitude,
+                amount = existing.amount ?: incoming.amount,
+                photoUris = mergedPhotos,
+                companions = mergedCompanions,
+                tags = mergedTags
+            )
         }
     }
 }

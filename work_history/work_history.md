@@ -813,3 +813,40 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 30. 다이어리 상세 이동 동선 중복 스텝 누적 결함 원천 해결 및 지능형 병합(Deduplication) 구축 (2026-09-08)
+
+### 30.1. 사용자 제보 증상 분석
+- **현상**: 다이어리 상세 모달(바텀시트)에서 `충청북 주덕읍, 사진 32장 촬영, 06:30` 항목이 8개나 동일하게 반복 표시되고, 방문 장소가 실제 2곳(주덕읍, 서울 방이동)이 아닌 `8곳`으로 왜곡 표출됨 (`media_1788866596245.png`).
+- **질문**: *"앱을 계속 업데이트하면서 기존데이터위에 같은 데이터가 쌓인건가?"*
+
+### 30.2. 원인 규명 (Root Cause Analysis)
+1. **`DailyRouteAggregator`의 무작위 UUID 생성과 `DiaryRepositoryImpl`의 결함 있는 `distinctBy` 키 (`AP-ANDROID-DIARY-STEP-DUPLICATE-ACCUMULATION`)**:
+   - 앱이 업데이트되거나 동기화/재색인이 실행될 때마다 `DailyRouteAggregator`는 `RouteStep`을 생성하며 `UUID.randomUUID().toString()`을 부여함.
+   - `DiaryRepositoryImpl.insertDiaryEntry()`는 기존 일자 데이터와 새 데이터를 병합할 때 `(existing.routeSteps + entry.routeSteps).distinctBy { it.id.ifBlank { ... } }` 코드를 수행함.
+   - 그러나 `it.id`가 무작위 UUID로 채워져 있어 결코 빈 값(blank)이 아니므로, 내용이 완전히 동일한 스텝임에도 UUID가 달라 중복으로 인식되지 못하고 매 실행마다 1개씩 뒤에 덧붙여져 누적(8회 중복)되었음.
+2. **`cleanDuplicates()`의 내부 스텝 정제 누락**:
+   - 기존의 `cleanDuplicates()`는 테이블의 `DiaryEntry` 행 단위 중복 날짜만 삭제했을 뿐, 각 엔트리 내부의 `routeSteps` JSON 컬럼 내 중복 데이터는 전혀 정제하지 않았음.
+3. **방문 장소 카운트 계산 왜곡**:
+   - `DiaryScreen.kt` 상세 다이얼로그에서 방문 장소를 `entry.routeSteps.size`로 표시하여, 중복 스텝 개수만큼 방문 장소 숫자가 부풀려져 표출되었음.
+
+### 30.3. 주요 개선 및 해결 내역
+1. **`DailyRouteAggregator.kt` 지능형 중복 병합 알고리즘 (`deduplicateRouteSteps`) 구현**:
+   - **사진 스텝 중복 감지**: 동일 사진 URI가 1개라도 포함되어 있거나, 동일 일자·동일 장소/위치에서 30분 이내 촬영된 스텝을 동일 활동으로 감지.
+   - **스텝 지능형 병합 (`mergeSteps`)**: 사진 URI 목록(`distinct()`), 동행인(`distinct()`), 태그 목록(`distinct()`)을 안전하게 통합하고, "사진 N장 촬영" 문구를 실제 유니크 사진 장수로 자동 재계산.
+   - **결제/주행/골프 스텝 중복 방어**: 결제(시각+가맹점+금액), 골프(일자+구장명), 주행(시각+좌표) 기준 정밀 중복 차단.
+2. **`DiaryRepositoryImpl.kt` 실시간 병합 및 기존 데이터 자동 마이그레이션**:
+   - `insertDiaryEntry` 및 `updateDiaryEntry` 시 `DailyRouteAggregator.deduplicateRouteSteps`를 거쳐 저장하도록 변경.
+   - `cleanDuplicates()` 호출 시 기존 Room DB 내 모든 다이어리 엔트리의 `routeSteps`, `photoUris`, `tags` 중복을 자동 검사하여 중복이 존재하는 경우 즉시 정제 후 DB 갱신.
+   - 앱 기동 시(`DiaryViewModel.init`) 자동으로 `cleanDuplicates()`가 구동되므로, 사용자의 폰에 이미 쌓여 있던 중복 스텝(8개)도 앱 실행 즉시 1개로 자동 정제 복구됨.
+3. **`DiaryScreen.kt` 방문 장소 지표 정밀화**:
+   - 상세 다이얼로그의 "방문 장소" 지표를 단순 리스트 크기(`routeSteps.size`) 대신 고유 방문 지점 수(`distinctPlaceCount`)로 정확하게 산출하도록 개선.
+
+### 30.4. 빌드 및 배포 검증
+- **단위 테스트**: `HistoricalDataSyncTest.deduplicateRouteSteps_mergesIdenticalPhotoStepsCorrectly` 추가 및 `testDebugUnitTest` 100% 통과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
