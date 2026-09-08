@@ -1691,6 +1691,12 @@ private val GOLF_COURSE_PRESETS = listOf(
     GolfCoursePreset("제이드팰리스 GC", "강원특별자치도 춘천시 남산면 북한강변길 398", 37.8250, 127.5750),
     GolfCoursePreset("더플레이어스 GC", "강원특별자치도 춘천시 동산면 사암리 131", 37.7820, 127.7210),
     GolfCoursePreset("세이지우드 홍천", "강원특별자치도 홍천군 두촌면 광석로 898-87", 37.7950, 127.9820),
+    GolfCoursePreset("오크밸리 CC", "강원특별자치도 원주시 지정면 오크밸리1길 66", 37.4150, 127.8250),
+    GolfCoursePreset("오크밸리 GC", "강원특별자치도 원주시 지정면 오크밸리1길 66", 37.4150, 127.8250),
+    GolfCoursePreset("오크밸리 클럽하우스", "강원특별자치도 원주시 지정면 오크밸리1길 66", 37.4150, 127.8250),
+    GolfCoursePreset("오크크릭 GC", "강원특별자치도 원주시 지정면 오크밸리2길 58", 37.4210, 127.8320),
+    GolfCoursePreset("성문안 CC", "강원특별자치도 원주시 지정면 월송석화로 430", 37.4080, 127.8180),
+    GolfCoursePreset("센추리21 CC", "강원특별자치도 원주시 문막읍 궁촌리 산 77", 37.4050, 127.7750),
     GolfCoursePreset("휘슬링락 CC", "강원특별자치도 춘천시 남산면 김유정로 430", 37.8550, 127.8250),
     GolfCoursePreset("카스카디아 CC", "강원특별자치도 홍천군 북방면 노일로 340", 37.8950, 127.8650),
     GolfCoursePreset("핀크스 GC", "제주특별자치도 서귀포시 안덕면 산록남로 863", 33.3250, 126.3980),
@@ -1733,7 +1739,7 @@ fun AddGolfReservationDialog(
                 it.name.contains(q, ignoreCase = true) || it.address.contains(q, ignoreCase = true)
             }
             if (matchedPresets.isNotEmpty()) {
-                suggestions = matchedPresets.take(5)
+                suggestions = matchedPresets.take(6)
                 showSuggestions = true
             } else {
                 withContext(Dispatchers.IO) {
@@ -1741,13 +1747,36 @@ fun AddGolfReservationDialog(
                         if (android.location.Geocoder.isPresent()) {
                             val geocoder = android.location.Geocoder(context, Locale.KOREA)
                             @Suppress("DEPRECATION")
-                            val addrs = geocoder.getFromLocationName("$q 골프장", 4)
+                            val addrs = geocoder.getFromLocationName("$q 골프장", 5)
                             if (!addrs.isNullOrEmpty()) {
-                                suggestions = addrs.mapNotNull { addr ->
-                                    val title = addr.featureName ?: q
-                                    val fullAddr = addr.getAddressLine(0) ?: ""
-                                    GolfCoursePreset(title, fullAddr, addr.latitude, addr.longitude)
+                                val dynamicSuggestions = mutableListOf<GolfCoursePreset>()
+                                val firstAddr = addrs[0]
+                                val rawFullAddr = firstAddr.getAddressLine(0) ?: ""
+                                val cleanAddr = rawFullAddr
+                                    .replace("대한민국 ", "")
+                                    .replace(Regex("\\bKR\\b"), "")
+                                    .replace(Regex("\\s+"), " ")
+                                    .trim()
+
+                                // [핵심 수정] Geocoder의 featureName('KR', 지번 번호 등) 오염 원천 차단
+                                // 사용자 검색어(q)를 기반으로 실제 구장명 옵션(CC, GC, 클럽하우스)을 자동 생성
+                                val baseName = q.replace(Regex("(CC|GC|C\\.C|G\\.C|골프장|클럽하우스|컨트리클럽)", RegexOption.IGNORE_CASE), "").trim()
+                                val candidates = if (q.contains("CC", ignoreCase = true) || q.contains("GC", ignoreCase = true) || q.contains("클럽하우스")) {
+                                    listOf(q)
+                                } else {
+                                    listOf(
+                                        "$baseName CC",
+                                        "$baseName GC",
+                                        "$baseName 클럽하우스"
+                                    )
                                 }
+
+                                for (cand in candidates) {
+                                    dynamicSuggestions.add(
+                                        GolfCoursePreset(cand, cleanAddr, firstAddr.latitude, firstAddr.longitude)
+                                    )
+                                }
+                                suggestions = dynamicSuggestions
                                 showSuggestions = true
                             } else {
                                 showSuggestions = false

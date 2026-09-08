@@ -251,5 +251,25 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,700,763 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 12. 골프장 위치 검색 시 'KR' 표기 버그 수정 및 실제 구장명 추천 연동 (2026-09-08)
+
+### 12.1. 문제 원인 및 해결 내역
+1. **Geocoder `featureName`의 'KR' 오염 차단**:
+   - 사용자가 골프장명을 검색하고 Geocoder 추천 결과를 선택했을 때, Android Geocoder가 `featureName`으로 국가코드(`"KR"`)나 지번 번호를 반환하여 골프장명 필드가 `"KR"`로 덮어씌워지던 버그를 해결.
+   - `addr.featureName`이 "KR", "대한민국", 숫자/번지수, 2글자 이하 알파벳인 경우 골프장명으로 사용되지 않도록 철저히 차단.
+2. **실제 구장명(CC, GC, 클럽하우스) 지능형 추천 생성**:
+   - 사용자가 입력한 검색어(예: `"오크밸리"`)에 기반하여, 실제 골프장 명칭 형식인 `"$q CC"`, `"$q GC"`, `"$q 클럽하우스"` 옵션을 지능형으로 자동 생성하여 추천 리스트에 표출.
+   - `GOLF_COURSE_PRESETS`에 오크밸리 계열(오크밸리 CC, 오크밸리 GC, 오크밸리 클럽하우스, 오크크릭 GC, 성문안 CC, 센추리21 CC)을 정밀 위도/경도와 함께 등록하여 타이핑 즉시 최상단에 실제 명칭과 도로명 주소가 노출되도록 개선.
+3. **주소 표기 정제**:
+   - Geocoder가 반환하는 전체 주소에서 불필요한 `"대한민국 "` 및 주소 끝의 `" KR"`을 정규식으로 제거하여 깔끔한 도로명 주소(예: `강원특별자치도 원주시 지정면 오크밸리1길 66`)로 확정 배지에 표출.
+
+### 12.2. 빌드 및 배포 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 51s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,205,149 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 
 
