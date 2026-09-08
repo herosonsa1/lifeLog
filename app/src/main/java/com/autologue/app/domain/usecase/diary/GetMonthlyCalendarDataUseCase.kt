@@ -6,6 +6,7 @@ import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
+import com.autologue.app.util.LocationDistanceUtils
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.time.LocalDate
@@ -51,6 +52,12 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
                 val dayEntries = entries.filter { it.date.toLocalDate() == curr }
                 val photoCount = dayEntries.sumOf { it.photoUris.size }
                 val expenseSum = dayTxs.sumOf { it.amount }
+                val dayVehicleDist = monthVehicles.filter { it.timestamp.toLocalDate() == curr }.sumOf { it.tripDistanceKm }
+                val dayEntriesDist = dayEntries.sumOf { entry ->
+                    if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
+                    else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+                }
+                val dayDistance = if (dayVehicleDist > 0.0) maxOf(dayVehicleDist, dayEntriesDist) else dayEntriesDist
 
                 daysMap[curr] = DaySummary(
                     date = curr,
@@ -58,16 +65,24 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
                     hasGolfRound = dayGolf,
                     hasRefueling = dayRefuel,
                     photoCount = photoCount,
-                    entryCount = dayEntries.size
+                    entryCount = dayEntries.size,
+                    totalDistanceKm = dayDistance
                 )
                 curr = curr.plusDays(1)
             }
+
+            val monthVehicleDist = monthVehicles.sumOf { it.tripDistanceKm }
+            val monthEntriesDist = entries.sumOf { entry ->
+                if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
+                else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+            }
+            val totalMonthDistance = if (monthVehicleDist > 0.0) maxOf(monthVehicleDist, monthEntriesDist) else monthEntriesDist
 
             MonthlySummary(
                 yearMonth = yearMonth,
                 totalExpense = monthTxs.sumOf { it.amount },
                 totalGolfRounds = monthGolf.size,
-                totalDistanceKm = monthVehicles.sumOf { it.tripDistanceKm },
+                totalDistanceKm = Math.round(totalMonthDistance * 10.0) / 10.0,
                 days = daysMap
             )
         }

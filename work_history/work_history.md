@@ -446,7 +446,11 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - `observeData`에서 `rawEntries` 로드 시에도 실시간 계산 폴백을 적용하여 앱 구동 즉시 올바른 주행거리가 화면에 표시되도록 보장.
 4. **UI 컴포넌트 방어적 표시 (`DiaryScreen.kt`)**:
    - 다이어리 상세 모달(Quick Stats Row), 타임라인 카드 목록, 상단 누적 통계 헤더(`NaturalSummaryHeader`) 전반에 `calculateRouteDrivingDistanceKm` 실시간 폴백을 연동하여 0.0km 미노출 방어.
-5. **Google Maps 임베드 및 동선 뷰 완성 (`GoogleMapRouteView.kt`)**:
+   - 주간 요약(`TimelineViewMode.WEEKLY`) 상단 헤더 및 목록 행에 당일/주간 거점 기반 도로 주행거리 합산 100% 반영.
+5. **월간 캘린더 주행거리 연동 보완 (`GetMonthlyCalendarDataUseCase.kt`, `MonthlyCalendarData.kt`)**:
+   - 월간 캘린더 상단 Summary Strip의 "주행 거리" 산출 시 차량 기록(`monthVehicles`) 외에 다이어리 거점 기반 도로 주행거리(`entriesDistance`)를 정밀 결합하여, 차량 로그가 없더라도 월간 누적 이동거리가 정상 합산되도록 완벽 보강.
+   - `DaySummary` 모델에 `totalDistanceKm`을 추가하여 일자별 캘린더 데이터에도 당일 도로 주행거리 제공.
+6. **Google Maps 임베드 및 동선 뷰 완성 (`GoogleMapRouteView.kt`)**:
    - `AndroidView(WebView)`를 통해 Google Maps 인터랙티브 웹뷰를 내장하여 지형 및 도로망이 즉시 렌더링되도록 구성.
    - 단일 거점 포커스 시 상세 핀 뷰, 전체 동선 시 `saddr` & `daddr` 멀티 경유지 차량 길찾기 모드(`dirflg=d`, `travelmode=driving`) URL을 생성하는 `buildGoogleMapsEmbedUrl` 구현.
    - 하단 지점 1, 2, 3... 항목들을 세로로 펼쳐진 카드 리스트로 배치하고, 클릭 시 해당 거점으로 지도 포커스를 이동하거나 전체 경로로 복귀할 수 있는 직관적인 인터랙션 제공.

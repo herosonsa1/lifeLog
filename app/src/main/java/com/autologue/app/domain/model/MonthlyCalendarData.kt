@@ -9,7 +9,8 @@ data class DaySummary(
     val hasGolfRound: Boolean = false,
     val hasRefueling: Boolean = false,
     val photoCount: Int = 0,
-    val entryCount: Int = 0
+    val entryCount: Int = 0,
+    val totalDistanceKm: Double = 0.0
 )
 
 data class MonthlySummary(

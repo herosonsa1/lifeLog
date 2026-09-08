@@ -312,7 +312,7 @@ object SmsParser {
 
     private fun parseStandardCard(body: String, sender: String?, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
         val pattern = Pattern.compile(
-            """(?:\[Web발신\])?\s*(?:\[(?<cardHeader>[^\]]+)\])?\s*(?<cardName>[가-힣A-Za-z0-9]+(?:카드|체크|신용|페이|은행)?)(?:\s*(?<cardNo>\d{4}|\d+\*+))?\s*(?:승인)?\s*(?:[가-힣\*]+\s+)?(?<amount>[\d,]+)원(?:\s*(?:일시불|\d+개월))?(?:\s*(?<month>\d{1,2})/(?<day>\d{1,2}))?(?:\s*(?<hour>\d{1,2}):(?<minute>\d{1,2}))?\s*(?<merchant>.+)""",
+            """(?:\[Web발신\])?\s*(?:\[(?<cardHeader>[^\]]+)\])?\s*(?<cardName>[가-힣A-Za-z0-9]+(?:카드|체크|신용|페이|은행)?)(?:\s*(?<cardNo>\d{4}|\d+\*+))?\s*(?:승인)?\s*(?:[가-힣\*]+\s+)?(?<amount>[\d,]+)원(?:\s*(?:\((?:일시불|\d+개월)\)|일시불|\d+개월))?(?:\s*(?<month>\d{1,2})/(?<day>\d{1,2}))?(?:\s*(?<hour>\d{1,2}):(?<minute>\d{1,2}))?\s*(?<merchant>.+)""",
             Pattern.DOTALL
         )
         val m = pattern.matcher(body)
@@ -338,7 +338,10 @@ object SmsParser {
             }
 
             var merchant = m.group("merchant")?.trim() ?: "카드 가맹점"
-            merchant = merchant.replace("일시불", "").replace("승인", "").trim()
+            merchant = merchant.replace("일시불", "").replace("승인", "")
+                .replace(Regex("""\s*누적[\d,]+.*$"""), "")
+                .replace(Regex("""\s*잔액[\d,]+.*$"""), "")
+                .trim()
 
             val category = RuleMatcherEngine.classifyMerchant(merchant)
             return Transaction(
