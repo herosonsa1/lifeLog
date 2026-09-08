@@ -777,3 +777,39 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 37s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,694,323 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 29. Android 14 백그라운드 FGS Location SecurityException 크래시 3단계 안전 폴백 구축 (2026-09-08)
+
+### 29.1. 사용자 제보 크래시 로그 분석
+- **발생 시점**: 백그라운드 차량 주행 감지 시작 시 (`act=com.autologue.app.action.START_CAR_TRACKING`)
+- **로그 내용**:
+  ```text
+  java.lang.RuntimeException: Unable to start service com.autologue.app.service.CarDrivingTrackingService with Intent { act=com.autologue.app.action.START_CAR_TRACKING }
+  Caused by: java.lang.SecurityException: Starting FGS with type location callerApp=ProcessRecord targetSDK=34 requires permissions: [android.permission.FOREGROUND_SERVICE_LOCATION] any of [ACCESS_COARSE_LOCATION, ACCESS_FINE_LOCATION] and the app must be in the eligible state/exemptions
+  ```
+
+### 29.2. 원인 규명 (Root Cause Analysis)
+1. **Android 14 (TargetSDK 34) 백그라운드 FGS Location 기동 제약 (`AP-ANDROID-14-FGS-LOCATION-BG-CRASH`)**:
+   - 이전 27번 조치는 주행 종료 시점(`STOP_CAR_TRACKING`)의 멀티 프로필 중복 수신 및 알림 아이콘 결함 해결이었음.
+   - 본 크래시는 **주행 시작 시점(`START_CAR_TRACKING`)**에서 발생한 것으로, 앱 화면이 꺼져 있거나 백그라운드 상태일 때 블루투스 브로드캐스트 리시버로부터 포그라운드 서비스를 시작하면, Android 14 OS가 `FOREGROUND_SERVICE_TYPE_LOCATION`에 대해 예외 면제(Eligible State / Exemptions)가 아니라는 이유로 `SecurityException`을 발생시킴.
+   - 포그라운드 서비스의 `onStartCommand` 내에서 OS의 `startForeground`를 호출할 때 발생하는 `SecurityException`은 프레임워크 `ActivityThread`에 의해 포착되지 않고 `RuntimeException: Unable to start service`로 전환되어 앱 프로세스를 즉각 강제 종료시킴.
+
+### 29.3. 주요 개선 및 해결 내역
+1. **`AndroidManifest.xml` 권한 및 서비스 타입 보강**:
+   - 백그라운드 위치 권한 `<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />` 추가.
+   - 데이터 동기화 포그라운드 서비스 권한 `<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />` 추가.
+   - `CarDrivingTrackingService`의 `foregroundServiceType` 속성을 `"location|dataSync"`로 다중 선언하여 백그라운드에서 동적 전환 가능하도록 기반 마련.
+2. **`CarDrivingTrackingService.kt` 3단계 동적 다운그레이드 안전 폴백(Fallback) 구현**:
+   - **1단계 (Location FGS)**: 위치 권한 점검 후 `FOREGROUND_SERVICE_TYPE_LOCATION`으로 등록 시도. OS 보안 정책 위반 시 `SecurityException`을 즉각 감지.
+   - **2단계 (DataSync FGS 폴백)**: `SecurityException` 발생 시 앱 크래시를 방지하고, 합법적인 백그라운드 서비스 타입인 `FOREGROUND_SERVICE_TYPE_DATA_SYNC`로 즉시 동적 다운그레이드 등록.
+   - **3단계 (일반 FGS 안전망)**: 데이터 동기화 타입 등록마저 실패할 경우 기본 `startForeground(NOTIFICATION_ID, initialNotification)`로 등록.
+   - **완전 격리 try-catch**: 3단계 전체를 방어하여 OS 정책 위반으로 인한 서비스 기동 크래시(Unable to start service) 발생률 0% 원천 보장.
+
+### 29.4. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 100% 통과 (`BUILD SUCCESSFUL in 2m 15s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+

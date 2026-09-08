@@ -189,22 +189,68 @@ class CarDrivingTrackingService : Service() {
             waypoints.clear()
         }
 
-        // 1. 포그라운드 서비스 알림 등록 (Android 14+ 위치 타입 명시)
+        // 1. 포그라운드 서비스 알림 등록 (Android 14+ 위치 타입 명시 및 SecurityException 안전 폴백)
         val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
         val initialNotification = buildNotification("$brandEmoji [$activeVehicleName] 탑승 운행 시작", "블루투스 감지 탑승 중 · 10분 주기 GPS 경로 수집 시작")
+
+        var isForegroundStarted = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceCompat.startForeground(
+            val hasFineLocation = androidx.core.content.ContextCompat.checkSelfPermission(
                 this,
-                NOTIFICATION_ID,
-                initialNotification,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-                } else {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val hasCoarseLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            // 1단계: 위치 권한 보유 시 FOREGROUND_SERVICE_TYPE_LOCATION 시도
+            if (hasFineLocation || hasCoarseLocation) {
+                try {
+                    val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                    } else {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                    }
+                    ServiceCompat.startForeground(this, NOTIFICATION_ID, initialNotification, fgsType)
+                    isForegroundStarted = true
+                    Log.d(TAG, "포그라운드 서비스 location 타입 기동 성공")
+                } catch (sec: SecurityException) {
+                    Log.w(TAG, "Android 14 백그라운드 FGS location 타입 기동 제한 감지. dataSync 또는 일반 타입으로 다운그레이드", sec)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "FGS location 기동 중 예외 발생", t)
                 }
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, initialNotification)
+            }
+
+            // 2단계: 1단계 실패 시 FOREGROUND_SERVICE_TYPE_DATA_SYNC 시도 (Android 14)
+            if (!isForegroundStarted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                try {
+                    ServiceCompat.startForeground(this, NOTIFICATION_ID, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                    isForegroundStarted = true
+                    Log.d(TAG, "포그라운드 서비스 dataSync 타입 안전 기동 성공")
+                } catch (sec: SecurityException) {
+                    Log.w(TAG, "FGS dataSync 기동 제한 감지. 기본 타입으로 폴백", sec)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "FGS dataSync 기동 예외", t)
+                }
+            }
+        }
+
+        // 3단계: 최후의 안전 폴백 (기본 startForeground)
+        if (!isForegroundStarted) {
+            try {
+                startForeground(NOTIFICATION_ID, initialNotification)
+                isForegroundStarted = true
+                Log.d(TAG, "포그라운드 서비스 기본 타입 기동 성공")
+            } catch (t: Throwable) {
+                Log.e(TAG, "기본 startForeground 호출 실패. 크래시 방지 및 서비스 안전 종료", t)
+                synchronized(stateLock) {
+                    isTracking = false
+                    isStopping = false
+                }
+                stopSelf()
+                return
+            }
         }
 
         // 2. 출발지 GPS 즉시 수집
