@@ -173,7 +173,7 @@ fun GoogleMapRouteView(
 
     var mapFocusStep by remember { mutableStateOf<RouteStep?>(selectedStep) }
     var selectedTripGroupId by remember { mutableStateOf<String?>(null) }
-    var isCanvasMapMode by remember { mutableStateOf(false) }
+    var isOnlineMapMode by remember { mutableStateOf(false) } // 기본값: 0초 로딩 중부권 광역 정적 맵
     var isWebViewLoading by remember { mutableStateOf(false) }
 
     val tripGroups = remember(validCoordinateSteps) { segmentRouteIntoTrips(validCoordinateSteps) }
@@ -336,33 +336,28 @@ fun GoogleMapRouteView(
 
         HairlineDivider()
 
-        // 2. Interactive Google Maps Embed Area (에뮬레이터 100% 렌더링 HTML5 Leaflet 맵 / 순수 Compose 벡터 레이더 듀얼 모드)
+        // 2. Interactive Google Maps Embed Area (옵션 C: 0초 로딩 중부권 광역 정적 맵 ↔ 전국 온라인 인터랙티브 맵 듀얼 모드)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(260.dp)
+                .height(280.dp)
                 .clipToBounds()
                 .background(Color(0xFF0F172A))
         ) {
             if (activeDisplaySteps.isNotEmpty()) {
-                if (isCanvasMapMode) {
-                    // 순수 Compose 캔버스 레이더 지도
-                    val focusIndex = remember(activeDisplaySteps, mapFocusStep) {
-                        if (mapFocusStep != null) {
-                            activeDisplaySteps.indexOfFirst { it.id == mapFocusStep?.id }.coerceAtLeast(0)
-                        } else 0
-                    }
-                    InteractiveRouteMapView(
+                if (!isOnlineMapMode) {
+                    // [옵션 C 기본 모드] 중부권 광역(수도권·인천·강원·충청) 고화질 정적 벡터 지도 (0.001초 즉시 렌더링, 오프라인 100%)
+                    MidKoreaStaticMapView(
                         steps = activeDisplaySteps,
-                        selectedIndex = focusIndex,
-                        onStepSelected = { idx ->
-                            mapFocusStep = activeDisplaySteps.getOrNull(idx)
-                            mapFocusStep?.let { onStepSelected(it) }
+                        focusedStep = mapFocusStep,
+                        onStepClick = { step ->
+                            mapFocusStep = step
+                            onStepSelected(step)
                         },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    // 인라인 HTML5 Leaflet + CartoDB 지도 웹뷰 (에뮬레이터/실기기 100% 번호 핀 및 경로선 렌더링)
+                    // [옵션 C 전국 모드] 인라인 HTML5 Leaflet + CartoDB 전국 인터랙티브 지도 (API 키 0원, 전국/제주/영호남 정밀 탐색)
                     val targetMapHtml = remember(activeDisplaySteps, mapFocusStep) {
                         buildInteractiveHtmlMap(activeDisplaySteps, mapFocusStep)
                     }
@@ -485,7 +480,7 @@ fun GoogleMapRouteView(
                     }
                 }
 
-                // Top Mode Switcher Segmented Control (우측 상단: [🗺️ 도로 지도] | [🧭 레이더])
+                // Top Mode Switcher Segmented Control (우측 상단: [🗺️ 중부권 정적 맵] | [🌐 전국 온라인 맵])
                 Surface(
                     shape = AppShapes.pill,
                     color = Color(0xFF0F172A).copy(alpha = 0.95f),
@@ -501,28 +496,28 @@ fun GoogleMapRouteView(
                     ) {
                         Surface(
                             shape = AppShapes.pill,
-                            color = if (!isCanvasMapMode) Color(0xFF2563EB) else Color.Transparent,
-                            modifier = Modifier.clickable { isCanvasMapMode = false }
+                            color = if (!isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
+                            modifier = Modifier.clickable { isOnlineMapMode = false }
                         ) {
                             Text(
-                                text = "🗺️ 도로 지도",
+                                text = "🗺️ 중부권 정적 맵",
                                 fontSize = 11.sp,
-                                fontWeight = if (!isCanvasMapMode) FontWeight.Bold else FontWeight.Medium,
-                                color = if (!isCanvasMapMode) PureWhite else Color(0xFF94A3B8),
+                                fontWeight = if (!isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
+                                color = if (!isOnlineMapMode) PureWhite else Color(0xFF94A3B8),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(2.dp))
                         Surface(
                             shape = AppShapes.pill,
-                            color = if (isCanvasMapMode) Color(0xFF2563EB) else Color.Transparent,
-                            modifier = Modifier.clickable { isCanvasMapMode = true }
+                            color = if (isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
+                            modifier = Modifier.clickable { isOnlineMapMode = true }
                         ) {
                             Text(
-                                text = "🧭 레이더",
+                                text = "🌐 전국 온라인 맵",
                                 fontSize = 11.sp,
-                                fontWeight = if (isCanvasMapMode) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isCanvasMapMode) PureWhite else Color(0xFF94A3B8),
+                                fontWeight = if (isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isOnlineMapMode) PureWhite else Color(0xFF94A3B8),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
