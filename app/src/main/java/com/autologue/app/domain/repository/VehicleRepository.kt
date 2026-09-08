@@ -13,6 +13,7 @@ interface VehicleRepository {
     suspend fun cleanDuplicates(): Int
     suspend fun cleanDuplicatesAndCorruptedLogs(homeName: String = "", companyName: String = "", commuteDistanceKm: Double = 0.0): Int
     suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int
+    suspend fun syncDrivingLogsFromDiary(diaryEntries: List<com.autologue.app.domain.model.DiaryEntry>): Int
     suspend fun clearTripDrivingLogs(): Int
     suspend fun recordCommuteTrip(isToWork: Boolean, homeName: String, companyName: String, distanceKm: Double): Long
 }

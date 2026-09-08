@@ -462,5 +462,31 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 19. 차계부 총 주행거리 및 다이어리 이동 동선 양방향 동기화 연동 (2026-09-08)
+
+### 19.1. 사용자 핵심 요청 사항
+- 다이어리 및 캘린더뿐만 아니라, **차계부(`CarLedgerScreen`, `CarLedgerViewModel`)에서도 거점 기반 주행거리가 총 주행거리 및 차계부 내역에 정상 연동·적용**되도록 요청.
+
+### 19.2. 주요 개선 및 구현 내역
+1. **차계부 실시간 주행거리 결합 엔진 탑재 (`CarLedgerViewModel.kt`)**:
+   - `DiaryRepository`를 주입하여 차계부 로그(`vehicleRepository.getAllVehicleLogsFlow()`)와 다이어리 엔트리(`diaryRepository.getDiaryEntriesFlow()`)를 실시간 `combine` 관찰.
+   - 차량 OBD/TMap 운행 로그가 없더라도 다이어리의 도로 주행거리(`diaryDist`)를 정밀 결합하여, 차계부 상단 **"총 주행: %.1f km"**에 즉시 실시간 반영.
+   - 누적 총 주행거리와 총 주유량을 결합하여 실제 주행 기반의 **정밀 평균 연비(`averageEfficiencyKmPerL`)** 자동 계산.
+2. **다이어리 이동 동선 차계부 자동 동기화 (`syncDrivingLogsFromDiary`)**:
+   - [`VehicleRepository.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/repository/VehicleRepository.kt) 및 [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt)에 `syncDrivingLogsFromDiary` 구현.
+   - 다이어리 이동 기록이 존재하는 날짜에 차계부 주행 로그(`VehicleLogType.TRIP_DRIVING`)가 없을 경우, 해당 거점 이동거리와 동선 요약 메모(`다이어리 이동 동선 (...)`)를 가진 차량 주행 카드를 자동 생성·등록.
+   - 차계부 동기화(`manualSyncRefueling`) 시 주유비뿐만 아니라 다이어리 주행 내역도 자동 동기화되어 차계부 타임라인 목록에 등록되도록 연계.
+3. **차량 소모품 정비 알림 연동 (`ConsumableMaintenanceDialog.kt`)**:
+   - 차계부의 `totalDrivingDistanceKm`이 거점 기반 이동거리까지 포함하여 정확한 누적 km로 산출됨에 따라, 소모품 교체 주기 알림도 실제 주행거리에 맞춰 정밀하게 작동하도록 보장.
+
+### 19.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 12개 테스트 100% 통과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 33s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 
 

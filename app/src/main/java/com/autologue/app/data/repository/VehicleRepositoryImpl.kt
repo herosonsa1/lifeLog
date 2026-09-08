@@ -5,6 +5,7 @@ import com.autologue.app.data.local.entity.VehicleLogEntity
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.domain.repository.VehicleRepository
+import com.autologue.app.util.LocationDistanceUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -83,6 +84,48 @@ class VehicleRepositoryImpl @Inject constructor(
                         daysSinceLastFuel = daysSince,
                         gasStationName = tx.merchantName,
                         note = "가계부 결제 내역 자동 분석"
+                    )
+                    vehicleLogDao.insertVehicleLog(log.toEntity())
+                    addedCount++
+                }
+            }
+        }
+        addedCount
+    }
+
+    override suspend fun syncDrivingLogsFromDiary(
+        diaryEntries: List<com.autologue.app.domain.model.DiaryEntry>
+    ): Int = withContext(Dispatchers.IO) {
+        var addedCount = 0
+        val existingLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }
+
+        for (entry in diaryEntries) {
+            val dist = if (entry.drivingDistanceKm > 0.0) {
+                entry.drivingDistanceKm
+            } else {
+                LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+            }
+
+            if (dist > 0.0) {
+                val date = entry.date.toLocalDate()
+                val alreadyHasDrivingLog = existingLogs.any {
+                    it.logType == VehicleLogType.TRIP_DRIVING &&
+                    it.timestamp.toLocalDate() == date &&
+                    it.tripDistanceKm > 0.0
+                }
+
+                if (!alreadyHasDrivingLog) {
+                    val noteText = if (!entry.movementSummary.isNullOrBlank() && entry.movementSummary != "기록된 활동 없음") {
+                        "다이어리 이동 동선 (${entry.movementSummary})"
+                    } else {
+                        "${entry.title} 이동"
+                    }
+
+                    val log = VehicleLog(
+                        timestamp = entry.date,
+                        logType = VehicleLogType.TRIP_DRIVING,
+                        tripDistanceKm = dist,
+                        note = noteText
                     )
                     vehicleLogDao.insertVehicleLog(log.toEntity())
                     addedCount++

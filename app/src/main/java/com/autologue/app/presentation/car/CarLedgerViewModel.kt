@@ -10,13 +10,16 @@ import com.autologue.app.data.preferences.VehicleMaintenancePreferences
 import com.autologue.app.data.preferences.VehicleProfile
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
+import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
+import com.autologue.app.util.LocationDistanceUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -43,6 +46,7 @@ data class CarLedgerUiState(
 class CarLedgerViewModel @Inject constructor(
     private val vehicleRepository: VehicleRepository,
     private val transactionRepository: TransactionRepository,
+    private val diaryRepository: DiaryRepository,
     private val locationPreferences: UserLocationPreferences,
     private val maintenancePreferences: VehicleMaintenancePreferences,
     private val multiVehiclePreferences: MultiVehiclePreferences
@@ -104,19 +108,36 @@ class CarLedgerViewModel @Inject constructor(
 
     private fun loadData() {
         viewModelScope.launch {
-            vehicleRepository.getAllVehicleLogsFlow().collectLatest { logs ->
+            combine(
+                vehicleRepository.getAllVehicleLogsFlow(),
+                diaryRepository.getDiaryEntriesFlow()
+            ) { logs, diaryEntries ->
                 val fuelLogs = logs.filter { it.logType == VehicleLogType.REFUELING }
                 val totalFuel = fuelLogs.sumOf { it.fuelCost }
                 val latest = fuelLogs.firstOrNull()?.daysSinceLastFuel
-                val totalDist = logs.sumOf { it.tripDistanceKm }
+
+                val vehicleLogDist = logs.sumOf { it.tripDistanceKm }
+                val diaryDist = diaryEntries.sumOf { entry ->
+                    if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
+                    else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+                }
+                val totalDist = if (vehicleLogDist > 0.0) maxOf(vehicleLogDist, diaryDist) else diaryDist
+
+                val totalFuelLiters = fuelLogs.sumOf { it.fuelAmountLiters }
+                val avgEff = if (totalDist > 0.0 && totalFuelLiters > 0.0) {
+                    Math.round((totalDist / totalFuelLiters) * 10.0) / 10.0
+                } else {
+                    12.5
+                }
 
                 _uiState.value = _uiState.value.copy(
                     logs = logs,
                     totalFuelExpense = totalFuel,
                     latestIntervalDays = latest,
-                    totalDrivingDistanceKm = totalDist
+                    totalDrivingDistanceKm = Math.round(totalDist * 10.0) / 10.0,
+                    averageEfficiencyKmPerL = avgEff
                 )
-            }
+            }.collectLatest { }
         }
     }
 
@@ -129,6 +150,10 @@ class CarLedgerViewModel @Inject constructor(
             }
             val txs = transactionRepository.getAllTransactionsFlow().first()
             vehicleRepository.syncRefuelingFromTransactions(txs)
+
+            val diaryList = diaryRepository.getDiaryEntriesFlow().first()
+            vehicleRepository.syncDrivingLogsFromDiary(diaryList)
+
             if (cfg.isConfigured) {
                 vehicleRepository.cleanDuplicatesAndCorruptedLogs(cfg.homeName, cfg.companyName, cfg.commuteRoundTripKm)
             }
