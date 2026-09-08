@@ -643,16 +643,26 @@ fun GolfRoundDetailDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            decorFitsSystemWindows = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.92f),
-            shape = AppShapes.modal,
-            color = AppColors.surface,
-            tonalElevation = 6.dp
+                .fillMaxSize()
+                .imePadding()
+                .systemBarsPadding(),
+            contentAlignment = Alignment.Center
         ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .fillMaxHeight(0.92f),
+                shape = AppShapes.modal,
+                color = AppColors.surface,
+                tonalElevation = 6.dp
+            ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // 1. Header
                 Row(
@@ -1082,6 +1092,7 @@ fun GolfRoundDetailDialog(
             }
         }
     }
+}
 
     // Round Time Edit Sub-Dialog
     if (showTimeEditDialog) {
@@ -1500,6 +1511,8 @@ fun GolfDutchPayDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(decorFitsSystemWindows = false),
+        modifier = Modifier.imePadding(),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("💸 동반자 1/N 정산기", fontWeight = FontWeight.Bold, fontSize = 17.sp)
@@ -1926,6 +1939,8 @@ fun AddGolfReservationDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(decorFitsSystemWindows = false),
+        modifier = Modifier.imePadding(),
         title = { Text("⛳ 골프 라운드 예약 등록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
         text = {
             Column(

@@ -49,16 +49,26 @@ fun VehicleManageDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            decorFitsSystemWindows = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .fillMaxHeight(0.90f),
-            shape = RoundedCornerShape(20.dp),
-            color = AppColors.surface,
-            shadowElevation = 8.dp
+                .fillMaxSize()
+                .imePadding()
+                .systemBarsPadding(),
+            contentAlignment = Alignment.Center
         ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.94f)
+                    .fillMaxHeight(0.90f),
+                shape = RoundedCornerShape(20.dp),
+                color = AppColors.surface,
+                shadowElevation = 8.dp
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -178,6 +188,7 @@ fun VehicleManageDialog(
             }
         }
     }
+}
 }
 
 @Composable

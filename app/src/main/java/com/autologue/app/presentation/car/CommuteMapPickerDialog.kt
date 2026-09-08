@@ -313,16 +313,26 @@ fun CommuteMapPickerDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            decorFitsSystemWindows = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = AppColors.surface,
-            shadowElevation = 12.dp,
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.92f)
+                .fillMaxSize()
+                .imePadding()
+                .systemBarsPadding(),
+            contentAlignment = Alignment.Center
         ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = AppColors.surface,
+                shadowElevation = 12.dp,
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .fillMaxHeight(0.92f)
+            ) {
             Column(modifier = Modifier.fillMaxSize().padding(Spacing.md)) {
                 // Header
                 Row(
@@ -717,6 +727,7 @@ fun CommuteMapPickerDialog(
             }
         }
     }
+}
 }
 
 @Composable

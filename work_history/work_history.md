@@ -487,6 +487,35 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 20. 소프트 키보드(IME) 팝업 시 본문 가림 방지 및 전 화면 스크롤 보장 공통 적용 (2026-09-08)
+
+### 20.1. 사용자 핵심 요청 사항
+- 입력란 중간에서 소프트 키보드가 올라올 때, 하단의 콘텐츠 및 저장/취소 버튼이 키보드 뒤에 가려져 스크롤을 해도 보이지 않던 결함 해결 (`media_1788841909631.png`).
+- 키보드가 표시되면 키보드에 가리지 않도록 **본문 내용이 끝까지 스크롤 가능하게 모든 화면에 공통 적용** 요청.
+
+### 20.2. 주요 개선 및 구현 내역
+1. **전역 Manifest 소프트 입력 모드 최적화 (`AndroidManifest.xml`)**:
+   - `MainActivity`에 `android:windowSoftInputMode="adjustResize"` 속성을 추가하여, 시스템 레벨에서 소프트 키보드가 올라올 때 전체 창 크기를 키보드 높이만큼 자동으로 축소(Resize)하도록 보장.
+2. **다이얼로그 공통 IME Insets 래퍼 아키텍처 탑재**:
+   - `DialogProperties(decorFitsSystemWindows = false, usePlatformDefaultWidth = false)`를 설정하여 다이얼로그 창 내로 안드로이드 시스템 IME WindowInsets가 온전히 인입되도록 허용.
+   - 다이얼로그 루트에 `Box(modifier = Modifier.fillMaxSize().imePadding().systemBarsPadding(), contentAlignment = Alignment.Center)`를 적용하여, 키보드가 팝업되면 **다이얼로그 윈도우 자체가 키보드 상단 경계선 위로 부드럽게 리사이즈/상승**하도록 구축.
+   - 내부 스크롤 컨테이너(`Column(modifier = Modifier.weight(1f).verticalScroll(...))`)가 줄어든 가용 영역 내에서 최하단까지 매끄럽게 스크롤되도록 보장.
+3. **앱 전 화면 및 모든 입력 다이얼로그 전수 적용**:
+   - **소모품 교체 주기 및 이력 설정** ([`ConsumableMaintenanceDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/ConsumableMaintenanceDialog.kt)): 에어컨 필터, 타이어 위치 교환 등 하단 카드 및 [기본 추천값 초기화], [취소], [설정 저장] 버튼이 키보드 위에서 완벽히 스크롤/탭 가능.
+   - **보유 차량 프로필 관리** ([`VehicleManageDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/VehicleManageDialog.kt)): 차량 번호, 블루투스, 연비 입력 시 하단 저장 버튼 가림 방지.
+   - **출퇴근 거점 지도 설정** ([`CommuteMapPickerDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CommuteMapPickerDialog.kt)): 집/회사 검색어 입력 시 키보드 인셋 대응.
+   - **골프 예약 및 정산/상세** ([`GolfScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/golf/GolfScreen.kt)): `AddGolfReservationDialog`, `GolfDutchPayDialog`, `GolfRoundDetailDialog` 3종 모두 `imePadding` 및 스크롤 보장.
+   - **다이어리 상세 및 동행자** ([`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt)): `DiaryDetailDialog`, `AddCompanionDialog` 키보드 반응형 인셋 완료.
+
+### 20.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 12개 테스트 100% 통과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 22s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 
 
 

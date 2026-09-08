@@ -784,18 +784,28 @@ fun DiaryDetailDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            decorFitsSystemWindows = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .fillMaxHeight(0.88f)
-                .clip(AppShapes.modal)
-                .background(AppColors.surface),
-            color = AppColors.surface,
-            shape = AppShapes.modal,
-            tonalElevation = 6.dp
+                .fillMaxSize()
+                .imePadding()
+                .systemBarsPadding(),
+            contentAlignment = Alignment.Center
         ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.94f)
+                    .fillMaxHeight(0.88f)
+                    .clip(AppShapes.modal)
+                    .background(AppColors.surface),
+                color = AppColors.surface,
+                shape = AppShapes.modal,
+                tonalElevation = 6.dp
+            ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -946,6 +956,7 @@ fun DiaryDetailDialog(
             }
         }
     }
+}
 }
 
 @Composable
@@ -1343,6 +1354,8 @@ fun AddCompanionDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(decorFitsSystemWindows = false),
+        modifier = Modifier.imePadding(),
         title = {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
