@@ -91,7 +91,10 @@ class MultiVehiclePreferences @Inject constructor(
     fun findVehicleByBluetooth(deviceName: String): VehicleProfile? {
         if (deviceName.isBlank()) return null
         return _vehicles.value.firstOrNull {
-            it.bluetoothDevice.isNotBlank() && deviceName.contains(it.bluetoothDevice, ignoreCase = true)
+            it.bluetoothDevice.isNotBlank() && (
+                deviceName.contains(it.bluetoothDevice, ignoreCase = true) ||
+                it.bluetoothDevice.contains(deviceName, ignoreCase = true)
+            )
         }
     }
 }

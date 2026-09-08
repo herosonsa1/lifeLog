@@ -439,6 +439,7 @@ fun SaaSCarLogRow(log: VehicleLog) {
     ) {
         val isCommute = log.note?.contains("출퇴근") == true
         val isGolf = log.note?.contains("골프") == true || log.note?.contains("라운딩") == true || log.note?.contains("CC") == true
+        val carTag = Regex("\\[(.*?)\\]").find(log.note ?: "")?.groupValues?.get(1)?.split(" ")?.firstOrNull()
 
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -467,6 +468,14 @@ fun SaaSCarLogRow(log: VehicleLog) {
                         else -> Slate100
                     }
                 )
+                if (carTag != null) {
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    MetricBadge(
+                        text = "🚗 $carTag",
+                        textColor = Indigo700,
+                        backgroundColor = Indigo50
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(Spacing.xxs))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {

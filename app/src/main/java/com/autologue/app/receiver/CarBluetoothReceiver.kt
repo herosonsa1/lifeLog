@@ -86,11 +86,27 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             when (action) {
                 BluetoothDevice.ACTION_ACL_CONNECTED -> {
                     val activeName = matchedVehicle?.name ?: "차량"
-                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 감지: $deviceName ($activeName). 출발 지점 캡처 시작")
+                    val activePlate = matchedVehicle?.licensePlate ?: ""
+                    val vehicleId = matchedVehicle?.id ?: "car_1"
+                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 감지: $deviceName ($activeName, $activePlate). 백그라운드 10분 주기 추적 서비스 시작")
+                    
+                    // 백그라운드 포그라운드 GPS 10분 주기 추적 서비스 시작
+                    try {
+                        com.autologue.app.service.CarDrivingTrackingService.startTracking(
+                            context = context,
+                            vehicleId = vehicleId,
+                            vehicleName = activeName,
+                            licensePlate = activePlate
+                        )
+                    } catch (e: Throwable) {
+                        Log.e("CarBluetoothReceiver", "CarDrivingTrackingService 시작 실패", e)
+                    }
+
                     val loc = getCurrentLocation(context)
                     prefs.edit()
                         .putBoolean("is_driving", true)
                         .putString("active_car_name", activeName)
+                        .putString("active_car_plate", activePlate)
                         .putLong("start_time", System.currentTimeMillis())
                         .putFloat("start_lat", (loc?.latitude ?: 0.0).toFloat())
                         .putFloat("start_lng", (loc?.longitude ?: 0.0).toFloat())
@@ -98,86 +114,20 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                 }
 
             BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제: $deviceName. 도착 지점 판별 시작")
+                Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제: $deviceName. 도착 지점 및 주행 완료 처리 시작")
+                
+                // 백그라운드 GPS 추적 서비스에 정지 및 기록 신호 전송
+                try {
+                    com.autologue.app.service.CarDrivingTrackingService.stopTracking(context)
+                } catch (e: Throwable) {
+                    Log.e("CarBluetoothReceiver", "CarDrivingTrackingService 정지 신호 전송 실패", e)
+                }
+
                 val isDriving = prefs.getBoolean("is_driving", false)
+                prefs.edit().putBoolean("is_driving", false).apply()
                 if (!isDriving) return
 
-                val startTime = prefs.getLong("start_time", 0L)
-                val durationMin = (System.currentTimeMillis() - startTime) / 60000
-
-                // 2분 미만의 초단기 연결 해제는 단순 시동 on/off로 무시
-                if (durationMin < 2) {
-                    prefs.edit().putBoolean("is_driving", false).apply()
-                    return
-                }
-
-                val startLat = prefs.getFloat("start_lat", 0.0f).toDouble()
-                val startLng = prefs.getFloat("start_lng", 0.0f).toDouble()
-
-                val endLoc = getCurrentLocation(context)
-                val endLat = endLoc?.latitude ?: 0.0
-                val endLng = endLoc?.longitude ?: 0.0
-
-                val activeCarName = prefs.getString("active_car_name", "차량") ?: "차량"
-                prefs.edit().putBoolean("is_driving", false).apply()
-
-                // [H-03] goAsync(): onReceive() 반환 후에도 프로세스를 살려 DB 기록 완료를 보장
-                val pendingResult = goAsync()
-                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                    try {
-                        val homeLat = config.homeLat
-                        val homeLng = config.homeLng
-                        val compLat = config.companyLat
-                        val compLng = config.companyLng
-
-                        val distFromHomeToStart = distanceMeter(homeLat, homeLng, startLat, startLng)
-                        val distFromCompToEnd = distanceMeter(compLat, compLng, endLat, endLng)
-
-                        val distFromCompToStart = distanceMeter(compLat, compLng, startLat, startLng)
-                        val distFromHomeToEnd = distanceMeter(homeLat, homeLng, endLat, endLng)
-
-                        // 1. 집 -> 회사 출근 판별 (출발지 집 반경 800m & 도착지 회사 반경 800m)
-                        if (homeLat != 0.0 && compLat != 0.0 && distFromHomeToStart < 800 && distFromCompToEnd < 800) {
-                            val oneWay = if (config.commuteOneWayKm > 0) config.commuteOneWayKm else calculateRoundTripDistanceKm(homeLat, homeLng, compLat, compLng) / 2.0
-                            vehicleRepository.recordCommuteTrip(
-                                isToWork = true,
-                                homeName = config.homeName.ifBlank { "우리집" },
-                                companyName = config.companyName.ifBlank { "회사" },
-                                distanceKm = oneWay
-                            )
-                            Log.d("CarBluetoothReceiver", "출근 주행 감지 및 자동 기록 완료: [${activeCarName}] ${oneWay}km")
-                        }
-                        // 2. 회사 -> 집 퇴근 판별 (출발지 회사 반경 800m & 도착지 집 반경 800m)
-                        else if (homeLat != 0.0 && compLat != 0.0 && distFromCompToStart < 800 && distFromHomeToEnd < 800) {
-                            val oneWay = if (config.commuteOneWayKm > 0) config.commuteOneWayKm else calculateRoundTripDistanceKm(homeLat, homeLng, compLat, compLng) / 2.0
-                            vehicleRepository.recordCommuteTrip(
-                                isToWork = false,
-                                homeName = config.homeName.ifBlank { "우리집" },
-                                companyName = config.companyName.ifBlank { "회사" },
-                                distanceKm = oneWay
-                            )
-                            Log.d("CarBluetoothReceiver", "퇴근 주행 감지 및 자동 기록 완료: [${activeCarName}] ${oneWay}km")
-                        }
-                        // 3. 일반 차량 주행 판별
-                        else if (startLat != 0.0 && endLat != 0.0) {
-                            val straightKm = calculateStraightDistanceKm(startLat, startLng, endLat, endLng)
-                            val tripKm = (straightKm * 1.25).coerceAtLeast(1.0)
-                            val log = com.autologue.app.domain.model.VehicleLog(
-                                timestamp = LocalDateTime.now(),
-                                logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
-                                tripDistanceKm = tripKm,
-                                note = "[$activeCarName] 블루투스 연동 자동 주행 ($durationMin 분 운행)"
-                            )
-                            vehicleRepository.insertVehicleLog(log)
-                            Log.d("CarBluetoothReceiver", "일반 주행 자동 기록 완료: [${activeCarName}] ${tripKm}km")
-                        }
-                    } catch (t: Throwable) {
-                        Log.e("CarBluetoothReceiver", "주행 기록 중 오류 발생", t)
-                    } finally {
-                        // [H-03] 코루틴 완료 후 PendingResult.finish() → 시스템에 작업 완료 신호
-                        pendingResult.finish()
-                    }
-                }
+                Log.d("CarBluetoothReceiver", "CarDrivingTrackingService에 주행 종료 및 정밀 거리 기록 위임 완료")
             }
         }
     } catch (t: Throwable) {

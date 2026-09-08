@@ -146,14 +146,29 @@ class DailyRouteAggregator @Inject constructor(
 
         // 4. Map Vehicle Logs
         for (vLog in vehicleLogs) {
+            val note = vLog.note ?: ""
+            // [차량명 (차량번호)] 파싱 (예: "[벤츠 A클래스 (169저7737)]" 또는 "[벤츠 A클래스]")
+            val matchedBracket = Regex("\\[(.*?)\\]").find(note)?.groupValues?.get(1)
+            val carDisplayTitle = if (matchedBracket != null) {
+                "차량 주행 [$matchedBracket]"
+            } else {
+                "차량 주행"
+            }
+            val stepDesc = when {
+                note.isNotBlank() -> note
+                else -> "주행 거리 %.1f km".format(vLog.tripDistanceKm)
+            }
+            val vehicleTag = matchedBracket ?: "차량"
+
             steps.add(
                 RouteStep(
                     id = UUID.randomUUID().toString(),
                     time = vLog.timestamp,
                     stepType = RouteStepType.DRIVING,
-                    title = "차량 주행",
-                    description = "주행 거리 %.1f km".format(vLog.tripDistanceKm),
-                    category = "차계부"
+                    title = carDisplayTitle,
+                    description = stepDesc,
+                    category = "차계부",
+                    tags = listOf("차량주행", vehicleTag)
                 )
             )
         }
@@ -208,6 +223,10 @@ class DailyRouteAggregator @Inject constructor(
         if (hasGolf) tags.add("골프")
         if (totalExpense > 0) tags.add("지출기록")
         if (photos.isNotEmpty()) tags.add("사진 ${photos.size}장")
+        val vehicleNames = vehicleLogs.mapNotNull { vLog ->
+            Regex("\\[(.*?)\\]").find(vLog.note ?: "")?.groupValues?.get(1)?.split(" ")?.firstOrNull()
+        }.distinct()
+        vehicleNames.forEach { tags.add("🚗 $it") }
         if (totalDistance > 0) tags.add("%.1fkm 주행".format(totalDistance))
 
         return DiaryEntry(

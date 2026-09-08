@@ -76,4 +76,48 @@ object LocationDistanceUtils {
 
         return Math.round(totalDistanceKm * 10.0) / 10.0
     }
+
+    /**
+     * 연속된 DrivingWaypoint 목록 간의 누적 도로 주행거리(km) 계산
+     * - 10분 단위 GPS 수신 위치들을 순차 연결
+     * - 50m 미만의 제자리 정차/신호대기 오차는 중복 합산 방지
+     */
+    fun calculateWaypointsDistanceKm(
+        waypoints: List<DrivingWaypoint>,
+        roadCurveFactor: Double = DEFAULT_ROAD_CURVE_FACTOR
+    ): Double {
+        val validPoints = waypoints.filter {
+            it.latitude != 0.0 && it.longitude != 0.0
+        }
+        if (validPoints.size < 2) return 0.0
+
+        var totalDistanceKm = 0.0
+        var prev = validPoints.first()
+
+        for (i in 1 until validPoints.size) {
+            val curr = validPoints[i]
+            val dist = calculateDrivingDistanceKm(
+                prev.latitude, prev.longitude,
+                curr.latitude, curr.longitude,
+                roadCurveFactor
+            )
+            if (dist >= 0.05) {
+                totalDistanceKm += dist
+                prev = curr
+            }
+        }
+        return Math.round(totalDistanceKm * 10.0) / 10.0
+    }
 }
+
+/**
+ * 백그라운드 GPS 위치 수집 포인트 (10분 단위 및 출발/도착)
+ */
+data class DrivingWaypoint(
+    val timestamp: Long = System.currentTimeMillis(),
+    val latitude: Double,
+    val longitude: Double,
+    val address: String? = null,
+    val isDeparture: Boolean = false,
+    val isDestination: Boolean = false
+)

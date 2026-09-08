@@ -414,7 +414,11 @@ fun GoogleMapRouteView(
                                     RouteStepType.TRANSACTION -> Triple("💳 결제/방문", Emerald50, Emerald700)
                                     RouteStepType.PHOTO -> Triple("📸 사진 기록", Indigo50, Indigo700)
                                     RouteStepType.GOLF -> Triple("⛳ 골프 라운드", Forest50, Forest700)
-                                    RouteStepType.DRIVING -> Triple("🚗 차량 주행", Amber50, Amber700)
+                                    RouteStepType.DRIVING -> {
+                                        val carTag = step.tags.firstOrNull { it != "차량주행" && it != "차량" }
+                                        if (carTag != null) Triple("🚗 $carTag", Amber50, Amber700)
+                                        else Triple("🚗 차량 주행", Amber50, Amber700)
+                                    }
                                     RouteStepType.MEMO -> Triple("📝 메모 기록", Slate100, Slate700)
                                     else -> Triple("📍 이동 거점", Slate100, Slate700)
                                 }

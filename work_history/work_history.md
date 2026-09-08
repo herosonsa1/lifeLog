@@ -515,6 +515,43 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 21. 차량 블루투스 자동감지 탑승 연동 및 백그라운드 10분 주기 GPS 이동경로 기록 (2026-09-08)
+
+### 21.1. 사용자 핵심 요청 사항
+- 등록된 블루투스(자동 감지)가 연결되면 차량 탑승 상태로 자동 간주.
+- 탑승한 채로 백그라운드에서 10분 단위로 GPS 수신 위치를 기록하여 실제 이동경로 생성 및 정밀 차량 주행거리 산출.
+- 어떤 차량(예: 벤츠 A클래스, 볼보 V60cc)을 이용했는지 차계부 및 다이어리 동선에 명확히 추가 표기 요청.
+
+### 21.2. 주요 개선 및 구현 내역
+1. **백그라운드 포그라운드 위치 추적 서비스 (`CarDrivingTrackingService.kt`) 신설**:
+   - Android 14+ 표준 `foregroundServiceType="location"` 기반 Hilt 주입 포그라운드 서비스 구현.
+   - 블루투스 연결 즉시 출발지 GPS 위치를 캡처하고, 무소음 상시 알림(`🚗 [차량명 (차량번호)] 주행 기록 중 · 10분 주기 GPS 경로 수집 중`) 표출.
+   - 10분 간격(600,000ms) 백그라운드 코루틴 타이머로 GPS 위경도를 획득하여 `DrivingWaypoint` 리스트에 순차 누적.
+   - 블루투스 연결 해제(하차) 시 최종 도착지 GPS 좌표를 획득하고, 연속 Waypoint 목록을 기반으로 실제 도로 주행거리 정밀 계산 및 출퇴근/일반 주행 자동 분류 저장.
+   - 비정상 종료 대비 `SharedPreferences`에 Waypoint 실시간 세이프가드 영구화.
+2. **권한 및 매니페스트 설정 (`AndroidManifest.xml`)**:
+   - `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION` 권한 및 서비스 선언 완료.
+3. **블루투스 리시버 연동 및 양방향 매칭 개선 (`CarBluetoothReceiver.kt`, `MultiVehiclePreferences.kt`)**:
+   - `findVehicleByBluetooth`: 기기명 양방향 포함 검색 지원.
+   - 블루투스 `ACTION_ACL_CONNECTED` 시 해당 차량 프로필을 활성 차량으로 자동 전환하고 `CarDrivingTrackingService.startTracking(...)` 호출.
+   - 블루투스 `ACTION_ACL_DISCONNECTED` 시 `CarDrivingTrackingService.stopTracking(...)`으로 단일 위임하여 중복 기록 원천 차단.
+4. **정밀 연속 Waypoint 주행거리 연산 (`LocationDistanceUtils.kt`)**:
+   - `DrivingWaypoint` 모델 및 `calculateWaypointsDistanceKm` 함수 신설.
+   - 10분 주기 좌표들을 순차 연결하고, 50m 미만의 신호대기/정차 오차는 중복 합산되지 않도록 방어.
+5. **다이어리 및 차계부 UI 탑승 차량 식별 정보 강화 (`DailyRouteAggregator.kt`, `CarLedgerScreen.kt`, `GoogleMapRouteView.kt`)**:
+   - `DailyRouteAggregator`: `vehicleLogs`의 차량 정보(`[차량명 (차량번호)]`)를 파싱하여 `RouteStep`의 타이틀(`차량 주행 - [벤츠 A클래스]`) 및 다이어리 태그(`🚗 벤츠`)에 자동 부여.
+   - `CarLedgerScreen`: `SaaSCarLogRow`에 탑승 차량 뱃지(`🚗 벤츠 A클래스`)를 즉시 렌더링.
+   - `GoogleMapRouteView`: 구글 지도 동선 상세 카드 상단에 해당 주행 차량명이 강조 표출되도록 지원.
+
+### 21.3. 빌드 및 배포 검증
+- **단위 테스트**: `LocationDistanceUtilsTest` (10분 주기 Waypoint 연속 거리 누적 및 신호대기 정차 오차 배제 테스트 포함 14개 테스트 100% 통과)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 21s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 
 
 
