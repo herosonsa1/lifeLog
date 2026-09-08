@@ -20,6 +20,7 @@ import com.autologue.app.domain.usecase.export.ExportAllDataToExcelUseCase
 import com.autologue.app.domain.usecase.export.ExportResult
 import com.autologue.app.domain.usecase.sync.SyncHistoricalDataUseCase
 import com.autologue.app.domain.usecase.sync.SyncProgress
+import com.autologue.app.util.LocationDistanceUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -94,7 +95,14 @@ class DiaryViewModel @Inject constructor(
     private fun observeData() {
         viewModelScope.launch {
             diaryRepository.getDiaryEntriesFlow().collectLatest { list ->
-                rawEntries = list
+                rawEntries = list.map { entry ->
+                    if (entry.drivingDistanceKm <= 0.0) {
+                        val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+                        if (calculated > 0.0) entry.copy(drivingDistanceKm = calculated) else entry
+                    } else {
+                        entry
+                    }
+                }
                 // Room DB 업데이트 후 무한 재귀 호출 루프를 원천 차단하기 위해 세션 당 최초 1회만 레거시 점검
                 if (!hasUpgradedLegacyEntries && list.isNotEmpty()) {
                     hasUpgradedLegacyEntries = true
@@ -174,7 +182,9 @@ class DiaryViewModel @Inject constructor(
                     val hasIncomeOrTransferInSummary = listOf("입금", "출금", "이체", "송금", "급여", "체크출금").any {
                         entry.summary.contains(it) || entry.movementSummary?.contains(it) == true
                     }
-                    val needsUpgrade = isDummyTitle || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary
+                    val hasZeroDistanceWithValidSteps = entry.drivingDistanceKm <= 0.0 &&
+                        entry.routeSteps.count { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 } >= 2
+                    val needsUpgrade = isDummyTitle || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps
 
                     if (needsUpgrade) {
                         val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }

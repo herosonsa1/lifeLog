@@ -421,4 +421,42 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,237,917 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 18. 이동 동선 구글 지도 임베드 & 지점 세로 펼침 리스트 개편 및 주행거리 0.0 km 결함 해결 (2026-09-08)
+
+### 18.1. 사용자 핵심 요청 사항
+1. **이동 동선 구글 지도 직접 표시 & 하단 지점 세로 펼침**:
+   - 이동 동선 상단 지도 영역에 단순 캔버스가 아닌 실제 Google Maps가 바로 표시되도록 개편.
+   - 하단 지점 1, 2, 3... 항목들을 이전/다음 탐색 방식이 아닌 아래로 펼쳐진 리스트(`LazyColumn`)로 일괄 표시.
+   - 전체 경로보기 버튼의 이동 수단을 대중교통이 아닌 차량(`travelmode=driving`, `dirflg=d`)으로 설정하고 "조회된 전체 이동경로 안내 (차량)"으로 명확화.
+2. **주행거리 0.0 km 미기록 결함 해결**:
+   - 2026년 9월 7일 다이어리 상세 모달(`media_1788841214534.png`)에서 '충청북 주덕읍 ➔ 서울 방이동' 등 방문 장소(2곳)와 사진(33장)이 명확히 기록되어 있음에도 주행거리가 `0.0 km`로 표시되던 이슈 해결.
+
+### 18.2. 주요 개선 및 구현 내역
+1. **정밀 도로 주행거리 산출 엔진 구축 (`LocationDistanceUtils.kt`)**:
+   - 구면 삼각법(Haversine) 기반 두 GPS 좌표 간의 직선 거리 산출 함수 `calculateStraightDistanceKm` 구현.
+   - 대한민국 도로망 곡률 및 우회율을 정밀 반영한 도로 굴곡도 계수(`roadCurveFactor = 1.25`)를 적용한 `calculateDrivingDistanceKm` 구현.
+   - 하루 동안 방문한 `RouteStep` 목록에서 50m 미만의 제자리 촬영 지점을 자동 필터링하고 연속 거점 간 누적 도로 주행거리를 소수점 1자리까지 산출하는 `calculateRouteDrivingDistanceKm` 구현.
+2. **일일 동선 집계기 연동 (`DailyRouteAggregator.kt`)**:
+   - 차량 OBD/TMap 운행 로그가 감지되지 않아 `vehicleLogsDistance`가 0인 경우에도, 당일 방문 거점 간의 도로 주행거리(`estimatedRouteDistance`)를 자동 산출하여 `drivingDistanceKm`에 적용.
+   - 주행거리가 0보다 클 때 다이어리 태그에 `%.1fkm 주행`이 자동 추가되도록 연동.
+3. **과거 데이터 자동 보정 및 실시간 ViewModel 방어 (`DiaryViewModel.kt`)**:
+   - `checkAndUpgradeLegacyEntries`에서 주행거리가 `0.0 km`로 저장되어 있던 기존 다이어리 엔트리 중 유효 좌표 거점이 2개 이상 존재하는 경우 자동 업그레이드 대상(`hasZeroDistanceWithValidSteps`)에 포함하여 DB 영구 갱신.
+   - `observeData`에서 `rawEntries` 로드 시에도 실시간 계산 폴백을 적용하여 앱 구동 즉시 올바른 주행거리가 화면에 표시되도록 보장.
+4. **UI 컴포넌트 방어적 표시 (`DiaryScreen.kt`)**:
+   - 다이어리 상세 모달(Quick Stats Row), 타임라인 카드 목록, 상단 누적 통계 헤더(`NaturalSummaryHeader`) 전반에 `calculateRouteDrivingDistanceKm` 실시간 폴백을 연동하여 0.0km 미노출 방어.
+5. **Google Maps 임베드 및 동선 뷰 완성 (`GoogleMapRouteView.kt`)**:
+   - `AndroidView(WebView)`를 통해 Google Maps 인터랙티브 웹뷰를 내장하여 지형 및 도로망이 즉시 렌더링되도록 구성.
+   - 단일 거점 포커스 시 상세 핀 뷰, 전체 동선 시 `saddr` & `daddr` 멀티 경유지 차량 길찾기 모드(`dirflg=d`, `travelmode=driving`) URL을 생성하는 `buildGoogleMapsEmbedUrl` 구현.
+   - 하단 지점 1, 2, 3... 항목들을 세로로 펼쳐진 카드 리스트로 배치하고, 클릭 시 해당 거점으로 지도 포커스를 이동하거나 전체 경로로 복귀할 수 있는 직관적인 인터랙션 제공.
+   - "조회된 전체 이동경로 안내 (차량)" 마스터 카드를 배치하여 조회된 지점 전체를 순서대로 경유하는 차량 길찾기 안내 기능 제공.
+
+### 18.3. 빌드 및 배포 검증
+- **단위 테스트**: `LocationDistanceUtilsTest` (충북 주덕읍 ↔ 서울 방이동 간 추정 도로 주행거리 약 114.8km 정상 산출 및 제자리 촬영 누적 배제 검증 완료)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 46s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 

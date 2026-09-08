@@ -8,6 +8,7 @@ import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.VehicleLog
+import com.autologue.app.util.LocationDistanceUtils
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -193,7 +194,9 @@ class DailyRouteAggregator @Inject constructor(
         // Extract All Photos, Companions, Tags
         val allPhotoUris = photos.map { it.uri }
         val totalExpense = validExpenseTxs.sumOf { it.amount }
-        val totalDistance = vehicleLogs.sumOf { it.tripDistanceKm }
+        val vehicleLogDistance = vehicleLogs.sumOf { it.tripDistanceKm }
+        val estimatedRouteDistance = LocationDistanceUtils.calculateRouteDrivingDistanceKm(steps)
+        val totalDistance = if (vehicleLogDistance > 0) vehicleLogDistance else estimatedRouteDistance
 
         // Generate Smart Summary Paragraph
         val summary = buildSummaryNarrative(date, steps, distinctPlaces, photos.size, totalExpense)

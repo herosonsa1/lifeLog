@@ -1,6 +1,7 @@
 package com.autologue.app.presentation.diary
 
 import com.autologue.app.presentation.diary.map.GoogleMapRouteView
+import com.autologue.app.util.LocationDistanceUtils
 
 import android.Manifest
 import android.content.Context
@@ -551,7 +552,12 @@ fun NaturalSummaryHeader(
     // [M-04] 무거운 집계 연산을 remember(entries)로 캐싱
     //   entries가 변경될 때만 재계산되고, 부모 리컴포지션 시에는 캐시된 값을 재사용합니다.
     val totalExpense = remember(entries) { entries.sumOf { it.totalExpense } }
-    val totalDistance = remember(entries) { entries.sumOf { it.drivingDistanceKm } }
+    val totalDistance = remember(entries) {
+        entries.sumOf {
+            if (it.drivingDistanceKm > 0) it.drivingDistanceKm
+            else LocationDistanceUtils.calculateRouteDrivingDistanceKm(it.routeSteps)
+        }
+    }
     val totalPlaces = remember(entries) {
         entries.flatMap { entry ->
             if (entry.routeSteps.isNotEmpty()) {
@@ -660,9 +666,10 @@ fun SaaSTimelineRow(
                 }
             }
 
-            if (entry.drivingDistanceKm > 0) {
+            val displayKm = if (entry.drivingDistanceKm > 0) entry.drivingDistanceKm else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+            if (displayKm > 0) {
                 Text(
-                    text = "%.1f km 주행".format(entry.drivingDistanceKm),
+                    text = "%.1f km 주행".format(displayKm),
                     style = AppTypography.caption
                 )
             }
@@ -856,8 +863,9 @@ fun DiaryDetailDialog(
                             Text("${entry.routeSteps.size}곳", style = AppTypography.h3)
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val displayKm = if (entry.drivingDistanceKm > 0) entry.drivingDistanceKm else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
                             Text("주행거리", style = AppTypography.caption)
-                            Text("%.1f km".format(entry.drivingDistanceKm), style = AppTypography.h3)
+                            Text("%.1f km".format(displayKm), style = AppTypography.h3)
                         }
                     }
 

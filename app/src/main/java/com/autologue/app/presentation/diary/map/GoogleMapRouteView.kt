@@ -1,17 +1,23 @@
 package com.autologue.app.presentation.diary.map
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,14 +77,7 @@ fun GoogleMapRouteView(
         nonTransactionSteps.filter { it.latitude != null && it.longitude != null }
     }
 
-    val currentIndex = remember(selectedStep, validCoordinateSteps) {
-        if (selectedStep == null) 0
-        else {
-            val idx = validCoordinateSteps.indexOfFirst { it.id == selectedStep.id }
-            if (idx >= 0) idx else 0
-        }
-    }
-    val currentStep = validCoordinateSteps.getOrNull(currentIndex) ?: nonTransactionSteps.firstOrNull()
+    var mapFocusStep by remember { mutableStateOf<RouteStep?>(selectedStep) }
 
     Column(modifier = Modifier.fillMaxSize().background(AppColors.background)) {
         // 1. Top Period Filter Chips Bar
@@ -97,7 +97,7 @@ fun GoogleMapRouteView(
                     Surface(
                         shape = AppShapes.pill,
                         color = if (isSelected) AppColors.primary else AppColors.surfaceVariant,
-                        border = androidx.compose.foundation.BorderStroke(
+                        border = BorderStroke(
                             width = 0.5.dp,
                             color = if (isSelected) AppColors.primary else AppColors.border
                         ),
@@ -145,25 +145,131 @@ fun GoogleMapRouteView(
 
         HairlineDivider()
 
-        // 2. Interactive Route Map Area (Jetpack Compose Canvas)
+        // 2. Interactive Google Maps Embed Area (실제 구글 지도 웹뷰)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .height(260.dp)
                 .clipToBounds()
                 .background(Color(0xFF0F172A))
         ) {
             if (validCoordinateSteps.isNotEmpty()) {
-                InteractiveRouteMapView(
-                    steps = validCoordinateSteps,
-                    selectedIndex = currentIndex,
-                    onStepSelected = { idx ->
-                        if (idx in validCoordinateSteps.indices) {
-                            onStepSelected(validCoordinateSteps[idx])
+                val targetMapUrl = remember(validCoordinateSteps, mapFocusStep) {
+                    buildGoogleMapsEmbedUrl(validCoordinateSteps, mapFocusStep)
+                }
+
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            @SuppressLint("SetJavaScriptEnabled")
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            settings.setSupportZoom(true)
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                            webViewClient = object : WebViewClient() {
+                                @Deprecated("Deprecated in Java")
+                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                    return false
+                                }
+                            }
+                            loadUrl(targetMapUrl)
+                        }
+                    },
+                    update = { webView ->
+                        if (webView.url != targetMapUrl) {
+                            webView.loadUrl(targetMapUrl)
                         }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+
+                // Top Status Badge Overlay
+                Surface(
+                    modifier = Modifier
+                        .padding(Spacing.sm)
+                        .align(Alignment.TopStart),
+                    shape = AppShapes.pill,
+                    color = Color(0xFF0F172A).copy(alpha = 0.92f),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    shadowElevation = 4.dp
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = if (mapFocusStep != null) {
+                                "📍 ${mapFocusStep?.locationName ?: mapFocusStep?.title} (지점 포커스)"
+                            } else {
+                                "🚗 조회된 차량 이동 동선 (${validCoordinateSteps.size}개 지점)"
+                            },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF60A5FA)
+                        )
+                        if (mapFocusStep != null) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF2563EB).copy(alpha = 0.25f),
+                                modifier = Modifier.clickable { mapFocusStep = null }
+                            ) {
+                                Text(
+                                    text = "전체 경로 복귀",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF93C5FD),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Floating Google Maps App Open Button
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF0F172A).copy(alpha = 0.9f),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .clickable {
+                            if (mapFocusStep != null) {
+                                openGoogleMapsLocation(
+                                    context = context,
+                                    latitude = mapFocusStep!!.latitude!!,
+                                    longitude = mapFocusStep!!.longitude!!,
+                                    label = mapFocusStep!!.locationName ?: mapFocusStep!!.title,
+                                    address = mapFocusStep!!.address
+                                )
+                            } else {
+                                openGoogleMapsRoute(context, validCoordinateSteps)
+                            }
+                        }
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = "앱에서 열기",
+                            tint = Color(0xFF60A5FA),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (mapFocusStep != null) "지점 앱에서 열기" else "전체 경로 앱에서 열기",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = PureWhite
+                        )
+                    }
+                }
             } else {
                 // Empty Coordinates State
                 Box(
@@ -185,282 +291,313 @@ fun GoogleMapRouteView(
                     }
                 }
             }
-
-            // Top-left Route summary badge overlay
-            if (validCoordinateSteps.isNotEmpty()) {
-                Surface(
-                    modifier = Modifier
-                        .padding(Spacing.sm)
-                        .align(Alignment.TopStart),
-                    shape = AppShapes.pill,
-                    color = Color(0xFF0F172A).copy(alpha = 0.9f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
-                    shadowElevation = 4.dp
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 5.dp)
-                    ) {
-                        Text(
-                            text = "📍 이동 동선 ${validCoordinateSteps.size}개 지점",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF60A5FA)
-                        )
-                    }
-                }
-            }
         }
 
         HairlineDivider()
 
-        // 3. Selected Stop Bottom Card (Interactive Stop Details)
-        if (currentStep != null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(AppColors.surface)
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.md)
-            ) {
-                // Stop Stepper & Time Header
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+        // 3. Staggered Vertical List: 지점 1, 2, 3... 모든 항목 아래로 펼쳐진 리스트
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(AppColors.background),
+            contentPadding = PaddingValues(vertical = Spacing.sm)
+        ) {
+            // Header: 전체 경로보기 마스터 버튼 (조회된 결과 전체 차량 이동경로 명확화)
+            if (validCoordinateSteps.size > 1) {
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFEFF6FF),
+                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.md, vertical = Spacing.xs)
+                            .clickable {
+                                openGoogleMapsRoute(context, validCoordinateSteps)
+                            }
                     ) {
-                        // Stop Number Badge
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(CircleShape)
-                                .background(AppColors.primary),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF2563EB)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DirectionsCar,
+                                    contentDescription = null,
+                                    tint = PureWhite,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "조회된 전체 이동경로 안내 (차량 ${validCoordinateSteps.size}개 지점)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1E3A8A)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "현재 조회된 ${validCoordinateSteps.size}개 지점 전체를 순서대로 경유하는 차량 이동경로를 안내합니다.",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF3B82F6)
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = Color(0xFF2563EB),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+                }
+            }
+
+            // Staggered Items: 지점 1, 2, 3...
+            itemsIndexed(validCoordinateSteps) { index, step ->
+                val isFocused = mapFocusStep?.id == step.id || (mapFocusStep == null && selectedStep?.id == step.id)
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isFocused) Color(0xFFF8FAFC) else AppColors.surface,
+                    border = BorderStroke(
+                        width = if (isFocused) 1.5.dp else 1.dp,
+                        color = if (isFocused) AppColors.primary else Color(0xFFE2E8F0)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.md, vertical = 4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        // Top Header: Number Badge, Time, Type Pill
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isFocused) AppColors.primary else Color(0xFF64748B)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "${index + 1}",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = PureWhite
+                                    )
+                                }
+
+                                Text(
+                                    text = step.time.format(DateTimeFormatter.ofPattern("M월 d일 (E) a h:mm", Locale.KOREA)),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AppColors.textPrimary
+                                )
+
+                                val (typeLabel, typeBg, typeFg) = when (step.stepType) {
+                                    RouteStepType.TRANSACTION -> Triple("💳 결제/방문", Emerald50, Emerald700)
+                                    RouteStepType.PHOTO -> Triple("📸 사진 기록", Indigo50, Indigo700)
+                                    RouteStepType.GOLF -> Triple("⛳ 골프 라운드", Forest50, Forest700)
+                                    RouteStepType.DRIVING -> Triple("🚗 차량 주행", Amber50, Amber700)
+                                    RouteStepType.MEMO -> Triple("📝 메모 기록", Slate100, Slate700)
+                                    else -> Triple("📍 이동 거점", Slate100, Slate700)
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(AppShapes.pill)
+                                        .background(typeBg)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(text = typeLabel, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = typeFg)
+                                }
+                            }
+
                             Text(
-                                text = "${currentIndex + 1}",
+                                text = "지점 ${index + 1} / ${validCoordinateSteps.size}",
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = PureWhite
+                                color = Color(0xFF64748B)
                             )
                         }
 
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Location Title
                         Text(
-                            text = currentStep.time.format(DateTimeFormatter.ofPattern("M월 d일 (E) a h:mm", Locale.KOREA)),
-                            style = AppTypography.body.copy(fontWeight = FontWeight.Bold)
+                            text = step.locationName ?: step.title,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
                         )
 
-                        // Step Type Pill
-                        val (typeLabel, typeBg, typeFg) = when (currentStep.stepType) {
-                            RouteStepType.TRANSACTION -> Triple("💳 결제 / 방문", Emerald50, Emerald700)
-                            RouteStepType.PHOTO -> Triple("📸 사진 기록", Indigo50, Indigo700)
-                            RouteStepType.GOLF -> Triple("⛳ 골프 라운드", Forest50, Forest700)
-                            RouteStepType.DRIVING -> Triple("🚗 차량 주행", Amber50, Amber700)
-                            RouteStepType.MEMO -> Triple("📝 메모 기록", Slate100, Slate700)
-                            else -> Triple("📍 이동 거점", Slate100, Slate700)
+                        // Address
+                        val addr = step.address ?: ""
+                        if (addr.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "📍 $addr",
+                                fontSize = 12.sp,
+                                color = Color(0xFF64748B)
+                            )
                         }
 
-                        Box(
-                            modifier = Modifier
-                                .clip(AppShapes.pill)
-                                .background(typeBg)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(text = typeLabel, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = typeFg)
-                        }
-                    }
-
-                    // Step Index Indicator (e.g. 1/3)
-                    Text(
-                        text = "${currentIndex + 1} / ${validCoordinateSteps.size}",
-                        style = AppTypography.captionMuted
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(Spacing.xs))
-
-                // Location Title
-                Text(
-                    text = currentStep.locationName ?: currentStep.title,
-                    style = AppTypography.h3.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
-                )
-
-                // Subtitle / Address / Coordinates
-                val addressText = currentStep.address ?: ""
-                if (addressText.isNotEmpty()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "📍 $addressText",
-                            style = AppTypography.bodySecondary.copy(color = AppColors.secondary)
-                        )
-                    }
-                }
-
-                // Companions Tag Row (동행인 표시)
-                if (currentStep.companions.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(Spacing.xs))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "동행인:",
-                            style = AppTypography.captionMuted,
-                            fontWeight = FontWeight.Medium
-                        )
-                        currentStep.companions.forEach { companion ->
-                            Surface(
-                                shape = AppShapes.pill,
-                                color = Indigo50,
-                                border = androidx.compose.foundation.BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.3f))
+                        // Companions Tag Row
+                        if (step.companions.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "👤 $companion",
-                                        style = AppTypography.caption.copy(fontWeight = FontWeight.SemiBold, color = Indigo700)
-                                    )
-                                    if (onRemoveCompanion != null) {
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "동행인 삭제",
-                                            tint = Indigo600,
-                                            modifier = Modifier
-                                                .size(11.dp)
-                                                .clickable { onRemoveCompanion(currentStep.id, companion) }
+                                Text("동행인:", fontSize = 11.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Medium)
+                                step.companions.forEach { companion ->
+                                    Surface(
+                                        shape = AppShapes.pill,
+                                        color = Indigo50,
+                                        border = BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.3f))
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "👤 $companion",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Indigo700
+                                            )
+                                            if (onRemoveCompanion != null) {
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "동행인 삭제",
+                                                    tint = Indigo600,
+                                                    modifier = Modifier
+                                                        .size(11.dp)
+                                                        .clickable { onRemoveCompanion(step.id, companion) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Photo Carousel
+                        if (step.photoUris.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(step.photoUris) { photoUrl ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(AppColors.surfaceVariant)
+                                            .clickable { onPhotoClick(photoUrl) }
+                                    ) {
+                                        AsyncImage(
+                                            model = photoUrl,
+                                            contentDescription = "장소 사진",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
                                         )
                                     }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Action Buttons Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    mapFocusStep = step
+                                    onStepSelected(step)
+                                },
+                                shape = AppShapes.button,
+                                border = BorderStroke(0.5.dp, if (isFocused) AppColors.primary else Color(0xFFCBD5E1)),
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                            ) {
+                                Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text("지도에서 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
+                            }
+
+                            if (step.latitude != null && step.longitude != null) {
+                                OutlinedButton(
+                                    onClick = {
+                                        openGoogleMapsLocation(
+                                            context = context,
+                                            latitude = step.latitude,
+                                            longitude = step.longitude,
+                                            label = step.locationName ?: step.title,
+                                            address = step.address
+                                        )
+                                    },
+                                    shape = AppShapes.button,
+                                    border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
+                                    modifier = Modifier.weight(1f).height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) {
+                                    Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color(0xFF2563EB))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("구글맵 앱 열기", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF2563EB))
+                                }
+                            }
+
+                            if (onAddCompanionClick != null) {
+                                OutlinedButton(
+                                    onClick = { onAddCompanionClick(step) },
+                                    shape = AppShapes.button,
+                                    border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
+                                    modifier = Modifier.height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                ) {
+                                    Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("동행인", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
                                 }
                             }
                         }
                     }
                 }
 
-                // Photo Carousel (if photos exist)
-                if (currentStep.photoUris.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(Spacing.sm))
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        items(currentStep.photoUris) { photoUrl ->
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(AppColors.surfaceVariant)
-                                    .clickable { onPhotoClick(photoUrl) }
-                            ) {
-                                AsyncImage(
-                                    model = photoUrl,
-                                    contentDescription = "장소 사진",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(Spacing.sm))
-
-                // Action Buttons Row: Google Maps App Navigation & Add Companion
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                ) {
-                    // Google Maps Location Pin Button
-                    if (currentStep.latitude != null && currentStep.longitude != null) {
-                        OutlinedButton(
-                            onClick = {
-                                openGoogleMapsLocation(
-                                    context = context,
-                                    latitude = currentStep.latitude,
-                                    longitude = currentStep.longitude,
-                                    label = currentStep.locationName ?: currentStep.title,
-                                    address = currentStep.address
-                                )
-                            },
-                            shape = AppShapes.button,
-                            border = androidx.compose.foundation.BorderStroke(0.5.dp, AppColors.border),
-                            modifier = Modifier.weight(1f).height(34.dp),
-                            contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp)
-                        ) {
-                            Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text("지점 핀 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
-                        }
-
-                        // 전체 이동 동선(2개 이상 거점)이 있는 경우 길찾기 경로 버튼 추가
-                        if (validCoordinateSteps.size > 1) {
-                            OutlinedButton(
-                                onClick = {
-                                    openGoogleMapsRoute(context, validCoordinateSteps)
-                                },
-                                shape = AppShapes.button,
-                                border = androidx.compose.foundation.BorderStroke(0.5.dp, AppColors.border),
-                                modifier = Modifier.weight(1f).height(34.dp),
-                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp)
-                            ) {
-                                Icon(Icons.Default.Navigation, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text("전체 경로 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
-                            }
-                        }
-                    }
-
-                    // Add Companion Button
-                    if (onAddCompanionClick != null) {
-                        OutlinedButton(
-                            onClick = { onAddCompanionClick(currentStep) },
-                            shape = AppShapes.button,
-                            border = androidx.compose.foundation.BorderStroke(0.5.dp, AppColors.border),
-                            modifier = Modifier.height(34.dp),
-                            contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = 0.dp)
-                        ) {
-                            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
-                            Spacer(modifier = Modifier.width(Spacing.xs))
-                            Text("동행인 추가", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
-                        }
-                    }
-                }
-
-                // Step Navigation Controls (이전 / 다음 거점)
-                if (validCoordinateSteps.size > 1) {
-                    Spacer(modifier = Modifier.height(Spacing.xs))
+                // Intermediate Route Indicator
+                if (index < validCoordinateSteps.size - 1) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(
-                            onClick = {
-                                val prevIdx = if (currentIndex > 0) currentIndex - 1 else validCoordinateSteps.size - 1
-                                onStepSelected(validCoordinateSteps[prevIdx])
-                            },
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            Text("← 이전 장소", fontSize = 11.sp, color = AppColors.primary)
-                        }
-
-                        TextButton(
-                            onClick = {
-                                val nextIdx = if (currentIndex < validCoordinateSteps.size - 1) currentIndex + 1 else 0
-                                onStepSelected(validCoordinateSteps[nextIdx])
-                            },
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            Text("다음 장소 →", fontSize = 11.sp, color = AppColors.primary)
-                        }
+                        Text(
+                            text = "↓ 다음 지점으로 이동 (차량)",
+                            fontSize = 10.sp,
+                            color = Color(0xFF94A3B8),
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
             }
@@ -840,6 +977,7 @@ fun openGoogleMapsRoute(context: Context, steps: List<RouteStep>) {
                 append("&waypoints=").append(Uri.encode(waypoints))
             }
             append("&travelmode=driving")
+            append("&dirflg=d")
         }
 
         val routeUri = Uri.parse(directionsUrl)
@@ -859,6 +997,46 @@ fun openGoogleMapsRoute(context: Context, steps: List<RouteStep>) {
     } catch (e: Exception) {
         e.printStackTrace()
     }
+}
+
+/**
+ * 인앱 WebView에서 구글 지도를 로드하기 위한 iframe/embed 표준 URL을 생성합니다.
+ * - 단일 지점 포커스 시: 해당 지점 마커 핀 중심 표시 (zoom 16)
+ * - 전체 경로 표시 시: 출발지(saddr), 경유지/도착지(daddr) 차량 경로(dirflg=d) 임베드
+ */
+fun buildGoogleMapsEmbedUrl(steps: List<RouteStep>, focusStep: RouteStep? = null): String {
+    val validSteps = steps.filter {
+        it.latitude != null && it.longitude != null &&
+        (it.latitude != 0.0 || it.longitude != 0.0)
+    }
+
+    if (validSteps.isEmpty()) {
+        return "about:blank"
+    }
+
+    // 단일 지점 포커스인 경우
+    if (focusStep != null && focusStep.latitude != null && focusStep.longitude != null) {
+        val lat = focusStep.latitude!!
+        val lng = focusStep.longitude!!
+        val label = Uri.encode(focusStep.locationName ?: focusStep.title)
+        return "https://maps.google.com/maps?q=$lat,$lng($label)&hl=ko&z=16&output=embed"
+    }
+
+    // 전체 유효 지점이 1개인 경우
+    if (validSteps.size == 1) {
+        val single = validSteps.first()
+        val lat = single.latitude
+        val lng = single.longitude
+        val label = Uri.encode(single.locationName ?: single.title)
+        return "https://maps.google.com/maps?q=$lat,$lng($label)&hl=ko&z=15&output=embed"
+    }
+
+    // 전체 경로(출발지 ~ 경유지 ~ 도착지) 차량 이동 모드 임베드
+    val origin = "${validSteps.first().latitude},${validSteps.first().longitude}"
+    val remaining = validSteps.drop(1)
+    val destAndWaypoints = remaining.joinToString("+to:") { "${it.latitude},${it.longitude}" }
+
+    return "https://maps.google.com/maps?saddr=$origin&daddr=$destAndWaypoints&dirflg=d&hl=ko&output=embed"
 }
 
 // 하위 호환성을 위해 유지
