@@ -350,3 +350,45 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 24s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,208,611 bytes)
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 16. 골프장명 옆 코스명 표기 연동 및 날씨 분석 UI 정밀 고도화 (2026-09-08)
+
+### 16.1. 사용자 핵심 요청 사항
+1. **골프장명 옆 코스명 누락 해결**: 구장명 옆에 코스명(예: `오크밸리 CC (잣나무 코스)`)이 표기되지 않는 문제 완벽 해결.
+2. **Gemini 텍스트 및 불필요한 이모지 제거**:
+   - `Gemini AI 골프 라운딩 정밀 분석` -> `AI 골프 라운딩 정밀 분석`으로 명칭 변경.
+   - 분석 브리핑 본문 내 `[Gemini AI 브리핑]` 문구 및 불필요한 이모지(✨, 💡, ⚠️ 등) 전면 삭제.
+   - 단, 최상단의 골프장 날씨 예보에 포함된 날씨 상태 이모지(☀️, ⛅, 🌧️ 등)는 사용자 요청대로 유지.
+3. **타이틀 정돈**: `예상 강우량 (최우선)` -> `예상 강우량`으로 정제.
+4. **메트릭 카드 2줄 레이아웃 개편**:
+   - `예상 강우량`, `평균 기온`, `바람`, `습도` 배지 내 텍스트를 상하 3줄/분산 구조에서 `[1줄: 타이틀] / [2줄: 정보 상세정보]`의 2줄 나란히 구조로 개편.
+5. **테이블 및 메트릭 조건부 색상 강조 규칙 엄격 적용**:
+   - 시간대별 테이블의 강우량 헤더 빨간색 제거 (`Slate600` 기본색으로 통일).
+   - 강우량 1mm 이상: 빨간색 (`#DC2626`).
+   - 기온 10도 이하: 파란색 (`#2563EB`), 30도 이상: 빨간색 (`#DC2626`).
+   - 바람 3.5~6.5 m/s: 파란색 (`#2563EB`), 6.5 m/s 초과: 빨간색 (`#DC2626`).
+
+### 16.2. 주요 개선 및 구현 내역
+1. **골프장명 + 코스명 통합 표기 아키텍처 구축**:
+   - `GolfRound.getDisplayClubName()` 확장 함수 신설:
+     - `clubName`에 이미 `(코스명)`이 있는 경우 그대로 사용.
+     - `memo`에 `[코스: xxx]`가 보관된 경우 `"$clubName ($suffix)"`로 자동 합성.
+   - `GolfViewModel.addGolfReservation`:
+     - 신규 예약 등록 시 `courseName`이 입력되면 구장명과 결합하여 `"$officialClubName ($cleanCourseName 코스)"` 형태로 `GolfRound.clubName`에 직접 보존.
+   - `GolfWeatherRepositoryImpl.resolveCoordinates`:
+     - 코스명이 붙은 구장명(`오크밸리 CC (잣나무 코스)`)이 전달되더라도 `Regex("\\(.*\\)")`로 괄호 코스명을 안전하게 제거 후 위도/경도를 정밀 매칭하도록 방어.
+   - `GolfScreen.kt` 전체 뷰 연동:
+     - 다가오는 라운드 카드(`UpcomingGolfCard`), 라운드 요약 카드(`GolfRoundSummaryCard`), 라운드 상세 다이얼로그(`GolfRoundDetailDialog`), 더치페이 정산기(`GolfDutchPayDialog`), 날씨 다이얼로그(`GolfWeatherDetailDialog`) 전반에 `getDisplayClubName()`을 1:1 적용하여 구장명 바로 옆에 코스명이 볼드체로 명확하게 노출되도록 보장.
+     - 시간 표시 줄 밑에 나타나던 중복 코스명은 구장명에 이미 코스명이 있을 때 표시되지 않도록 스마트 방어.
+2. **AI 브리핑 텍스트 및 UI 레이아웃 정밀 고도화**:
+   - `GolfWeatherRepositoryImpl.kt`의 `buildGeminiBriefing`에서 불필요한 AI 태그 및 이모지를 제거하고 순수 전략 어드바이스 문장만 생성하도록 정제.
+   - `GolfWeatherComponents.kt`의 `MetricQuadrantCard`를 `[1줄: 타이틀] / [2줄: 정보 상세정보]` 형태로 레이아웃 전면 리팩토링.
+   - 시간대별 테이블 헤더의 불필요한 빨간색 강조를 제거하고, 데이터 행의 강우량/기온/바람값에 조건부 색상 하이라이트 로직 적용.
+
+### 16.3. 빌드 및 배포 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 45s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,748,770 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+

@@ -208,7 +208,7 @@ class GolfWeatherRepositoryImpl @Inject constructor(
     }
 
     private fun resolveCoordinates(clubName: String): Pair<Double, Double> {
-        val clean = clubName.trim()
+        val clean = clubName.replace(Regex("\\(.*\\)"), "").trim()
         for ((key, coord) in GOLF_COURSE_COORDINATES) {
             if (clean.contains(key, ignoreCase = true)) {
                 return coord
@@ -520,22 +520,22 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         val timeRange = "${sTime.format(DateTimeFormatter.ofPattern("HH:mm"))}~${eTime.format(DateTimeFormatter.ofPattern("HH:mm"))}"
         return when (risk) {
             RainRiskLevel.CLEAR -> {
-                "💡 [Gemini AI 브리핑] ${club}의 ${timeRange} 플레이 시간대는 비 걱정 없이 라운딩을 즐기기 매우 좋습니다. " +
+                "${club}의 ${timeRange} 플레이 시간대는 비 걱정 없이 라운딩을 즐기기 매우 좋습니다. " +
                         "평균 기온은 %.1f°C로 적정하며, ${windDir} 방면의 %.1fm/s 미풍으로 볼의 탄도 영향이 적습니다. 그린 스피드는 보통 2.6~2.8m로 안정적일 것으로 분석됩니다."
                             .format(avgTemp, avgWind)
             }
             RainRiskLevel.DRIZZLE -> {
-                "💡 [Gemini AI 브리핑] ${club} 플레이 중 약 %.1fmm의 약한 이슬비 또는 스침비가 시간대별로 통과할 가능성이 있습니다. " +
+                "${club} 플레이 중 약 %.1fmm의 약한 이슬비 또는 스침비가 시간대별로 통과할 가능성이 있습니다. " +
                         "그린 잔디가 젖어 퍼팅 시 공이 10~15%% 덜 구를 수 있으므로 핀을 직접 공략하는 것이 유리합니다. 방수 겉옷을 카트에 챙겨두세요."
                             .format(rainMm)
             }
             RainRiskLevel.RAIN -> {
-                "💡 [Gemini AI 브리핑] ${timeRange} 사이에 총 %.1fmm의 비가 예상됩니다. 특히 강우 집중 시간대에는 그립이 미끄러질 수 있으니 레인그립 장갑과 마른 수건을 2장 이상 지참하십시오. " +
+                "${timeRange} 사이에 총 %.1fmm의 비가 예상됩니다. 특히 강우 집중 시간대에는 그립이 미끄러질 수 있으니 레인그립 장갑과 마른 수건을 2장 이상 지참하십시오. " +
                         "페어웨이 런이 줄어들므로 티샷 캐리 거리에 집중하시기 바랍니다."
                             .format(rainMm)
             }
             RainRiskLevel.HEAVY_RAIN -> {
-                "⚠️ [Gemini AI 브리핑] 플레이 시간대에 시간당 강한 비(총 %.1fmm)가 집중될 가능성이 높습니다. 벙커 및 그린 물고임 현상이 발생할 수 있으니 라운드 전 ${club} 프론트의 우천 취소 규정을 사전에 확인하시는 것을 추천합니다."
+                "플레이 시간대에 시간당 강한 비(총 %.1fmm)가 집중될 가능성이 높습니다. 벙커 및 그린 물고임 현상이 발생할 수 있으니 라운드 전 ${club} 프론트의 우천 취소 규정을 사전에 확인하시는 것을 추천합니다."
                             .format(rainMm)
             }
         }

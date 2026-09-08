@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -540,7 +541,7 @@ fun GolfWeatherDetailDialog(
                         }
                     }
 
-                    // Gemini AI Briefing Card
+                    // AI Briefing Card (Gemini 텍스트 및 불필요한 이모지 배제)
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = Color(0xFFF1F5F9),
@@ -548,16 +549,12 @@ fun GolfWeatherDetailDialog(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("✨", fontSize = 16.sp)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Gemini AI 골프 라운딩 정밀 분석",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A)
-                                )
-                            }
+                            Text(
+                                text = "AI 골프 라운딩 정밀 분석",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = weather.geminiBriefing,
@@ -568,29 +565,40 @@ fun GolfWeatherDetailDialog(
                         }
                     }
 
-                    // 4-Quadrant Key Metrics Grid (Rainfall First!)
+                    // 4-Quadrant Key Metrics Grid (2줄 레이아웃: 1줄-타이틀, 2줄-정보 상세정보)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // 1. 강우량 카드 (가장 중요)
+                        // 1. 강우량 카드 (1mm 이상 빨간색 강조)
+                        val rainHighlight = if (weather.totalRainfallMm >= 1.0) Color(0xFFDC2626) else Color(0xFF059669)
+                        val rainBg = if (weather.totalRainfallMm >= 1.0) Color(0xFFFEF2F2) else Color(0xFFECFDF5)
                         MetricQuadrantCard(
                             modifier = Modifier.weight(1f),
-                            title = "예상 강우량 (최우선)",
+                            title = "예상 강우량",
                             value = "%.1f mm".format(weather.totalRainfallMm),
-                            subtext = "최대 강수확률 ${weather.maxRainProbability}%",
-                            highlightColor = if (weather.totalRainfallMm > 0) Color(0xFFDC2626) else Color(0xFF059669),
-                            bgColor = if (weather.totalRainfallMm > 0) Color(0xFFFEF2F2) else Color(0xFFECFDF5)
+                            subtext = "최대 ${weather.maxRainProbability}%",
+                            highlightColor = rainHighlight,
+                            bgColor = rainBg
                         )
 
-                        // 2. 기온 카드
+                        // 2. 기온 카드 (10도 이하 파란색, 30도 이상 빨간색)
+                        val tempHighlight = when {
+                            weather.avgTemperature <= 10.0 -> Color(0xFF2563EB)
+                            weather.avgTemperature >= 30.0 -> Color(0xFFDC2626)
+                            else -> Color(0xFF2563EB)
+                        }
+                        val tempBg = when {
+                            weather.avgTemperature >= 30.0 -> Color(0xFFFEF2F2)
+                            else -> Color(0xFFEFF6FF)
+                        }
                         MetricQuadrantCard(
                             modifier = Modifier.weight(1f),
                             title = "평균 기온 / 체감",
                             value = "%.1f°C".format(weather.avgTemperature),
-                            subtext = "체감 %.1f°C (최고 %.1f°C)".format(weather.avgFeelsLike, weather.maxTemperature),
-                            highlightColor = Color(0xFF2563EB),
-                            bgColor = Color(0xFFEFF6FF)
+                            subtext = "체감 %.1f°C".format(weather.avgFeelsLike),
+                            highlightColor = tempHighlight,
+                            bgColor = tempBg
                         )
                     }
 
@@ -598,14 +606,24 @@ fun GolfWeatherDetailDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // 3. 바람 카드
+                        // 3. 바람 카드 (3.5~6.5 파란색, >6.5 빨간색)
+                        val windHighlight = when {
+                            weather.avgWindSpeed > 6.5 -> Color(0xFFDC2626)
+                            weather.avgWindSpeed >= 3.5 -> Color(0xFF2563EB)
+                            else -> Color(0xFF0D9488)
+                        }
+                        val windBg = when {
+                            weather.avgWindSpeed > 6.5 -> Color(0xFFFEF2F2)
+                            weather.avgWindSpeed >= 3.5 -> Color(0xFFEFF6FF)
+                            else -> Color(0xFFF0FDFA)
+                        }
                         MetricQuadrantCard(
                             modifier = Modifier.weight(1f),
                             title = "바람 (풍속/풍향)",
                             value = "%.1f m/s".format(weather.avgWindSpeed),
-                            subtext = "${weather.mainWindDirection}풍 (돌풍 %.1fm/s)".format(weather.maxWindSpeed),
-                            highlightColor = Color(0xFF0D9488),
-                            bgColor = Color(0xFFF0FDFA)
+                            subtext = "${weather.mainWindDirection}풍",
+                            highlightColor = windHighlight,
+                            bgColor = windBg
                         )
 
                         // 4. 습도 카드
@@ -636,7 +654,7 @@ fun GolfWeatherDetailDialog(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column {
-                            // Table Header
+                            // Table Header (강우량 헤더 빨간색 제거 -> Slate600 통일)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -646,13 +664,31 @@ fun GolfWeatherDetailDialog(
                             ) {
                                 Text("시간", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Slate600, modifier = Modifier.width(45.dp))
                                 Text("날씨", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Slate600, modifier = Modifier.width(60.dp))
-                                Text("강우량", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626), modifier = Modifier.width(60.dp))
+                                Text("강우량", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Slate600, modifier = Modifier.width(60.dp))
                                 Text("기온", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Slate600, modifier = Modifier.width(45.dp))
                                 Text("바람", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Slate600, modifier = Modifier.width(55.dp))
                             }
                             HairlineDivider()
 
+                            // Table Rows with conditional color highlights
                             weather.hourlyForecast.forEach { item ->
+                                val rainColor = if (item.precipitationMm >= 1.0) Color(0xFFDC2626) else Slate600
+                                val rainWeight = if (item.precipitationMm >= 1.0) FontWeight.Bold else FontWeight.Normal
+
+                                val tempColor = when {
+                                    item.temperature <= 10.0 -> Color(0xFF2563EB) // 10도 이하 파란색
+                                    item.temperature >= 30.0 -> Color(0xFFDC2626) // 30도 이상 빨간색
+                                    else -> Color(0xFF0F172A)
+                                }
+                                val tempWeight = if (item.temperature <= 10.0 || item.temperature >= 30.0) FontWeight.Bold else FontWeight.Normal
+
+                                val windColor = when {
+                                    item.windSpeed > 6.5 -> Color(0xFFDC2626) // 6.5 초과 빨간색
+                                    item.windSpeed >= 3.5 -> Color(0xFF2563EB) // 3.5~6.5 파란색
+                                    else -> Slate600
+                                }
+                                val windWeight = if (item.windSpeed >= 3.5) FontWeight.Bold else FontWeight.Normal
+
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -671,15 +707,25 @@ fun GolfWeatherDetailDialog(
                                         Text(
                                             text = if (item.precipitationMm > 0) "%.1fmm (%d%%)".format(item.precipitationMm, item.precipitationProbability) else "0mm",
                                             fontSize = 10.sp,
-                                            fontWeight = if (item.precipitationMm > 0) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (item.precipitationMm > 0) Color(0xFFDC2626) else Slate600
+                                            fontWeight = rainWeight,
+                                            color = rainColor
                                         )
                                     }
                                     Row(modifier = Modifier.width(45.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("%.0f°C".format(item.temperature), fontSize = 11.sp)
+                                        Text(
+                                            text = "%.0f°C".format(item.temperature),
+                                            fontSize = 11.sp,
+                                            fontWeight = tempWeight,
+                                            color = tempColor
+                                        )
                                     }
                                     Row(modifier = Modifier.width(55.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("%.1fm/s".format(item.windSpeed), fontSize = 10.sp, color = Slate600)
+                                        Text(
+                                            text = "%.1fm/s".format(item.windSpeed),
+                                            fontSize = 10.sp,
+                                            fontWeight = windWeight,
+                                            color = windColor
+                                        )
                                     }
                                 }
                                 HairlineDivider()
@@ -699,6 +745,7 @@ fun GolfWeatherDetailDialog(
     }
 }
 
+// [2줄 구조 메트릭 카드] 1줄: 타이틀 / 2줄: 정보 상세정보 (한 줄 나란히)
 @Composable
 private fun MetricQuadrantCard(
     title: String,
@@ -714,12 +761,40 @@ private fun MetricQuadrantCard(
         border = BorderStroke(1.dp, highlightColor.copy(alpha = 0.25f)),
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Text(title, fontSize = 10.sp, color = Slate600, fontWeight = FontWeight.Medium)
-            Spacer(modifier = Modifier.height(3.dp))
-            Text(value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = highlightColor)
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(subtext, fontSize = 9.sp, color = Slate500)
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
+            // 1번째 줄: 타이틀
+            Text(
+                text = title,
+                fontSize = 11.sp,
+                color = Slate600,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            // 2번째 줄: 정보 상세정보 (강조된 값과 상세정보를 한 줄로 나란히 표시)
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = value,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = highlightColor
+                )
+                if (subtext.isNotBlank()) {
+                    Text(
+                        text = subtext,
+                        fontSize = 10.sp,
+                        color = Slate500,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(bottom = 1.dp)
+                    )
+                }
+            }
         }
     }
 }

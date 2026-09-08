@@ -45,6 +45,7 @@ import coil.compose.AsyncImage
 import com.autologue.app.domain.model.GolfPlayWeather
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.GolfType
+import com.autologue.app.domain.model.getDisplayClubName
 import com.autologue.app.presentation.common.AutoLogueTextField
 import com.autologue.app.presentation.common.AutoLogueCompactInputRow
 import com.autologue.app.presentation.common.AutoLogueActionChipButton
@@ -496,7 +497,7 @@ fun SaaSGolfRow(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = round.clubName,
+                    text = round.getDisplayClubName(),
                     style = AppTypography.h2
                 )
                 Spacer(modifier = Modifier.width(Spacing.sm))
@@ -606,7 +607,7 @@ fun GolfRoundDetailDialog(
     onSaveDetails: (clubName: String, totalScore: Int?, totalPutts: Int?, memo: String?, startTime: LocalDateTime?, endTime: LocalDateTime?, companions: List<String>) -> Unit,
     onDelete: () -> Unit
 ) {
-    var clubName by remember { mutableStateOf(round.clubName) }
+    var clubName by remember { mutableStateOf(round.getDisplayClubName()) }
     var totalScoreText by remember { mutableStateOf(round.totalScore?.toString() ?: "") }
     var totalPuttsText by remember { mutableStateOf(round.totalPutts?.toString() ?: "") }
     var memo by remember { mutableStateOf(round.memo ?: "") }
@@ -1263,7 +1264,7 @@ fun UpcomingGolfCard(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = round.clubName,
+                        text = round.getDisplayClubName(),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF0F172A)
@@ -1295,7 +1296,8 @@ fun UpcomingGolfCard(
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFF334155)
                 )
-                if (!round.memo.isNullOrBlank() && round.memo.contains("코스")) {
+                val hasCourseInTitle = round.getDisplayClubName().contains("코스") || round.getDisplayClubName().contains("(")
+                if (!hasCourseInTitle && !round.memo.isNullOrBlank() && round.memo.contains("코스")) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "· " + round.memo.substringAfter("[").substringBefore("]"),
@@ -1503,7 +1505,7 @@ fun GolfDutchPayDialog(
                 Text("💸 동반자 1/N 정산기", fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
-                    text = round?.clubName ?: "골프 라운딩",
+                    text = round?.getDisplayClubName() ?: "골프 라운딩",
                     fontSize = 12.sp,
                     color = Color(0xFF2563EB),
                     fontWeight = FontWeight.SemiBold

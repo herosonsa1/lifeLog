@@ -10,6 +10,7 @@ import com.autologue.app.data.sync.HistoricalDataImporter
 import com.autologue.app.domain.model.GolfPlayWeather
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.GolfType
+import com.autologue.app.domain.model.getDisplayClubName
 import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.GolfWeatherRepository
@@ -158,7 +159,7 @@ class GolfViewModel @Inject constructor(
                 if (!forceRefresh && currentMap.containsKey(round.id)) continue
                 val weather = runCatching {
                     golfWeatherRepository.getGolfPlayWeather(
-                        clubName = round.clubName,
+                        clubName = round.getDisplayClubName(),
                         roundDate = round.roundDate,
                         startTime = round.startTime,
                         endTime = round.endTime,
@@ -184,7 +185,7 @@ class GolfViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(isWeatherRefreshing = true)
                 val w = runCatching {
                     golfWeatherRepository.getGolfPlayWeather(
-                        clubName = round.clubName,
+                        clubName = round.getDisplayClubName(),
                         roundDate = round.roundDate,
                         startTime = round.startTime,
                         endTime = round.endTime,
@@ -422,9 +423,22 @@ class GolfViewModel @Inject constructor(
             val finalLat = latitude ?: resolvedCoords?.first
             val finalLng = longitude ?: resolvedCoords?.second
 
+            // 코스명이 입력되었을 때 구장명 옆에 코스명을 결합 (예: "오크밸리 CC (잣나무 코스)")
+            val cleanCourseName = courseName.trim()
+            val formattedCourseSuffix = if (cleanCourseName.isNotBlank()) {
+                val cName = if (cleanCourseName.endsWith("코스")) cleanCourseName else "$cleanCourseName 코스"
+                " ($cName)"
+            } else ""
+
+            val finalClubNameWithCourse = if (formattedCourseSuffix.isNotBlank() && !officialClubName.contains(cleanCourseName)) {
+                "$officialClubName$formattedCourseSuffix"
+            } else {
+                officialClubName
+            }
+
             val formattedMemo = if (courseName.isNotBlank()) "[코스: $courseName] $memo".trim() else memo.trim()
             val newRound = GolfRound(
-                clubName = officialClubName,
+                clubName = finalClubNameWithCourse,
                 roundDate = teeOffTime,
                 golfType = GolfType.FIELD,
                 latitude = finalLat,
