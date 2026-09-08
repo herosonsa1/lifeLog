@@ -3,7 +3,7 @@
 - **프로젝트명**: LifeLog (스마트 라이프로그 & 통합 가계·차계·골프 플랫폼)
 - **프로젝트 위치**: `C:\myWork\workspace\scratch\lifeLog`
 - **GitHub 저장소**: [https://github.com/herosonsa1/lifeLog.git](https://github.com/herosonsa1/lifeLog.git)
-- **문서 최종 갱신일**: 2026-09-04
+- **문서 최종 갱신일**: 2026-09-08
 
 ---
 
@@ -140,8 +140,23 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 | 경로 | 역할 및 변경 내용 |
 | :--- | :--- |
 | `app/src/main/java/com/autologue/app/data/preferences/UserLocationPreferences.kt` | [신규] 집/회사 위치 및 출퇴근 왕복 주행거리 영속 관리 |
-| `app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt` | [수정] `CommuteSettingsDialog` 추가, 출퇴근/골프 배지 분리 |
-| `app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt` | [수정] 거점 설정 저장 및 DB 클린업 자동 동기화 연동 |
+| `app/src/main/java/com/autologue/app/data/preferences/MultiVehiclePreferences.kt` | [신규] 복수 차량(대표차량/서브차량) 프로필 및 블루투스 기기 매핑 영속 관리 |
+| `app/src/main/java/com/autologue/app/data/preferences/VehicleMaintenancePreferences.kt` | [신규] 차량별 소모품(엔진오일, 에어컨필터, 타이어 등) 교체주기 및 마지막 정비일 영속 관리 |
+| `app/src/main/java/com/autologue/app/data/preferences/ExcludedPhotoPreferences.kt` | [신규] 다이어리 타임라인에서 숨김 처리된 사진 Uri 영속 관리 |
+| `app/src/main/java/com/autologue/app/domain/model/GolfWeather.kt` | [신규] 골프 라운드 날씨(기온, 날씨상태, 풍속) 도메인 모델 |
+| `app/src/main/java/com/autologue/app/domain/repository/GolfWeatherRepository.kt` | [신규] 라운드 위치/날짜 기반 기상 데이터 조회 인터페이스 |
+| `app/src/main/java/com/autologue/app/data/repository/GolfWeatherRepositoryImpl.kt` | [신규] Open-Meteo REST API 연동 및 소켓 누수 방지, LRU 50건 인메모리 캐싱 |
+| `app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt` | [수정] 차량 전환 탭, 소모품 정비 현황 배너, 출퇴근 설정, Canvas 지도 피커 연동 |
+| `app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt` | [수정] 다중 차량 관리, 소모품 교체주기 갱신, 거점 위치 저장 연동 |
+| `app/src/main/java/com/autologue/app/presentation/car/VehicleSelectorBar.kt` | [신규] 상단 수평 스크롤 차량 전환 셀렉터 및 정비 D-Day 요약 바 |
+| `app/src/main/java/com/autologue/app/presentation/car/VehicleManageDialog.kt` | [신규] 차량 추가/수정/삭제 및 대표차량 지정 다이얼로그 |
+| `app/src/main/java/com/autologue/app/presentation/car/ConsumableMaintenanceDialog.kt` | [신규] 4대 필수 소모품 권장 교체주기 및 실시간 정비 마일리지 입력 다이얼로그 |
+| `app/src/main/java/com/autologue/app/presentation/car/CommuteMapPickerDialog.kt` | [신규] Canvas 기반 인터랙티브 지도 피커 다이얼로그 (`clipToBounds` 및 `clipRect` 가드 탑재) |
+| `app/src/main/java/com/autologue/app/presentation/diary/map/GoogleMapRouteView.kt` | [신규/수정] 다이어리 타임라인 캔버스 경로 지도 및 펄스 레이더 객체 캐싱(GC 부하 방어) |
+| `app/src/main/java/com/autologue/app/presentation/common/WelcomeSplashScreen.kt` | [신규] 앱 시작 브랜딩 스플래시 화면, 자동 동기화 완료 연동 및 즉시 스킵 지원 |
+| `app/src/main/java/com/autologue/app/presentation/common/CrashReportDialog.kt` | [신규] 앱 비정상 종료 감지 시 복구 리포트 및 크래시 로그 공유 다이얼로그 |
+| `app/src/main/java/com/autologue/app/presentation/golf/GolfWeatherComponents.kt` | [신규] 라운드 카드 기온/풍속/아이콘 칩 및 날씨 뱃지 컴포저블 |
+| `app/src/main/java/com/autologue/app/receiver/CarBluetoothReceiver.kt` | [신규] 차량 블루투스 핸즈프리 연결/해제 감지 및 자동 주행 기록 트리거 리시버 |
 | `app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt` | [수정] 중복 데이터/쓰레기 레코드 삭제, 평일 가짜 골프장 출퇴근 복구 |
 | `app/src/main/java/com/autologue/app/data/ocr/GolfLockerSlipOcrAnalyzer.kt` | [수정] 단어 단위 정규식 도입으로 영문 포함 일반 사진 오탐 차단 |
 | `app/src/main/java/com/autologue/app/domain/usecase/golf/ProcessGolfLockerSlipUseCase.kt` | [수정] 140km 획일적 기본값 제거, 골프장 검증 시에만 1회 주행 기록 생성 |
@@ -149,16 +164,39 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 | `app/src/main/java/com/autologue/app/presentation/diary/DiaryViewModel.kt` | [수정] `isAutoSyncing`, `isManualSyncDialogOpen`, 수동 동기화 기간 파라미터화 |
 | `app/src/main/java/com/autologue/app/data/sync/HistoricalDataImporter.kt` | [수정] 무제한 스캔 방지, daysBack 및 take 상한선 적용 |
 | `app/src/main/java/com/autologue/app/domain/usecase/sync/SyncHistoricalDataUseCase.kt` | [수정] OCR 분석 대상 take(10) 메모리 보호 상한선 적용 |
-| `app/src/main/java/com/autologue/app/presentation/golf/GolfViewModel.kt` | [수정] Flow collect 재진입 무한루프 분리 및 Flow `first()` import 추가 |
-| `app/src/main/java/com/autologue/app/AutoLogueApp.kt` | [수정] 독립 스마트폰 디버깅용 파일 기반 전역 CrashHandler 탑재 |
-| `app/src/main/AndroidManifest.xml` | [수정] WorkManagerInitializer 충돌 방지 노드 설정 |
+| `app/src/main/java/com/autologue/app/presentation/golf/GolfViewModel.kt` | [수정] Flow collect 재진입 무한루프 분리, 갤러리 일괄 OCR `take(5)` 상한선 적용 |
+| `app/src/main/java/com/autologue/app/AutoLogueApp.kt` | [수정] Coil ImageLoader 메모리 상한(15%), LowMemory/TrimMemory 핸들러, 파일 기반 CrashHandler |
+| `app/src/main/AndroidManifest.xml` | [수정] WorkManagerInitializer 충돌 방지 노드 설정 및 블루투스/알림 서비스 등록 |
 | `settings.gradle.kts` | [수정] `rootProject.name = "lifeLog"` 명명 |
 | `work_history/work_history.md` | [수정] 전체 작업 히스토리 및 기술 사양 기록 |
 
 ---
 
-## 8. 빌드 및 배포 검증 결과
-- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 34s`)
+## 8. 전체 기능 OOM·메모리누수·강제종료 방어 강화 (2026-09-08)
+
+### 8.1. 전수 감사 및 해결 내역
+1. **Coil ImageLoader 메모리 상한 및 OS Low Memory 대응 탑재**:
+   - `AutoLogueApp.kt`에 `ImageLoaderFactory`를 구현하여 메모리 캐시를 기기 가용 램의 15%로 제한.
+   - `RGB_565` 기본 적용으로 인메모리 비트맵 점유량 50% 절감.
+   - `onTrimMemory(level)` 및 `onLowMemory()` 콜백을 등록하여 시스템 메모리 압박 시 Coil 인메모리 캐시 즉시 해제 및 `System.gc()` 유도.
+2. **골프 갤러리 일괄 OCR 스캔 상한선 적용**:
+   - `GolfViewModel.kt`의 `scanAllLockerSlipsFromGallery()`에서 최근 14일 사진 중 골프/라커룸 후보 사진 최대 5장(`take(5)`)으로 엄격 제한하여 OOM/LMK 차단.
+   - `try ... finally` 구문으로 에러 발생 시에도 `isOcrScanning = false` 로딩 상태 해제 보장.
+3. **Canvas 펄스 레이더 애니메이션 매 프레임 객체 할당 최적화**:
+   - `GoogleMapRouteView.kt`의 `InteractiveRouteMapView` 내부에서 `Path()` 및 `PathEffect.dashPathEffect(...)` 객체를 `remember`로 사전 캐싱하여 초당 60~120회의 단기 가비지 객체 생성 원천 제거 및 GC 버벅임 해소.
+4. **출퇴근 지도 피커 Canvas 경계 클리핑 (`AP-COMPOSE-CANVAS-OVERFLOW-NOCLIP`)**:
+   - `CommuteMapPickerDialog.kt`의 `Canvas`에 `clipToBounds()`를 추가하고, `drawGridMap` 본문 전체를 `clipRect { ... }`로 감싸 줌인/드래그 시 뷰 경계 침범 차단.
+5. **Open-Meteo 날씨 HTTP 커넥션 및 인메모리 캐시 안정화**:
+   - `GolfWeatherRepositoryImpl.kt`에서 `HttpURLConnection.disconnect()`를 `finally` 블록에서 100% 호출 보장하여 소켓 누수 차단.
+   - `weatherCache`를 최대 50개 LRU 캐시로 제한하여 장기 실행 시 메모리 누수 방지.
+6. **웰컴 스플래시 화면 타이머 리셋 버그 및 스킵 UX 개선**:
+   - `WelcomeSplashScreen.kt`에서 `LaunchedEffect(Unit)`로 1회만 동작하도록 수정하여 타이머 리셋 현상 해결 및 화면 탭 시 즉시 스킵 지원.
+
+---
+
+## 9. 빌드 및 배포 검증 결과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 49s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
 

@@ -39,6 +39,24 @@ fun HairlineDivider(
 }
 
 /**
+ * 최상단 메뉴별 고유 테마 가로 색상 띠 (Accent Bar)
+ * 현재 페이지가 어떤 메뉴인지 한눈에 인지할 수 있도록 상단 뷰포트에 3.5dp의 색상 바를 표시합니다.
+ */
+@Composable
+fun TopMenuAccentBar(
+    color: Color,
+    modifier: Modifier = Modifier,
+    height: Dp = 3.5.dp
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(height)
+            .background(color)
+    )
+}
+
+/**
  * 표준 Input 텍스트필드 (상단 라벨 + 기존 톤의 소프트 배경 + 그림자 입체 효과 + 슬레이트 테두리)
  */
 @Composable
@@ -310,7 +328,7 @@ fun AutoLogueDangerButton(
 }
 
 /**
- * 표준 Outlined 보조 버튼 (선명한 파란 틴트 배경 + 테두리 + 그림자)
+ * 표준 Outlined 보조 버튼 (메뉴 테마 컬러 지원: 틴트 배경 + 테두리 + 그림자)
  */
 @Composable
 fun AutoLogueOutlinedButton(
@@ -318,14 +336,17 @@ fun AutoLogueOutlinedButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    contentColor: Color = Color(0xFF1D4ED8),
+    containerColor: Color = Color(0xFFEFF6FF),
+    borderColor: Color = Color(0xFF93C5FD)
 ) {
     Surface(
         onClick = { if (enabled) onClick() },
         shape = RoundedCornerShape(8.dp),
-        color = if (enabled) Color(0xFFEFF6FF) else Slate50,
+        color = if (enabled) containerColor else Slate50,
         shadowElevation = if (enabled) 1.5.dp else 0.dp,
-        border = BorderStroke(1.dp, if (enabled) Color(0xFF93C5FD) else Slate200),
+        border = BorderStroke(1.dp, if (enabled) borderColor else Slate200),
         modifier = modifier.height(34.dp)
     ) {
         Row(
@@ -333,13 +354,13 @@ fun AutoLogueOutlinedButton(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (icon != null) {
-                Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = if (enabled) Color(0xFF1D4ED8) else Slate400)
+                Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = if (enabled) contentColor else Slate400)
                 Spacer(modifier = Modifier.width(4.dp))
             }
             Text(
                 text = text,
                 style = AppTypography.caption.copy(
-                    color = if (enabled) Color(0xFF1D4ED8) else Slate400,
+                    color = if (enabled) contentColor else Slate400,
                     fontWeight = FontWeight.Bold
                 )
             )

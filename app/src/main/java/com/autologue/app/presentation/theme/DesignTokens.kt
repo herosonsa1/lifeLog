@@ -69,6 +69,32 @@ object AppColors {
 }
 
 /**
+ * AutoLogue Menu Theme Colors
+ * 각 메뉴별 고유 아이덴티티 및 즉각적인 시각적 구분을 위한 4원색 테마 팔레트
+ */
+object MenuColors {
+    // 1. 다이어리 (Diary): 일상, 사진, 타임라인, 지도 - 스마트 로열 블루
+    val diary = Color(0xFF2563EB)
+    val diaryBg = Color(0xFFEFF6FF)
+    val diaryBorder = Color(0xFFBFDBFE)
+
+    // 2. 가계부 (Expense): 금융, 영수증, 지출 내역 - 프리미엄 코랄 로즈
+    val expense = Color(0xFFE11D48)
+    val expenseBg = Color(0xFFFFF1F2)
+    val expenseBorder = Color(0xFFFECDD3)
+
+    // 3. 차계부 (CarLedger): 주유, 운행 기록, 차량 관리 - 웜 앰버 오렌지
+    val carLedger = Color(0xFFD97706)
+    val carLedgerBg = Color(0xFFFFFBEB)
+    val carLedgerBorder = Color(0xFFFDE68A)
+
+    // 4. 골프 (Golf): 필드 잔디, 라운딩, 스코어카드 - 필드 포레스트 그린
+    val golf = Color(0xFF15803D)
+    val golfBg = Color(0xFFF0FDF4)
+    val golfBorder = Color(0xFFBBF7D0)
+}
+
+/**
  * AutoLogue Typography Hierarchy (NanumSquare Neo 6-Scale)
  */
 object AppTypography {

@@ -32,4 +32,7 @@ interface VehicleLogDao {
 
     @Query("SELECT * FROM vehicle_logs ORDER BY id ASC")
     suspend fun getAllVehicleLogsSync(): List<VehicleLogEntity>
+
+    @Query("DELETE FROM vehicle_logs WHERE logType = 'TRIP_DRIVING'")
+    suspend fun deleteAllTripDrivingLogs(): Int
 }

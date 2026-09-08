@@ -1,6 +1,8 @@
 package com.autologue.app.data.ocr
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -31,14 +33,61 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
 ) {
     private val recognizer = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
 
+    /**
+     * 실제 스마트폰 카메라 고해상도(12~50MP) 사진 로딩 시
+     * 안드로이드 힙 한도 초과(OOM) 및 C++ 네이티브 SIGSEGV 크래시를 방지하기 위해
+     * 최대 1024px 이하로 안전하게 다운샘플링합니다. (메모리 사용량 95% 이상 절감)
+     */
+    private fun decodeSafeSampledBitmap(uri: Uri, maxDimension: Int = 1024): Bitmap? {
+        return try {
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
+            }
+
+            val origW = options.outWidth
+            val origH = options.outHeight
+            if (origW <= 0 || origH <= 0) return null
+
+            var inSampleSize = 1
+            var halfW = origW
+            var halfH = origH
+            while (halfW > maxDimension || halfH > maxDimension) {
+                inSampleSize *= 2
+                halfW /= 2
+                halfH /= 2
+            }
+
+            val decodeOptions = BitmapFactory.Options().apply {
+                this.inSampleSize = inSampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565 // ARGB_8888 대비 메모리 50% 절감
+            }
+
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOptions)
+            }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     suspend fun analyzeLockerSlip(imageUri: Uri, fallbackDate: LocalDate? = null): GolfLockerSlipResult = withContext(Dispatchers.IO) {
+        var sampledBitmap: Bitmap? = null
         try {
-            val image = InputImage.fromFilePath(context, imageUri)
+            sampledBitmap = decodeSafeSampledBitmap(imageUri, 1024)
+            val image = if (sampledBitmap != null) {
+                InputImage.fromBitmap(sampledBitmap, 0)
+            } else {
+                InputImage.fromFilePath(context, imageUri)
+            }
             val visionText = recognizer.process(image).await()
             val raw = visionText.text
 
             parseLockerSlipText(raw, fallbackDate)
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
+            // OutOfMemoryError 및 C++ Native 예외를 포괄하는 Throwable 안전망
             GolfLockerSlipResult(
                 isLockerSlip = false,
                 clubName = "필드 골프장",
@@ -48,9 +97,20 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
                 date = fallbackDate ?: LocalDate.now(),
                 playerName = null,
                 gender = null,
-                rawText = "OCR 실패: ${e.message}"
+                rawText = "OCR 스킵: ${t.message}"
             )
+        } finally {
+            sampledBitmap?.recycle()
         }
+    }
+
+    /**
+     * [M-03] ML Kit TextRecognizer 네이티브 리소스 명시적 해제.
+     * @Singleton이므로 앱 수명 동안 점유하지만, 필요 시 명시적으로 해제할 수 있는 경로 제공.
+     * GolfViewModel.onCleared() 또는 앱 종료 시 호출 가능.
+     */
+    fun close() {
+        runCatching { recognizer.close() }
     }
 
     fun parseLockerSlipText(raw: String, fallbackDate: LocalDate? = null): GolfLockerSlipResult {

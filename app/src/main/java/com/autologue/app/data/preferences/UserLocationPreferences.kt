@@ -10,12 +10,18 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 data class CommuteConfig(
-    val homeName: String = "서울 방이동",
-    val homeAddress: String = "서울특별시 송파구 방이동",
-    val companyName: String = "판교 테크노밸리",
-    val companyAddress: String = "경기도 성남시 분당구 판교역로",
-    val commuteOneWayKm: Double = 18.5,
-    val commuteRoundTripKm: Double = 37.0
+    val isConfigured: Boolean = false,
+    val homeName: String = "",
+    val homeAddress: String = "",
+    val homeLat: Double = 0.0,
+    val homeLng: Double = 0.0,
+    val companyName: String = "",
+    val companyAddress: String = "",
+    val companyLat: Double = 0.0,
+    val companyLng: Double = 0.0,
+    val commuteOneWayKm: Double = 0.0,
+    val commuteRoundTripKm: Double = 0.0,
+    val carBluetoothDevice: String = ""
 )
 
 @Singleton
@@ -28,38 +34,69 @@ class UserLocationPreferences @Inject constructor(
     val config: StateFlow<CommuteConfig> = _config.asStateFlow()
 
     private fun loadConfig(): CommuteConfig {
-        val homeName = prefs.getString("home_name", "서울 방이동") ?: "서울 방이동"
-        val homeAddress = prefs.getString("home_address", "서울특별시 송파구 방이동") ?: "서울특별시 송파구 방이동"
-        val companyName = prefs.getString("company_name", "판교 테크노밸리") ?: "판교 테크노밸리"
-        val companyAddress = prefs.getString("company_address", "경기도 성남시 분당구 판교역로") ?: "경기도 성남시 분당구 판교역로"
-        val roundTripKm = prefs.getFloat("commute_round_trip_km", 37.0f).toDouble()
-        val oneWayKm = roundTripKm / 2.0
+        val isConfigured = prefs.getBoolean("is_configured", false)
+        val homeName = prefs.getString("home_name", "") ?: ""
+        val homeAddress = prefs.getString("home_address", "") ?: ""
+        val homeLat = prefs.getFloat("home_lat", 0.0f).toDouble()
+        val homeLng = prefs.getFloat("home_lng", 0.0f).toDouble()
+
+        val companyName = prefs.getString("company_name", "") ?: ""
+        val companyAddress = prefs.getString("company_address", "") ?: ""
+        val companyLat = prefs.getFloat("company_lat", 0.0f).toDouble()
+        val companyLng = prefs.getFloat("company_lng", 0.0f).toDouble()
+
+        val roundTripKm = prefs.getFloat("commute_round_trip_km", 0.0f).toDouble()
+        val oneWayKm = if (roundTripKm > 0.0) roundTripKm / 2.0 else 0.0
+        val bluetoothDevice = prefs.getString("car_bluetooth_device", "") ?: ""
 
         return CommuteConfig(
+            isConfigured = isConfigured,
             homeName = homeName,
             homeAddress = homeAddress,
+            homeLat = homeLat,
+            homeLng = homeLng,
             companyName = companyName,
             companyAddress = companyAddress,
+            companyLat = companyLat,
+            companyLng = companyLng,
             commuteOneWayKm = oneWayKm,
-            commuteRoundTripKm = roundTripKm
+            commuteRoundTripKm = roundTripKm,
+            carBluetoothDevice = bluetoothDevice
         )
     }
 
     fun updateConfig(
         homeName: String,
         homeAddress: String,
+        homeLat: Double,
+        homeLng: Double,
         companyName: String,
         companyAddress: String,
-        roundTripKm: Double
+        companyLat: Double,
+        companyLng: Double,
+        roundTripKm: Double,
+        carBluetoothDevice: String = ""
     ) {
+        val hasConfig = homeName.isNotBlank() && companyName.isNotBlank() && roundTripKm > 0.0
         prefs.edit()
-            .putString("home_name", homeName.trim().ifBlank { "서울 방이동" })
-            .putString("home_address", homeAddress.trim().ifBlank { "서울특별시 송파구 방이동" })
-            .putString("company_name", companyName.trim().ifBlank { "판교 테크노밸리" })
-            .putString("company_address", companyAddress.trim().ifBlank { "경기도 성남시 분당구 판교역로" })
-            .putFloat("commute_round_trip_km", roundTripKm.toFloat().coerceAtLeast(1.0f))
+            .putBoolean("is_configured", hasConfig)
+            .putString("home_name", homeName.trim())
+            .putString("home_address", homeAddress.trim())
+            .putFloat("home_lat", homeLat.toFloat())
+            .putFloat("home_lng", homeLng.toFloat())
+            .putString("company_name", companyName.trim())
+            .putString("company_address", companyAddress.trim())
+            .putFloat("company_lat", companyLat.toFloat())
+            .putFloat("company_lng", companyLng.toFloat())
+            .putFloat("commute_round_trip_km", roundTripKm.toFloat())
+            .putString("car_bluetooth_device", carBluetoothDevice.trim())
             .apply()
 
         _config.value = loadConfig()
+    }
+
+    fun resetConfig() {
+        prefs.edit().clear().apply()
+        _config.value = CommuteConfig()
     }
 }

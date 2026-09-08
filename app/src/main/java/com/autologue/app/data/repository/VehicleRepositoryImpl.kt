@@ -173,6 +173,26 @@ class VehicleRepositoryImpl @Inject constructor(
         modifiedCount
     }
 
+    override suspend fun clearTripDrivingLogs(): Int = withContext(Dispatchers.IO) {
+        vehicleLogDao.deleteAllTripDrivingLogs()
+    }
+
+    override suspend fun recordCommuteTrip(
+        isToWork: Boolean,
+        homeName: String,
+        companyName: String,
+        distanceKm: Double
+    ): Long = withContext(Dispatchers.IO) {
+        val direction = if (isToWork) "출근 주행 ($homeName ➔ $companyName)" else "퇴근 주행 ($companyName ➔ $homeName)"
+        val log = VehicleLog(
+            timestamp = java.time.LocalDateTime.now(),
+            logType = VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = distanceKm,
+            note = direction
+        )
+        vehicleLogDao.insertVehicleLog(log.toEntity())
+    }
+
     private fun VehicleLogEntity.toDomain() = VehicleLog(
         id = id, timestamp = timestamp, logType = logType, fuelCost = fuelCost,
         fuelAmountLiters = fuelAmountLiters, daysSinceLastFuel = daysSinceLastFuel,

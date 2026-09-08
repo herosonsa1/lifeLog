@@ -57,19 +57,34 @@ fun ExpenseScreen(
     Scaffold(
         containerColor = AppColors.background,
         topBar = {
-            Column {
+            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+                TopMenuAccentBar(color = MenuColors.expense)
                 TopAppBar(
+                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
                     title = {
-                        Text(
-                            text = "스마트 가계부",
-                            style = AppTypography.h1
-                        )
+                        Column {
+                            Text(
+                                text = "스마트 가계부",
+                                style = AppTypography.h2
+                            )
+                            Text(
+                                text = "소비·지출 관리",
+                                style = AppTypography.caption.copy(
+                                    color = MenuColors.expense,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
                     },
                     actions = {
                         AutoLogueOutlinedButton(
                             text = "지출 직접 추가",
                             icon = Icons.Default.Add,
-                            onClick = { viewModel.openAddDialog() }
+                            onClick = { viewModel.openAddDialog() },
+                            contentColor = MenuColors.expense,
+                            containerColor = MenuColors.expenseBg,
+                            borderColor = MenuColors.expenseBorder
                         )
                         Spacer(modifier = Modifier.width(Spacing.lg))
                     },

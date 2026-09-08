@@ -11,6 +11,8 @@ interface VehicleRepository {
     suspend fun getLatestRefuelingLog(): VehicleLog?
     suspend fun getDrivingDistanceBetween(start: LocalDate, end: LocalDate): Double
     suspend fun cleanDuplicates(): Int
-    suspend fun cleanDuplicatesAndCorruptedLogs(homeName: String = "서울 방이동", companyName: String = "판교 테크노밸리", commuteDistanceKm: Double = 37.0): Int
+    suspend fun cleanDuplicatesAndCorruptedLogs(homeName: String = "", companyName: String = "", commuteDistanceKm: Double = 0.0): Int
     suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int
+    suspend fun clearTripDrivingLogs(): Int
+    suspend fun recordCommuteTrip(isToWork: Boolean, homeName: String, companyName: String, distanceKm: Double): Long
 }

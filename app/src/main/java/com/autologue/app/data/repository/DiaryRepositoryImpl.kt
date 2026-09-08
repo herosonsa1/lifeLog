@@ -11,10 +11,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
+import com.autologue.app.data.preferences.ExcludedPhotoPreferences
 import javax.inject.Inject
 
 class DiaryRepositoryImpl @Inject constructor(
-    private val diaryDao: DiaryDao
+    private val diaryDao: DiaryDao,
+    private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) : DiaryRepository {
 
     override fun getDiaryEntriesFlow(): Flow<List<DiaryEntry>> {
@@ -39,6 +41,10 @@ class DiaryRepositoryImpl @Inject constructor(
         val existing = diaryDao.getEntryByDateRangeSingle(startDateTime, endDateTime)
         if (existing != null) {
             val isUserCustomTitle = !existing.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) && existing.title.isNotBlank()
+            val mergedPhotos = (existing.photoUris + entry.photoUris).distinct().filterNot { excludedPhotoPreferences.isExcluded(it) }
+            val mergedSteps = (entry.routeSteps.ifEmpty { existing.routeSteps }).map { step ->
+                step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+            }
             val merged = existing.copy(
                 title = if (isUserCustomTitle) existing.title else entry.title,
                 summary = if (existing.summary.isNotBlank()) existing.summary else entry.summary,
@@ -46,18 +52,24 @@ class DiaryRepositoryImpl @Inject constructor(
                 address = entry.address ?: existing.address,
                 latitude = entry.latitude ?: existing.latitude,
                 longitude = entry.longitude ?: existing.longitude,
-                photoUris = (existing.photoUris + entry.photoUris).distinct(),
+                photoUris = mergedPhotos,
                 totalExpense = entry.totalExpense,
                 drivingDistanceKm = if (entry.drivingDistanceKm > 0) entry.drivingDistanceKm else existing.drivingDistanceKm,
                 hasGolfRound = entry.hasGolfRound || existing.hasGolfRound,
                 tags = (existing.tags + entry.tags).distinct(),
-                routeSteps = entry.routeSteps.ifEmpty { existing.routeSteps },
+                routeSteps = mergedSteps,
                 movementSummary = entry.movementSummary ?: existing.movementSummary
             )
             diaryDao.updateEntry(merged)
             return@withContext existing.id
         }
-        diaryDao.insertEntry(entry.toEntity())
+        val cleanEntry = entry.copy(
+            photoUris = entry.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) },
+            routeSteps = entry.routeSteps.map { step ->
+                step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+            }
+        )
+        diaryDao.insertEntry(cleanEntry.toEntity())
     }
 
     override suspend fun updateDiaryEntry(entry: DiaryEntry) = withContext(Dispatchers.IO) {

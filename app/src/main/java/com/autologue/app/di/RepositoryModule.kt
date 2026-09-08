@@ -31,4 +31,8 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindTransactionRuleRepository(impl: TransactionRuleRepositoryImpl): TransactionRuleRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindGolfWeatherRepository(impl: GolfWeatherRepositoryImpl): GolfWeatherRepository
 }

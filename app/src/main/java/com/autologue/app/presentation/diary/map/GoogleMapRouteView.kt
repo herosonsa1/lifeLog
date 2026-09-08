@@ -22,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -29,6 +30,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -53,7 +55,8 @@ fun GoogleMapRouteView(
     onPeriodFilterChanged: (MapPeriodFilter) -> Unit,
     onStepSelected: (RouteStep) -> Unit,
     onPhotoClick: (String) -> Unit,
-    onAddCompanionClick: ((RouteStep) -> Unit)? = null
+    onAddCompanionClick: ((RouteStep) -> Unit)? = null,
+    onRemoveCompanion: ((String, String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val nonTransactionSteps = remember(routeSteps) {
@@ -111,17 +114,28 @@ fun GoogleMapRouteView(
                 }
             }
 
-            // Google Maps Open Button
-            if (currentStep?.latitude != null && currentStep.longitude != null) {
+            // Google Maps Open Button (전체 이동 경로 또는 거점 핀 열기)
+            if (validCoordinateSteps.isNotEmpty()) {
                 IconButton(
                     onClick = {
-                        openGoogleMaps(context, currentStep.latitude, currentStep.longitude, currentStep.locationName ?: currentStep.title)
+                        if (validCoordinateSteps.size > 1) {
+                            openGoogleMapsRoute(context, validCoordinateSteps)
+                        } else {
+                            val step = validCoordinateSteps.first()
+                            openGoogleMapsLocation(
+                                context = context,
+                                latitude = step.latitude!!,
+                                longitude = step.longitude!!,
+                                label = step.locationName ?: step.title,
+                                address = step.address
+                            )
+                        }
                     },
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Map,
-                        contentDescription = "Google 지도 앱에서 열기",
+                        contentDescription = "Google 지도 앱에서 전체 이동 경로 열기",
                         tint = AppColors.primary,
                         modifier = Modifier.size(20.dp)
                     )
@@ -136,6 +150,7 @@ fun GoogleMapRouteView(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .clipToBounds()
                 .background(Color(0xFF0F172A))
         ) {
             if (validCoordinateSteps.isNotEmpty()) {
@@ -302,8 +317,8 @@ fun GoogleMapRouteView(
                         currentStep.companions.forEach { companion ->
                             Surface(
                                 shape = AppShapes.pill,
-                                color = AppColors.surfaceVariant,
-                                border = androidx.compose.foundation.BorderStroke(0.5.dp, AppColors.border)
+                                color = Indigo50,
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.3f))
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -311,8 +326,19 @@ fun GoogleMapRouteView(
                                 ) {
                                     Text(
                                         text = "👤 $companion",
-                                        style = AppTypography.caption.copy(fontWeight = FontWeight.SemiBold, color = AppColors.primary)
+                                        style = AppTypography.caption.copy(fontWeight = FontWeight.SemiBold, color = Indigo700)
                                     )
+                                    if (onRemoveCompanion != null) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "동행인 삭제",
+                                            tint = Indigo600,
+                                            modifier = Modifier
+                                                .size(11.dp)
+                                                .clickable { onRemoveCompanion(currentStep.id, companion) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -352,25 +378,43 @@ fun GoogleMapRouteView(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
-                    // Google Maps Button
+                    // Google Maps Location Pin Button
                     if (currentStep.latitude != null && currentStep.longitude != null) {
                         OutlinedButton(
                             onClick = {
-                                openGoogleMaps(
+                                openGoogleMapsLocation(
                                     context = context,
                                     latitude = currentStep.latitude,
                                     longitude = currentStep.longitude,
-                                    label = currentStep.locationName ?: currentStep.title
+                                    label = currentStep.locationName ?: currentStep.title,
+                                    address = currentStep.address
                                 )
                             },
                             shape = AppShapes.button,
                             border = androidx.compose.foundation.BorderStroke(0.5.dp, AppColors.border),
                             modifier = Modifier.weight(1f).height(34.dp),
-                            contentPadding = PaddingValues(horizontal = Spacing.sm, vertical = 0.dp)
+                            contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp)
                         ) {
-                            Icon(Icons.Default.Navigation, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
-                            Spacer(modifier = Modifier.width(Spacing.xs))
-                            Text("Google 지도에서 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
+                            Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text("지점 핀 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
+                        }
+
+                        // 전체 이동 동선(2개 이상 거점)이 있는 경우 길찾기 경로 버튼 추가
+                        if (validCoordinateSteps.size > 1) {
+                            OutlinedButton(
+                                onClick = {
+                                    openGoogleMapsRoute(context, validCoordinateSteps)
+                                },
+                                shape = AppShapes.button,
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, AppColors.border),
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                contentPadding = PaddingValues(horizontal = Spacing.xs, vertical = 0.dp)
+                            ) {
+                                Icon(Icons.Default.Navigation, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text("전체 경로 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
+                            }
                         }
                     }
 
@@ -469,6 +513,7 @@ fun InteractiveRouteMapView(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
+            .clipToBounds()
             .background(Color(0xFF0F172A))
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
@@ -508,90 +553,103 @@ fun InteractiveRouteMapView(
             }
         }
 
-        // 1. Vector Map Canvas (Blueprint grid, radar circles, route path)
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            // Draw Coordinate Grid
-            val gridSize = 36.dp.toPx() * zoomLevel
-            val startX = ((panOffset.x % gridSize) + gridSize) % gridSize
-            val startY = ((panOffset.y % gridSize) + gridSize) % gridSize
-
-            var gx = startX
-            while (gx < widthPx) {
-                drawLine(
-                    color = Color(0xFF1E293B),
-                    start = Offset(gx, 0f),
-                    end = Offset(gx, heightPx),
-                    strokeWidth = 1f
-                )
-                gx += gridSize
-            }
-
-            var gy = startY
-            while (gy < heightPx) {
-                drawLine(
-                    color = Color(0xFF1E293B),
-                    start = Offset(0f, gy),
-                    end = Offset(widthPx, gy),
-                    strokeWidth = 1f
-                )
-                gy += gridSize
-            }
-
-            // Radar concentric circles around center
-            for (r in 1..4) {
-                drawCircle(
-                    color = Color(0xFF334155).copy(alpha = 0.4f),
-                    radius = r * 70.dp.toPx() * zoomLevel,
-                    center = Offset(centerX, centerY),
-                    style = Stroke(
-                        width = 1.2f,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
-                    )
-                )
-            }
-
-            // Draw Route Polyline
+        // [GC 최적화] 펄스 레이더 애니메이션에 의해 매 프레임 실행되는 Canvas 내부에서
+        // Path() 및 PathEffect 객체가 수백 회 무한 생성되어 GC 랙을 일으키는 현상을 원천 방어
+        val cachedRoutePath = remember(pointOffsets) {
             if (pointOffsets.size > 1) {
-                val path = Path()
-                pointOffsets.forEachIndexed { i, (_, pt) ->
-                    if (i == 0) path.moveTo(pt.x, pt.y) else path.lineTo(pt.x, pt.y)
+                Path().apply {
+                    pointOffsets.forEachIndexed { i, (_, pt) ->
+                        if (i == 0) moveTo(pt.x, pt.y) else lineTo(pt.x, pt.y)
+                    }
                 }
-                // Ambient Route Glow
-                drawPath(
-                    path = path,
-                    color = Color(0xFF2563EB).copy(alpha = 0.35f),
-                    style = Stroke(
-                        width = 10.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
-                )
-                // Crisp Dashed Vector Path
-                drawPath(
-                    path = path,
-                    color = Color(0xFF60A5FA),
-                    style = Stroke(
-                        width = 3.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f)
-                    )
-                )
-            }
+            } else null
+        }
+        val radarDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f) }
+        val routeDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f) }
 
-            // Draw Pulsing Radar Circle on Selected Waypoint
-            val selectedOffset = pointOffsets.getOrNull(selectedIndex)?.second ?: pointOffsets.firstOrNull()?.second
-            if (selectedOffset != null) {
-                drawCircle(
-                    color = Color(0xFFF59E0B).copy(alpha = pulseAlpha),
-                    radius = pulseRadius * zoomLevel,
-                    center = selectedOffset
-                )
-                drawCircle(
-                    color = Color(0xFF3B82F6).copy(alpha = pulseAlpha * 0.4f),
-                    radius = pulseRadius * 1.6f * zoomLevel,
-                    center = selectedOffset
-                )
+        // 1. Vector Map Canvas (Blueprint grid, radar circles, route path)
+        // clipToBounds 및 clipRect를 적용하여 동심원/경로선이 지도 영역 밖(상단 메뉴/필터바)으로 침범하지 않도록 완벽 차단
+        Canvas(modifier = Modifier.fillMaxSize().clipToBounds()) {
+            clipRect {
+                // Draw Coordinate Grid
+                val gridSize = 36.dp.toPx() * zoomLevel
+                val startX = ((panOffset.x % gridSize) + gridSize) % gridSize
+                val startY = ((panOffset.y % gridSize) + gridSize) % gridSize
+
+                var gx = startX
+                while (gx < widthPx) {
+                    drawLine(
+                        color = Color(0xFF1E293B),
+                        start = Offset(gx, 0f),
+                        end = Offset(gx, heightPx),
+                        strokeWidth = 1f
+                    )
+                    gx += gridSize
+                }
+
+                var gy = startY
+                while (gy < heightPx) {
+                    drawLine(
+                        color = Color(0xFF1E293B),
+                        start = Offset(0f, gy),
+                        end = Offset(widthPx, gy),
+                        strokeWidth = 1f
+                    )
+                    gy += gridSize
+                }
+
+                // Radar concentric circles around center
+                for (r in 1..4) {
+                    drawCircle(
+                        color = Color(0xFF334155).copy(alpha = 0.4f),
+                        radius = r * 70.dp.toPx() * zoomLevel,
+                        center = Offset(centerX, centerY),
+                        style = Stroke(
+                            width = 1.2f,
+                            pathEffect = radarDashEffect
+                        )
+                    )
+                }
+
+                // Draw Route Polyline (캐시된 Path 재사용)
+                if (cachedRoutePath != null) {
+                    // Ambient Route Glow
+                    drawPath(
+                        path = cachedRoutePath,
+                        color = Color(0xFF2563EB).copy(alpha = 0.35f),
+                        style = Stroke(
+                            width = 10.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                    // Crisp Dashed Vector Path
+                    drawPath(
+                        path = cachedRoutePath,
+                        color = Color(0xFF60A5FA),
+                        style = Stroke(
+                            width = 3.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round,
+                            pathEffect = routeDashEffect
+                        )
+                    )
+                }
+
+                // Draw Pulsing Radar Circle on Selected Waypoint
+                val selectedOffset = pointOffsets.getOrNull(selectedIndex)?.second ?: pointOffsets.firstOrNull()?.second
+                if (selectedOffset != null) {
+                    drawCircle(
+                        color = Color(0xFFF59E0B).copy(alpha = pulseAlpha),
+                        radius = pulseRadius * zoomLevel,
+                        center = selectedOffset
+                    )
+                    drawCircle(
+                        color = Color(0xFF3B82F6).copy(alpha = pulseAlpha * 0.4f),
+                        radius = pulseRadius * 1.6f * zoomLevel,
+                        center = selectedOffset
+                    )
+                }
             }
         }
 
@@ -700,20 +758,110 @@ fun InteractiveRouteMapView(
     }
 }
 
-fun openGoogleMaps(context: Context, latitude: Double, longitude: Double, label: String) {
+/**
+ * 특정 거점(스텝)을 Google 지도에 마커(Pin)와 장소명으로 정확하게 표기하여 엽니다.
+ * geo:0,0?q=latitude,longitude(label) 표준 사양을 적용하여 핀이 지도 정중앙에 선명하게 꽂힙니다.
+ */
+fun openGoogleMapsLocation(
+    context: Context,
+    latitude: Double,
+    longitude: Double,
+    label: String,
+    address: String? = null
+) {
     try {
-        val uri = Uri.parse("geo:$latitude,$longitude?q=$latitude,$longitude($label)")
-        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-            setPackage("com.google.android.apps.maps")
+        val pinTitle = buildString {
+            append(label)
+            if (!address.isNullOrBlank() && address != label) {
+                append(" (").append(address).append(")")
+            }
         }
-        if (intent.resolveActivity(context.packageManager) != null) {
-            context.startActivity(intent)
-        } else {
-            val browserUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$latitude,$longitude")
-            context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+        val encodedTitle = Uri.encode(pinTitle)
+
+        // Google Maps 공식 마커 핀 생성 URI 사양:
+        // geo:0,0?q=latitude,longitude(label)
+        // geo:lat,lng는 마커 없이 카메라만 이동하지만, geo:0,0?q=lat,lng(label)은 해당 좌표에 핀을 꽂고 라벨을 표시합니다.
+        val geoUri = Uri.parse("geo:0,0?q=$latitude,$longitude($encodedTitle)")
+        val mapIntent = Intent(Intent.ACTION_VIEW, geoUri).apply {
+            setPackage("com.google.android.apps.maps")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            context.startActivity(mapIntent)
+        } catch (e: Exception) {
+            // Google Maps 앱이 없거나 실행 실패 시 웹 브라우저 Google 지도 열기
+            val webQuery = Uri.encode("$latitude,$longitude ($pinTitle)")
+            val webUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$webQuery")
+            val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(webIntent)
         }
     } catch (e: Exception) {
-        val browserUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$latitude,$longitude")
-        context.startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+        e.printStackTrace()
     }
+}
+
+/**
+ * 하루 동안 이동한 여러 거점들을 Google 지도의 길찾기(Directions)로 열어 전체 이동 경로와 지점들을 표시합니다.
+ */
+fun openGoogleMapsRoute(context: Context, steps: List<RouteStep>) {
+    try {
+        val validSteps = steps.filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
+        if (validSteps.isEmpty()) return
+
+        if (validSteps.size == 1) {
+            val step = validSteps.first()
+            openGoogleMapsLocation(
+                context = context,
+                latitude = step.latitude!!,
+                longitude = step.longitude!!,
+                label = step.locationName ?: step.title,
+                address = step.address
+            )
+            return
+        }
+
+        val origin = "${validSteps.first().latitude},${validSteps.first().longitude}"
+        val destination = "${validSteps.last().latitude},${validSteps.last().longitude}"
+
+        val waypoints = if (validSteps.size > 2) {
+            // 구글 지도는 최대 8~9개 경유지를 지원하므로 중간 스텝들 중 최대 8개 선별
+            val intermediate = validSteps.drop(1).dropLast(1).take(8)
+            intermediate.joinToString("|") { "${it.latitude},${it.longitude}" }
+        } else null
+
+        val directionsUrl = buildString {
+            append("https://www.google.com/maps/dir/?api=1")
+            append("&origin=").append(origin)
+            append("&destination=").append(destination)
+            if (!waypoints.isNullOrBlank()) {
+                append("&waypoints=").append(Uri.encode(waypoints))
+            }
+            append("&travelmode=driving")
+        }
+
+        val routeUri = Uri.parse(directionsUrl)
+        val mapIntent = Intent(Intent.ACTION_VIEW, routeUri).apply {
+            setPackage("com.google.android.apps.maps")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            context.startActivity(mapIntent)
+        } catch (e: Exception) {
+            val webIntent = Intent(Intent.ACTION_VIEW, routeUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(webIntent)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+// 하위 호환성을 위해 유지
+fun openGoogleMaps(context: Context, latitude: Double, longitude: Double, label: String) {
+    openGoogleMapsLocation(context, latitude, longitude, label)
 }

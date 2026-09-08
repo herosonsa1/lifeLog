@@ -1,6 +1,7 @@
 package com.autologue.app.presentation.car
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,11 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Business
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,11 +39,53 @@ fun CarLedgerScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     if (uiState.showLocationDialog) {
-        CommuteSettingsDialog(
+        CommuteMapPickerDialog(
             config = uiState.commuteConfig,
             onDismiss = { viewModel.closeLocationDialog() },
-            onSave = { home, homeAddr, comp, compAddr, dist ->
-                viewModel.saveCommuteConfig(home, homeAddr, comp, compAddr, dist)
+            onSave = { home, homeAddr, homeLat, homeLng, comp, compAddr, compLat, compLng, dist, bt ->
+                viewModel.saveCommuteConfig(
+                    homeName = home,
+                    homeAddress = homeAddr,
+                    homeLat = homeLat,
+                    homeLng = homeLng,
+                    companyName = comp,
+                    companyAddress = compAddr,
+                    companyLat = compLat,
+                    companyLng = compLng,
+                    roundTripKm = dist,
+                    carBt = bt
+                )
+            }
+        )
+    }
+
+    if (uiState.showMaintenanceDialog) {
+        ConsumableMaintenanceDialog(
+            config = uiState.maintenanceConfig,
+            currentTotalKm = uiState.totalDrivingDistanceKm,
+            onDismiss = { viewModel.closeMaintenanceDialog() },
+            onSave = { eKm, eDate, eInt, aKm, aDate, aInt, tKm, tDate, tInt ->
+                viewModel.updateMaintenanceConfig(
+                    engineOilLastKm = eKm,
+                    engineOilDate = eDate,
+                    engineOilInterval = eInt,
+                    airconLastKm = aKm,
+                    airconDate = aDate,
+                    airconInterval = aInt,
+                    tireLastKm = tKm,
+                    tireDate = tDate,
+                    tireInterval = tInt
+                )
+            }
+        )
+    }
+
+    if (uiState.showVehicleManageDialog) {
+        VehicleManageDialog(
+            vehicles = uiState.vehicles,
+            onDismiss = { viewModel.closeVehicleManageDialog() },
+            onSaveVehicles = { car1, car2 ->
+                viewModel.saveVehicleProfiles(car1, car2)
             }
         )
     }
@@ -54,27 +93,53 @@ fun CarLedgerScreen(
     Scaffold(
         containerColor = AppColors.background,
         topBar = {
-            Column {
+            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+                TopMenuAccentBar(color = MenuColors.carLedger)
                 TopAppBar(
+                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
                     title = {
-                        Text(
-                            text = "스마트 차계부",
-                            style = AppTypography.h1
-                        )
+                        Column {
+                            Text(
+                                text = "스마트 차계부",
+                                style = AppTypography.h2
+                            )
+                            Text(
+                                text = "차량·주유 관리",
+                                style = AppTypography.caption.copy(
+                                    color = MenuColors.carLedger,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
                     },
                     actions = {
                         AutoLogueOutlinedButton(
-                            text = "집/회사 설정",
+                            text = "지도 거점 설정",
                             icon = Icons.Default.LocationOn,
-                            onClick = { viewModel.openLocationDialog() }
+                            onClick = { viewModel.openLocationDialog() },
+                            contentColor = MenuColors.carLedger,
+                            containerColor = MenuColors.carLedgerBg,
+                            borderColor = MenuColors.carLedgerBorder
                         )
                         Spacer(modifier = Modifier.width(Spacing.xs))
                         AutoLogueOutlinedButton(
                             text = "주유 동기화",
                             icon = Icons.Default.Sync,
-                            onClick = { viewModel.manualSyncRefueling() }
+                            onClick = { viewModel.manualSyncRefueling() },
+                            contentColor = MenuColors.carLedger,
+                            containerColor = MenuColors.carLedgerBg,
+                            borderColor = MenuColors.carLedgerBorder
                         )
-                        Spacer(modifier = Modifier.width(Spacing.md))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        IconButton(onClick = { viewModel.clearAllDummyLogs() }) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "가상 주행기록 삭제",
+                                tint = Slate400
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(Spacing.xs))
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
                 )
@@ -88,6 +153,17 @@ fun CarLedgerScreen(
                 .padding(padding),
             contentPadding = PaddingValues(bottom = Spacing.xxxl)
         ) {
+            // 다중 차량 (2대) 선택 탭 바
+            item {
+                VehicleSelectorBar(
+                    vehicles = uiState.vehicles,
+                    selectedVehicleId = uiState.selectedVehicleId,
+                    onSelectVehicle = { viewModel.selectVehicle(it) },
+                    onManageVehicles = { viewModel.openVehicleManageDialog() }
+                )
+                HairlineDivider()
+            }
+
             // Level 1: Natural Metrics Grid
             item {
                 Row(
@@ -129,8 +205,96 @@ fun CarLedgerScreen(
                 HairlineDivider()
             }
 
+            // Commute Location & Quick Action Card
+            item {
+                if (!uiState.commuteConfig.isConfigured) {
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Amber50),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = Spacing.sm)
+                            .clickable { viewModel.openLocationDialog() }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(Spacing.md),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.AddLocationAlt, contentDescription = null, tint = MenuColors.carLedger)
+                            Spacer(modifier = Modifier.width(Spacing.sm))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "우리집 & 회사 거점 미등록",
+                                    style = AppTypography.body.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                                )
+                                Text(
+                                    text = "지도를 열어 집과 회사를 지정하면 출퇴근 경로와 거리가 자동 산출됩니다.",
+                                    style = AppTypography.captionMuted
+                                )
+                            }
+                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Slate400)
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = Spacing.sm)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "🚗 출퇴근 경로",
+                                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${uiState.commuteConfig.homeName} ↔ ${uiState.commuteConfig.companyName}",
+                                    style = AppTypography.caption.copy(color = MenuColors.carLedger, fontWeight = FontWeight.Bold)
+                                )
+                            }
+                            Text(
+                                text = "편도 %.1fkm · 왕복 %.1fkm".format(uiState.commuteConfig.commuteOneWayKm, uiState.commuteConfig.commuteRoundTripKm),
+                                style = AppTypography.captionMuted
+                            )
+                        }
+                        if (uiState.commuteConfig.carBluetoothDevice.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "차량 블루투스 연동: ${uiState.commuteConfig.carBluetoothDevice} (탑승 시 자동 판별)",
+                                style = AppTypography.captionMuted.copy(fontSize = 11.sp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(Spacing.xs))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            AutoLoguePrimaryButton(
+                                text = "오늘 출근 기록",
+                                modifier = Modifier.weight(1f),
+                                onClick = { viewModel.recordManualCommute(isToWork = true) }
+                            )
+                            AutoLogueSecondaryButton(
+                                text = "오늘 퇴근 기록",
+                                modifier = Modifier.weight(1f),
+                                onClick = { viewModel.recordManualCommute(isToWork = false) }
+                            )
+                        }
+                    }
+                }
+                HairlineDivider()
+            }
+
             // Consumable Maintenance Reminder Section
             item {
+                val mCfg = uiState.maintenanceConfig
+                val currentKm = uiState.totalDrivingDistanceKm
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -141,14 +305,44 @@ fun CarLedgerScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "🔧 차량 소모품 교체 주기 알림",
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            text = "주행 %d km 기준".format(uiState.totalDrivingDistanceKm.toInt()),
-                            style = AppTypography.captionMuted
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "🔧 차량 소모품 교체 주기 알림",
+                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "(주행 %,d km 기준)".format(currentKm.toInt()),
+                                style = AppTypography.captionMuted.copy(fontSize = 11.sp)
+                            )
+                        }
+
+                        // 설정 버튼
+                        androidx.compose.material3.Surface(
+                            onClick = { viewModel.openMaintenanceDialog() },
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+                            color = MenuColors.carLedgerBg,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Settings,
+                                    contentDescription = "교체 주기 설정",
+                                    tint = MenuColors.carLedger,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "주기/교체 설정",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MenuColors.carLedger
+                                )
+                            }
+                        }
                     }
                     Spacer(modifier = Modifier.height(Spacing.xs))
 
@@ -158,20 +352,33 @@ fun CarLedgerScreen(
                     ) {
                         MaintenanceItemCard(
                             title = "엔진오일",
-                            intervalKm = 7000,
-                            currentKm = (uiState.totalDrivingDistanceKm % 7000).toInt(),
+                            remainingKm = mCfg.engineOil.getRemainingKm(currentKm),
+                            ratio = mCfg.engineOil.getProgressRatio(currentKm),
+                            recommendedIntervalKm = mCfg.engineOil.recommendedIntervalKm,
+                            lastReplacedKm = mCfg.engineOil.lastReplacedKm,
+                            lastDate = mCfg.engineOil.lastReplacedDate,
+                            onClick = { viewModel.openMaintenanceDialog() },
                             modifier = Modifier.weight(1f)
                         )
                         MaintenanceItemCard(
                             title = "에어컨 필터",
-                            intervalKm = 10000,
-                            currentKm = (uiState.totalDrivingDistanceKm % 10000).toInt(),
+                            remainingKm = mCfg.airconFilter.getRemainingKm(currentKm),
+                            ratio = mCfg.airconFilter.getProgressRatio(currentKm),
+                            recommendedIntervalKm = mCfg.airconFilter.recommendedIntervalKm,
+                            lastReplacedKm = mCfg.airconFilter.lastReplacedKm,
+                            lastDate = mCfg.airconFilter.lastReplacedDate,
+                            onClick = { viewModel.openMaintenanceDialog() },
                             modifier = Modifier.weight(1f)
                         )
                         MaintenanceItemCard(
-                            title = "타이어 위치",
-                            intervalKm = 20000,
-                            currentKm = (uiState.totalDrivingDistanceKm % 20000).toInt(),
+                            title = "타이어 위치 교환",
+                            subLabel = "앞↔뒤 편마모 방지",
+                            remainingKm = mCfg.tireRotation.getRemainingKm(currentKm),
+                            ratio = mCfg.tireRotation.getProgressRatio(currentKm),
+                            recommendedIntervalKm = mCfg.tireRotation.recommendedIntervalKm,
+                            lastReplacedKm = mCfg.tireRotation.lastReplacedKm,
+                            lastDate = mCfg.tireRotation.lastReplacedDate,
+                            onClick = { viewModel.openMaintenanceDialog() },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -309,19 +516,23 @@ fun SaaSCarLogRow(log: VehicleLog) {
 @Composable
 private fun MaintenanceItemCard(
     title: String,
-    intervalKm: Int,
-    currentKm: Int,
+    subLabel: String? = null,
+    remainingKm: Int,
+    ratio: Float,
+    recommendedIntervalKm: Int,
+    lastReplacedKm: Int,
+    lastDate: String,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val remainingKm = (intervalKm - currentKm).coerceAtLeast(0)
-    val ratio = (currentKm.toFloat() / intervalKm).coerceIn(0f, 1f)
     val statusColor = when {
-        ratio >= 0.9f -> androidx.compose.ui.graphics.Color(0xFFEF4444)
-        ratio >= 0.75f -> androidx.compose.ui.graphics.Color(0xFFF59E0B)
+        remainingKm <= 1000 || ratio >= 0.9f -> androidx.compose.ui.graphics.Color(0xFFEF4444)
+        remainingKm <= 2500 || ratio >= 0.75f -> androidx.compose.ui.graphics.Color(0xFFF59E0B)
         else -> androidx.compose.ui.graphics.Color(0xFF10B981)
     }
 
     androidx.compose.material3.Surface(
+        onClick = onClick,
         shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
         color = androidx.compose.ui.graphics.Color(0xFFF8FAFC),
         border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFFE2E8F0)),
@@ -333,15 +544,24 @@ private fun MaintenanceItemCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = title,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = androidx.compose.ui.graphics.Color(0xFF1E293B)
-                )
+                Column {
+                    Text(
+                        text = title,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = androidx.compose.ui.graphics.Color(0xFF1E293B)
+                    )
+                    if (subLabel != null) {
+                        Text(
+                            text = subLabel,
+                            fontSize = 8.5.sp,
+                            color = Slate500
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier
-                        .size(6.dp)
+                        .size(7.dp)
                         .clip(androidx.compose.foundation.shape.CircleShape)
                         .background(statusColor)
                 )
@@ -357,172 +577,39 @@ private fun MaintenanceItemCard(
                 trackColor = androidx.compose.ui.graphics.Color(0xFFE2E8F0)
             )
             Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "${remainingKm}km",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = androidx.compose.ui.graphics.Color(0xFF0F172A)
-            )
-            Text(
-                text = "남음",
-                fontSize = 9.sp,
-                color = androidx.compose.ui.graphics.Color(0xFF64748B)
-            )
-        }
-    }
-}
 
-@Composable
-fun CommuteSettingsDialog(
-    config: CommuteConfig,
-    onDismiss: () -> Unit,
-    onSave: (homeName: String, homeAddr: String, compName: String, compAddr: String, dist: Double) -> Unit
-) {
-    var homeLocationName by remember(config) { mutableStateOf(config.homeName) }
-    var homeAddress by remember(config) { mutableStateOf(config.homeAddress) }
-    var companyLocationName by remember(config) { mutableStateOf(config.companyName) }
-    var companyAddress by remember(config) { mutableStateOf(config.companyAddress) }
-    var distanceKmText by remember(config) { mutableStateOf(config.commuteRoundTripKm.toString()) }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = AppColors.surface,
-            shadowElevation = 8.dp,
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .wrapContentHeight()
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(Spacing.lg)
-                    .verticalScroll(rememberScrollState())
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        tint = AppColors.primary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(Spacing.xs))
+                Column {
                     Text(
-                        text = "출퇴근 거점 및 경로 설정",
-                        style = AppTypography.h2
+                        text = "%,dkm".format(remainingKm),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (remainingKm <= 1000) androidx.compose.ui.graphics.Color(0xFFDC2626) else androidx.compose.ui.graphics.Color(0xFF0F172A)
+                    )
+                    Text(
+                        text = "남음",
+                        fontSize = 9.sp,
+                        color = androidx.compose.ui.graphics.Color(0xFF64748B)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                Text(
-                    text = "우리집과 회사 거점을 등록하면 평일 주행 시 골프장 오탐 없이 정확한 출퇴근 경로로 자동 정제 및 분류됩니다.",
-                    style = AppTypography.caption.copy(color = Slate500)
-                )
-
-                Spacer(modifier = Modifier.height(Spacing.md))
-                HairlineDivider()
-                Spacer(modifier = Modifier.height(Spacing.md))
-
-                // 집 설정
-                Text(
-                    text = "우리집 설정",
-                    style = AppTypography.h3.copy(fontWeight = FontWeight.Bold, color = Slate800)
-                )
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                AutoLogueTextField(
-                    value = homeLocationName,
-                    onValueChange = { homeLocationName = it },
-                    label = "집 거점 명칭",
-                    placeholder = "예: 서울 방이동, 판교 푸르지오 등",
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                AutoLogueTextField(
-                    value = homeAddress,
-                    onValueChange = { homeAddress = it },
-                    label = "집 상세 주소 (선택)",
-                    placeholder = "예: 서울특별시 송파구 위례성대로...",
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(Spacing.md))
-                HairlineDivider()
-                Spacer(modifier = Modifier.height(Spacing.md))
-
-                // 회사 설정
-                Text(
-                    text = "직장 / 회사 설정",
-                    style = AppTypography.h3.copy(fontWeight = FontWeight.Bold, color = Slate800)
-                )
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                AutoLogueTextField(
-                    value = companyLocationName,
-                    onValueChange = { companyLocationName = it },
-                    label = "회사 거점 명칭",
-                    placeholder = "예: 판교 테크노밸리, 강남파이낸스센터 등",
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                AutoLogueTextField(
-                    value = companyAddress,
-                    onValueChange = { companyAddress = it },
-                    label = "회사 상세 주소 (선택)",
-                    placeholder = "예: 경기도 성남시 분당구 판교역로...",
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(Spacing.md))
-                HairlineDivider()
-                Spacer(modifier = Modifier.height(Spacing.md))
-
-                // 출퇴근 왕복 거리 설정
-                Text(
-                    text = "출퇴근 왕복 주행거리",
-                    style = AppTypography.h3.copy(fontWeight = FontWeight.Bold, color = Slate800)
-                )
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                AutoLogueTextField(
-                    value = distanceKmText,
-                    onValueChange = { distanceKmText = it },
-                    label = "왕복 기준 거리 (km)",
-                    placeholder = "37.0",
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(Spacing.xl))
-
-                // 액션 버튼
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
+                androidx.compose.material3.Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                    color = androidx.compose.ui.graphics.Color(0xFFF1F5F9)
                 ) {
-                    AutoLogueSecondaryButton(
-                        text = "취소",
-                        onClick = onDismiss
-                    )
-                    Spacer(modifier = Modifier.width(Spacing.sm))
-                    AutoLoguePrimaryButton(
-                        text = "저장 및 동기화",
-                        onClick = {
-                            val dist = distanceKmText.toDoubleOrNull() ?: 37.0
-                            onSave(
-                                homeLocationName.trim(),
-                                homeAddress.trim(),
-                                companyLocationName.trim(),
-                                companyAddress.trim(),
-                                dist
-                            )
-                        }
+                    Text(
+                        text = "권장 %,dkm".format(recommendedIntervalKm),
+                        fontSize = 8.sp,
+                        color = Slate600,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                     )
                 }
             }
         }
     }
 }
+

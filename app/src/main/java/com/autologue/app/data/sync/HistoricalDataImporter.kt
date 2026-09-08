@@ -1,10 +1,13 @@
 package com.autologue.app.data.sync
 
+import android.Manifest
 import android.content.ContentUris
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.Telephony
+import androidx.core.content.ContextCompat
 import com.autologue.app.data.parser.SmsParser
 import com.autologue.app.domain.model.DiaryEntry
 import com.autologue.app.domain.model.GolfRound
@@ -14,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
+import com.autologue.app.data.preferences.ExcludedPhotoPreferences
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,10 +25,16 @@ import javax.inject.Singleton
 @Singleton
 class HistoricalDataImporter @Inject constructor(
     private val placeResolver: PlaceResolver,
-    private val dailyRouteAggregator: DailyRouteAggregator
+    private val dailyRouteAggregator: DailyRouteAggregator,
+    private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) {
 
     suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 7, limit: Int = 300): List<Transaction> = withContext(Dispatchers.IO) {
+        // [L-01] READ_SMS 권한 사전 체크 — SecurityException 원천 방지
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            android.util.Log.w("HistoricalDataImporter", "READ_SMS 권한 없음 — SMS 스캔 건너뜀")
+            return@withContext emptyList()
+        }
         val result = mutableListOf<Transaction>()
         try {
             val projection = arrayOf(
@@ -67,8 +77,8 @@ class HistoricalDataImporter @Inject constructor(
                     count++
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
         result
     }
@@ -113,6 +123,12 @@ class HistoricalDataImporter @Inject constructor(
                     }
 
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    val uriString = contentUri.toString()
+                    // 사용자가 삭제하여 영구 제외된 사진(캡처/불필요 사진)은 스캔 단계에서 즉시 건너뜀
+                    if (excludedPhotoPreferences.isExcluded(uriString)) {
+                        continue
+                    }
+
                     val photoTime = Instant.ofEpochMilli(timestampMillis)
                         .atZone(ZoneId.systemDefault())
                         .toLocalDateTime()
@@ -134,8 +150,8 @@ class HistoricalDataImporter @Inject constructor(
                     count++
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
         scanned
     }

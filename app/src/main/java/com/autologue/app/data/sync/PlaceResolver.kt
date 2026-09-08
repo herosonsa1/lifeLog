@@ -10,6 +10,21 @@ import javax.inject.Singleton
 @Singleton
 class PlaceResolver @Inject constructor() {
 
+    /**
+     * [M-01] geoCache 크기 제한 적용 — 무제한 ConcurrentHashMap 대신 LruCache 래퍼 사용.
+     * 장기 사용 시 수천~수만 개 좌표 항목이 영구 축적되어 OOM이 발생하는 것을 방지합니다.
+     * 최대 1000개 항목 초과 시 가장 오래된 항목부터 자동 eviction (LRU 정책).
+     */
+    private val geoCache: MutableMap<String, ResolvedLocation> = object : LinkedHashMap<String, ResolvedLocation>(
+        16, 0.75f, true // accessOrder=true → LRU 순서 유지
+    ) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ResolvedLocation>?) =
+            size > MAX_CACHE_SIZE
+    }.let { lruMap ->
+        // ConcurrentHashMap으로 래핑하여 thread-safety 보장
+        java.util.Collections.synchronizedMap(lruMap)
+    }
+
     data class ResolvedLocation(
         val placeName: String,
         val address: String,
@@ -99,10 +114,15 @@ class PlaceResolver @Inject constructor() {
     }
 
     fun resolveGeoLocation(context: Context? = null, lat: Double, lng: Double): ResolvedLocation {
+        val cacheKey = "%.3f,%.3f".format(java.util.Locale.US, lat, lng)
+        geoCache[cacheKey]?.let { return it }
+
         // 1. Check known specific bounds for precise Korean Dong / Eup / Myeon name
         // 마포구 상암동
         if (lat in 37.550..37.585 && lng in 126.880..126.915) {
-            return ResolvedLocation("서울 상암동", "서울특별시 마포구 상암동 하늘공원로 95", lat, lng)
+            val res = ResolvedLocation("서울 상암동", "서울특별시 마포구 상암동 하늘공원로 95", lat, lng)
+            geoCache[cacheKey] = res
+            return res
         }
         // 송파구 (잠실동 vs 방이동 vs 문정동)
         if (lat in 37.480..37.535 && lng in 127.080..127.160) {
@@ -111,12 +131,16 @@ class PlaceResolver @Inject constructor() {
                 lat < 37.500 -> "문정동"
                 else -> "방이동"
             }
-            return ResolvedLocation("서울 $dong", "서울특별시 송파구 $dong", lat, lng)
+            val res = ResolvedLocation("서울 $dong", "서울특별시 송파구 $dong", lat, lng)
+            geoCache[cacheKey] = res
+            return res
         }
         // 영등포구 (여의도동 vs 영등포동)
         if (lat in 37.505..37.545 && lng in 126.885..126.945) {
             val dong = if (lng >= 126.918) "여의도동" else "영등포동"
-            return ResolvedLocation("서울 $dong", "서울특별시 영등포구 $dong", lat, lng)
+            val res = ResolvedLocation("서울 $dong", "서울특별시 영등포구 $dong", lat, lng)
+            geoCache[cacheKey] = res
+            return res
         }
         // 강남구 (역삼동 vs 삼성동 vs 신사동)
         if (lat in 37.480..37.535 && lng in 127.020..127.079) {
@@ -125,20 +149,28 @@ class PlaceResolver @Inject constructor() {
                 lng >= 127.045 -> "삼성동"
                 else -> "역삼동"
             }
-            return ResolvedLocation("서울 $dong", "서울특별시 강남구 $dong", lat, lng)
+            val res = ResolvedLocation("서울 $dong", "서울특별시 강남구 $dong", lat, lng)
+            geoCache[cacheKey] = res
+            return res
         }
         // 위례동
         if (lat in 37.470..37.485 && lng in 127.135..127.155) {
-            return ResolvedLocation("경기 위례동", "경기도 성남시 수정구 위례동", lat, lng)
+            val res = ResolvedLocation("경기 위례동", "경기도 성남시 수정구 위례동", lat, lng)
+            geoCache[cacheKey] = res
+            return res
         }
         // 분당/판교 삼평동/백현동
         if (lat in 37.380..37.410 && lng in 127.100..127.125) {
             val dong = if (lat >= 37.395) "삼평동" else "백현동"
-            return ResolvedLocation("경기 $dong", "경기도 성남시 분당구 $dong", lat, lng)
+            val res = ResolvedLocation("경기 $dong", "경기도 성남시 분당구 $dong", lat, lng)
+            geoCache[cacheKey] = res
+            return res
         }
         // 광주 곤지암읍
         if (lat in 37.320..37.350 && lng in 127.340..127.370) {
-            return ResolvedLocation("경기 곤지암읍", "경기도 광주시 곤지암읍", lat, lng)
+            val res = ResolvedLocation("경기 곤지암읍", "경기도 광주시 곤지암읍", lat, lng)
+            geoCache[cacheKey] = res
+            return res
         }
 
         // 2. Android Geocoder reverse-lookup with Dong prioritisation
@@ -169,17 +201,26 @@ class PlaceResolver @Inject constructor() {
                         }
 
                         val fullAddress = addr.getAddressLine(0) ?: "$admin $locality ${dong ?: ""}".trim()
-                        return ResolvedLocation(
+                        val res = ResolvedLocation(
                             placeName = if (shortName.isNotBlank()) shortName else "서울 방이동",
                             address = fullAddress,
                             latitude = lat,
                             longitude = lng
                         )
+                        geoCache[cacheKey] = res
+                        return res
                     }
                 }
             }
         }
 
-        return ResolvedLocation("서울 방이동", "서울특별시 송파구 방이동", lat, lng)
+        val fallback = ResolvedLocation("서울 방이동", "서울특별시 송파구 방이동", lat, lng)
+        geoCache[cacheKey] = fallback
+        return fallback
+    }
+
+    companion object {
+        /** [M-01] geoCache LRU 최대 항목 수 — 초과 시 가장 오래된 항목 자동 제거 */
+        private const val MAX_CACHE_SIZE = 1000
     }
 }

@@ -31,6 +31,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -59,6 +60,7 @@ import com.autologue.app.presentation.common.AutoLoguePrimaryButton
 import com.autologue.app.presentation.common.AutoLogueSecondaryButton
 import com.autologue.app.presentation.common.HairlineDivider
 import com.autologue.app.presentation.common.MetricBadge
+import com.autologue.app.presentation.common.TopMenuAccentBar
 import com.autologue.app.presentation.common.UnderlineTabBar
 import com.autologue.app.presentation.theme.*
 import java.time.DayOfWeek
@@ -177,13 +179,25 @@ fun DiaryScreen(
     Scaffold(
         containerColor = AppColors.background,
         topBar = {
-            Column {
+            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+                TopMenuAccentBar(color = MenuColors.diary)
                 TopAppBar(
+                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
                     title = {
-                        Text(
-                            text = "AutoLogue",
-                            style = AppTypography.h1
-                        )
+                        Column {
+                            Text(
+                                text = "스마트 다이어리",
+                                style = AppTypography.h2
+                            )
+                            Text(
+                                text = "일상·동선 관리",
+                                style = AppTypography.caption.copy(
+                                    color = MenuColors.diary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
                     },
                     actions = {
                         // Pill Date Capsule
@@ -300,7 +314,8 @@ fun DiaryScreen(
                         onPeriodFilterChanged = { viewModel.setMapPeriodFilter(it) },
                         onStepSelected = { viewModel.selectMapStep(it) },
                         onPhotoClick = { viewModel.openPhotoPreview(it) },
-                        onAddCompanionClick = { viewModel.openAddCompanionDialog(it) }
+                        onAddCompanionClick = { viewModel.openAddCompanionDialog(it) },
+                        onRemoveCompanion = { stepId, name -> viewModel.removeCompanionFromStep(stepId, name) }
                     )
                 }
                 TimelineViewMode.MONTHLY -> {
@@ -497,14 +512,30 @@ fun DiaryScreen(
                 entry = detailEntry,
                 onDismiss = { viewModel.closeDiaryDetail() },
                 onPhotoClick = { viewModel.openPhotoPreview(it) },
+                onAddCompanionClick = { viewModel.openAddCompanionDialog(it) },
+                onRemoveCompanion = { stepId, name -> viewModel.removeCompanionFromStep(stepId, name) },
                 onUpdateNote = { id, title, note -> viewModel.updateDiaryNote(id, title, note) }
             )
         }
 
-        // Large Photo Preview Dialog
-        uiState.selectedPhotoPreviewUrl?.let { photoUrl ->
+        // 특정 지점 동행인 관리 팝업
+        val targetStep = uiState.companionTargetStep
+        if (uiState.isAddCompanionDialogOpen && targetStep != null) {
+            AddCompanionDialog(
+                step = targetStep,
+                onAddCompanion = { viewModel.addCompanionToStep(it) },
+                onRemoveCompanion = { stepId, name -> viewModel.removeCompanionFromStep(stepId, name) },
+                onDismiss = { viewModel.closeAddCompanionDialog() }
+            )
+        }
+
+        // Large Photo Preview Dialog with Prev/Next Navigation and Delete
+        if (uiState.selectedPhotoPreviewUrl != null && uiState.photoPreviewList.isNotEmpty()) {
             PhotoPreviewDialog(
-                photoUrl = photoUrl,
+                photoList = uiState.photoPreviewList,
+                currentIndex = uiState.photoPreviewIndex,
+                onIndexChanged = { viewModel.setPhotoPreviewIndex(it) },
+                onDeletePhoto = { viewModel.deletePhoto(it) },
                 onDismiss = { viewModel.closePhotoPreview() }
             )
         }
@@ -517,15 +548,19 @@ fun NaturalSummaryHeader(
     isWeekly: Boolean = false,
     onOpenMapClick: (() -> Unit)? = null
 ) {
-    val totalExpense = entries.sumOf { it.totalExpense }
-    val totalDistance = entries.sumOf { it.drivingDistanceKm }
-    val totalPlaces = entries.flatMap { entry ->
-        if (entry.routeSteps.isNotEmpty()) {
-            entry.routeSteps.mapNotNull { it.locationName ?: it.title }
-        } else {
-            listOfNotNull(entry.placeName)
-        }
-    }.distinct().size
+    // [M-04] 무거운 집계 연산을 remember(entries)로 캐싱
+    //   entries가 변경될 때만 재계산되고, 부모 리컴포지션 시에는 캐시된 값을 재사용합니다.
+    val totalExpense = remember(entries) { entries.sumOf { it.totalExpense } }
+    val totalDistance = remember(entries) { entries.sumOf { it.drivingDistanceKm } }
+    val totalPlaces = remember(entries) {
+        entries.flatMap { entry ->
+            if (entry.routeSteps.isNotEmpty()) {
+                entry.routeSteps.mapNotNull { it.locationName ?: it.title }
+            } else {
+                listOfNotNull(entry.placeName)
+            }
+        }.distinct().size
+    }
 
     Row(
         modifier = Modifier
@@ -732,6 +767,8 @@ fun DiaryDetailDialog(
     entry: DiaryEntry,
     onDismiss: () -> Unit,
     onPhotoClick: (String) -> Unit,
+    onAddCompanionClick: ((RouteStep) -> Unit)? = null,
+    onRemoveCompanion: ((String, String) -> Unit)? = null,
     onUpdateNote: (Long, String, String) -> Unit
 ) {
     var isEditing by remember { mutableStateOf(false) }
@@ -779,41 +816,44 @@ fun DiaryDetailDialog(
                         } else {
                             Text(
                                 text = entry.title,
-                                style = AppTypography.h1
+                                style = AppTypography.h2
                             )
                         }
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "닫기", tint = AppColors.secondary)
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "닫기", tint = AppColors.textSecondary)
                     }
                 }
 
                 HairlineDivider(modifier = Modifier.padding(vertical = Spacing.sm))
 
-                // Scrollable Content Body
+                // Scrollable Body
                 Column(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .weight(1f)
                         .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
-                    // Daily Stats Strip
+                    // Quick Stats Row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(AppShapes.card)
-                            .background(AppColors.surfaceVariant)
-                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .background(Slate50)
+                            .padding(vertical = Spacing.sm, horizontal = Spacing.md),
+                        horizontalArrangement = Arrangement.SpaceAround
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("총 지출", style = AppTypography.caption)
-                            Text("%,d원".format(entry.totalExpense), style = AppTypography.h3)
+                            Text("지출 금액", style = AppTypography.caption)
+                            Text("%,d원".format(entry.totalExpense), style = AppTypography.h3.copy(color = if (entry.totalExpense > 0) AppColors.errorText else AppColors.textPrimary))
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("사진", style = AppTypography.caption)
-                            Text("${entry.photoUris.size}장", style = AppTypography.h3)
+                            Text("방문 장소", style = AppTypography.caption)
+                            Text("${entry.routeSteps.size}곳", style = AppTypography.h3)
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("주행거리", style = AppTypography.caption)
@@ -853,7 +893,9 @@ fun DiaryDetailDialog(
                                 VerticalTimelineStepItem(
                                     step = step,
                                     isLast = index == entry.routeSteps.size - 1,
-                                    onPhotoClick = onPhotoClick
+                                    onPhotoClick = onPhotoClick,
+                                    onAddCompanionClick = onAddCompanionClick,
+                                    onRemoveCompanion = onRemoveCompanion
                                 )
                             }
                         }
@@ -902,7 +944,9 @@ fun DiaryDetailDialog(
 fun VerticalTimelineStepItem(
     step: RouteStep,
     isLast: Boolean,
-    onPhotoClick: (String) -> Unit
+    onPhotoClick: (String) -> Unit,
+    onAddCompanionClick: ((RouteStep) -> Unit)? = null,
+    onRemoveCompanion: ((String, String) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -976,25 +1020,61 @@ fun VerticalTimelineStepItem(
                 )
             }
 
-            if (step.companions.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    step.companions.forEach { companion ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(AppShapes.pill)
-                                .background(Indigo50)
-                                .border(0.5.dp, Indigo600.copy(alpha = 0.3f), AppShapes.pill)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text("👤", fontSize = 9.sp)
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text(companion, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Indigo700)
+            // Companions and Add Companion button for this specific step
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 3.dp)
+            ) {
+                step.companions.forEach { companion ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(AppShapes.pill)
+                            .background(Indigo50)
+                            .border(0.5.dp, Indigo600.copy(alpha = 0.3f), AppShapes.pill)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("👤", fontSize = 9.sp)
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(companion, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Indigo700)
+                        if (onRemoveCompanion != null) {
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "동행인 삭제",
+                                tint = Indigo600,
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clickable { onRemoveCompanion(step.id, companion) }
+                            )
                         }
+                    }
+                }
+
+                // 특정 지점에 동행인 추가하는 버튼
+                if (onAddCompanionClick != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(AppShapes.pill)
+                            .background(Slate100)
+                            .clickable { onAddCompanionClick(step) }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PersonAdd,
+                            contentDescription = "동행인 추가",
+                            modifier = Modifier.size(11.dp),
+                            tint = AppColors.primary
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = if (step.companions.isEmpty()) "+ 동행인" else "+",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AppColors.primary
+                        )
                     }
                 }
             }
@@ -1030,36 +1110,353 @@ fun VerticalTimelineStepItem(
 
 @Composable
 fun PhotoPreviewDialog(
-    photoUrl: String,
+    photoList: List<String>,
+    currentIndex: Int,
+    onIndexChanged: (Int) -> Unit,
+    onDeletePhoto: ((String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    if (photoList.isEmpty()) return
+
+    val totalCount = photoList.size
+    val safeIndex = currentIndex.coerceIn(0, totalCount - 1)
+    val currentPhotoUrl = photoList[safeIndex]
+
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.Black),
-            contentAlignment = Alignment.TopEnd
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.88f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF0A0A0A))
+                .pointerInput(safeIndex, totalCount) {
+                    detectHorizontalDragGestures { _, dragAmount ->
+                        if (dragAmount > 50) {
+                            // 오른쪽 드래그 -> 이전 사진
+                            if (totalCount > 1) {
+                                val prevIdx = if (safeIndex - 1 < 0) totalCount - 1 else safeIndex - 1
+                                onIndexChanged(prevIdx)
+                            }
+                        } else if (dragAmount < -50) {
+                            // 왼쪽 드래그 -> 다음 사진
+                            if (totalCount > 1) {
+                                val nextIdx = (safeIndex + 1) % totalCount
+                                onIndexChanged(nextIdx)
+                            }
+                        }
+                    }
+                }
         ) {
+            // 메인 사진 뷰어
             AsyncImage(
-                model = photoUrl,
-                contentDescription = "사진 원본 확대",
+                model = currentPhotoUrl,
+                contentDescription = "사진 원본 확대 (${safeIndex + 1}/$totalCount)",
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .wrapContentHeight(),
+                    .fillMaxSize()
+                    .padding(vertical = 52.dp, horizontal = 8.dp),
                 contentScale = ContentScale.Fit
             )
-            IconButton(
-                onClick = onDismiss,
+
+            // 상단 컨트롤 바 (사진 순번 카운터, 삭제 휴지통 버튼 & 닫기 X 버튼)
+            Row(
                 modifier = Modifier
-                    .padding(8.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Black.copy(alpha = 0.75f), Color.Transparent)
+                        )
+                    )
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Close, contentDescription = "닫기", tint = PureWhite)
+                // 사진 번호 뱃지 (예: 2 / 5)
+                if (totalCount > 1) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White.copy(alpha = 0.2f),
+                        contentColor = PureWhite
+                    ) {
+                        Text(
+                            text = "${safeIndex + 1} / $totalCount",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.width(1.dp))
+                }
+
+                // 우측 버튼 모음 (삭제 휴지통 버튼 & 닫기 X 버튼)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 사진 삭제 휴지통 버튼
+                    if (onDeletePhoto != null) {
+                        IconButton(
+                            onClick = { showDeleteConfirmDialog = true },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.Red.copy(alpha = 0.35f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "사진 삭제 및 영구 제외",
+                                tint = PureWhite,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // 닫기 (X) 버튼
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color.White.copy(alpha = 0.25f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "닫기",
+                            tint = PureWhite,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // 삭제 확인 대화상자
+            if (showDeleteConfirmDialog && onDeletePhoto != null) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteConfirmDialog = false },
+                    title = {
+                        Text(
+                            text = "사진 기록 삭제",
+                            style = AppTypography.h3,
+                            color = AppColors.textPrimary
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "이 사진을 다이어리 기록에서 삭제하시겠습니까?\n\n※ 불필요한 캡처 화면이나 영수증 등을 삭제하면, 추후 재동기화가 진행되더라도 다시 추가되지 않도록 영구 제외 처리됩니다.",
+                            style = AppTypography.bodySecondary,
+                            color = AppColors.textSecondary
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showDeleteConfirmDialog = false
+                                onDeletePhoto(currentPhotoUrl)
+                            }
+                        ) {
+                            Text(
+                                text = "삭제",
+                                color = AppColors.errorText,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                            Text(text = "취소", color = AppColors.textMuted)
+                        }
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = PureWhite
+                )
+            }
+
+            // 좌측 이전 사진 (<) 버튼
+            if (totalCount > 1) {
+                IconButton(
+                    onClick = {
+                        val prevIdx = if (safeIndex - 1 < 0) totalCount - 1 else safeIndex - 1
+                        onIndexChanged(prevIdx)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 12.dp)
+                        .size(46.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronLeft,
+                        contentDescription = "이전 사진",
+                        tint = PureWhite,
+                        modifier = Modifier.size(30.dp)
+                    )
+                }
+            }
+
+            // 우측 다음 사진 (>) 버튼
+            if (totalCount > 1) {
+                IconButton(
+                    onClick = {
+                        val nextIdx = (safeIndex + 1) % totalCount
+                        onIndexChanged(nextIdx)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 12.dp)
+                        .size(46.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = "다음 사진",
+                        tint = PureWhite,
+                        modifier = Modifier.size(30.dp)
+                    )
+                }
             }
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AddCompanionDialog(
+    step: RouteStep,
+    onAddCompanion: (String) -> Unit,
+    onRemoveCompanion: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var newName by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = AppColors.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("특정 지점 동행인 관리", style = AppTypography.h2)
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                // 특정 지점 정보 명시
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Slate100,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                        Text(
+                            text = "📍 ${step.locationName ?: step.title} (${step.time.format(DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA))})",
+                            style = AppTypography.caption.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
+                        )
+                        if (!step.address.isNullOrBlank()) {
+                            Text(
+                                text = step.address,
+                                style = AppTypography.captionMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "※ 해당 지점(방문 장소)에 함께 있었던 동행인만 개별 등록됩니다.",
+                    style = AppTypography.captionMuted
+                )
+                Spacer(modifier = Modifier.height(Spacing.sm))
+
+                // 현재 등록된 동행인 목록
+                if (step.companions.isNotEmpty()) {
+                    Text("현재 등록된 동행인:", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        step.companions.forEach { companion ->
+                            Surface(
+                                shape = AppShapes.pill,
+                                color = Indigo50,
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.4f))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text("👤 $companion", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Indigo700)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "삭제",
+                                        tint = Indigo600,
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clickable { onRemoveCompanion(step.id, companion) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(Spacing.md))
+                }
+
+                // 새 동행인 추가 입력창
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        placeholder = { Text("동행인 이름 (예: 김철수, 대표님)", fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        textStyle = AppTypography.body
+                    )
+                    Button(
+                        onClick = {
+                            if (newName.isNotBlank()) {
+                                onAddCompanion(newName.trim())
+                                newName = ""
+                            }
+                        },
+                        enabled = newName.isNotBlank(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.height(48.dp)
+                    ) {
+                        Text("추가", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("닫기", style = AppTypography.body.copy(fontWeight = FontWeight.Bold, color = AppColors.primary))
+            }
+        },
+        shape = RoundedCornerShape(16.dp),
+        containerColor = PureWhite
+    )
+}
+
 
 @Composable
 fun MonthlyCalendarView(

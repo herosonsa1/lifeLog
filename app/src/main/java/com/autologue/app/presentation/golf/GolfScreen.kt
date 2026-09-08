@@ -41,6 +41,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.autologue.app.domain.model.GolfPlayWeather
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.GolfType
 import com.autologue.app.presentation.common.AutoLogueTextField
@@ -52,6 +53,7 @@ import com.autologue.app.presentation.common.AutoLogueDangerButton
 import com.autologue.app.presentation.common.AutoLogueOutlinedButton
 import com.autologue.app.presentation.common.HairlineDivider
 import com.autologue.app.presentation.common.MetricBadge
+import com.autologue.app.presentation.common.TopMenuAccentBar
 import com.autologue.app.presentation.theme.*
 import java.time.Duration
 import android.content.ClipData
@@ -78,7 +80,7 @@ fun GolfScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            viewModel.scanGolfLockerSlip(uri, context)
+            viewModel.scanGolfLockerSlip(uri)
         }
     }
 
@@ -89,7 +91,7 @@ fun GolfScreen(
         if (uri != null) {
             val targetRound = uiState.selectedRound ?: uiState.rounds.firstOrNull()
             if (targetRound != null) {
-                viewModel.scanScorecard(targetRound.id, uri, context)
+                viewModel.scanScorecard(targetRound.id, uri)
             }
         }
     }
@@ -97,19 +99,34 @@ fun GolfScreen(
     Scaffold(
         containerColor = AppColors.background,
         topBar = {
-            Column {
+            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+                TopMenuAccentBar(color = MenuColors.golf)
                 TopAppBar(
+                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
                     title = {
-                        Text(
-                            text = "골프 라이프",
-                            style = AppTypography.h1
-                        )
+                        Column {
+                            Text(
+                                text = "스마트 골프",
+                                style = AppTypography.h2
+                            )
+                            Text(
+                                text = "라운드·스코어 관리",
+                                style = AppTypography.caption.copy(
+                                    color = MenuColors.golf,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
                     },
                     actions = {
                         AutoLogueOutlinedButton(
                             text = "예약 추가",
                             icon = Icons.Default.AddCircle,
-                            onClick = { viewModel.openReservationDialog() }
+                            onClick = { viewModel.openReservationDialog() },
+                            contentColor = MenuColors.golf,
+                            containerColor = MenuColors.golfBg,
+                            borderColor = MenuColors.golfBorder
                         )
                         Spacer(modifier = Modifier.width(Spacing.xs))
                         AutoLogueOutlinedButton(
@@ -119,7 +136,10 @@ fun GolfScreen(
                                 globalLockerSlipPicker.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
-                            }
+                            },
+                            contentColor = MenuColors.golf,
+                            containerColor = MenuColors.golfBg,
+                            borderColor = MenuColors.golfBorder
                         )
                         Spacer(modifier = Modifier.width(Spacing.xs))
                         AutoLogueOutlinedButton(
@@ -129,7 +149,10 @@ fun GolfScreen(
                                 globalScorecardPicker.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
-                            }
+                            },
+                            contentColor = MenuColors.golf,
+                            containerColor = MenuColors.golfBg,
+                            borderColor = MenuColors.golfBorder
                         )
                         Spacer(modifier = Modifier.width(Spacing.lg))
                     },
@@ -204,13 +227,15 @@ fun GolfScreen(
                         uiState.upcomingReservations.forEach { res ->
                             UpcomingGolfCard(
                                 round = res,
+                                weather = uiState.weatherMap[res.id],
                                 onOpenDutchPay = { viewModel.openDutchPayDialog(res) },
                                 onScanLocker = {
                                     globalLockerSlipPicker.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
                                 },
-                                onClick = { viewModel.selectRound(res, context) }
+                                onViewWeatherDetail = { viewModel.openWeatherDetail(res) },
+                                onClick = { viewModel.selectRound(res) }
                             )
                             Spacer(modifier = Modifier.height(Spacing.xs))
                         }
@@ -355,7 +380,7 @@ fun GolfScreen(
                 items(displayRounds) { round ->
                     SaaSGolfRow(
                         round = round,
-                        onClick = { viewModel.selectRound(round, context) }
+                        onClick = { viewModel.selectRound(round) }
                     )
                     HairlineDivider()
                 }
@@ -366,13 +391,15 @@ fun GolfScreen(
         if (uiState.selectedRound != null) {
             GolfRoundDetailDialog(
                 round = uiState.selectedRound!!,
+                weather = uiState.weatherMap[uiState.selectedRound!!.id],
                 isOcrScanning = uiState.isOcrScanning,
                 onDismiss = { viewModel.closeRoundDetail() },
                 onPhotoClick = { photoUrl -> viewModel.openPhotoPreview(photoUrl) },
                 onAddPhotos = { uris -> viewModel.addPhotosToRound(uiState.selectedRound!!.id, uris) },
                 onRemovePhoto = { uri -> viewModel.removePhotoFromRound(uiState.selectedRound!!.id, uri) },
                 onSetScorecard = { uri -> viewModel.setScorecardPhoto(uiState.selectedRound!!.id, uri) },
-                onScanScorecard = { uri -> viewModel.scanScorecard(uiState.selectedRound!!.id, uri, context) },
+                onScanScorecard = { uri -> viewModel.scanScorecard(uiState.selectedRound!!.id, uri) },
+                onOpenWeatherDetail = { viewModel.openWeatherDetail(uiState.selectedRound!!) },
                 onSaveDetails = { name, score, putts, memo, sTime, eTime, companions ->
                     viewModel.updateRoundDetails(
                         uiState.selectedRound!!.id,
@@ -406,6 +433,26 @@ fun GolfScreen(
             GolfDutchPayDialog(
                 round = uiState.dutchPayTargetRound!!,
                 onDismiss = { viewModel.closeDutchPayDialog() }
+            )
+        }
+
+        // Golf Weather Detail Dialog (WeatherNext 3 & Hourly Rainfall)
+        if (uiState.weatherDetailTarget != null) {
+            GolfWeatherDetailDialog(
+                weather = uiState.weatherDetailTarget!!,
+                isRefreshing = uiState.isWeatherRefreshing,
+                onDismiss = { viewModel.closeWeatherDetail() },
+                onRefresh = {
+                    val target = uiState.weatherDetailTarget!!
+                    val round = uiState.rounds.find { it.clubName == target.clubName }
+                    viewModel.refreshWeatherForTarget(
+                        roundId = round?.id ?: 0L,
+                        clubName = target.clubName,
+                        roundDate = target.roundDate,
+                        startTime = round?.startTime,
+                        endTime = round?.endTime
+                    )
+                }
             )
         }
     }
@@ -536,6 +583,7 @@ fun SaaSGolfRow(
 @Composable
 fun GolfRoundDetailDialog(
     round: GolfRound,
+    weather: GolfPlayWeather? = null,
     isOcrScanning: Boolean,
     onDismiss: () -> Unit,
     onPhotoClick: (String) -> Unit,
@@ -543,6 +591,7 @@ fun GolfRoundDetailDialog(
     onRemovePhoto: (String) -> Unit,
     onSetScorecard: (String) -> Unit,
     onScanScorecard: (Uri) -> Unit,
+    onOpenWeatherDetail: () -> Unit = {},
     onSaveDetails: (clubName: String, totalScore: Int?, totalPutts: Int?, memo: String?, startTime: LocalDateTime?, endTime: LocalDateTime?, companions: List<String>) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -680,6 +729,20 @@ fun GolfRoundDetailDialog(
                                     startHour, startMinute, endHour, endMinute, durHours, durMinutes
                                 ),
                                 style = AppTypography.h3.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+
+                    // WeatherNext 3 날씨 & 시간대별 강우량 섹션
+                    if (weather != null) {
+                        GolfWeatherSummaryBadge(
+                            weather = weather,
+                            onViewDetail = onOpenWeatherDetail
+                        )
+                        if (weather.hourlyForecast.isNotEmpty()) {
+                            GolfHourlyRainfallChart(
+                                hourlyList = weather.hourlyForecast,
+                                modifier = Modifier.clickable { onOpenWeatherDetail() }
                             )
                         }
                     }
@@ -1137,8 +1200,10 @@ fun PhotoPreviewDialog(
 @Composable
 fun UpcomingGolfCard(
     round: GolfRound,
+    weather: GolfPlayWeather? = null,
     onOpenDutchPay: () -> Unit,
     onScanLocker: () -> Unit,
+    onViewWeatherDetail: () -> Unit = {},
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1250,26 +1315,19 @@ fun UpcomingGolfCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Color(0xFFEFF6FF),
-                border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 7.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("☀️ 맑음 21°C", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1D4ED8))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("🍃 풍속 1.5m/s (잔잔)", fontSize = 11.sp, color = Color(0xFF2563EB))
-                    }
-                    Text("💧 강수 0%", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
-                }
+            // WeatherNext 3 실시간 날씨 배너
+            GolfWeatherSummaryBadge(
+                weather = weather,
+                onViewDetail = onViewWeatherDetail
+            )
+
+            // 시간대별 강우량 & 강수확률 퀵 차트
+            if (weather != null && weather.hourlyForecast.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                GolfHourlyRainfallChart(
+                    hourlyList = weather.hourlyForecast,
+                    modifier = Modifier.clickable { onViewWeatherDetail() }
+                )
             }
 
             Spacer(modifier = Modifier.height(10.dp))

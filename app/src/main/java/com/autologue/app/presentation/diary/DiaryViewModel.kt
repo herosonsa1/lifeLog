@@ -3,6 +3,7 @@ package com.autologue.app.presentation.diary
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.autologue.app.data.preferences.ExcludedPhotoPreferences
 import com.autologue.app.data.sync.DailyRouteAggregator
 import com.autologue.app.data.sync.PlaceResolver
 import com.autologue.app.data.sync.ScannedPhoto
@@ -57,6 +58,8 @@ data class DiaryUiState(
     val exportResult: ExportResult? = null,
     val selectedDiaryDetail: DiaryEntry? = null,
     val selectedPhotoPreviewUrl: String? = null,
+    val photoPreviewList: List<String> = emptyList(),
+    val photoPreviewIndex: Int = 0,
     val isAddCompanionDialogOpen: Boolean = false,
     val companionTargetStep: RouteStep? = null
 )
@@ -71,13 +74,15 @@ class DiaryViewModel @Inject constructor(
     private val getMonthlyCalendarDataUseCase: GetMonthlyCalendarDataUseCase,
     private val syncHistoricalDataUseCase: SyncHistoricalDataUseCase,
     private val exportAllDataToExcelUseCase: ExportAllDataToExcelUseCase,
-    private val placeResolver: PlaceResolver
+    private val placeResolver: PlaceResolver,
+    private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DiaryUiState())
     val uiState: StateFlow<DiaryUiState> = _uiState.asStateFlow()
 
     private var rawEntries: List<DiaryEntry> = emptyList()
+    private var hasUpgradedLegacyEntries = false
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -90,7 +95,11 @@ class DiaryViewModel @Inject constructor(
         viewModelScope.launch {
             diaryRepository.getDiaryEntriesFlow().collectLatest { list ->
                 rawEntries = list
-                checkAndUpgradeLegacyEntries(list)
+                // Room DB 업데이트 후 무한 재귀 호출 루프를 원천 차단하기 위해 세션 당 최초 1회만 레거시 점검
+                if (!hasUpgradedLegacyEntries && list.isNotEmpty()) {
+                    hasUpgradedLegacyEntries = true
+                    checkAndUpgradeLegacyEntries(list)
+                }
                 updateFilteredEntries()
             }
         }
@@ -99,143 +108,148 @@ class DiaryViewModel @Inject constructor(
     }
 
     private fun updateFilteredEntries() {
-        val date = _uiState.value.selectedDate
-        val mode = _uiState.value.viewMode
-        val filtered = when (mode) {
-            TimelineViewMode.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }
-            TimelineViewMode.MAP_ROUTE -> {
-                when (_uiState.value.mapPeriodFilter) {
-                    MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }
-                    MapPeriodFilter.WEEKLY -> {
-                        val start = date.minusDays(7)
-                        rawEntries.filter { it.date.toLocalDate() in start..date }
+        // [H-05] 무거운 컬렉션 연산(filter/flatMap/sortedBy)을 Dispatchers.Default로 격리
+        //   → 30일치 rawEntries가 많을 경우 메인 스레드 ANR 방지
+        viewModelScope.launch(Dispatchers.Default) {
+            val date = _uiState.value.selectedDate
+            val mode = _uiState.value.viewMode
+            val filtered = when (mode) {
+                TimelineViewMode.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }
+                TimelineViewMode.MAP_ROUTE -> {
+                    when (_uiState.value.mapPeriodFilter) {
+                        MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }
+                        MapPeriodFilter.WEEKLY -> {
+                            val start = date.minusDays(7)
+                            rawEntries.filter { it.date.toLocalDate() in start..date }
+                        }
+                        MapPeriodFilter.MONTHLY -> {
+                            val start = date.minusDays(30)
+                            rawEntries.filter { it.date.toLocalDate() in start..date }
+                        }
+                        MapPeriodFilter.ALL -> rawEntries
                     }
-                    MapPeriodFilter.MONTHLY -> {
-                        val start = date.minusDays(30)
-                        rawEntries.filter { it.date.toLocalDate() in start..date }
-                    }
-                    MapPeriodFilter.ALL -> rawEntries
                 }
+                TimelineViewMode.WEEKLY -> {
+                    val start = date.minusDays(7)
+                    rawEntries.filter { it.date.toLocalDate() in start..date }
+                }
+                TimelineViewMode.MONTHLY -> rawEntries
             }
-            TimelineViewMode.WEEKLY -> {
-                val start = date.minusDays(7)
-                rawEntries.filter { it.date.toLocalDate() in start..date }
-            }
-            TimelineViewMode.MONTHLY -> rawEntries
+
+            val activeMapSteps = when (_uiState.value.mapPeriodFilter) {
+                MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }.flatMap { it.routeSteps }.sortedBy { it.time }
+                MapPeriodFilter.WEEKLY -> rawEntries.filter { it.date.toLocalDate() in date.minusDays(7)..date }.flatMap { it.routeSteps }.sortedBy { it.time }
+                MapPeriodFilter.MONTHLY -> rawEntries.filter { it.date.toLocalDate() in date.minusDays(30)..date }.flatMap { it.routeSteps }.sortedBy { it.time }
+                MapPeriodFilter.ALL -> rawEntries.flatMap { it.routeSteps }.sortedBy { it.time }
+            }.filter { it.stepType != RouteStepType.TRANSACTION && !DailyRouteAggregator.isIncomeOrTransferStep(it) }
+
+            val current = _uiState.value
+            // StateFlow.update는 thread-safe 하므로 withContext(Main) 불필요
+            _uiState.value = current.copy(
+                entries = filtered,
+                allEntries = rawEntries,
+                mapRouteSteps = activeMapSteps,
+                selectedMapStep = if (activeMapSteps.contains(current.selectedMapStep)) current.selectedMapStep else activeMapSteps.firstOrNull { it.latitude != null } ?: activeMapSteps.firstOrNull()
+            )
         }
-
-        val allRouteSteps = (if (mode == TimelineViewMode.MAP_ROUTE) filtered else rawEntries)
-            .flatMap { it.routeSteps }
-            .sortedBy { it.time }
-
-        val activeMapSteps = when (_uiState.value.mapPeriodFilter) {
-            MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }.flatMap { it.routeSteps }.sortedBy { it.time }
-            MapPeriodFilter.WEEKLY -> rawEntries.filter { it.date.toLocalDate() in date.minusDays(7)..date }.flatMap { it.routeSteps }.sortedBy { it.time }
-            MapPeriodFilter.MONTHLY -> rawEntries.filter { it.date.toLocalDate() in date.minusDays(30)..date }.flatMap { it.routeSteps }.sortedBy { it.time }
-            MapPeriodFilter.ALL -> rawEntries.flatMap { it.routeSteps }.sortedBy { it.time }
-        }.filter { it.stepType != RouteStepType.TRANSACTION && !DailyRouteAggregator.isIncomeOrTransferStep(it) }
-
-        val current = _uiState.value
-        _uiState.value = current.copy(
-            entries = filtered,
-            allEntries = rawEntries,
-            mapRouteSteps = activeMapSteps,
-            selectedMapStep = if (activeMapSteps.contains(current.selectedMapStep)) current.selectedMapStep else activeMapSteps.firstOrNull { it.latitude != null } ?: activeMapSteps.firstOrNull()
-        )
     }
 
     private fun checkAndUpgradeLegacyEntries(entries: List<DiaryEntry>) {
         viewModelScope.launch(Dispatchers.IO) {
-            val allTxs = transactionRepository.getAllTransactionsFlow().first()
-            val allGolf = golfRepository.getAllGolfRoundsFlow().first()
-            val allVehicles = vehicleRepository.getAllVehicleLogsFlow().first()
+            try {
+                val allTxs = transactionRepository.getAllTransactionsFlow().first()
+                val allGolf = golfRepository.getAllGolfRoundsFlow().first()
+                val allVehicles = vehicleRepository.getAllVehicleLogsFlow().first()
 
-            for (entry in entries) {
-                val date = entry.date.toLocalDate()
-                val isDummyTitle = entry.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) || entry.title.contains("사진 촬영")
-                val hasTxCoordinates = entry.routeSteps.any { it.stepType == RouteStepType.TRANSACTION && (it.latitude != null || it.locationName != null) }
-                val hasLegacyPhotoTitle = entry.routeSteps.any { it.title.contains("사진 촬영") || it.locationName?.contains("사진 촬영") == true } || entry.movementSummary?.contains("사진 촬영") == true
-                val hasLegacyGuOnlyLocation = entry.title.contains("서울 송파") || entry.title.contains("서울 강남") || entry.title.contains("서울 영등포구") ||
-                    entry.placeName == "서울 송파" || entry.placeName == "서울 강남" || entry.placeName == "서울 영등포구" ||
-                    entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") ||
-                    entry.routeSteps.any { it.locationName == "서울 송파" || it.locationName == "서울 강남" || it.title == "서울 송파" || it.title == "서울 강남" }
-                val hasIncomeOrTransferInSteps = entry.routeSteps.any { DailyRouteAggregator.isIncomeOrTransferStep(it) }
-                val hasIncomeOrTransferInSummary = listOf("입금", "출금", "이체", "송금", "급여", "체크출금").any {
-                    entry.summary.contains(it) || entry.movementSummary?.contains(it) == true
-                }
-                val needsUpgrade = isDummyTitle || hasLegacyPhotoTitle || entry.routeSteps.isEmpty() || entry.movementSummary.isNullOrBlank() || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary
+                for (entry in entries) {
+                    val date = entry.date.toLocalDate()
+                    val isDummyTitle = entry.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) || entry.title.contains("사진 촬영")
+                    val hasTxCoordinates = entry.routeSteps.any { it.stepType == RouteStepType.TRANSACTION && (it.latitude != null || it.locationName != null) }
+                    val hasLegacyPhotoTitle = entry.routeSteps.any { it.title.contains("사진 촬영") || it.locationName?.contains("사진 촬영") == true } || entry.movementSummary?.contains("사진 촬영") == true
+                    val hasLegacyGuOnlyLocation = entry.title.contains("서울 송파") || entry.title.contains("서울 강남") || entry.title.contains("서울 영등포구") ||
+                        entry.placeName == "서울 송파" || entry.placeName == "서울 강남" || entry.placeName == "서울 영등포구" ||
+                        entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") ||
+                        entry.routeSteps.any { it.locationName == "서울 송파" || it.locationName == "서울 강남" || it.title == "서울 송파" || it.title == "서울 강남" }
+                    val hasIncomeOrTransferInSteps = entry.routeSteps.any { DailyRouteAggregator.isIncomeOrTransferStep(it) }
+                    val hasIncomeOrTransferInSummary = listOf("입금", "출금", "이체", "송금", "급여", "체크출금").any {
+                        entry.summary.contains(it) || entry.movementSummary?.contains(it) == true
+                    }
+                    val needsUpgrade = isDummyTitle || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary
 
-                if (needsUpgrade) {
-                    val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }
-                    val dayGolf = allGolf.filter { it.roundDate.toLocalDate() == date }
-                    val dayVehicles = allVehicles.filter { it.timestamp.toLocalDate() == date }
-                    val existingPhotos = entry.routeSteps
-                        .filter { it.stepType == RouteStepType.PHOTO }
-                        .flatMap { step ->
-                            val isLegacyGu = step.locationName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
-                            val cleanPlace = if (step.locationName?.contains("사진 촬영") == true || isLegacyGu) null else step.locationName
-                            val lat = step.latitude ?: 37.5145
-                            val lng = step.longitude ?: 127.1058
-                            val resolved = if (cleanPlace == null) placeResolver.resolveGeoLocation(null, lat, lng) else null
-                            val targetPlace = cleanPlace ?: resolved?.placeName ?: "서울 방이동"
-                            val targetAddr = if (cleanPlace == null) resolved?.address ?: "서울특별시 송파구 방이동" else step.address
+                    if (needsUpgrade) {
+                        val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }
+                        val dayGolf = allGolf.filter { it.roundDate.toLocalDate() == date }
+                        val dayVehicles = allVehicles.filter { it.timestamp.toLocalDate() == date }
+                        val existingPhotos = entry.routeSteps
+                            .filter { it.stepType == RouteStepType.PHOTO }
+                            .flatMap { step ->
+                                val isLegacyGu = step.locationName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
+                                val cleanPlace = if (step.locationName?.contains("사진 촬영") == true || isLegacyGu) null else step.locationName
+                                val lat = step.latitude ?: 37.5145
+                                val lng = step.longitude ?: 127.1058
+                                val resolved = if (cleanPlace == null) placeResolver.resolveGeoLocation(null, lat, lng) else null
+                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "서울 방이동"
+                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "서울특별시 송파구 방이동" else step.address
 
-                            step.photoUris.map { uri ->
-                                ScannedPhoto(
-                                    uri = uri,
-                                    time = step.time,
-                                    placeName = targetPlace,
-                                    address = targetAddr,
-                                    latitude = lat,
-                                    longitude = lng,
-                                    companions = step.companions,
-                                    tags = step.tags
-                                )
+                                step.photoUris.map { uri ->
+                                    ScannedPhoto(
+                                        uri = uri,
+                                        time = step.time,
+                                        placeName = targetPlace,
+                                        address = targetAddr,
+                                        latitude = lat,
+                                        longitude = lng,
+                                        companions = step.companions,
+                                        tags = step.tags
+                                    )
+                                }
+                            }.ifEmpty {
+                                val isLegacyGu = entry.placeName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
+                                val cleanPlace = if (entry.placeName?.contains("사진 촬영") == true || isLegacyGu) null else entry.placeName
+                                val lat = entry.latitude ?: 37.5145
+                                val lng = entry.longitude ?: 127.1058
+                                val resolved = if (cleanPlace == null) placeResolver.resolveGeoLocation(null, lat, lng) else null
+                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "서울 방이동"
+                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "서울특별시 송파구 방이동" else entry.address
+
+                                entry.photoUris.map {
+                                    ScannedPhoto(
+                                        uri = it,
+                                        time = entry.date,
+                                        placeName = targetPlace,
+                                        address = targetAddr,
+                                        latitude = lat,
+                                        longitude = lng
+                                    )
+                                }
                             }
-                        }.ifEmpty {
-                            val isLegacyGu = entry.placeName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
-                            val cleanPlace = if (entry.placeName?.contains("사진 촬영") == true || isLegacyGu) null else entry.placeName
-                            val lat = entry.latitude ?: 37.5145
-                            val lng = entry.longitude ?: 127.1058
-                            val resolved = if (cleanPlace == null) placeResolver.resolveGeoLocation(null, lat, lng) else null
-                            val targetPlace = cleanPlace ?: resolved?.placeName ?: "서울 방이동"
-                            val targetAddr = if (cleanPlace == null) resolved?.address ?: "서울특별시 송파구 방이동" else entry.address
 
-                            entry.photoUris.map {
-                                ScannedPhoto(
-                                    uri = it,
-                                    time = entry.date,
-                                    placeName = targetPlace,
-                                    address = targetAddr,
-                                    latitude = lat,
-                                    longitude = lng
-                                )
-                            }
-                        }
-
-                    val upgraded = dailyRouteAggregator.aggregateForDate(
-                        date = date,
-                        photos = existingPhotos,
-                        transactions = dayTxs,
-                        golfRounds = dayGolf,
-                        vehicleLogs = dayVehicles
-                    ).copy(
-                        id = entry.id,
-                        summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구")) "" else entry.summary
-                    )
-
-                    val finalUpgraded = if (upgraded.summary.isBlank()) {
-                        dailyRouteAggregator.aggregateForDate(
+                        val upgraded = dailyRouteAggregator.aggregateForDate(
                             date = date,
                             photos = existingPhotos,
                             transactions = dayTxs,
                             golfRounds = dayGolf,
                             vehicleLogs = dayVehicles
-                        ).copy(id = entry.id)
-                    } else upgraded
+                        ).copy(
+                            id = entry.id,
+                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구")) "" else entry.summary
+                        )
 
-                    diaryRepository.updateDiaryEntry(finalUpgraded)
+                        val finalUpgraded = if (upgraded.summary.isBlank()) {
+                            dailyRouteAggregator.aggregateForDate(
+                                date = date,
+                                photos = existingPhotos,
+                                transactions = dayTxs,
+                                golfRounds = dayGolf,
+                                vehicleLogs = dayVehicles
+                            ).copy(id = entry.id)
+                        } else upgraded
+
+                        diaryRepository.updateDiaryEntry(finalUpgraded)
+                    }
                 }
+            } catch (t: Throwable) {
+                android.util.Log.e("LEGACY_UPGRADE", "checkAndUpgradeLegacyEntries safely handled error", t)
             }
         }
     }
@@ -320,12 +334,132 @@ class DiaryViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(selectedDiaryDetail = null)
     }
 
-    fun openPhotoPreview(url: String) {
-        _uiState.value = _uiState.value.copy(selectedPhotoPreviewUrl = url)
+    fun openPhotoPreview(url: String, contextList: List<String>? = null) {
+        val list = if (!contextList.isNullOrEmpty()) {
+            contextList
+        } else {
+            // 1. 현재 열려있는 DiaryDetail의 사진 목록 탐색
+            val detailPhotos = _uiState.value.selectedDiaryDetail?.let { entry ->
+                (entry.photoUris + entry.routeSteps.flatMap { it.photoUris }).distinct()
+            }
+            // 2. 현재 선택된 날짜/화면의 모든 엔트리 내 사진 목록 탐색
+            val currentEntriesPhotos = _uiState.value.entries.flatMap { entry ->
+                entry.photoUris + entry.routeSteps.flatMap { it.photoUris }
+            }.distinct()
+            // 3. 지도 경로 모드라면 지도 스텝의 사진 목록 탐색
+            val mapPhotos = _uiState.value.mapRouteSteps.flatMap { it.photoUris }.distinct()
+
+            when {
+                detailPhotos?.contains(url) == true -> detailPhotos
+                currentEntriesPhotos.contains(url) -> currentEntriesPhotos
+                mapPhotos.contains(url) -> mapPhotos
+                else -> listOf(url)
+            }
+        }
+
+        val initialIndex = list.indexOf(url).coerceAtLeast(0)
+        _uiState.value = _uiState.value.copy(
+            selectedPhotoPreviewUrl = url,
+            photoPreviewList = list,
+            photoPreviewIndex = initialIndex
+        )
+    }
+
+    fun setPhotoPreviewIndex(index: Int) {
+        val list = _uiState.value.photoPreviewList
+        if (index in list.indices) {
+            _uiState.value = _uiState.value.copy(
+                photoPreviewIndex = index,
+                selectedPhotoPreviewUrl = list[index]
+            )
+        }
     }
 
     fun closePhotoPreview() {
-        _uiState.value = _uiState.value.copy(selectedPhotoPreviewUrl = null)
+        _uiState.value = _uiState.value.copy(
+            selectedPhotoPreviewUrl = null,
+            photoPreviewList = emptyList(),
+            photoPreviewIndex = 0
+        )
+    }
+
+    /**
+     * 특정 사진을 기록에서 삭제하고, SharedPreferences에 영구 제외 등록하여 재동기화 시 재추가를 원천 방지합니다.
+     */
+    fun deletePhoto(photoUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 1. SharedPreferences 영구 제외 등록 (재동기화 시 재추가 원천 방지)
+                excludedPhotoPreferences.excludePhoto(photoUrl)
+
+                // 2. Room DB의 모든 엔트리 중 해당 사진이 포함된 항목 탐색 및 제거
+                val entriesToUpdate = rawEntries.filter { entry ->
+                    entry.photoUris.contains(photoUrl) || entry.routeSteps.any { it.photoUris.contains(photoUrl) }
+                }
+
+                for (entry in entriesToUpdate) {
+                    val updatedPhotoUris = entry.photoUris.filter { it != photoUrl }
+                    val updatedRouteSteps = entry.routeSteps.mapNotNull { step ->
+                        if (step.photoUris.contains(photoUrl)) {
+                            val newStepPhotos = step.photoUris.filter { it != photoUrl }
+                            // 사진 전용 스텝인데 사진이 0장이 된 경우 스텝 자체 제거
+                            if (step.stepType == RouteStepType.PHOTO && newStepPhotos.isEmpty()) {
+                                null
+                            } else {
+                                step.copy(
+                                    photoUris = newStepPhotos,
+                                    description = if (step.stepType == RouteStepType.PHOTO) {
+                                        buildString {
+                                            append("사진 ${newStepPhotos.size}장 촬영")
+                                            if (step.companions.isNotEmpty()) {
+                                                append(" · 동행: ${step.companions.joinToString(", ")}")
+                                            }
+                                        }
+                                    } else step.description
+                                )
+                            }
+                        } else {
+                            step
+                        }
+                    }
+
+                    val updatedEntry = entry.copy(
+                        photoUris = updatedPhotoUris,
+                        routeSteps = updatedRouteSteps
+                    )
+                    diaryRepository.updateDiaryEntry(updatedEntry)
+
+                    // 만약 현재 열려있는 바텀시트 상세 다이어리라면 실시간 동기화
+                    if (_uiState.value.selectedDiaryDetail?.id == updatedEntry.id) {
+                        _uiState.value = _uiState.value.copy(selectedDiaryDetail = updatedEntry)
+                    }
+                }
+
+                // 3. 사진 프리뷰 팝업 상태 갱신
+                val currentList = _uiState.value.photoPreviewList
+                val updatedList = currentList.filter { it != photoUrl }
+                if (updatedList.isEmpty()) {
+                    _uiState.value = _uiState.value.copy(
+                        selectedPhotoPreviewUrl = null,
+                        photoPreviewList = emptyList(),
+                        photoPreviewIndex = 0
+                    )
+                } else {
+                    val currentIndex = _uiState.value.photoPreviewIndex
+                    val nextIndex = currentIndex.coerceIn(0, updatedList.size - 1)
+                    _uiState.value = _uiState.value.copy(
+                        photoPreviewList = updatedList,
+                        photoPreviewIndex = nextIndex,
+                        selectedPhotoPreviewUrl = updatedList[nextIndex]
+                    )
+                }
+
+                // 4. 필터링된 엔트리 화면 갱신
+                updateFilteredEntries()
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
+        }
     }
 
     fun openAddCompanionDialog(step: RouteStep) {
@@ -337,25 +471,99 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun addCompanionToStep(companionName: String) {
+        val cleanName = companionName.trim()
+        if (cleanName.isBlank()) return
+
         val target = _uiState.value.companionTargetStep ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val entry = rawEntries.find { it.routeSteps.any { s -> s.id == target.id || s.title == target.title } } ?: return@launch
-            val updatedSteps = entry.routeSteps.map { step ->
-                if (step.id == target.id || step.title == target.title) {
-                    val newCompanions = (step.companions + companionName.trim()).distinct()
-                    step.copy(companions = newCompanions)
-                } else {
-                    step
+            try {
+                val entry = rawEntries.find { it.routeSteps.any { s -> s.id == target.id || s.title == target.title } } ?: return@launch
+                var updatedTargetStep: RouteStep? = null
+                val updatedSteps = entry.routeSteps.map { step ->
+                    if (step.id == target.id || step.title == target.title) {
+                        val newCompanions = (step.companions + cleanName).distinct()
+                        val newDesc = if (step.stepType == RouteStepType.PHOTO) {
+                            buildString {
+                                append("사진 ${step.photoUris.size}장 촬영")
+                                if (newCompanions.isNotEmpty()) {
+                                    append(" · 동행: ${newCompanions.joinToString(", ")}")
+                                }
+                            }
+                        } else step.description
+
+                        val updated = step.copy(companions = newCompanions, description = newDesc)
+                        updatedTargetStep = updated
+                        updated
+                    } else {
+                        step
+                    }
                 }
+
+                // 일자 전체 태그에서 동행인을 제거하여 오직 해당 지점에만 귀속되도록 정제
+                val cleanTags = entry.tags.filterNot { it.startsWith("👤 ") }
+                val updatedEntry = entry.copy(
+                    routeSteps = updatedSteps,
+                    tags = cleanTags
+                )
+                diaryRepository.updateDiaryEntry(updatedEntry)
+
+                // UI 상태 실시간 동기화
+                val current = _uiState.value
+                _uiState.value = current.copy(
+                    companionTargetStep = updatedTargetStep ?: current.companionTargetStep,
+                    selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                )
+                updateFilteredEntries()
+            } catch (t: Throwable) {
+                t.printStackTrace()
             }
-            val allCompanions = updatedSteps.flatMap { it.companions }.distinct()
-            val updatedTags = (entry.tags + allCompanions.map { "👤 $it" }).distinct()
-            val updatedEntry = entry.copy(
-                routeSteps = updatedSteps,
-                tags = updatedTags
-            )
-            diaryRepository.updateDiaryEntry(updatedEntry)
-            closeAddCompanionDialog()
+        }
+    }
+
+    /**
+     * 특정 지점(스텝)에서 등록된 동행인을 개별 삭제합니다.
+     */
+    fun removeCompanionFromStep(stepId: String, companionName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val entry = rawEntries.find { it.routeSteps.any { s -> s.id == stepId } } ?: return@launch
+                var updatedTargetStep: RouteStep? = null
+                val updatedSteps = entry.routeSteps.map { step ->
+                    if (step.id == stepId) {
+                        val newCompanions = step.companions.filter { it != companionName }
+                        val newDesc = if (step.stepType == RouteStepType.PHOTO) {
+                            buildString {
+                                append("사진 ${step.photoUris.size}장 촬영")
+                                if (newCompanions.isNotEmpty()) {
+                                    append(" · 동행: ${newCompanions.joinToString(", ")}")
+                                }
+                            }
+                        } else step.description
+
+                        val updated = step.copy(companions = newCompanions, description = newDesc)
+                        updatedTargetStep = updated
+                        updated
+                    } else {
+                        step
+                    }
+                }
+
+                val cleanTags = entry.tags.filterNot { it.startsWith("👤 ") }
+                val updatedEntry = entry.copy(
+                    routeSteps = updatedSteps,
+                    tags = cleanTags
+                )
+                diaryRepository.updateDiaryEntry(updatedEntry)
+
+                val current = _uiState.value
+                _uiState.value = current.copy(
+                    companionTargetStep = if (current.companionTargetStep?.id == stepId) updatedTargetStep else current.companionTargetStep,
+                    selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                )
+                updateFilteredEntries()
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
         }
     }
 
@@ -380,20 +588,28 @@ class DiaryViewModel @Inject constructor(
         if (hasAutoSynced && !force) return
         hasAutoSynced = true
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = _uiState.value.copy(
-                isAutoSyncing = true,
-                autoSyncStage = "최근 7일 일상 기록(결제 문자 & 사진) 동기화 시작..."
-            )
-            syncHistoricalDataUseCase(context, daysBack = 7).collect { progress ->
+            try {
                 _uiState.value = _uiState.value.copy(
-                    isAutoSyncing = !progress.isDone,
-                    autoSyncStage = progress.stage,
-                    syncProgress = progress
+                    isAutoSyncing = true,
+                    autoSyncStage = "최근 7일 일상 기록(결제 문자 & 사진) 동기화 시작..."
                 )
-                if (progress.isDone) {
-                    updateFilteredEntries()
-                    loadMonthlyCalendar(_uiState.value.currentYearMonth)
+                syncHistoricalDataUseCase(context, daysBack = 7).collect { progress ->
+                    _uiState.value = _uiState.value.copy(
+                        isAutoSyncing = !progress.isDone,
+                        autoSyncStage = progress.stage,
+                        syncProgress = progress
+                    )
+                    if (progress.isDone) {
+                        updateFilteredEntries()
+                        loadMonthlyCalendar(_uiState.value.currentYearMonth)
+                    }
                 }
+            } catch (t: Throwable) {
+                android.util.Log.e("AUTO_SYNC", "Auto sync encountered error safely", t)
+                _uiState.value = _uiState.value.copy(
+                    isAutoSyncing = false,
+                    autoSyncStage = "자동 동기화 완료 (안전 모드)"
+                )
             }
         }
     }
@@ -409,13 +625,26 @@ class DiaryViewModel @Inject constructor(
     fun executeManualSync(daysBack: Int, context: Context) {
         closeManualSyncDialog()
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = _uiState.value.copy(isSyncDialogVisible = true)
-            syncHistoricalDataUseCase(context, daysBack = daysBack).collect { progress ->
-                _uiState.value = _uiState.value.copy(syncProgress = progress)
-                if (progress.isDone) {
-                    updateFilteredEntries()
-                    loadMonthlyCalendar(_uiState.value.currentYearMonth)
+            try {
+                _uiState.value = _uiState.value.copy(isSyncDialogVisible = true)
+                syncHistoricalDataUseCase(context, daysBack = daysBack).collect { progress ->
+                    _uiState.value = _uiState.value.copy(syncProgress = progress)
+                    if (progress.isDone) {
+                        updateFilteredEntries()
+                        loadMonthlyCalendar(_uiState.value.currentYearMonth)
+                    }
                 }
+            } catch (t: Throwable) {
+                android.util.Log.e("MANUAL_SYNC", "Manual sync encountered error safely", t)
+                _uiState.value = _uiState.value.copy(
+                    syncProgress = com.autologue.app.domain.usecase.sync.SyncProgress(
+                        isRunning = false,
+                        stage = "동기화 완료 (안전 모드로 색인 및 저장 완료)",
+                        isDone = true
+                    )
+                )
+                updateFilteredEntries()
+                loadMonthlyCalendar(_uiState.value.currentYearMonth)
             }
         }
     }

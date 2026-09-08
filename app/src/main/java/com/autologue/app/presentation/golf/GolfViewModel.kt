@@ -7,20 +7,25 @@ import androidx.lifecycle.viewModelScope
 import com.autologue.app.data.ocr.GolfLockerSlipOcrAnalyzer
 import com.autologue.app.data.ocr.ScorecardOcrAnalyzer
 import com.autologue.app.data.sync.HistoricalDataImporter
+import com.autologue.app.domain.model.GolfPlayWeather
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.GolfType
 import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.GolfRepository
+import com.autologue.app.domain.repository.GolfWeatherRepository
 import com.autologue.app.domain.usecase.golf.ExtractScorecardOcrUseCase
 import com.autologue.app.domain.usecase.golf.MatchGolfRoundPhotosUseCase
 import com.autologue.app.domain.usecase.golf.ProcessGolfLockerSlipUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 import java.time.LocalTime
 import javax.inject.Inject
@@ -34,7 +39,10 @@ data class GolfUiState(
     val selectedPhotoPreviewUrl: String? = null,
     val isReservationDialogOpen: Boolean = false,
     val isDutchPayDialogOpen: Boolean = false,
-    val dutchPayTargetRound: GolfRound? = null
+    val dutchPayTargetRound: GolfRound? = null,
+    val weatherMap: Map<Long, GolfPlayWeather> = emptyMap(),
+    val weatherDetailTarget: GolfPlayWeather? = null,
+    val isWeatherRefreshing: Boolean = false
 ) {
     val upcomingReservations: List<GolfRound>
         get() {
@@ -57,14 +65,20 @@ data class GolfUiState(
 
 @HiltViewModel
 class GolfViewModel @Inject constructor(
+    // [H-01] ApplicationContext를 Hilt로 주입받아 Activity Context 전달로 인한 메모리 누수 방지
+    @ApplicationContext private val appContext: Context,
     private val golfRepository: GolfRepository,
     private val extractScorecardOcrUseCase: ExtractScorecardOcrUseCase,
     private val matchGolfRoundPhotosUseCase: MatchGolfRoundPhotosUseCase,
     private val historicalDataImporter: HistoricalDataImporter,
     private val diaryRepository: DiaryRepository,
     private val golfLockerSlipOcrAnalyzer: GolfLockerSlipOcrAnalyzer,
-    private val processGolfLockerSlipUseCase: ProcessGolfLockerSlipUseCase
+    private val processGolfLockerSlipUseCase: ProcessGolfLockerSlipUseCase,
+    private val golfWeatherRepository: GolfWeatherRepository
 ) : ViewModel() {
+
+    // [L-04] ScorecardOcrAnalyzer를 ViewModel 멤버로 관리하여 onCleared()에서 close() 호출
+    private val scorecardOcrAnalyzer = ScorecardOcrAnalyzer(appContext)
 
     private val _uiState = MutableStateFlow(GolfUiState())
     val uiState: StateFlow<GolfUiState> = _uiState.asStateFlow()
@@ -112,14 +126,89 @@ class GolfViewModel @Inject constructor(
                     bestScore = best,
                     selectedRound = updatedSelected
                 )
+
+                loadWeatherForRounds(list)
             }
         }
     }
 
-    fun selectRound(round: GolfRound, context: Context? = null) {
+    fun loadWeatherForRounds(rounds: List<GolfRound>, forceRefresh: Boolean = false) {
+        viewModelScope.launch {
+            val currentMap = _uiState.value.weatherMap.toMutableMap()
+            // 다가오는 예약 라운드 및 최근 라운드 8건 날씨 수집
+            for (round in rounds.take(8)) {
+                if (!forceRefresh && currentMap.containsKey(round.id)) continue
+                val weather = runCatching {
+                    golfWeatherRepository.getGolfPlayWeather(
+                        clubName = round.clubName,
+                        roundDate = round.roundDate,
+                        startTime = round.startTime,
+                        endTime = round.endTime,
+                        forceRefresh = forceRefresh
+                    )
+                }.getOrNull()
+                if (weather != null) {
+                    currentMap[round.id] = weather
+                    _uiState.value = _uiState.value.copy(weatherMap = currentMap.toMap())
+                }
+            }
+        }
+    }
+
+    fun openWeatherDetail(round: GolfRound) {
+        val cached = _uiState.value.weatherMap[round.id]
+        if (cached != null) {
+            _uiState.value = _uiState.value.copy(weatherDetailTarget = cached)
+        } else {
+            viewModelScope.launch {
+                _uiState.value = _uiState.value.copy(isWeatherRefreshing = true)
+                val w = runCatching {
+                    golfWeatherRepository.getGolfPlayWeather(
+                        clubName = round.clubName,
+                        roundDate = round.roundDate,
+                        startTime = round.startTime,
+                        endTime = round.endTime,
+                        forceRefresh = true
+                    )
+                }.getOrNull()
+                _uiState.value = _uiState.value.copy(
+                    isWeatherRefreshing = false,
+                    weatherDetailTarget = w,
+                    weatherMap = if (w != null) _uiState.value.weatherMap + (round.id to w) else _uiState.value.weatherMap
+                )
+            }
+        }
+    }
+
+    fun closeWeatherDetail() {
+        _uiState.value = _uiState.value.copy(weatherDetailTarget = null)
+    }
+
+    fun refreshWeatherForTarget(roundId: Long, clubName: String, roundDate: LocalDateTime, startTime: LocalDateTime?, endTime: LocalDateTime?) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isWeatherRefreshing = true)
+            val w = runCatching {
+                golfWeatherRepository.getGolfPlayWeather(
+                    clubName = clubName,
+                    roundDate = roundDate,
+                    startTime = startTime,
+                    endTime = endTime,
+                    forceRefresh = true
+                )
+            }.getOrNull()
+            _uiState.value = _uiState.value.copy(
+                isWeatherRefreshing = false,
+                weatherDetailTarget = w,
+                weatherMap = if (w != null) _uiState.value.weatherMap + (roundId to w) else _uiState.value.weatherMap
+            )
+        }
+    }
+
+    fun selectRound(round: GolfRound) {
         _uiState.value = _uiState.value.copy(selectedRound = round)
-        if (context != null && round.matchingPhotoUris.isEmpty()) {
-            autoDiscoverPhotosForRound(round, context)
+        if (round.matchingPhotoUris.isEmpty()) {
+            // [H-01] context 파라미터 제거 — appContext를 ViewModel 내부에서 사용
+            autoDiscoverPhotosForRound(round)
         }
     }
 
@@ -200,11 +289,13 @@ class GolfViewModel @Inject constructor(
         }
     }
 
-    fun scanScorecard(roundId: Long, imageUri: Uri, context: Context) {
-        viewModelScope.launch {
+    fun scanScorecard(roundId: Long, imageUri: Uri) {
+        // [H-01] Activity Context 대신 appContext(ApplicationContext) 사용
+        // [H-02] viewModelScope.launch(Dispatchers.IO)로 OCR을 IO 스레드에서 격리 → ANR 방지
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isOcrScanning = true)
-            val analyzer = ScorecardOcrAnalyzer(context)
-            val result = analyzer.analyzeScorecard(imageUri)
+            // [L-04] 매번 new 대신 ViewModel 멤버 scorecardOcrAnalyzer 재사용
+            val result = scorecardOcrAnalyzer.analyzeScorecard(imageUri)
             val totalScore = result.totalScore ?: 90
             extractScorecardOcrUseCase.saveOcrResult(
                 roundId = roundId,
@@ -221,8 +312,9 @@ class GolfViewModel @Inject constructor(
         }
     }
 
-    fun scanGolfLockerSlip(imageUri: Uri, context: Context) {
-        viewModelScope.launch {
+    fun scanGolfLockerSlip(imageUri: Uri) {
+        // [H-01] context 파라미터 제거 — GolfLockerSlipOcrAnalyzer는 @Singleton이며 ApplicationContext 보유
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isOcrScanning = true)
             val result = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(imageUri)
             val round = processGolfLockerSlipUseCase(result, imageUri.toString())
@@ -233,18 +325,35 @@ class GolfViewModel @Inject constructor(
         }
     }
 
-    fun scanAllLockerSlipsFromGallery(context: Context) {
-        viewModelScope.launch {
+    fun scanAllLockerSlipsFromGallery() {
+        // [H-01] context 파라미터 제거 — appContext 사용
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isOcrScanning = true)
-            val photos = historicalDataImporter.scanHistoricalPhotos(context, daysBack = null)
-            for (photo in photos) {
-                val uri = Uri.parse(photo.uri)
-                val result = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(uri, fallbackDate = photo.time.toLocalDate())
-                if (result.isLockerSlip) {
-                    processGolfLockerSlipUseCase(result, photo.uri)
+            try {
+                // [OOM 방어] 최근 14일 사진 중 골프/라커룸 후보 사진 최대 5장으로 엄격 제한하여 OCR 실행
+                val photos = historicalDataImporter.scanHistoricalPhotos(appContext, daysBack = 14, limit = 30)
+                val golfCandidates = photos.filter { photo ->
+                    photo.uri.contains("golf", ignoreCase = true) ||
+                    photo.uri.contains("locker", ignoreCase = true) ||
+                    (photo.placeName ?: "").contains("골프") ||
+                    photo.tags.any { it.contains("골프") }
+                }.take(5).ifEmpty { photos.take(3) }
+
+                for (photo in golfCandidates) {
+                    if (photo.uri.isBlank()) continue
+                    runCatching {
+                        val uri = Uri.parse(photo.uri)
+                        val result = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(uri, fallbackDate = photo.time.toLocalDate())
+                        if (result.isLockerSlip) {
+                            processGolfLockerSlipUseCase(result, photo.uri)
+                        }
+                    }
                 }
+            } catch (t: Throwable) {
+                android.util.Log.e("GolfViewModel", "라커룸 일괄 스캔 중 오류", t)
+            } finally {
+                _uiState.value = _uiState.value.copy(isOcrScanning = false)
             }
-            _uiState.value = _uiState.value.copy(isOcrScanning = false)
         }
     }
 
@@ -301,11 +410,13 @@ class GolfViewModel @Inject constructor(
         }
     }
 
-    private fun autoDiscoverPhotosForRound(round: GolfRound, context: Context) {
-        viewModelScope.launch {
+    private fun autoDiscoverPhotosForRound(round: GolfRound) {
+        // [H-01] context 파라미터 제거 — appContext 사용
+        // [H-06] Dispatchers.IO로 IO 작업 격리 → ANR 방지
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val roundDate = round.roundDate.toLocalDate()
-                val photos = historicalDataImporter.scanHistoricalPhotos(context, daysBack = 30)
+                val photos = historicalDataImporter.scanHistoricalPhotos(appContext, daysBack = 30)
                 val sameDayPhotos = photos.filter { it.time.toLocalDate() == roundDate }
                 if (sameDayPhotos.isNotEmpty()) {
                     val uris = sameDayPhotos.map { it.uri }
@@ -317,9 +428,18 @@ class GolfViewModel @Inject constructor(
                     golfRepository.updateGolfRound(updated)
                     _uiState.value = _uiState.value.copy(selectedRound = updated)
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (t: Throwable) {
+                // [H-06] catch(Throwable): OOM 등 시스템 레벨 오류까지 안전하게 포획
+                android.util.Log.e("GolfViewModel", "사진 자동 발굴 중 오류", t)
             }
         }
+    }
+
+    /**
+     * [L-04] ViewModel 소멸 시 ScorecardOcrAnalyzer의 ML Kit 네이티브 리소스 해제.
+     */
+    override fun onCleared() {
+        super.onCleared()
+        scorecardOcrAnalyzer.close()
     }
 }
