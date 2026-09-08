@@ -12,6 +12,10 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -306,7 +310,8 @@ fun DiaryScreen(
             )
             HairlineDivider()
 
-            when (uiState.viewMode) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (uiState.viewMode) {
                 TimelineViewMode.MAP_ROUTE -> {
                     GoogleMapRouteView(
                         routeSteps = uiState.mapRouteSteps,
@@ -433,7 +438,15 @@ fun DiaryScreen(
                     }
                 }
             }
+
+            // 감성적인 스마트 다이어리 로딩 애니메이션 오버레이 (0.5초~1초 이상 로딩 시 부드럽게 표출)
+            SmartDiaryLoadingOverlay(
+                isLoading = uiState.isLoading,
+                message = uiState.loadingMessage,
+                modifier = Modifier.fillMaxSize()
+            )
         }
+    }
 
         // Notification Guide Dialog
         if (showNotificationGuideDialog) {
@@ -1885,5 +1898,97 @@ fun ManualSyncPeriodDialog(
         containerColor = AppColors.surface,
         shape = AppShapes.modal
     )
+}
+
+/**
+ * 스마트 다이어리 로딩 인디케이터 오버레이
+ * 0.5초~1초 이상 걸리는 데이터 조회 및 화면 전환 시 멈춘 느낌을 해소하고
+ * 라이프로그 분석 상황을 감성적인 펄스 애니메이션과 함께 직관적으로 전달합니다.
+ */
+@Composable
+fun SmartDiaryLoadingOverlay(
+    isLoading: Boolean,
+    message: String,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = isLoading,
+        enter = fadeIn(animationSpec = tween(200)),
+        exit = fadeOut(animationSpec = tween(250)),
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF0F172A).copy(alpha = 0.45f))
+                .clickable(enabled = false) {}, // 클릭 이벤트 가로채기 (로딩 중 중복 터치 방지)
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = PureWhite,
+                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                modifier = Modifier
+                    .padding(horizontal = Spacing.xxl)
+                    .fillMaxWidth(0.85f)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xl),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    val infiniteTransition = rememberInfiniteTransition(label = "DiaryLoading")
+                    val pulseScale by infiniteTransition.animateFloat(
+                        initialValue = 0.92f,
+                        targetValue = 1.08f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(800, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "pulseScale"
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale)
+                            .clip(CircleShape)
+                            .background(Color(0xFFEFF6FF)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            strokeWidth = 3.dp,
+                            color = AppColors.primary,
+                            modifier = Modifier.size(44.dp)
+                        )
+                        Text(
+                            text = "🚗",
+                            fontSize = 20.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = "데이터 분석 및 불러오는 중",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F172A)
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = message.ifBlank { "라이프로그와 이동 경로를 안전하게 분석하고 있습니다..." },
+                        fontSize = 12.sp,
+                        color = Color(0xFF64748B),
+                        textAlign = TextAlign.Center,
+                        lineHeight = 17.sp
+                    )
+                }
+            }
+        }
+    }
 }
 

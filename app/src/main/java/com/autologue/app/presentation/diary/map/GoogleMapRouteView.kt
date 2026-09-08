@@ -170,6 +170,8 @@ fun GoogleMapRouteView(
 
     var mapFocusStep by remember { mutableStateOf<RouteStep?>(selectedStep) }
     var selectedTripGroupId by remember { mutableStateOf<String?>(null) }
+    var isCanvasMapMode by remember { mutableStateOf(false) }
+    var isWebViewLoading by remember { mutableStateOf(false) }
 
     val tripGroups = remember(validCoordinateSteps) { segmentRouteIntoTrips(validCoordinateSteps) }
     val selectedTripGroup = remember(tripGroups, selectedTripGroupId) {
@@ -331,7 +333,7 @@ fun GoogleMapRouteView(
 
         HairlineDivider()
 
-        // 2. Interactive Google Maps Embed Area (실제 구글 지도 웹뷰 - 도로 주행 경로선 즉시 렌더링)
+        // 2. Interactive Google Maps Embed Area (에뮬레이터 100% 렌더링 HTML5 Leaflet 맵 / 순수 Compose 벡터 레이더 듀얼 모드)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -340,39 +342,86 @@ fun GoogleMapRouteView(
                 .background(Color(0xFF0F172A))
         ) {
             if (activeDisplaySteps.isNotEmpty()) {
-                val targetMapUrl = remember(activeDisplaySteps, mapFocusStep) {
-                    buildGoogleMapsEmbedUrl(activeDisplaySteps, mapFocusStep)
+                if (isCanvasMapMode) {
+                    // 순수 Compose 캔버스 레이더 지도
+                    val focusIndex = remember(activeDisplaySteps, mapFocusStep) {
+                        if (mapFocusStep != null) {
+                            activeDisplaySteps.indexOfFirst { it.id == mapFocusStep?.id }.coerceAtLeast(0)
+                        } else 0
+                    }
+                    InteractiveRouteMapView(
+                        steps = activeDisplaySteps,
+                        selectedIndex = focusIndex,
+                        onStepSelected = { idx ->
+                            mapFocusStep = activeDisplaySteps.getOrNull(idx)
+                            mapFocusStep?.let { onStepSelected(it) }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    // 인라인 HTML5 Leaflet + CartoDB 지도 웹뷰 (에뮬레이터/실기기 100% 번호 핀 및 경로선 렌더링)
+                    val targetMapHtml = remember(activeDisplaySteps, mapFocusStep) {
+                        buildInteractiveHtmlMap(activeDisplaySteps, mapFocusStep)
+                    }
+
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                @SuppressLint("SetJavaScriptEnabled")
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.loadWithOverviewMode = true
+                                settings.useWideViewPort = true
+                                settings.setSupportZoom(true)
+                                settings.builtInZoomControls = true
+                                settings.displayZoomControls = false
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                        isWebViewLoading = true
+                                    }
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        isWebViewLoading = false
+                                    }
+                                    @Deprecated("Deprecated in Java")
+                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                        return false
+                                    }
+                                }
+                                loadDataWithBaseURL("https://unpkg.com", targetMapHtml, "text/html", "UTF-8", null)
+                            }
+                        },
+                        update = { webView ->
+                            webView.loadDataWithBaseURL("https://unpkg.com", targetMapHtml, "text/html", "UTF-8", null)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    if (isWebViewLoading) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFF0F172A).copy(alpha = 0.4f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .background(Color(0xFF1E293B), RoundedCornerShape(20.dp))
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color(0xFF60A5FA)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("지도 불러오는 중...", fontSize = 11.sp, color = Color(0xFFE2E8F0))
+                            }
+                        }
+                    }
                 }
 
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            @SuppressLint("SetJavaScriptEnabled")
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.loadWithOverviewMode = true
-                            settings.useWideViewPort = true
-                            settings.setSupportZoom(true)
-                            settings.builtInZoomControls = true
-                            settings.displayZoomControls = false
-                            webViewClient = object : WebViewClient() {
-                                @Deprecated("Deprecated in Java")
-                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                    return false
-                                }
-                            }
-                            loadUrl(targetMapUrl)
-                        }
-                    },
-                    update = { webView ->
-                        if (webView.url != targetMapUrl) {
-                            webView.loadUrl(targetMapUrl)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Top Status Badge Overlay
+                // Top Status Badge Overlay (좌측 상단: 선택된 트립/지점 상태)
                 Surface(
                     modifier = Modifier
                         .padding(Spacing.sm)
@@ -422,7 +471,31 @@ fun GoogleMapRouteView(
                     }
                 }
 
-                // Floating Google Maps App Open Button
+                // Top Mode Switcher Toggle (우측 상단: 실시간 지도 ↔ 레이더 지도 전환)
+                Surface(
+                    modifier = Modifier
+                        .padding(Spacing.sm)
+                        .align(Alignment.TopEnd)
+                        .clickable { isCanvasMapMode = !isCanvasMapMode },
+                    shape = AppShapes.pill,
+                    color = if (isCanvasMapMode) Color(0xFF2563EB) else Color(0xFF1E293B).copy(alpha = 0.92f),
+                    border = BorderStroke(1.dp, if (isCanvasMapMode) Color(0xFF60A5FA) else Color(0xFF334155)),
+                    shadowElevation = 4.dp
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = if (isCanvasMapMode) "🧭 레이더 맵" else "🗺️ 실시간 지도",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = PureWhite
+                        )
+                    }
+                }
+
+                // Floating Google Maps App Open Button (우측 하단: 공식 구글맵 앱에서 열기)
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = Color(0xFF0F172A).copy(alpha = 0.9f),
@@ -1268,4 +1341,220 @@ fun buildGoogleMapsEmbedUrl(steps: List<RouteStep>, focusStep: RouteStep? = null
 // 하위 호환성을 위해 유지
 fun openGoogleMaps(context: Context, latitude: Double, longitude: Double, label: String) {
     openGoogleMapsLocation(context, latitude, longitude, label)
+}
+
+/**
+ * 에뮬레이터 및 실기기에서 쿠키 차단/CSP/WebGL 미지원 문제를 원천 해결하는
+ * 인라인 HTML5 Leaflet + CartoDB 인터랙티브 지도 생성 함수.
+ * - 번호 핀([1], [2], [3]...) 및 파란색 경로선(Polyline) 100% 렌더링
+ * - 자동 fitBounds 지원으로 모든 이동 거점이 한 화면에 선명하게 정렬됨
+ */
+fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null): String {
+    val validSteps = steps.filter {
+        it.latitude != null && it.longitude != null &&
+        (it.latitude != 0.0 || it.longitude != 0.0)
+    }
+
+    if (validSteps.isEmpty()) {
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"/><style>body{margin:0;background:#0f172a;color:#94a3b8;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:14px;}</style></head>
+            <body><div>등록된 위치 정보가 없습니다.</div></body>
+            </html>
+        """.trimIndent()
+    }
+
+    val focusIndex = if (focusStep != null) {
+        validSteps.indexOfFirst { it.id == focusStep.id || (it.latitude == focusStep.latitude && it.longitude == focusStep.longitude) }
+    } else -1
+
+    val pointsJson = buildString {
+        append("[")
+        validSteps.forEachIndexed { index, step ->
+            if (index > 0) append(",")
+            val title = (step.locationName ?: step.title)
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", "")
+                .replace("'", "\\'")
+            val timeStr = step.time.format(DateTimeFormatter.ofPattern("M/d a h:mm", Locale.KOREAN))
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+            val isFocus = (index == focusIndex)
+            append("""{"lat":${step.latitude},"lng":${step.longitude},"title":"$title","time":"$timeStr","num":${index + 1},"isFocus":$isFocus}""")
+        }
+        append("]")
+    }
+
+    return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+          <style>
+            html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #0f172a; }
+            .leaflet-container { background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            .custom-pin {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              width: 26px;
+              height: 26px;
+              border-radius: 50%;
+              background: #2563eb;
+              color: #ffffff;
+              font-weight: 800;
+              font-size: 12px;
+              box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+              border: 2px solid #ffffff;
+              transition: transform 0.2s ease;
+            }
+            .custom-pin.start {
+              background: #16a34a;
+              border-color: #bbf7d0;
+            }
+            .custom-pin.end {
+              background: #dc2626;
+              border-color: #fecaca;
+            }
+            .custom-pin.focus {
+              background: #ea580c;
+              border-color: #fef08a;
+              box-shadow: 0 0 14px #f97316;
+              transform: scale(1.25);
+            }
+            .leaflet-popup-content-wrapper {
+              background: #1e293b;
+              color: #f8fafc;
+              border-radius: 10px;
+              border: 1px solid #334155;
+              box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+              padding: 4px;
+            }
+            .leaflet-popup-tip {
+              background: #1e293b;
+            }
+            .popup-card {
+              padding: 4px 6px;
+            }
+            .popup-num {
+              display: inline-block;
+              background: #2563eb;
+              color: #fff;
+              font-size: 10px;
+              font-weight: bold;
+              padding: 1px 6px;
+              border-radius: 999px;
+              margin-bottom: 4px;
+            }
+            .popup-title {
+              font-weight: 700;
+              font-size: 13px;
+              color: #60a5fa;
+              line-height: 1.3;
+            }
+            .popup-time {
+              font-size: 11px;
+              color: #94a3b8;
+              margin-top: 3px;
+            }
+            .leaflet-control-attribution {
+              background: rgba(15, 23, 42, 0.75) !important;
+              color: #64748b !important;
+              font-size: 9px !important;
+            }
+            .leaflet-control-attribution a {
+              color: #94a3b8 !important;
+            }
+          </style>
+        </head>
+        <body>
+          <div id="map"></div>
+          <script>
+            try {
+              var points = $pointsJson;
+              var focusIdx = $focusIndex;
+
+              var initialCenter = points.length > 0 ? [points[0].lat, points[0].lng] : [37.5665, 126.9780];
+              var map = L.map('map', {
+                center: initialCenter,
+                zoom: 13,
+                zoomControl: false,
+                attributionControl: false
+              });
+
+              L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+              L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                maxZoom: 19,
+                subdomains: 'abcd',
+                timeout: 8000
+              }).addTo(map);
+
+              var latlngs = [];
+              var markers = [];
+
+              points.forEach(function(p, i) {
+                var pos = [p.lat, p.lng];
+                latlngs.push(pos);
+
+                var pinClass = 'custom-pin';
+                if (p.isFocus) {
+                  pinClass += ' focus';
+                } else if (i === 0) {
+                  pinClass += ' start';
+                } else if (i === points.length - 1) {
+                  pinClass += ' end';
+                }
+
+                var icon = L.divIcon({
+                  className: '',
+                  html: '<div class="' + pinClass + '">' + p.num + '</div>',
+                  iconSize: [26, 26],
+                  iconAnchor: [13, 13]
+                });
+
+                var marker = L.marker(pos, { icon: icon }).addTo(map);
+                var content = '<div class="popup-card">' +
+                              '<span class="popup-num">지점 ' + p.num + '</span>' +
+                              '<div class="popup-title">' + p.title + '</div>' +
+                              (p.time ? '<div class="popup-time">⏰ ' + p.time + '</div>' : '') +
+                              '</div>';
+                marker.bindPopup(content);
+                markers.push(marker);
+
+                if (p.isFocus) {
+                  marker.openPopup();
+                }
+              });
+
+              if (latlngs.length > 1) {
+                L.polyline(latlngs, {
+                  color: '#3b82f6',
+                  weight: 4,
+                  opacity: 0.88,
+                  dashArray: '8, 6',
+                  lineJoin: 'round'
+                }).addTo(map);
+              }
+
+              if (focusIdx >= 0 && focusIdx < latlngs.length) {
+                map.setView(latlngs[focusIdx], 16);
+              } else if (latlngs.length === 1) {
+                map.setView(latlngs[0], 15);
+              } else if (latlngs.length > 1) {
+                map.fitBounds(L.latLngBounds(latlngs), { padding: [35, 35] });
+              }
+            } catch (e) {
+              console.error("Map initialization error:", e);
+            }
+          </script>
+        </body>
+        </html>
+    """.trimIndent()
 }

@@ -23,6 +23,7 @@ import com.autologue.app.domain.usecase.sync.SyncProgress
 import com.autologue.app.util.LocationDistanceUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -62,7 +63,9 @@ data class DiaryUiState(
     val photoPreviewList: List<String> = emptyList(),
     val photoPreviewIndex: Int = 0,
     val isAddCompanionDialogOpen: Boolean = false,
-    val companionTargetStep: RouteStep? = null
+    val companionTargetStep: RouteStep? = null,
+    val isLoading: Boolean = false,
+    val loadingMessage: String = ""
 )
 
 @HiltViewModel
@@ -115,12 +118,30 @@ class DiaryViewModel @Inject constructor(
         loadMonthlyCalendar(_uiState.value.currentYearMonth)
     }
 
-    private fun updateFilteredEntries() {
+    private fun updateFilteredEntries(customMessage: String = "") {
         // [H-05] 무거운 컬렉션 연산(filter/flatMap/sortedBy)을 Dispatchers.Default로 격리
         //   → 30일치 rawEntries가 많을 경우 메인 스레드 ANR 방지
         viewModelScope.launch(Dispatchers.Default) {
             val date = _uiState.value.selectedDate
             val mode = _uiState.value.viewMode
+            val mapFilter = _uiState.value.mapPeriodFilter
+
+            val isLongLoading = mapFilter != MapPeriodFilter.DAILY || mode == TimelineViewMode.WEEKLY || mode == TimelineViewMode.MONTHLY || customMessage.isNotBlank()
+            if (isLongLoading) {
+                val msg = when {
+                    customMessage.isNotBlank() -> customMessage
+                    mapFilter == MapPeriodFilter.WEEKLY -> "최근 7일간의 이동 경로와 라이프로그를 분석 중입니다..."
+                    mapFilter == MapPeriodFilter.MONTHLY -> "최근 30일간의 이동 경로를 분석 중입니다..."
+                    mapFilter == MapPeriodFilter.ALL -> "전체 이동 기록을 불러오는 중입니다..."
+                    mode == TimelineViewMode.WEEKLY -> "최근 7일간의 주간 다이어리를 분석 중입니다..."
+                    mode == TimelineViewMode.MONTHLY -> "월간 캘린더 데이터를 분석 중입니다..."
+                    else -> "데이터를 불러오는 중입니다..."
+                }
+                _uiState.value = _uiState.value.copy(isLoading = true, loadingMessage = msg)
+                // 1초 이상 걸리는 느낌을 방지하고 부드러운 애니메이션 인식을 위한 최소 딜레이
+                delay(300L)
+            }
+
             val filtered = when (mode) {
                 TimelineViewMode.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }
                 TimelineViewMode.MAP_ROUTE -> {
@@ -157,7 +178,9 @@ class DiaryViewModel @Inject constructor(
                 entries = filtered,
                 allEntries = rawEntries,
                 mapRouteSteps = activeMapSteps,
-                selectedMapStep = if (activeMapSteps.contains(current.selectedMapStep)) current.selectedMapStep else activeMapSteps.firstOrNull { it.latitude != null } ?: activeMapSteps.firstOrNull()
+                selectedMapStep = if (activeMapSteps.contains(current.selectedMapStep)) current.selectedMapStep else activeMapSteps.firstOrNull { it.latitude != null } ?: activeMapSteps.firstOrNull(),
+                isLoading = false,
+                loadingMessage = ""
             )
         }
     }
@@ -267,13 +290,25 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun setViewMode(mode: TimelineViewMode) {
+        val msg = when (mode) {
+            TimelineViewMode.WEEKLY -> "최근 7일간의 주간 다이어리를 분석 중입니다..."
+            TimelineViewMode.MONTHLY -> "월간 캘린더 데이터를 불러오는 중입니다..."
+            TimelineViewMode.MAP_ROUTE -> "이동 동선 지도를 불러오는 중입니다..."
+            TimelineViewMode.DAILY -> ""
+        }
         _uiState.value = _uiState.value.copy(viewMode = mode)
-        updateFilteredEntries()
+        updateFilteredEntries(msg)
     }
 
     fun setMapPeriodFilter(filter: MapPeriodFilter) {
+        val msg = when (filter) {
+            MapPeriodFilter.WEEKLY -> "최근 7일간의 주행 경로를 분석 중입니다..."
+            MapPeriodFilter.MONTHLY -> "최근 30일간의 주행 경로를 분석 중입니다..."
+            MapPeriodFilter.ALL -> "전체 이동 기록을 불러오는 중입니다..."
+            MapPeriodFilter.DAILY -> "선택 일자의 이동 경로를 불러오는 중입니다..."
+        }
         _uiState.value = _uiState.value.copy(mapPeriodFilter = filter)
-        updateFilteredEntries()
+        updateFilteredEntries(msg)
     }
 
     fun selectMapStep(step: RouteStep) {
