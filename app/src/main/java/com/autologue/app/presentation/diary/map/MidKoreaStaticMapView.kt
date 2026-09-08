@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autologue.app.domain.model.RouteStep
+import com.autologue.app.domain.model.RouteStepType
 import kotlin.math.max
 import kotlin.math.min
 
@@ -260,57 +261,62 @@ fun MidKoreaStaticMapView(
                         val isFocus = step.id == selectedStep?.id || step.id == focusedStep?.id
                         val isStart = index == 0
                         val isEnd = index == validSteps.lastIndex
+                        val isKeyPoint = isStart || isEnd || isFocus || step.stepType != RouteStepType.DRIVING
 
-                        val pinColor = when {
-                            isFocus -> Color(0xFFEA580C) // 오렌지 포커스
-                            isStart -> Color(0xFF16A34A) // 녹색 출발
-                            isEnd -> Color(0xFFDC2626)   // 빨강 도착
-                            else -> Color(0xFF2563EB)    // 파랑 경유
-                        }
+                        if (isKeyPoint) {
+                            val pinColor = when {
+                                isFocus -> Color(0xFFEA580C) // 오렌지 포커스
+                                isStart -> Color(0xFF16A34A) // 녹색 출발
+                                isEnd -> Color(0xFFDC2626)   // 빨강 도착
+                                else -> Color(0xFF2563EB)    // 파랑 활동 거점 (사진, 골프 등)
+                            }
 
-                        val radius = if (isFocus) 14.dp.toPx() / scale.coerceAtLeast(1f) else 11.dp.toPx() / scale.coerceAtLeast(1f)
+                            val radius = if (isFocus) 14.dp.toPx() / scale.coerceAtLeast(1f) else 11.dp.toPx() / scale.coerceAtLeast(1f)
 
-                        // 외곽 흰색 테두리
-                        drawCircle(
-                            color = Color.White,
-                            radius = radius + 2.dp.toPx() / scale.coerceAtLeast(1f),
-                            center = pt
-                        )
-                        // 채움 원
-                        drawCircle(
-                            color = pinColor,
-                            radius = radius,
-                            center = pt
-                        )
-
-                        // 번호 텍스트
-                        val numStr = (index + 1).toString()
-                        val numLayout = textMeasurer.measure(
-                            text = AnnotatedString(numStr),
-                            style = TextStyle(
+                            // 외곽 흰색 테두리
+                            drawCircle(
                                 color = Color.White,
-                                fontSize = (10 / scale.coerceAtLeast(1f)).sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center
+                                radius = radius + 2.dp.toPx() / scale.coerceAtLeast(1f),
+                                center = pt
                             )
-                        )
-                        drawText(
-                            textLayoutResult = numLayout,
-                            topLeft = Offset(
-                                pt.x - numLayout.size.width / 2f,
-                                pt.y - numLayout.size.height / 2f
+                            // 채움 원
+                            drawCircle(
+                                color = pinColor,
+                                radius = radius,
+                                center = pt
                             )
-                        )
 
-                        // 장소명 캡슐 라벨 (미선택 시 축약 표기)
-                        if (!isFocus) {
-                            val placeLabel = (step.locationName ?: step.title).take(6)
+                            // 번호 텍스트: 시작 지점은 "1", 종료 지점은 "${validSteps.size}", 포커스는 "${index + 1}"
+                            val numStr = if (isStart) "1" else if (isEnd) "${validSteps.size}" else "${index + 1}"
+                            val numLayout = textMeasurer.measure(
+                                text = AnnotatedString(numStr),
+                                style = TextStyle(
+                                    color = Color.White,
+                                    fontSize = (10 / scale.coerceAtLeast(1f)).sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                            )
+                            drawText(
+                                textLayoutResult = numLayout,
+                                topLeft = Offset(
+                                    pt.x - numLayout.size.width / 2f,
+                                    pt.y - numLayout.size.height / 2f
+                                )
+                            )
+
+                            // 장소명 캡슐 라벨 (출발/도착 또는 포커스 지점에 표기)
+                            val rawLabel = step.locationName ?: step.title
+                            val cleanPlace = rawLabel.replace(Regex("\\[.*?\\]"), "").trim()
+                            val placePrefix = if (isStart) "🟢 출발 " else if (isEnd) "🔴 도착 " else ""
+                            val placeLabel = (placePrefix + cleanPlace).take(8)
+
                             val labelLayout = textMeasurer.measure(
                                 text = AnnotatedString(placeLabel),
                                 style = TextStyle(
-                                    color = Color(0xFFE2E8F0),
-                                    fontSize = (8 / scale.coerceAtLeast(1f)).sp,
-                                    fontWeight = FontWeight.Medium
+                                    color = if (isFocus) Color(0xFFFDBA74) else Color(0xFFE2E8F0),
+                                    fontSize = (8.5f / scale.coerceAtLeast(1f)).sp,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             )
                             val labelW = labelLayout.size.width + 10f
@@ -318,13 +324,13 @@ fun MidKoreaStaticMapView(
                             val labelTopLeft = Offset(pt.x - labelW / 2f, pt.y + radius + 3f)
 
                             drawRoundRect(
-                                color = Color(0xFF1E293B).copy(alpha = 0.9f),
+                                color = Color(0xFF1E293B).copy(alpha = 0.92f),
                                 topLeft = labelTopLeft,
                                 size = androidx.compose.ui.geometry.Size(labelW, labelH),
                                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f)
                             )
                             drawRoundRect(
-                                color = Color(0xFF475569),
+                                color = if (isFocus) Color(0xFFEA580C) else Color(0xFF475569),
                                 topLeft = labelTopLeft,
                                 size = androidx.compose.ui.geometry.Size(labelW, labelH),
                                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f),
@@ -333,6 +339,19 @@ fun MidKoreaStaticMapView(
                             drawText(
                                 textLayoutResult = labelLayout,
                                 topLeft = Offset(labelTopLeft.x + 5f, labelTopLeft.y + 2f)
+                            )
+                        } else {
+                            // 중간 경유 GPS 좌표: 큰 원과 숫자를 제거하고, 직선 경로선 위에 작은 원(도트)으로 심플하게 표기
+                            val dotRadius = 4.dp.toPx() / scale.coerceAtLeast(1f)
+                            drawCircle(
+                                color = Color.White,
+                                radius = dotRadius + 1.5f.dp.toPx() / scale.coerceAtLeast(1f),
+                                center = pt
+                            )
+                            drawCircle(
+                                color = Color(0xFF38BDF8), // 밝은 스카이블루 도트
+                                radius = dotRadius,
+                                center = pt
                             )
                         }
                     }

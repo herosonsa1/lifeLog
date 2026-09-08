@@ -184,6 +184,19 @@ fun GoogleMapRouteView(
         selectedTripGroup?.steps ?: validCoordinateSteps
     }
 
+    // 하단 상세 목록: 차량 주행(DRIVING)이 다수일 경우 중간 GPS 경유지는 제외하고 출발 시점과 도착 시점만 정예화하여 표시
+    val bottomDisplaySteps = remember(activeDisplaySteps) {
+        val drivingSteps = activeDisplaySteps.filter { it.stepType == RouteStepType.DRIVING }
+        if (drivingSteps.size > 2) {
+            val startDriving = drivingSteps.first()
+            val endDriving = drivingSteps.last()
+            val nonDriving = activeDisplaySteps.filter { it.stepType != RouteStepType.DRIVING }
+            (nonDriving + listOf(startDriving, endDriving)).sortedBy { it.time }
+        } else {
+            activeDisplaySteps
+        }
+    }
+
     LaunchedEffect(periodFilter) {
         selectedTripGroupId = null
         mapFocusStep = null
@@ -598,78 +611,11 @@ fun GoogleMapRouteView(
                 .background(AppColors.background),
             contentPadding = PaddingValues(vertical = Spacing.sm)
         ) {
-            // Header: 전체 경로보기 마스터 버튼 (조회된 결과 전체 차량 이동경로 명확화)
-            if (activeDisplaySteps.size > 1) {
-                item {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFEFF6FF),
-                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.md, vertical = Spacing.xs)
-                            .clickable {
-                                openGoogleMapsRoute(context, activeDisplaySteps)
-                            }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF2563EB)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DirectionsCar,
-                                    contentDescription = null,
-                                    tint = PureWhite,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                val masterTitle = if (selectedTripGroup != null) {
-                                    "${selectedTripGroup.brandEmoji} [${selectedTripGroup.title}] 앱에서 내비 안내 (${activeDisplaySteps.size}개 지점)"
-                                } else {
-                                    "조회된 전체 이동경로 안내 (차량 ${activeDisplaySteps.size}개 지점)"
-                                }
-                                Text(
-                                    text = masterTitle,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF1E3A8A)
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                val masterDesc = if (selectedTripGroup != null) {
-                                    "${selectedTripGroup.subtitle} 구간을 순서대로 경유하는 구글맵 내비게이션을 실행합니다."
-                                } else {
-                                    "현재 조회된 ${activeDisplaySteps.size}개 지점 전체를 순서대로 경유하는 차량 이동경로를 안내합니다."
-                                }
-                                Text(
-                                    text = masterDesc,
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF3B82F6)
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.Default.ChevronRight,
-                                contentDescription = null,
-                                tint = Color(0xFF2563EB),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(Spacing.xs))
-                }
-            }
-
-            // Staggered Items: 지점 1, 2, 3...
-            itemsIndexed(activeDisplaySteps) { index, step ->
+            // Staggered Items: 출발 시점, 도착 시점 및 기타 활동 거점
+            itemsIndexed(bottomDisplaySteps) { index, step ->
                 val isFocused = mapFocusStep?.id == step.id || (mapFocusStep == null && selectedStep?.id == step.id)
+                val isFirst = index == 0
+                val isLast = index == bottomDisplaySteps.size - 1 && bottomDisplaySteps.size > 1
 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -693,15 +639,27 @@ fun GoogleMapRouteView(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                             ) {
+                                val badgeBg = when {
+                                    isFocused -> AppColors.primary
+                                    isFirst -> Color(0xFF16A34A)
+                                    isLast -> Color(0xFFDC2626)
+                                    else -> Color(0xFF64748B)
+                                }
+                                val badgeText = when {
+                                    isFirst -> "1"
+                                    isLast -> "${activeDisplaySteps.size}"
+                                    else -> "${index + 1}"
+                                }
+
                                 Box(
                                     modifier = Modifier
                                         .size(24.dp)
                                         .clip(CircleShape)
-                                        .background(if (isFocused) AppColors.primary else Color(0xFF64748B)),
+                                        .background(badgeBg),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = "${index + 1}",
+                                        text = badgeText,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = PureWhite
@@ -743,10 +701,21 @@ fun GoogleMapRouteView(
                                 }
                             }
 
+                            val pointSubtitle = when {
+                                isFirst -> "🟢 출발 지점"
+                                isLast -> "🔴 최종 도착지 (${activeDisplaySteps.size})"
+                                else -> "지점 ${index + 1} / ${bottomDisplaySteps.size}"
+                            }
+
                             Text(
-                                text = "지점 ${index + 1} / ${activeDisplaySteps.size}",
+                                text = pointSubtitle,
                                 fontSize = 11.sp,
-                                color = Color(0xFF64748B)
+                                fontWeight = if (isFirst || isLast) FontWeight.Bold else FontWeight.Normal,
+                                color = when {
+                                    isFirst -> Color(0xFF16A34A)
+                                    isLast -> Color(0xFFDC2626)
+                                    else -> Color(0xFF64748B)
+                                }
                             )
                         }
 
@@ -1122,57 +1091,88 @@ fun InteractiveRouteMapView(
         pointOffsets.forEach { (idx, pt) ->
             val step = steps.getOrNull(idx) ?: return@forEach
             val isSelected = idx == selectedIndex
-            val num = idx + 1
-            val title = step.locationName ?: step.title
+            val isStart = idx == 0
+            val isEnd = idx == pointOffsets.size - 1 && pointOffsets.size > 1
+            val isKeyPoint = isStart || isEnd || isSelected || step.stepType != RouteStepType.DRIVING
 
             val density = LocalDensity.current
             val xDp = with(density) { pt.x.toDp() }
             val yDp = with(density) { pt.y.toDp() }
 
-            Box(
-                modifier = Modifier
-                    .offset(x = xDp - 50.dp, y = yDp - 20.dp)
-                    .clickable { onStepSelected(idx) }
-            ) {
-                Surface(
-                    shape = AppShapes.pill,
-                    color = if (isSelected) Color(0xFF0F172A) else Color(0xFF1E293B),
-                    border = androidx.compose.foundation.BorderStroke(
-                        width = if (isSelected) 2.dp else 1.dp,
-                        color = if (isSelected) Color(0xFFF59E0B) else Color(0xFF475569)
-                    ),
-                    shadowElevation = if (isSelected) 8.dp else 3.dp
+            if (isKeyPoint) {
+                val badgeColor = when {
+                    isSelected -> Color(0xFFF59E0B)
+                    isStart -> Color(0xFF16A34A)
+                    isEnd -> Color(0xFFDC2626)
+                    else -> Color(0xFF3B82F6)
+                }
+                val badgeText = when {
+                    isStart -> "1"
+                    isEnd -> "${pointOffsets.size}"
+                    else -> "${idx + 1}"
+                }
+                val title = when {
+                    isStart -> "🟢 출발: ${step.locationName ?: step.title}"
+                    isEnd -> "🔴 도착: ${step.locationName ?: step.title}"
+                    else -> step.locationName ?: step.title
+                }
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = xDp - 50.dp, y = yDp - 20.dp)
+                        .clickable { onStepSelected(idx) }
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = if (isSelected) Color(0xFF0F172A) else Color(0xFF1E293B),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = if (isSelected) 2.dp else 1.dp,
+                            color = if (isSelected) Color(0xFFF59E0B) else Color(0xFF475569)
+                        ),
+                        shadowElevation = if (isSelected) 8.dp else 3.dp
                     ) {
-                        // Badge Number Dot
-                        Box(
-                            modifier = Modifier
-                                .size(18.dp)
-                                .clip(CircleShape)
-                                .background(if (isSelected) Color(0xFFF59E0B) else Color(0xFF3B82F6)),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
+                            // Badge Number Dot
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clip(CircleShape)
+                                    .background(badgeColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = badgeText,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = PureWhite
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
                             Text(
-                                text = "$num",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (isSelected) Color(0xFF0F172A) else PureWhite
+                                text = title,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = PureWhite
                             )
                         }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        Text(
-                            text = title,
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = PureWhite
-                        )
                     }
                 }
+            } else {
+                // 중간 GPS 경유지: 번호/라벨 없는 7.dp 파란색 작은 도트로 직선 경로선 상에 깔끔하게 표기
+                Box(
+                    modifier = Modifier
+                        .offset(x = xDp - 3.5.dp, y = yDp - 3.5.dp)
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF38BDF8))
+                        .border(1.dp, PureWhite, CircleShape)
+                        .clickable { onStepSelected(idx) }
+                )
             }
         }
 
@@ -1291,22 +1291,19 @@ fun openGoogleMapsRoute(context: Context, steps: List<RouteStep>) {
         val origin = "${validSteps.first().latitude},${validSteps.first().longitude}"
         val destination = "${validSteps.last().latitude},${validSteps.last().longitude}"
 
-        val waypoints = if (validSteps.size > 2) {
-            // 구글 지도는 최대 8~9개 경유지를 지원하므로 중간 스텝들 중 최대 8개 선별
-            val intermediate = validSteps.drop(1).dropLast(1).take(8)
-            intermediate.joinToString("|") { "${it.latitude},${it.longitude}" }
-        } else null
+        // 한국 구글맵 라우팅은 중간 경유지가 너무 많으면 자동차 경로 계산 실패로 대중교통 탭으로 강제 전환됨.
+        // 따라서 출발지-도착지 간 핵심 경유지는 최대 2개만 선별하고 파이프(|)만 %7C로 결합 (위경도 간 쉼표는 인코딩 금지)
+        val intermediate = if (validSteps.size > 2) {
+            val sub = validSteps.drop(1).dropLast(1)
+            if (sub.size <= 2) sub else listOf(sub[sub.size / 3], sub[sub.size * 2 / 3])
+        } else emptyList()
 
-        val directionsUrl = buildString {
-            append("https://www.google.com/maps/dir/?api=1")
-            append("&origin=").append(origin)
-            append("&destination=").append(destination)
-            if (!waypoints.isNullOrBlank()) {
-                append("&waypoints=").append(Uri.encode(waypoints))
-            }
-            append("&travelmode=driving")
-            append("&dirflg=d")
-        }
+        val waypointsParam = if (intermediate.isNotEmpty()) {
+            "&waypoints=" + intermediate.joinToString("%7C") { "${it.latitude},${it.longitude}" }
+        } else ""
+
+        // 공식 Google Maps Universal Directions URL (travelmode=driving & dirflg=d로 차량 경로 강제 지정)
+        val directionsUrl = "https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destination$waypointsParam&travelmode=driving&dirflg=d"
 
         val routeUri = Uri.parse(directionsUrl)
         val mapIntent = Intent(Intent.ACTION_VIEW, routeUri).apply {
@@ -1457,6 +1454,14 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
               box-shadow: 0 0 14px #f97316;
               transform: scale(1.25);
             }
+            .custom-pin-dot {
+              width: 8px;
+              height: 8px;
+              border-radius: 50%;
+              background: #38bdf8;
+              border: 1.5px solid #ffffff;
+              box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+            }
             .leaflet-popup-content-wrapper {
               background: #1e293b;
               color: #f8fafc;
@@ -1556,15 +1561,25 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
               }
 
               screenPts.forEach(function(sp, idx) {
-                var color = sp.p.isFocus ? '#ea580c' : (idx === 0 ? '#16a34a' : (idx === screenPts.length - 1 ? '#dc2626' : '#2563eb'));
-                var r = sp.p.isFocus ? 15 : 12;
-                svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + (r + 2) + '" fill="#ffffff"/>';
-                svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + r + '" fill="' + color + '"/>';
-                svg += '<text x="' + sp.x + '" y="' + (sp.y + 4) + '" fill="#ffffff" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + sp.p.num + '</text>';
+                var isStart = (idx === 0);
+                var isEnd = (idx === screenPts.length - 1 && screenPts.length > 1);
+                var isKey = isStart || isEnd || sp.p.isFocus;
 
-                var lbl = (sp.p.title || '').substring(0, 8);
-                svg += '<rect x="' + (sp.x - 38) + '" y="' + (sp.y + r + 3) + '" width="76" height="17" rx="4" fill="#1e293b" stroke="#334155"/>';
-                svg += '<text x="' + sp.x + '" y="' + (sp.y + r + 15) + '" fill="#e2e8f0" font-size="9" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + lbl + '</text>';
+                if (isKey) {
+                  var color = sp.p.isFocus ? '#ea580c' : (isStart ? '#16a34a' : '#dc2626');
+                  var numText = isStart ? '1' : (isEnd ? '' + screenPts.length : '' + sp.p.num);
+                  var r = sp.p.isFocus ? 15 : 12;
+                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + (r + 2) + '" fill="#ffffff"/>';
+                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + r + '" fill="' + color + '"/>';
+                  svg += '<text x="' + sp.x + '" y="' + (sp.y + 4) + '" fill="#ffffff" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + numText + '</text>';
+
+                  var lbl = (sp.p.title || '').substring(0, 8);
+                  svg += '<rect x="' + (sp.x - 38) + '" y="' + (sp.y + r + 3) + '" width="76" height="17" rx="4" fill="#1e293b" stroke="#334155"/>';
+                  svg += '<text x="' + sp.x + '" y="' + (sp.y + r + 15) + '" fill="#e2e8f0" font-size="9" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + lbl + '</text>';
+                } else {
+                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="5" fill="#ffffff"/>';
+                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="4" fill="#38bdf8"/>';
+                }
               });
 
               svg += '</svg>';
@@ -1606,25 +1621,40 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
                   var pos = [p.lat, p.lng];
                   latlngs.push(pos);
 
-                  var pinClass = 'custom-pin';
-                  if (p.isFocus) {
-                    pinClass += ' focus';
-                  } else if (i === 0) {
-                    pinClass += ' start';
-                  } else if (i === points.length - 1) {
-                    pinClass += ' end';
+                  var isStart = (i === 0);
+                  var isEnd = (i === points.length - 1 && points.length > 1);
+                  var isKey = isStart || isEnd || p.isFocus;
+
+                  var icon;
+                  if (isKey) {
+                    var pinClass = 'custom-pin';
+                    if (p.isFocus) {
+                      pinClass += ' focus';
+                    } else if (isStart) {
+                      pinClass += ' start';
+                    } else if (isEnd) {
+                      pinClass += ' end';
+                    }
+                    var labelNum = isStart ? '1' : (isEnd ? '' + points.length : '' + p.num);
+                    icon = L.divIcon({
+                      className: '',
+                      html: '<div class="' + pinClass + '">' + labelNum + '</div>',
+                      iconSize: [26, 26],
+                      iconAnchor: [13, 13]
+                    });
+                  } else {
+                    icon = L.divIcon({
+                      className: '',
+                      html: '<div class="custom-pin-dot"></div>',
+                      iconSize: [8, 8],
+                      iconAnchor: [4, 4]
+                    });
                   }
 
-                  var icon = L.divIcon({
-                    className: '',
-                    html: '<div class="' + pinClass + '">' + p.num + '</div>',
-                    iconSize: [26, 26],
-                    iconAnchor: [13, 13]
-                  });
-
                   var marker = L.marker(pos, { icon: icon }).addTo(map);
+                  var subtitle = isStart ? '🟢 출발 지점' : (isEnd ? '🔴 최종 도착지' : ('지점 ' + p.num));
                   var content = '<div class="popup-card">' +
-                                '<span class="popup-num">지점 ' + p.num + '</span>' +
+                                '<span class="popup-num">' + subtitle + '</span>' +
                                 '<div class="popup-title">' + p.title + '</div>' +
                                 (p.time ? '<div class="popup-time">⏰ ' + p.time + '</div>' : '') +
                                 '</div>';

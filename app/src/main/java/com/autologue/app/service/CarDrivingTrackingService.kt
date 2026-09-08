@@ -40,7 +40,7 @@ import java.util.UUID
 import javax.inject.Inject
 
 /**
- * 차량 블루투스 연결(탑승) 시 백그라운드에서 동작하여 10분 단위로 GPS 위치를 수집하고
+ * 차량 블루투스 연결(탑승) 시 백그라운드에서 동작하여 5분 단위로 GPS 위치를 수집하고
  * 하차(연결 해제) 시 정밀 이동경로 및 실주행거리를 자동 산출·기록하는 포그라운드 서비스
  */
 @AndroidEntryPoint
@@ -191,7 +191,7 @@ class CarDrivingTrackingService : Service() {
 
         // 1. 포그라운드 서비스 알림 등록 (Android 14+ 위치 타입 명시 및 SecurityException 안전 폴백)
         val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
-        val initialNotification = buildNotification("$brandEmoji [$activeVehicleName] 탑승 운행 시작", "블루투스 감지 탑승 중 · 10분 주기 GPS 경로 수집 시작")
+        val initialNotification = buildNotification("$brandEmoji [$activeVehicleName] 탑승 운행 시작", "블루투스 감지 탑승 중 · 5분 주기 GPS 경로 수집 시작")
 
         var isForegroundStarted = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -258,12 +258,12 @@ class CarDrivingTrackingService : Service() {
             captureCurrentWaypoint(isDeparture = true, isDestination = false)
         }
 
-        // 3. 10분 주기 백그라운드 GPS 위치 수집 코루틴 가동 (600,000ms = 10분)
+        // 3. 5분 주기 백그라운드 GPS 위치 수집 코루틴 가동 (300,000ms = 5분)
         trackingJob?.cancel()
         trackingJob = serviceScope.launch {
-            Log.d(TAG, "10분 주기 GPS 위치 수집 루프 시작: [$activeVehicleName] ($activeLicensePlate)")
+            Log.d(TAG, "5분 주기 GPS 위치 수집 루프 시작: [$activeVehicleName] ($activeLicensePlate)")
             while (isActive && isTracking) {
-                delay(10 * 60 * 1000L) // 10분 대기
+                delay(5 * 60 * 1000L) // 5분 대기
                 if (!isTracking) break
 
                 captureCurrentWaypoint(isDeparture = false, isDestination = false)
