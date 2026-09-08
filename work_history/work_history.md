@@ -583,6 +583,95 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 23. 백그라운드 10분 주기 GPS 실시간 확인 및 이동동선(RouteStep) 자동 영속화 (2026-09-08)
+
+### 23.1. 사용자 핵심 요청 사항
+- 차량 탑승 후 백그라운드에서 10분 단위로 GPS 위치 정보를 수신하는 상태를 사용자가 어떻게 확인할 수 있는지 가시화 요청.
+- 수신된 위치 정보가 다이어리 이동 경로(RouteStep)에 그대로 실시간 표시되어 확인 가능한지 보장 요청.
+
+### 23.2. 주요 개선 및 구현 내역
+1. **실시간 상시 알림(Notification) 시각화 (`CarDrivingTrackingService.kt`)**:
+   - 10분마다 GPS 위치를 획득할 때마다 안드로이드 상단바 포그라운드 알림 텍스트를 실시간 업데이트:
+     `⭐ [벤츠 A클래스 (169저7737)] 주행 기록 중 · N번째 GPS 수신 완료 (방이동 ➔ 판교 테크노밸리)`
+   - 사용자가 백그라운드에서 몇 번째 GPS 수신이 이루어졌고 현재 어느 위치를 지나고 있는지 상시 알림창에서 즉각 육안 확인 가능.
+2. **10분 주기 GPS 수신 즉시 RouteStep DB 자동 영속화 (`DiaryRepositoryImpl.kt`, `CarDrivingTrackingService.kt`)**:
+   - 주행 종료 시까지 기다리지 않고, 10분마다 수신된 GPS 위경도와 역지오코딩된 주소/장소명을 `RouteStepType.DRIVING` 타입의 `RouteStep`으로 생성하여 당일 다이어리 엔트리에 실시간 추가 저장(`addOrUpdateDrivingRouteStep`).
+   - 비정상 앱 종료 시에도 수신된 이동 경로가 유실되지 않도록 실시간 세이프가드 보장.
+3. **다이어리 이동 동선 실시간 통합 표출 (`DailyRouteAggregator.kt`)**:
+   - 10분 주기 주행 거점(`RouteStep`)과 방문 결제처, 촬영 사진 위치를 시간순으로 자동 결합.
+   - 다이어리 상단 구글 지도에 10분마다 수신된 거점들이 `[1]`, `[2]`, `[3]`, `[4]` 순서대로 번호 마커와 함께 지도 동선에 100% 실시간 표출되도록 연동.
+
+### 23.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 100% 통과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 22s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git` (`4e00376`)
+
+---
+
+## 24. 앱 내 화면 지도 경로선 즉시 렌더링 및 주행 트립/일자별 스마트 세그먼트 UI/UX 탑재 (2026-09-08)
+
+### 24.1. 사용자 핵심 요청 사항
+- `[조회된 전체 이동경로 안내]` 마스터 버튼을 매번 누르지 않고도 앱 화면 지도 안에서 이동 경로선이 바로 보이도록 개선.
+- 모든 경로가 복잡하게 얽혀 보이지 않도록, 각각의 경로나 날짜(운행 세션)별로 현대적 모빌리티 앱(Google 타임라인, 블루링크, 카카오T) 스타일로 스마트하게 구분(세그먼트)해서 볼 수 있는 UI/UX 요청.
+
+### 24.2. 주요 개선 및 구현 내역
+1. **앱 화면 지도 내 도로 주행 경로선 즉시 렌더링 (`GoogleMapRouteView.kt`)**:
+   - 외부 구글맵 앱을 실행하지 않고도, 선택된 트립(또는 기간 내)의 출발지(`saddr`), 경유지들, 도착지(`daddr`) 좌표와 차량 길찾기 모드(`dirflg=d`, `travelmode=driving`)를 조합하여 상단 지도 안에서 실제 도로를 따라 그려지는 파란색 차량 내비게이션 주행 경로선과 경유 핀을 즉시 표출.
+2. **지능형 주행 세션 분할 알고리즘 구축 (`segmentRouteIntoTrips`)**:
+   - `RouteTripGroup` 데이터 모델 신설 (id, title, subtitle, brandEmoji, date, steps, totalDistanceKm).
+   - 40분 이상의 시간 간격, 날짜 변경, 출발/도착 태그를 자동 감지하여 하루 동안의 이동 기록을 개별 운행 트립(출근 주행, 골프 라운드, 퇴근/귀가, 오전/오후 주행)으로 정밀 분할.
+3. **스마트 운행 트립 & 일자별 세그먼트 칩 바 신설**:
+   - 기간 필터 아래에 가로 스크롤 가능한 칩 바 배치:
+     `[🌐 전체 모아보기 (총 N개 지점)]`, `[⭐ 9/8 오전 출근 · 4개 지점 (21.4km)]`, `[⭐ 9/8 골프 라운드 · 3개 지점 (35.0km)]`, `[⭐ 9/8 퇴근/귀가 · 4개 지점 (18.2km)]`
+   - 탑승 차량 엠블럼(`⭐ 벤츠`, `🛡️ 볼보`), 운행 성격, 지점 수, 정밀 도로 주행거리(km) 일괄 표출.
+4. **선택된 트립 중심의 몰입형 뷰 (Focus Isolation)**:
+   - 원하는 트립 칩 탭 시 지도 자동 줌인: 복잡한 다른 경로선 없이 **해당 주행의 출발 ➔ 경유 ➔ 도착 도로선 하나만 깔끔하게 줌인 표출**.
+   - 하단 세로 목록도 해당 트립에 속한 지점들만 필터링되어 정보 과부하 원천 차단.
+   - 각 지점 카드 사이의 `[↓ 지점 1 ➔ 지점 2 차량 이동 구간]`을 누르면 두 지점 간의 구간 경로선으로 지도 포커스 자동 전환.
+
+### 24.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 100% 통과
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 1m 1s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git` (`260d093`)
+
+---
+
+## 25. 스마트 다이어리 로딩 애니메이션 탑재 및 에뮬레이터 Leaflet 인라인 지도 / 벡터 레이더 듀얼 모드 구현 (2026-09-08)
+
+### 25.1. 사용자 핵심 요청 사항
+- 스마트 다이어리에서 최근 7일 등 데이터 조회 시 로딩 시간이 길어질 때 오류로 멈춘 것처럼 느껴지는 문제를 방지하기 위해 직관적이고 감성적인 로딩 애니메이션 추가 요청.
+- 안드로이드 에뮬레이터 환경에서 구글 지도 화면이 표시되지 않고 빈 화면(Blank)으로 남는 현상 원인 규명 및 지점 마커/경로선 100% 렌더링 해결 요청.
+
+### 25.2. 주요 개선 및 구현 내역
+1. **감성적인 스마트 다이어리 로딩 애니메이션 구축 (`SmartDiaryLoadingOverlay`)**:
+   - `DiaryUiState`에 `isLoading: Boolean`, `loadingMessage: String` 필드 신설.
+   - 탭 전환(주간 요약, 월간 캘린더, 지도 경로) 및 기간 필터(최근 7일, 최근 30일, 전체) 선택 시 즉시 로딩 오버레이 가동.
+   - 반투명 블러 백드롭 + 부드러운 펄스 스케일 원 + 회전형 `CircularProgressIndicator` + `🚗` 아이콘 결합.
+   - 상황별 실시간 안내 메시지 제공 (*"최근 7일간의 이동 경로와 라이프로그를 분석 중입니다... 🚗✨"*, *"최근 30일간의 주행 경로를 분석 중입니다..."* 등).
+   - 로딩 중 사용자 중복 터치를 차단하고, 0.3초 이내 초고속 연산 시에는 부드러운 페이드 트랜지션으로 화면 깜빡임 방지.
+2. **에뮬레이터 구글 지도 미표출 원인 분석 및 완전한 인라인 엔진 해결**:
+   - **원인 규명**:
+     1) Google Maps 웹 임베드(`maps.google.com/maps?...output=embed`)가 모바일 WebView에서 구글 쿠키 동의(`consent.google.com`) 리다이렉트나 `X-Frame-Options: SAMEORIGIN` / CSP 정책에 의해 강제 차단됨.
+     2) PC 에뮬레이터 환경의 WebGL 하드웨어 가속 미지원으로 인해 최신 구글 맵 벡터 렌더러가 투명 빈 화면(Blank)을 생성함.
+   - **해결 방안 1: 인라인 HTML5 Leaflet + CartoDB 인터랙티브 지도 엔진 (`buildInteractiveHtmlMap`)**:
+     - 외부 쿠키 동의나 CSP 제약이 없는 표준 인라인 Leaflet 맵을 WebView에 직접 주입(`loadDataWithBaseURL`).
+     - 에뮬레이터 및 저사양 실기기 어디서든 WebGL 없이 **100% 선명하게 렌더링 보장**.
+     - 지점 번호 핀([1], [2], [3]...) 및 파란색 도로 경로선(Polyline), `map.fitBounds` 자동 줌, 핀 터치 시 장소명/시각 팝업 툴팁 완벽 제공.
+   - **해결 방안 2: 실시간 지도 ↔ 순수 Compose 캔버스 레이더 맵 듀얼 모드 토글**:
+     - 지도 우측 상단에 **[🗺️ 실시간 지도 / 🧭 레이더 맵]** 토글 버튼 신설.
+     - 네트워크 단절이나 에뮬레이터 통신 장애 시에도 0초 만에 순수 네이티브 Jetpack Compose 캔버스 지도(`InteractiveRouteMapView`)로 전환 가능.
+
+### 25.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 100% 통과 (`BUILD SUCCESSFUL in 1m 42s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 40s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git` (`062e158`)
+
+
 
 
 
