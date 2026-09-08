@@ -54,6 +54,97 @@ import com.autologue.app.presentation.theme.*
 import java.time.format.DateTimeFormatter
 import java.util.*
 
+/**
+ * 개별 운행 주행 세션(Trip) 또는 일자별 이동 경로 그룹
+ */
+data class RouteTripGroup(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val brandEmoji: String,
+    val date: java.time.LocalDate,
+    val steps: List<RouteStep>,
+    val totalDistanceKm: Double = 0.0
+)
+
+fun segmentRouteIntoTrips(steps: List<RouteStep>): List<RouteTripGroup> {
+    val valid = steps.filter { it.latitude != null && it.longitude != null }.sortedBy { it.time }
+    if (valid.isEmpty()) return emptyList()
+
+    val groups = mutableListOf<RouteTripGroup>()
+    var currentGroupSteps = mutableListOf<RouteStep>()
+
+    for (step in valid) {
+        val lastStep = currentGroupSteps.lastOrNull()
+        val isDifferentDay = lastStep != null && lastStep.time.toLocalDate() != step.time.toLocalDate()
+        val isTimeGap = lastStep != null && java.time.Duration.between(lastStep.time, step.time).abs().toMinutes() > 40
+        val isNewDeparture = step.tags.contains("출발지점") || step.title.contains("출발")
+
+        if (currentGroupSteps.isNotEmpty() && (isDifferentDay || isTimeGap || (isNewDeparture && lastStep?.tags?.contains("도착지점") == true))) {
+            groups.add(createTripGroup(currentGroupSteps))
+            currentGroupSteps = mutableListOf()
+        }
+
+        currentGroupSteps.add(step)
+
+        if (step.tags.contains("도착지점") || step.title.contains("도착")) {
+            groups.add(createTripGroup(currentGroupSteps))
+            currentGroupSteps = mutableListOf()
+        }
+    }
+
+    if (currentGroupSteps.isNotEmpty()) {
+        groups.add(createTripGroup(currentGroupSteps))
+    }
+
+    return groups
+}
+
+private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
+    val first = steps.first()
+    val last = steps.last()
+    val date = first.time.toLocalDate()
+
+    val brandEmoji = steps.mapNotNull { s ->
+        val tag = s.tags.firstOrNull {
+            it.startsWith("⭐") || it.startsWith("🛡️") || it.startsWith("🔵") ||
+            it.startsWith("🔗") || it.startsWith("🪽") || it.startsWith("🚗")
+        }
+        tag ?: com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(s.title)
+    }.firstOrNull() ?: "🚗"
+
+    val hasGolf = steps.any { it.stepType == RouteStepType.GOLF || it.title.contains("골프") || it.title.contains("CC") }
+    val isCommuteToWork = steps.any { it.title.contains("회사") && (it.title.contains("도착") || it.tags.contains("도착지점")) }
+    val isCommuteToHome = steps.any { it.title.contains("집") && (it.title.contains("도착") || it.tags.contains("도착지점")) }
+
+    val tripName = when {
+        hasGolf -> "골프 라운드"
+        isCommuteToWork -> "출근 주행"
+        isCommuteToHome -> "퇴근/귀가"
+        first.time.hour < 11 -> "오전 주행"
+        first.time.hour < 17 -> "오후 이동"
+        else -> "야간 주행"
+    }
+
+    val distKm = com.autologue.app.util.LocationDistanceUtils.calculateRouteDrivingDistanceKm(steps)
+    val startPlace = first.locationName ?: first.title.replace(Regex("\\[.*?\\]"), "").trim()
+    val endPlace = last.locationName ?: last.title.replace(Regex("\\[.*?\\]"), "").trim()
+
+    val subtitle = if (steps.size > 1) "$startPlace ➔ $endPlace" else startPlace
+    val timeStr = first.time.format(java.time.format.DateTimeFormatter.ofPattern("M/d a h:mm", java.util.Locale.KOREAN))
+    val title = "$timeStr $tripName"
+
+    return RouteTripGroup(
+        id = "${date}_${first.time}_${steps.size}_${first.id}",
+        title = title,
+        subtitle = subtitle,
+        brandEmoji = brandEmoji,
+        date = date,
+        steps = steps,
+        totalDistanceKm = distKm
+    )
+}
+
 @Composable
 fun GoogleMapRouteView(
     routeSteps: List<RouteStep>,
@@ -78,6 +169,20 @@ fun GoogleMapRouteView(
     }
 
     var mapFocusStep by remember { mutableStateOf<RouteStep?>(selectedStep) }
+    var selectedTripGroupId by remember { mutableStateOf<String?>(null) }
+
+    val tripGroups = remember(validCoordinateSteps) { segmentRouteIntoTrips(validCoordinateSteps) }
+    val selectedTripGroup = remember(tripGroups, selectedTripGroupId) {
+        tripGroups.firstOrNull { it.id == selectedTripGroupId }
+    }
+    val activeDisplaySteps = remember(validCoordinateSteps, selectedTripGroup) {
+        selectedTripGroup?.steps ?: validCoordinateSteps
+    }
+
+    LaunchedEffect(periodFilter) {
+        selectedTripGroupId = null
+        mapFocusStep = null
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(AppColors.background)) {
         // 1. Top Period Filter Chips Bar
@@ -143,9 +248,90 @@ fun GoogleMapRouteView(
             }
         }
 
+        // 1-2. 스마트 운행 트립(Trip) & 일자별 세그먼트 칩 바 (원하는 주행 경로만 분리 확인)
+        if (tripGroups.size > 1) {
+            Surface(
+                color = Color(0xFF0F172A),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = Spacing.md, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 전체 모아보기 칩
+                    val isAllSelected = selectedTripGroupId == null
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = if (isAllSelected) Color(0xFF2563EB) else Color(0xFF1E293B),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isAllSelected) Color(0xFF60A5FA) else Color(0xFF334155)
+                        ),
+                        modifier = Modifier.clickable {
+                            selectedTripGroupId = null
+                            mapFocusStep = null
+                        }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Text(
+                                text = "🌐 전체 모아보기 (${validCoordinateSteps.size}개)",
+                                fontSize = 11.sp,
+                                fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isAllSelected) PureWhite else Color(0xFF94A3B8)
+                            )
+                        }
+                    }
+
+                    // 개별 트립/일자별 칩들
+                    tripGroups.forEach { group ->
+                        val isSelected = selectedTripGroupId == group.id
+                        Surface(
+                            shape = AppShapes.pill,
+                            color = if (isSelected) Color(0xFF2563EB) else Color(0xFF1E293B),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) Color(0xFF60A5FA) else Color(0xFF334155)
+                            ),
+                            modifier = Modifier.clickable {
+                                selectedTripGroupId = group.id
+                                mapFocusStep = null
+                            }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = "${group.brandEmoji} ${group.title} · ${group.steps.size}지점",
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) PureWhite else Color(0xFFE2E8F0)
+                                )
+                                if (group.totalDistanceKm > 0) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "(%.1fkm)".format(group.totalDistanceKm),
+                                        fontSize = 10.sp,
+                                        color = if (isSelected) Color(0xFFBFDBFE) else Color(0xFF64748B)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         HairlineDivider()
 
-        // 2. Interactive Google Maps Embed Area (실제 구글 지도 웹뷰)
+        // 2. Interactive Google Maps Embed Area (실제 구글 지도 웹뷰 - 도로 주행 경로선 즉시 렌더링)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -153,9 +339,9 @@ fun GoogleMapRouteView(
                 .clipToBounds()
                 .background(Color(0xFF0F172A))
         ) {
-            if (validCoordinateSteps.isNotEmpty()) {
-                val targetMapUrl = remember(validCoordinateSteps, mapFocusStep) {
-                    buildGoogleMapsEmbedUrl(validCoordinateSteps, mapFocusStep)
+            if (activeDisplaySteps.isNotEmpty()) {
+                val targetMapUrl = remember(activeDisplaySteps, mapFocusStep) {
+                    buildGoogleMapsEmbedUrl(activeDisplaySteps, mapFocusStep)
                 }
 
                 AndroidView(
@@ -200,25 +386,32 @@ fun GoogleMapRouteView(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 5.dp)
                     ) {
+                        val badgeText = when {
+                            mapFocusStep != null -> "📍 ${mapFocusStep?.locationName ?: mapFocusStep?.title} (지점 포커스)"
+                            selectedTripGroup != null -> "${selectedTripGroup.brandEmoji} [${selectedTripGroup.title}] ${selectedTripGroup.subtitle} (${activeDisplaySteps.size}개 지점)"
+                            else -> "🚗 조회된 차량 이동 동선 (${activeDisplaySteps.size}개 지점)"
+                        }
                         Text(
-                            text = if (mapFocusStep != null) {
-                                "📍 ${mapFocusStep?.locationName ?: mapFocusStep?.title} (지점 포커스)"
-                            } else {
-                                "🚗 조회된 차량 이동 동선 (${validCoordinateSteps.size}개 지점)"
-                            },
+                            text = badgeText,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF60A5FA)
                         )
-                        if (mapFocusStep != null) {
+                        if (mapFocusStep != null || selectedTripGroup != null) {
                             Spacer(modifier = Modifier.width(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = Color(0xFF2563EB).copy(alpha = 0.25f),
-                                modifier = Modifier.clickable { mapFocusStep = null }
+                                modifier = Modifier.clickable {
+                                    if (mapFocusStep != null) {
+                                        mapFocusStep = null
+                                    } else {
+                                        selectedTripGroupId = null
+                                    }
+                                }
                             ) {
                                 Text(
-                                    text = "전체 경로 복귀",
+                                    text = if (mapFocusStep != null) "경로 복귀" else "전체 복귀",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF93C5FD),
@@ -247,7 +440,7 @@ fun GoogleMapRouteView(
                                     address = mapFocusStep!!.address
                                 )
                             } else {
-                                openGoogleMapsRoute(context, validCoordinateSteps)
+                                openGoogleMapsRoute(context, activeDisplaySteps)
                             }
                         }
                 ) {
@@ -304,7 +497,7 @@ fun GoogleMapRouteView(
             contentPadding = PaddingValues(vertical = Spacing.sm)
         ) {
             // Header: 전체 경로보기 마스터 버튼 (조회된 결과 전체 차량 이동경로 명확화)
-            if (validCoordinateSteps.size > 1) {
+            if (activeDisplaySteps.size > 1) {
                 item {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
@@ -314,7 +507,7 @@ fun GoogleMapRouteView(
                             .fillMaxWidth()
                             .padding(horizontal = Spacing.md, vertical = Spacing.xs)
                             .clickable {
-                                openGoogleMapsRoute(context, validCoordinateSteps)
+                                openGoogleMapsRoute(context, activeDisplaySteps)
                             }
                     ) {
                         Row(
@@ -337,15 +530,25 @@ fun GoogleMapRouteView(
                             }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
+                                val masterTitle = if (selectedTripGroup != null) {
+                                    "${selectedTripGroup.brandEmoji} [${selectedTripGroup.title}] 앱에서 내비 안내 (${activeDisplaySteps.size}개 지점)"
+                                } else {
+                                    "조회된 전체 이동경로 안내 (차량 ${activeDisplaySteps.size}개 지점)"
+                                }
                                 Text(
-                                    text = "조회된 전체 이동경로 안내 (차량 ${validCoordinateSteps.size}개 지점)",
+                                    text = masterTitle,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF1E3A8A)
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
+                                val masterDesc = if (selectedTripGroup != null) {
+                                    "${selectedTripGroup.subtitle} 구간을 순서대로 경유하는 구글맵 내비게이션을 실행합니다."
+                                } else {
+                                    "현재 조회된 ${activeDisplaySteps.size}개 지점 전체를 순서대로 경유하는 차량 이동경로를 안내합니다."
+                                }
                                 Text(
-                                    text = "현재 조회된 ${validCoordinateSteps.size}개 지점 전체를 순서대로 경유하는 차량 이동경로를 안내합니다.",
+                                    text = masterDesc,
                                     fontSize = 11.sp,
                                     color = Color(0xFF3B82F6)
                                 )
@@ -363,7 +566,7 @@ fun GoogleMapRouteView(
             }
 
             // Staggered Items: 지점 1, 2, 3...
-            itemsIndexed(validCoordinateSteps) { index, step ->
+            itemsIndexed(activeDisplaySteps) { index, step ->
                 val isFocused = mapFocusStep?.id == step.id || (mapFocusStep == null && selectedStep?.id == step.id)
 
                 Surface(
@@ -439,7 +642,7 @@ fun GoogleMapRouteView(
                             }
 
                             Text(
-                                text = "지점 ${index + 1} / ${validCoordinateSteps.size}",
+                                text = "지점 ${index + 1} / ${activeDisplaySteps.size}",
                                 fontSize = 11.sp,
                                 color = Color(0xFF64748B)
                             )
@@ -594,19 +797,33 @@ fun GoogleMapRouteView(
                     }
                 }
 
-                // Intermediate Route Indicator
-                if (index < validCoordinateSteps.size - 1) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                // Intermediate Route Indicator (도로 주행 이동 뱃지)
+                if (index < activeDisplaySteps.size - 1) {
+                    val nextStep = activeDisplaySteps[index + 1]
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = Color(0xFFF1F5F9),
+                        border = BorderStroke(0.5.dp, Color(0xFFE2E8F0)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = 3.dp)
+                            .clickable {
+                                // 두 지점 사이의 구간으로 지도 포커스 리셋
+                                mapFocusStep = null
+                            }
                     ) {
-                        Text(
-                            text = "↓ 다음 지점으로 이동 (차량)",
-                            fontSize = 10.sp,
-                            color = Color(0xFF94A3B8),
-                            fontWeight = FontWeight.Medium
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 차량 이동 구간",
+                                fontSize = 10.sp,
+                                color = Color(0xFF475569),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
