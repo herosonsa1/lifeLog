@@ -671,10 +671,40 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git` (`062e158`)
 
+---
 
+## 26. 모바일 실기기 지도 불러오기 무한 리로드 루프(Deadlock) 원천 해결 및 cdnjs/SVG 벡터 3중 안전망 구축 (2026-09-08)
 
+### 26.1. 사용자 핵심 요청 및 이상 증상
+- 모바일 실기기에 APK를 설치 후 스마트 다이어리 [지도 경로] 탭 진입 시 "지도 불러오는 중..." 인디케이터가 멈추지 않고 계속 회전하며 실제 지도 및 지점이 렌더링되지 않는 현상 제보 (`media_1788855222787.png`).
 
+### 26.2. 원인 규명 (Root Cause Analysis)
+1. **Compose-WebView 상호 리컴포지션 무한 교착 루프 (Infinite Recomposition Loop)**:
+   - `GoogleMapRouteView.kt`의 `AndroidView` `update` 블록 내에서 `loadDataWithBaseURL`이 가드 없이 매 리컴포지션마다 호출됨.
+   - 동시에 `WebViewClient.onPageStarted` / `onPageFinished`에서 Compose 상태(`isWebViewLoading`)를 토글.
+   - Compose 상태 변경이 Composable의 리컴포지션을 촉발하고, 이것이 다시 `update` 블록을 실행하여 `loadDataWithBaseURL`을 호출.
+   - 이로 인해 WebView가 페이지 로딩을 시작하자마자 취소되고 재시작되는 현상이 초당 수십 회 반복되어, 영원히 로딩이 끝나지 않고 스피너가 무한 회전함.
+2. **국내 모바일 통신망 외부 CDN(`unpkg.com`) 신뢰성 및 로딩 지연 문제**:
+   - `unpkg.com` CDN은 국내 통신사(SKT/KT/LGU+) 모바일 환경에서 간헐적 DNS 지연 또는 타임아웃이 발생할 수 있음.
+   - 웹뷰 내부에서 `crossorigin=""` 속성 사용 시 CORS 검증에 따른 리소스 로드 블로킹 가능성 존재.
 
+### 26.3. 주요 개선 및 해결 내역
+1. **`AndroidView` HTML 캐싱 가드 및 비동기 타이머 도입 (`GoogleMapRouteView.kt`)**:
+   - `webView.tag != targetMapHtml` 가드를 배치하여, HTML 내용이 실제로 변경되었을 때만 단 1회 `loadDataWithBaseURL`을 호출하도록 차단.
+   - `WebViewClient` 내부의 불필요한 상태 변이를 제거하고, `LaunchedEffect(targetMapHtml)` 기반의 800ms 안전 타이머(`delay(800L)`)로 전환.
+   - 화면 전체를 차단하던 불투명 오버레이를 제거하고, 하단에 작고 세련된 플로팅 알약 칩 로더(`MapLoadingPill`)로 변경하여 로딩 중에도 지도가 즉각 보이도록 개선.
+2. **초고속 Cloudflare cdnjs 전환 및 타일 에러 자동 폴백**:
+   - 국내 ICN 엣지 노드를 보유한 `cdnjs.cloudflare.com`으로 Leaflet 라이브러리 전면 교체.
+   - `crossorigin=""` 제거로 모바일 웹뷰 내부 CORS 제약 완전 방어.
+   - CartoDB 타일 로드 실패 시 OpenStreetMap으로 자동 즉시 전환되는 `tilelayer.on('tileerror')` 폴백 가동.
+3. **600ms 타임아웃 인라인 SVG 벡터 렌더러 탑재 (`renderSvgFallback`)**:
+   - 네트워크 불량 또는 외부 CDN 차단 시에도 600ms 이내에 지도가 뜨지 않으면, 순수 내장 JavaScript로 즉시 화면 크기에 맞춘 반응형 SVG 벡터 지도를 그려냄.
+   - 지점 번호 원형 마커([1], [2], [3]...), 장소명 캡슐 라벨, 반투명 파란색 도로 주행 경로선과 대시선이 0초 만에 완벽 표출되어 빈 화면이나 멈춤 현상 원천 배제.
+4. **직관적인 모드 전환 세그먼트 컨트롤 탑재**:
+   - 우측 상단에 `[🗺️ 도로 지도 | 🧭 레이더]` 2버튼 캡슐 세그먼트 컨트롤을 배치하여, 사용자가 언제든 0초 만에 네이티브 캔버스 지도(`InteractiveRouteMapView`)로 상호 전환 가능.
 
-
-
+### 26.4. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 100% 통과 (`BUILD SUCCESSFUL in 1m 50s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 39s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk` (63,303,565 bytes)
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`

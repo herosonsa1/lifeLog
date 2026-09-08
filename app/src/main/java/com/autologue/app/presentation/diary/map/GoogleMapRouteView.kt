@@ -4,13 +4,16 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -364,58 +367,69 @@ fun GoogleMapRouteView(
                         buildInteractiveHtmlMap(activeDisplaySteps, mapFocusStep)
                     }
 
+                    // 800ms 동안만 부드럽게 스피너 노출 후 자동 해제 (무한 루프 원천 차단)
+                    LaunchedEffect(targetMapHtml) {
+                        isWebViewLoading = true
+                        delay(800L)
+                        isWebViewLoading = false
+                    }
+
                     AndroidView(
                         factory = { ctx ->
                             WebView(ctx).apply {
                                 @SuppressLint("SetJavaScriptEnabled")
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
+                                settings.databaseEnabled = true
                                 settings.loadWithOverviewMode = true
                                 settings.useWideViewPort = true
                                 settings.setSupportZoom(true)
                                 settings.builtInZoomControls = true
                                 settings.displayZoomControls = false
+                                settings.cacheMode = WebSettings.LOAD_DEFAULT
+                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+
                                 webViewClient = object : WebViewClient() {
-                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                        isWebViewLoading = true
-                                    }
-                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                        isWebViewLoading = false
-                                    }
                                     @Deprecated("Deprecated in Java")
-                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                        return false
-                                    }
+                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
                                 }
-                                loadDataWithBaseURL("https://unpkg.com", targetMapHtml, "text/html", "UTF-8", null)
+
+                                tag = targetMapHtml
+                                loadDataWithBaseURL("https://cdnjs.cloudflare.com", targetMapHtml, "text/html", "UTF-8", null)
                             }
                         },
                         update = { webView ->
-                            webView.loadDataWithBaseURL("https://unpkg.com", targetMapHtml, "text/html", "UTF-8", null)
+                            if (webView.tag != targetMapHtml) {
+                                webView.tag = targetMapHtml
+                                webView.loadDataWithBaseURL("https://cdnjs.cloudflare.com", targetMapHtml, "text/html", "UTF-8", null)
+                            }
                         },
                         modifier = Modifier.fillMaxSize()
                     )
 
                     if (isWebViewLoading) {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color(0xFF0F172A).copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .background(Color(0xFF1E293B), RoundedCornerShape(20.dp))
-                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            Surface(
+                                shape = AppShapes.pill,
+                                color = Color(0xFF1E293B).copy(alpha = 0.92f),
+                                border = BorderStroke(1.dp, Color(0xFF334155)),
+                                shadowElevation = 8.dp
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color(0xFF60A5FA)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("지도 불러오는 중...", fontSize = 11.sp, color = Color(0xFFE2E8F0))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(13.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color(0xFF60A5FA)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("지도 불러오는 중...", fontSize = 11.sp, color = Color(0xFFE2E8F0))
+                                }
                             }
                         }
                     }
@@ -471,27 +485,47 @@ fun GoogleMapRouteView(
                     }
                 }
 
-                // Top Mode Switcher Toggle (우측 상단: 실시간 지도 ↔ 레이더 지도 전환)
+                // Top Mode Switcher Segmented Control (우측 상단: [🗺️ 도로 지도] | [🧭 레이더])
                 Surface(
+                    shape = AppShapes.pill,
+                    color = Color(0xFF0F172A).copy(alpha = 0.95f),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    shadowElevation = 4.dp,
                     modifier = Modifier
                         .padding(Spacing.sm)
                         .align(Alignment.TopEnd)
-                        .clickable { isCanvasMapMode = !isCanvasMapMode },
-                    shape = AppShapes.pill,
-                    color = if (isCanvasMapMode) Color(0xFF2563EB) else Color(0xFF1E293B).copy(alpha = 0.92f),
-                    border = BorderStroke(1.dp, if (isCanvasMapMode) Color(0xFF60A5FA) else Color(0xFF334155)),
-                    shadowElevation = 4.dp
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        modifier = Modifier.padding(3.dp)
                     ) {
-                        Text(
-                            text = if (isCanvasMapMode) "🧭 레이더 맵" else "🗺️ 실시간 지도",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = PureWhite
-                        )
+                        Surface(
+                            shape = AppShapes.pill,
+                            color = if (!isCanvasMapMode) Color(0xFF2563EB) else Color.Transparent,
+                            modifier = Modifier.clickable { isCanvasMapMode = false }
+                        ) {
+                            Text(
+                                text = "🗺️ 도로 지도",
+                                fontSize = 11.sp,
+                                fontWeight = if (!isCanvasMapMode) FontWeight.Bold else FontWeight.Medium,
+                                color = if (!isCanvasMapMode) PureWhite else Color(0xFF94A3B8),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Surface(
+                            shape = AppShapes.pill,
+                            color = if (isCanvasMapMode) Color(0xFF2563EB) else Color.Transparent,
+                            modifier = Modifier.clickable { isCanvasMapMode = true }
+                        ) {
+                            Text(
+                                text = "🧭 레이더",
+                                fontSize = 11.sp,
+                                fontWeight = if (isCanvasMapMode) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isCanvasMapMode) PureWhite else Color(0xFF94A3B8),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                 }
 
@@ -1394,10 +1428,10 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
         <head>
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+          <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
           <style>
-            html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #0f172a; }
+            html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #0f172a; overflow: hidden; }
             .leaflet-container { background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
             .custom-pin {
               display: flex;
@@ -1476,82 +1510,172 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
         <body>
           <div id="map"></div>
           <script>
-            try {
-              var points = $pointsJson;
-              var focusIdx = $focusIndex;
+            var points = $pointsJson;
+            var focusIdx = $focusIndex;
+            var mapInitialized = false;
 
-              var initialCenter = points.length > 0 ? [points[0].lat, points[0].lng] : [37.5665, 126.9780];
-              var map = L.map('map', {
-                center: initialCenter,
-                zoom: 13,
-                zoomControl: false,
-                attributionControl: false
+            function renderSvgFallback() {
+              var container = document.getElementById('map');
+              if (!container) return;
+              var w = container.clientWidth || window.innerWidth || 360;
+              var h = container.clientHeight || window.innerHeight || 260;
+              if (!points || points.length === 0) return;
+
+              var minLat = points[0].lat, maxLat = points[0].lat;
+              var minLng = points[0].lng, maxLng = points[0].lng;
+              points.forEach(function(p) {
+                if (p.lat < minLat) minLat = p.lat;
+                if (p.lat > maxLat) maxLat = p.lat;
+                if (p.lng < minLng) minLng = p.lng;
+                if (p.lng > maxLng) maxLng = p.lng;
+              });
+              var latSpan = Math.max(maxLat - minLat, 0.008);
+              var lngSpan = Math.max(maxLng - minLng, 0.008);
+              var pad = 40;
+
+              var svg = '<svg width="100%" height="100%" viewBox="0 0 ' + w + ' ' + h + '" style="background:#0f172a;display:block;">';
+              for (var x = 30; x < w; x += 40) {
+                svg += '<line x1="' + x + '" y1="0" x2="' + x + '" y2="' + h + '" stroke="#1e293b" stroke-width="1"/>';
+              }
+              for (var y = 30; y < h; y += 40) {
+                svg += '<line x1="0" y1="' + y + '" x2="' + w + '" y2="' + y + '" stroke="#1e293b" stroke-width="1"/>';
+              }
+
+              var screenPts = points.map(function(p) {
+                var nx = lngSpan === 0 ? 0.5 : (p.lng - minLng) / lngSpan;
+                var ny = latSpan === 0 ? 0.5 : 1.0 - (p.lat - minLat) / latSpan;
+                return {
+                  x: pad + nx * (w - pad * 2),
+                  y: pad + ny * (h - pad * 2),
+                  p: p
+                };
               });
 
-              L.control.zoom({ position: 'bottomleft' }).addTo(map);
-
-              L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-                maxZoom: 19,
-                subdomains: 'abcd',
-                timeout: 8000
-              }).addTo(map);
-
-              var latlngs = [];
-              var markers = [];
-
-              points.forEach(function(p, i) {
-                var pos = [p.lat, p.lng];
-                latlngs.push(pos);
-
-                var pinClass = 'custom-pin';
-                if (p.isFocus) {
-                  pinClass += ' focus';
-                } else if (i === 0) {
-                  pinClass += ' start';
-                } else if (i === points.length - 1) {
-                  pinClass += ' end';
+              if (screenPts.length > 1) {
+                var d = 'M ' + screenPts[0].x + ' ' + screenPts[0].y;
+                for (var i = 1; i < screenPts.length; i++) {
+                  d += ' L ' + screenPts[i].x + ' ' + screenPts[i].y;
                 }
+                svg += '<path d="' + d + '" stroke="#2563eb" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>';
+                svg += '<path d="' + d + '" stroke="#60a5fa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6,4"/>';
+              }
 
-                var icon = L.divIcon({
-                  className: '',
-                  html: '<div class="' + pinClass + '">' + p.num + '</div>',
-                  iconSize: [26, 26],
-                  iconAnchor: [13, 13]
+              screenPts.forEach(function(sp, idx) {
+                var color = sp.p.isFocus ? '#ea580c' : (idx === 0 ? '#16a34a' : (idx === screenPts.length - 1 ? '#dc2626' : '#2563eb'));
+                var r = sp.p.isFocus ? 15 : 12;
+                svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + (r + 2) + '" fill="#ffffff"/>';
+                svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + r + '" fill="' + color + '"/>';
+                svg += '<text x="' + sp.x + '" y="' + (sp.y + 4) + '" fill="#ffffff" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + sp.p.num + '</text>';
+
+                var lbl = (sp.p.title || '').substring(0, 8);
+                svg += '<rect x="' + (sp.x - 38) + '" y="' + (sp.y + r + 3) + '" width="76" height="17" rx="4" fill="#1e293b" stroke="#334155"/>';
+                svg += '<text x="' + sp.x + '" y="' + (sp.y + r + 15) + '" fill="#e2e8f0" font-size="9" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + lbl + '</text>';
+              });
+
+              svg += '</svg>';
+              container.innerHTML = svg;
+            }
+
+            function initMap() {
+              if (mapInitialized) return;
+              if (typeof L === 'undefined') {
+                renderSvgFallback();
+                return;
+              }
+              try {
+                mapInitialized = true;
+                var initialCenter = points.length > 0 ? [points[0].lat, points[0].lng] : [37.5665, 126.9780];
+                var map = L.map('map', {
+                  center: initialCenter,
+                  zoom: 13,
+                  zoomControl: false,
+                  attributionControl: false
                 });
 
-                var marker = L.marker(pos, { icon: icon }).addTo(map);
-                var content = '<div class="popup-card">' +
-                              '<span class="popup-num">지점 ' + p.num + '</span>' +
-                              '<div class="popup-title">' + p.title + '</div>' +
-                              (p.time ? '<div class="popup-time">⏰ ' + p.time + '</div>' : '') +
-                              '</div>';
-                marker.bindPopup(content);
-                markers.push(marker);
+                L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
-                if (p.isFocus) {
-                  marker.openPopup();
-                }
-              });
-
-              if (latlngs.length > 1) {
-                L.polyline(latlngs, {
-                  color: '#3b82f6',
-                  weight: 4,
-                  opacity: 0.88,
-                  dashArray: '8, 6',
-                  lineJoin: 'round'
+                var tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                  maxZoom: 19,
+                  subdomains: 'abcd',
+                  timeout: 4000
                 }).addTo(map);
-              }
 
-              if (focusIdx >= 0 && focusIdx < latlngs.length) {
-                map.setView(latlngs[focusIdx], 16);
-              } else if (latlngs.length === 1) {
-                map.setView(latlngs[0], 15);
-              } else if (latlngs.length > 1) {
-                map.fitBounds(L.latLngBounds(latlngs), { padding: [35, 35] });
+                tileLayer.on('tileerror', function() {
+                  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+                });
+
+                var latlngs = [];
+                var markers = [];
+
+                points.forEach(function(p, i) {
+                  var pos = [p.lat, p.lng];
+                  latlngs.push(pos);
+
+                  var pinClass = 'custom-pin';
+                  if (p.isFocus) {
+                    pinClass += ' focus';
+                  } else if (i === 0) {
+                    pinClass += ' start';
+                  } else if (i === points.length - 1) {
+                    pinClass += ' end';
+                  }
+
+                  var icon = L.divIcon({
+                    className: '',
+                    html: '<div class="' + pinClass + '">' + p.num + '</div>',
+                    iconSize: [26, 26],
+                    iconAnchor: [13, 13]
+                  });
+
+                  var marker = L.marker(pos, { icon: icon }).addTo(map);
+                  var content = '<div class="popup-card">' +
+                                '<span class="popup-num">지점 ' + p.num + '</span>' +
+                                '<div class="popup-title">' + p.title + '</div>' +
+                                (p.time ? '<div class="popup-time">⏰ ' + p.time + '</div>' : '') +
+                                '</div>';
+                  marker.bindPopup(content);
+                  markers.push(marker);
+
+                  if (p.isFocus) {
+                    marker.openPopup();
+                  }
+                });
+
+                if (latlngs.length > 1) {
+                  L.polyline(latlngs, {
+                    color: '#3b82f6',
+                    weight: 4,
+                    opacity: 0.88,
+                    dashArray: '8, 6',
+                    lineJoin: 'round'
+                  }).addTo(map);
+                }
+
+                if (focusIdx >= 0 && focusIdx < latlngs.length) {
+                  map.setView(latlngs[focusIdx], 16);
+                } else if (latlngs.length === 1) {
+                  map.setView(latlngs[0], 15);
+                } else if (latlngs.length > 1) {
+                  map.fitBounds(L.latLngBounds(latlngs), { padding: [35, 35] });
+                }
+              } catch (e) {
+                console.error("Leaflet init error:", e);
+                renderSvgFallback();
               }
-            } catch (e) {
-              console.error("Map initialization error:", e);
+            }
+
+            // 600ms 후에도 지도가 초기화되지 않으면 즉시 SVG 폴백으로 지도 표출 보장
+            setTimeout(function() {
+              if (!mapInitialized) {
+                initMap();
+              }
+            }, 600);
+
+            if (document.readyState === 'complete' || document.readyState === 'interactive') {
+              initMap();
+            } else {
+              window.addEventListener('DOMContentLoaded', initMap);
+              window.addEventListener('load', initMap);
             }
           </script>
         </body>
