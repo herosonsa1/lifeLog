@@ -193,7 +193,7 @@ fun CarLedgerScreen(
                             Text("평균 연비", style = AppTypography.caption)
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                "1,650원/L 기준",
+                                "%,d원/L 기준".format(uiState.selectedVehicleDefaultGasPrice.toInt()),
                                 style = AppTypography.captionMuted.copy(fontSize = 10.sp)
                             )
                         }
@@ -533,8 +533,10 @@ fun SaaSCarLogRow(
                             backgroundColor = Emerald50
                         )
                     } else {
+                        val assignedVehicle = vehicles.find { it.id == log.getAssignedVehicleId() }
+                        val defPrice = assignedVehicle?.defaultGasPrice ?: 1650.0
                         MetricBadge(
-                            text = "1,650원/L 추정",
+                            text = "%,d원/L 추정".format(defPrice.toInt()),
                             textColor = Slate600,
                             backgroundColor = Slate100
                         )
@@ -642,10 +644,12 @@ fun SaaSCarLogRow(
                         style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
                     )
                     if (log.fuelAmountLiters > 0) {
-                        val unitPrice = explicitUnitPrice ?: if (log.fuelAmountLiters > 0) log.fuelCost / log.fuelAmountLiters else 1650.0
+                        val assignedVehicle = vehicles.find { it.id == log.getAssignedVehicleId() }
+                        val defPrice = assignedVehicle?.defaultGasPrice ?: 1650.0
+                        val unitPrice = explicitUnitPrice ?: if (log.fuelAmountLiters > 0) log.fuelCost / log.fuelAmountLiters else defPrice
                         Text(
                             text = if (isCustom) "%.1f L (%,d원/L)".format(log.fuelAmountLiters, unitPrice.toInt())
-                                   else "%.1f L (1,650원/L 추정)".format(log.fuelAmountLiters),
+                                   else "%.1f L (%,d원/L 추정)".format(log.fuelAmountLiters, defPrice.toInt()),
                             style = if (isCustom) AppTypography.caption.copy(color = Emerald700, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                    else AppTypography.captionMuted.copy(fontSize = 11.sp)
                         )
@@ -927,6 +931,9 @@ fun RefuelDetailEditDialog(
                     Spacer(modifier = Modifier.height(Spacing.md))
 
                     // L당 단가
+                    val currentVehicle = vehicles.find { it.id == selectedVehicleId }
+                    val currentDefaultPrice = currentVehicle?.defaultGasPrice ?: 1650.0
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -934,7 +941,7 @@ fun RefuelDetailEditDialog(
                     ) {
                         Text("L당 주유 단가 (원/L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
                         Text(
-                            text = "평균가: 1,650원",
+                            text = "기본 설정: %,d원".format(currentDefaultPrice.toInt()),
                             style = AppTypography.captionMuted.copy(fontSize = 10.sp)
                         )
                     }
@@ -949,7 +956,7 @@ fun RefuelDetailEditDialog(
                                 litersText = "%.1f".format(Locale.US, cost / price)
                             }
                         },
-                        placeholder = { Text("예: 1680 (미입력 시 1,650원 기준)", style = AppTypography.captionMuted) },
+                        placeholder = { Text("예: 1680 (미입력 시 %,d원 기준)".format(currentDefaultPrice.toInt()), style = AppTypography.captionMuted) },
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
@@ -988,9 +995,9 @@ fun RefuelDetailEditDialog(
                         Surface(
                             onClick = {
                                 val cost = costText.toLongOrNull() ?: 0L
-                                unitPriceText = "1650.0"
+                                unitPriceText = "%.1f".format(Locale.US, currentDefaultPrice)
                                 if (cost > 0) {
-                                    litersText = "%.1f".format(Locale.US, cost / 1650.0)
+                                    litersText = "%.1f".format(Locale.US, cost / currentDefaultPrice)
                                 }
                             },
                             shape = RoundedCornerShape(6.dp),
@@ -998,7 +1005,7 @@ fun RefuelDetailEditDialog(
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(
-                                text = "1,650원 기준 자동 채움",
+                                text = "기본(%,d원) 기준 채움".format(currentDefaultPrice.toInt()),
                                 fontSize = 11.sp,
                                 color = Slate700,
                                 modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),

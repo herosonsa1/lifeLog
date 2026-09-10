@@ -45,6 +45,7 @@ data class CarLedgerUiState(
     val showMaintenanceDialog: Boolean = false,
     val vehicles: List<VehicleProfile> = emptyList(),
     val selectedVehicleId: String = "car_1",
+    val selectedVehicleDefaultGasPrice: Double = 1650.0,
     val showVehicleManageDialog: Boolean = false,
     val filterCurrentVehicleOnly: Boolean = true,
     val editingRefuelLog: VehicleLog? = null
@@ -75,19 +76,25 @@ class CarLedgerViewModel @Inject constructor(
         viewModelScope.launch {
             multiVehiclePreferences.vehicles.collectLatest { vList ->
                 val currentSel = _uiState.value.selectedVehicleId
-                val targetEff = vList.find { it.id == currentSel }?.targetEfficiencyKmPerL ?: 12.5
+                val targetProfile = vList.find { it.id == currentSel }
+                val targetEff = targetProfile?.targetEfficiencyKmPerL ?: 12.5
+                val targetGasPrice = targetProfile?.defaultGasPrice ?: 1650.0
                 _uiState.value = _uiState.value.copy(
                     vehicles = vList,
-                    averageEfficiencyKmPerL = targetEff
+                    averageEfficiencyKmPerL = targetEff,
+                    selectedVehicleDefaultGasPrice = targetGasPrice
                 )
             }
         }
         viewModelScope.launch {
             multiVehiclePreferences.selectedVehicleId.collectLatest { selId ->
-                val targetEff = _uiState.value.vehicles.find { it.id == selId }?.targetEfficiencyKmPerL ?: 12.5
+                val targetProfile = _uiState.value.vehicles.find { it.id == selId }
+                val targetEff = targetProfile?.targetEfficiencyKmPerL ?: 12.5
+                val targetGasPrice = targetProfile?.defaultGasPrice ?: 1650.0
                 _uiState.value = _uiState.value.copy(
                     selectedVehicleId = selId,
-                    averageEfficiencyKmPerL = targetEff
+                    averageEfficiencyKmPerL = targetEff,
+                    selectedVehicleDefaultGasPrice = targetGasPrice
                 )
                 maintenancePreferences.setCurrentVehicleId(selId)
             }
@@ -123,6 +130,7 @@ class CarLedgerViewModel @Inject constructor(
             ) { logs, diaryEntries, selectedId ->
                 val vehicleProfile = _uiState.value.vehicles.find { it.id == selectedId }
                 val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
+                val targetGasPrice = vehicleProfile?.defaultGasPrice ?: 1650.0
 
                 // 다이어리 이동 동선 거리 조회 람다 (car_1 차량의 경우 교차 검증)
                 val diaryLookup: (LocalDateTime?, LocalDateTime) -> Double = { start, end ->
@@ -138,10 +146,11 @@ class CarLedgerViewModel @Inject constructor(
                     } else 0.0
                 }
 
-                // 1. 선택된 차량에 대해 Full-to-Full 주유 주기 및 구간 연비 계산
+                // 1. 선택된 차량에 대해 Full-to-Full 주유 주기 및 구간 연비 계산 (차량별 설정 기본 유가 전달)
                 val calculationResult = FuelEconomyCalculator.calculateForVehicle(
                     targetVehicleId = selectedId,
                     allLogs = logs,
+                    gasPrice = targetGasPrice,
                     additionalDrivingDistanceLookup = diaryLookup
                 )
 
@@ -194,6 +203,7 @@ class CarLedgerViewModel @Inject constructor(
 
                 _uiState.value = _uiState.value.copy(
                     selectedVehicleId = selectedId,
+                    selectedVehicleDefaultGasPrice = targetGasPrice,
                     logs = displayedLogs,
                     totalFuelExpense = totalFuel,
                     latestIntervalDays = calculationResult.latestIntervalDays ?: vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel,
@@ -251,10 +261,11 @@ class CarLedgerViewModel @Inject constructor(
                 isCustom = isCustom
             )
 
+            val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
             val finalLiters = when {
                 explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
                 unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
-                else -> Math.round((fuelCost.toDouble() / FuelEconomyCalculator.DEFAULT_GAS_PRICE) * 10.0) / 10.0
+                else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
             }
 
             val updatedLog = log.copy(
@@ -420,7 +431,8 @@ class CarLedgerViewModel @Inject constructor(
             fuelType = car1.fuelType,
             bluetoothDevice = car1.bluetoothDevice,
             initialOdometerKm = car1.initialOdometerKm,
-            targetEfficiencyKmPerL = car1.targetEfficiencyKmPerL
+            targetEfficiencyKmPerL = car1.targetEfficiencyKmPerL,
+            defaultGasPrice = car1.defaultGasPrice
         )
         multiVehiclePreferences.updateVehicle(
             id = car2.id,
@@ -429,7 +441,8 @@ class CarLedgerViewModel @Inject constructor(
             fuelType = car2.fuelType,
             bluetoothDevice = car2.bluetoothDevice,
             initialOdometerKm = car2.initialOdometerKm,
-            targetEfficiencyKmPerL = car2.targetEfficiencyKmPerL
+            targetEfficiencyKmPerL = car2.targetEfficiencyKmPerL,
+            defaultGasPrice = car2.defaultGasPrice
         )
         closeVehicleManageDialog()
     }

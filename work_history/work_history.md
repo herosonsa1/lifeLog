@@ -1179,4 +1179,45 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 39. 차량별 기본 주유 유가(단가 미입력 시 적용 유가) 사전 설정 및 하이브리드 연비 동적 연동 (2026-09-10)
+
+### 39.1. 사용자 요청 및 구현 배경
+- **요청 사항**:
+  1. 주유 결제 시 L당 단가 미입력 상태일 때 기존에 하드코딩되어 있던 기본 비용(1,650원/L)을 사용자가 **차량별/차계부 설정에서 직접 사전 입력**할 수 있도록 지원.
+  2. 설정에 입력된 기본 유가가 있을 경우, 단가 미입력 주유 내역에 대해 해당 설정 금액을 기본 유가로 사용하여 주유량($\text{fuelCost} / \text{defaultGasPrice}$) 및 실연비를 자동 계산하도록 하이브리드 연산 엔진 개선.
+  3. 차량마다 유종(가솔린, 디젤, 고급유 등) 및 단가가 상이하므로, 차량 1(`car_1`)과 차량 2(`car_2`)에 각각 독립된 기본 유가를 영속화하고 UI에 실시간 반영.
+
+### 39.2. 주요 개선 및 구현 내역
+1. **차량 프로필 모델 및 영속화 계층 확장 (`MultiVehiclePreferences.kt`)**:
+   - `VehicleProfile`에 `val defaultGasPrice: Double = 1650.0` 프로퍼티 추가.
+   - `loadVehicles()` 및 `updateVehicle()`에 SharedPreferences(`car_1_default_gas_price`, `car_2_default_gas_price`) 저장/불러오기 파이프라인 완비.
+2. **차량 관리 다이얼로그 기본 유가 입력 폼 탑재 (`VehicleManageDialog.kt`)**:
+   - `VehicleEditCard`에 `defaultGasPrice: String`, `onDefaultGasPriceChange: (String) -> Unit` 매개변수 추가.
+   - Row 4에 `기본 주유 유가 (미입력 시 적용)` OutlinedTextField 삽입 (예: `1650`, `1750`, `원/L`, 숫자 키패드 지원).
+   - "저장 및 적용" 시 각 차량의 `defaultGasPrice`를 파싱하여 ViewModel로 전달.
+3. **ViewModel 동적 유가 바인딩 및 하이브리드 연산 연동 (`CarLedgerViewModel.kt`)**:
+   - `CarLedgerUiState`에 `val selectedVehicleDefaultGasPrice: Double = 1650.0` 추가.
+   - `observeVehicles()`에서 현재 선택된 차량의 `defaultGasPrice`를 감지하여 UI 상태에 실시간 동기화.
+   - `loadData()`에서 현재 선택된 차량의 `defaultGasPrice`를 추출하여 `FuelEconomyCalculator.calculateForVehicle(..., gasPrice = targetGasPrice)`로 동적 전달.
+   - `updateRefuelDetail()` 및 `saveVehicleProfiles()`에 차량별 기본 유가 전달 및 폴백 연산 반영.
+4. **차계부 UI 동적 유가 표시 및 자동 채움 도우미 고도화 (`CarLedgerScreen.kt`)**:
+   - **상단 Natural Metrics Grid**: 평균 연비 라벨 옆에 `%,d원/L 기준`으로 현재 선택 차량의 기본 유가 동적 표출.
+   - **주유 카드(`SaaSCarLogRow`)**: 단가 미입력 시 `%,d원/L 추정` 뱃지 및 우측 주유량 캡션에 차량별 설정 유가 반영.
+   - **주유 상세 설정 다이얼로그(`RefuelDetailEditDialog`)**:
+     - L당 주유 단가 우측 캡션에 `기본 설정: %,d원` 표출.
+     - 힌트 placeholder에 `예: 1680 (미입력 시 %,d원 기준)` 동적 포맷팅.
+     - 자동 채움 버튼을 `기본(%,d원) 기준 채움`으로 개편하여 설정된 유가를 즉시 원클릭으로 반영 지원.
+5. **단위 테스트 확장 및 커스텀 기본 유가 검증 (`FuelEconomyTest.kt`)**:
+   - `calculateForVehicle_withCustomDefaultGasPrice_usesCustomPriceForFallbacks` 테스트 케이스 추가.
+   - 디젤/고급유 1,750원/L 설정 시 52,500원 주유 내역에 대해 정확히 30.0L로 환산되고 360km 주행에 대해 12.0 km/L 연비가 오차 없이 도출됨을 검증.
+
+### 39.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 38개 전체 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 

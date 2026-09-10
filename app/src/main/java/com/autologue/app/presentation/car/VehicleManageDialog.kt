@@ -40,12 +40,14 @@ fun VehicleManageDialog(
     var car1Fuel by remember { mutableStateOf(car1Initial.fuelType) }
     var car1Bt by remember { mutableStateOf(car1Initial.bluetoothDevice) }
     var car1Efficiency by remember { mutableStateOf(car1Initial.targetEfficiencyKmPerL.toString()) }
+    var car1DefaultPrice by remember { mutableStateOf(car1Initial.defaultGasPrice.toInt().toString()) }
 
     var car2Name by remember { mutableStateOf(car2Initial.name) }
     var car2Plate by remember { mutableStateOf(car2Initial.licensePlate) }
     var car2Fuel by remember { mutableStateOf(car2Initial.fuelType) }
     var car2Bt by remember { mutableStateOf(car2Initial.bluetoothDevice) }
     var car2Efficiency by remember { mutableStateOf(car2Initial.targetEfficiencyKmPerL.toString()) }
+    var car2DefaultPrice by remember { mutableStateOf(car2Initial.defaultGasPrice.toInt().toString()) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -131,7 +133,9 @@ fun VehicleManageDialog(
                         bluetooth = car1Bt,
                         onBluetoothChange = { car1Bt = it },
                         efficiency = car1Efficiency,
-                        onEfficiencyChange = { car1Efficiency = it }
+                        onEfficiencyChange = { car1Efficiency = it },
+                        defaultGasPrice = car1DefaultPrice,
+                        onDefaultGasPriceChange = { car1DefaultPrice = it }
                     )
 
                     // Vehicle 2 Card
@@ -146,7 +150,9 @@ fun VehicleManageDialog(
                         bluetooth = car2Bt,
                         onBluetoothChange = { car2Bt = it },
                         efficiency = car2Efficiency,
-                        onEfficiencyChange = { car2Efficiency = it }
+                        onEfficiencyChange = { car2Efficiency = it },
+                        defaultGasPrice = car2DefaultPrice,
+                        onDefaultGasPriceChange = { car2DefaultPrice = it }
                     )
                 }
 
@@ -170,20 +176,24 @@ fun VehicleManageDialog(
                         onClick = {
                             val eff1 = car1Efficiency.toDoubleOrNull() ?: 12.5
                             val eff2 = car2Efficiency.toDoubleOrNull() ?: 16.0
+                            val price1 = car1DefaultPrice.toDoubleOrNull() ?: 1650.0
+                            val price2 = car2DefaultPrice.toDoubleOrNull() ?: 1650.0
 
                             val updatedCar1 = car1Initial.copy(
                                 name = car1Name.trim().ifBlank { "차량 1" },
                                 licensePlate = car1Plate.trim(),
                                 fuelType = car1Fuel,
                                 bluetoothDevice = car1Bt.trim(),
-                                targetEfficiencyKmPerL = eff1
+                                targetEfficiencyKmPerL = eff1,
+                                defaultGasPrice = price1
                             )
                             val updatedCar2 = car2Initial.copy(
                                 name = car2Name.trim().ifBlank { "차량 2" },
                                 licensePlate = car2Plate.trim(),
                                 fuelType = car2Fuel,
                                 bluetoothDevice = car2Bt.trim(),
-                                targetEfficiencyKmPerL = eff2
+                                targetEfficiencyKmPerL = eff2,
+                                defaultGasPrice = price2
                             )
 
                             onSaveVehicles(updatedCar1, updatedCar2)
@@ -208,7 +218,9 @@ private fun VehicleEditCard(
     bluetooth: String,
     onBluetoothChange: (String) -> Unit,
     efficiency: String,
-    onEfficiencyChange: (String) -> Unit
+    onEfficiencyChange: (String) -> Unit,
+    defaultGasPrice: String,
+    onDefaultGasPriceChange: (String) -> Unit
 ) {
     val fuelOptions = listOf("가솔린", "디젤", "하이브리드", "전기차", "LPG")
 
@@ -339,6 +351,37 @@ private fun VehicleEditCard(
                         )
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Row 4: 기본 유가 (미입력 시 적용 단가)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("기본 주유 유가 (미입력 시 적용)", style = AppTypography.caption.copy(fontWeight = FontWeight.SemiBold))
+                    Text("주유량/단가 미입력 결제 시 적용", fontSize = 10.sp, color = Slate500)
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                OutlinedTextField(
+                    value = defaultGasPrice,
+                    onValueChange = onDefaultGasPriceChange,
+                    placeholder = { Text("1650", fontSize = 12.sp, color = Slate400) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = AppTypography.body.copy(fontSize = 13.sp),
+                    trailingIcon = { Text("원/L", fontSize = 10.sp, color = Slate400, modifier = Modifier.padding(end = 4.dp)) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = AppColors.surface,
+                        unfocusedContainerColor = AppColors.surface,
+                        focusedBorderColor = MenuColors.carLedger,
+                        unfocusedBorderColor = Slate300
+                    )
+                )
             }
         }
     }

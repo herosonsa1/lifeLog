@@ -20,7 +20,8 @@ data class VehicleProfile(
     val bluetoothDevice: String = "", // 차량 블루투스 이름
     val initialOdometerKm: Double = 0.0, // 등록 시 계기판 누적 주행거리
     val targetEfficiencyKmPerL: Double = 12.0, // 공인/목표 연비
-    val customEmoji: String = "" // 브랜드 엠블럼 이모지
+    val customEmoji: String = "", // 브랜드 엠블럼 이모지
+    val defaultGasPrice: Double = 1650.0 // 주유 단가 미입력 시 적용될 기본 유가 (원/L)
 ) {
     val emblemEmoji: String
         get() = customEmoji.ifBlank { com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(name) }
@@ -51,7 +52,8 @@ class MultiVehiclePreferences @Inject constructor(
             bluetoothDevice = prefs.getString("car_1_bt", "") ?: "",
             initialOdometerKm = prefs.getFloat("car_1_init_odo", 0f).toDouble(),
             targetEfficiencyKmPerL = prefs.getFloat("car_1_efficiency", 12.5f).toDouble(),
-            customEmoji = prefs.getString("car_1_emoji", "") ?: ""
+            customEmoji = prefs.getString("car_1_emoji", "") ?: "",
+            defaultGasPrice = prefs.getFloat("car_1_default_gas_price", 1650.0f).toDouble()
         )
 
         val car2 = VehicleProfile(
@@ -62,7 +64,8 @@ class MultiVehiclePreferences @Inject constructor(
             bluetoothDevice = prefs.getString("car_2_bt", "") ?: "",
             initialOdometerKm = prefs.getFloat("car_2_init_odo", 0f).toDouble(),
             targetEfficiencyKmPerL = prefs.getFloat("car_2_efficiency", 16.0f).toDouble(),
-            customEmoji = prefs.getString("car_2_emoji", "") ?: ""
+            customEmoji = prefs.getString("car_2_emoji", "") ?: "",
+            defaultGasPrice = prefs.getFloat("car_2_default_gas_price", 1650.0f).toDouble()
         )
 
         return listOf(car1, car2)
@@ -81,7 +84,8 @@ class MultiVehiclePreferences @Inject constructor(
         bluetoothDevice: String,
         initialOdometerKm: Double = 0.0,
         targetEfficiencyKmPerL: Double = 12.0,
-        customEmoji: String = ""
+        customEmoji: String = "",
+        defaultGasPrice: Double = 1650.0
     ) {
         prefs.edit()
             .putString("${id}_name", name)
@@ -91,6 +95,7 @@ class MultiVehiclePreferences @Inject constructor(
             .putFloat("${id}_init_odo", initialOdometerKm.toFloat())
             .putFloat("${id}_efficiency", targetEfficiencyKmPerL.toFloat())
             .putString("${id}_emoji", customEmoji)
+            .putFloat("${id}_default_gas_price", defaultGasPrice.toFloat())
             .apply()
 
         _vehicles.value = loadVehicles()
