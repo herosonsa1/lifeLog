@@ -1061,3 +1061,35 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 33s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 36. 차량 주행 백그라운드 GPS 실시간 리스너(LocationListener) 등록 및 0.0km 계산 결함 원천 해결 (2026-09-10)
+
+### 36.1. 사용자 제보 및 현상 분석
+- **현상**: 차량 블루투스 연결 후 25분간 실제 주행했음에도, 알림 배너에 `"블루투스 감지 탑승 중 · 25분 경과 (현재까지 약 0.0 km, 6개 위치 기록)"`로 표출되며 이동 거리가 0.0 km로 고정되어 있음 (`media_1789030808375.jpg`).
+- **원인 규명 (`AP-ANDROID-GPS-GETLASTKNOWNLOCATION-STALE`)**:
+  1. `CarDrivingTrackingService` 내부에서 GPS 하드웨어 칩을 구동하는 실시간 위치 수신 리스너(`requestLocationUpdates`)를 등록하지 않고, 5분 타이머마다 OS 캐시 위치(`getLastKnownLocation`)만 단발성으로 조회함.
+  2. 안드로이드 OS는 백그라운드에서 실시간 위치 요청이 없으면 새로운 GPS 픽스를 수행하지 않으므로, 25분 동안 출발 시점의 동일한 위경도 좌표가 6회 연속 반복 수집됨.
+  3. 동일 좌표 간의 이동 거리가 0m이므로 `LocationDistanceUtils.calculateWaypointsDistanceKm`에서 유효 이동(50m 이상)이 없는 것으로 판정되어 `0.0 km`로 계산되었고, 주행 종료 시에도 최소 기본값(1.0 km)으로만 저장되는 결함 유발.
+
+### 36.2. 주요 개선 및 해결 내역
+1. **실시간 3중 GPS 공급자 LocationListener 등록 (`startLocationUpdates`)**:
+   - `LocationManager.GPS_PROVIDER` (5초 / 20m)
+   - `LocationManager.PASSIVE_PROVIDER` (티맵, 카카오내비, 네이버지도 등 내비게이션 앱 실행 시 고정밀 GPS 데이터를 배터리 소모 없이 100% 무임승차 수신, 2초 / 10m)
+   - `LocationManager.NETWORK_PROVIDER` (기지국/Wi-Fi 보조, 10초 / 50m)
+2. **실시간 40m 이동 감지 및 주행 궤적 누적 파이프라인 탑재**:
+   - 차량이 실제로 40m 이상 이동할 때마다 실시간으로 `waypoints`에 자동 누적하고 `LocationDistanceUtils`를 통해 실제 이동 거리를 재계산.
+   - 알림 배너 실시간 갱신: `현재까지 약 %.1f km, %d개 위치 기록`에 실제 주행거리가 `약 2.4 km`, `8.7 km` 등으로 동적 표출.
+3. **최신 수신 좌표(`latestLocation`) 우선 활용 아키텍처**:
+   - `getCurrentLocation()`에서 최근 60초 이내에 리스너로 수신된 실시간 좌표가 있으면 캐시를 무시하고 최우선 반환.
+4. **서비스 라이프사이클 안전 해제**:
+   - `stopTrackingInternal()` 및 `onDestroy()`에서 `stopLocationUpdates()`를 호출하여 리스너를 즉시 해제함으로써 배터리 누수 방지.
+5. **글로벌 안티패턴 영구 지식화 (`anti_patterns.json`)**:
+   - `AP-ANDROID-GPS-GETLASTKNOWNLOCATION-STALE` 신규 등록 완료.
+
+### 36.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 33개 전체 통과 (`BUILD SUCCESSFUL in 30s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 15s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`

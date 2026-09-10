@@ -72,6 +72,13 @@ class CarDrivingTrackingService : Service() {
     private var activeLicensePlate: String = ""
     private var startTimeMillis: Long = 0L
 
+    private var locationListener: android.location.LocationListener? = null
+    @Volatile
+    private var latestLocation: Location? = null
+    private var lastRecordedLat: Double = 0.0
+    private var lastRecordedLng: Double = 0.0
+    private var lastRecordedWaypointTime: Long = 0L
+
     private val waypoints = Collections.synchronizedList(mutableListOf<DrivingWaypoint>())
 
     companion object {
@@ -187,11 +194,15 @@ class CarDrivingTrackingService : Service() {
             activeLicensePlate = licensePlate
             startTimeMillis = System.currentTimeMillis()
             waypoints.clear()
+            lastRecordedLat = 0.0
+            lastRecordedLng = 0.0
+            lastRecordedWaypointTime = 0L
+            latestLocation = null
         }
 
         // 1. 포그라운드 서비스 알림 등록 (Android 14+ 위치 타입 명시 및 SecurityException 안전 폴백)
         val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
-        val initialNotification = buildNotification("$brandEmoji [$activeVehicleName] 탑승 운행 시작", "블루투스 감지 탑승 중 · 5분 주기 GPS 경로 수집 시작")
+        val initialNotification = buildNotification("$brandEmoji [$activeVehicleName] 탑승 운행 시작", "블루투스 감지 탑승 중 · 실시간 GPS 경로 수집 시작")
 
         var isForegroundStarted = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -253,20 +264,26 @@ class CarDrivingTrackingService : Service() {
             }
         }
 
-        // 2. 출발지 GPS 즉시 수집
+        // 2. 실시간 GPS LocationListener 가동 (GPS + 패시브 내비게이션 + 네트워크)
+        startLocationUpdates()
+
+        // 3. 출발지 GPS 즉시 수집
         serviceScope.launch {
             captureCurrentWaypoint(isDeparture = true, isDestination = false)
         }
 
-        // 3. 5분 주기 백그라운드 GPS 위치 수집 코루틴 가동 (300,000ms = 5분)
+        // 4. 백그라운드 보조 점검 및 알림 갱신 코루틴 가동 (3분 주기)
         trackingJob?.cancel()
         trackingJob = serviceScope.launch {
-            Log.d(TAG, "5분 주기 GPS 위치 수집 루프 시작: [$activeVehicleName] ($activeLicensePlate)")
+            Log.d(TAG, "GPS 백그라운드 주기적 점검 루프 시작: [$activeVehicleName] ($activeLicensePlate)")
             while (isActive && isTracking) {
-                delay(5 * 60 * 1000L) // 5분 대기
+                delay(3 * 60 * 1000L) // 3분 대기
                 if (!isTracking) break
 
-                captureCurrentWaypoint(isDeparture = false, isDestination = false)
+                // 실시간 리스너로 최근 3분간 새 waypoint가 기록되지 않은 경우 강제 샘플링
+                if (System.currentTimeMillis() - lastRecordedWaypointTime >= 3 * 60 * 1000L) {
+                    captureCurrentWaypoint(isDeparture = false, isDestination = false)
+                }
                 updateOngoingNotification()
             }
         }
@@ -280,6 +297,7 @@ class CarDrivingTrackingService : Service() {
             }
             if (!isTracking) {
                 Log.d(TAG, "추적 중이 아닙니다. 서비스 안전 종료")
+                stopLocationUpdates()
                 serviceScope.launch(Dispatchers.Main) {
                     try {
                         ServiceCompat.stopForeground(this@CarDrivingTrackingService, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -294,6 +312,7 @@ class CarDrivingTrackingService : Service() {
             isTracking = false
         }
 
+        stopLocationUpdates()
         trackingJob?.cancel()
 
         serviceScope.launch {
@@ -533,6 +552,12 @@ class CarDrivingTrackingService : Service() {
         val lat = loc?.latitude ?: 0.0
         val lng = loc?.longitude ?: 0.0
 
+        if (lat != 0.0 && lng != 0.0) {
+            lastRecordedLat = lat
+            lastRecordedLng = lng
+            lastRecordedWaypointTime = System.currentTimeMillis()
+        }
+
         val waypoint = DrivingWaypoint(
             timestamp = System.currentTimeMillis(),
             latitude = lat,
@@ -629,10 +654,129 @@ class CarDrivingTrackingService : Service() {
     }
 
     @SuppressLint("MissingPermission")
+    private fun startLocationUpdates() {
+        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+        val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val hasCoarse = androidx.core.content.ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (!hasFine && !hasCoarse) {
+            Log.w(TAG, "위치 권한이 없어 실시간 LocationListener 등록을 건너뜁니다.")
+            return
+        }
+
+        stopLocationUpdates()
+
+        val listener = android.location.LocationListener { loc ->
+            if (loc.latitude == 0.0 && loc.longitude == 0.0) return@LocationListener
+            // 정확도 150m 이내 신호만 신뢰 (터널 등 비정상 튀는 신호 제외)
+            if (loc.hasAccuracy() && loc.accuracy > 150f) {
+                Log.d(TAG, "낮은 정확도(${loc.accuracy}m) GPS 신호 무시")
+                return@LocationListener
+            }
+
+            latestLocation = loc
+
+            // 실시간 궤적 누적: 이전 기록 위치 대비 40m 이상 이동했거나, 마지막 기록 후 3분 경과 시 기록
+            val distFromLast = if (lastRecordedLat != 0.0 && lastRecordedLng != 0.0) {
+                distanceMeter(lastRecordedLat, lastRecordedLng, loc.latitude, loc.longitude)
+            } else 9999.0
+
+            val timeSinceLast = System.currentTimeMillis() - lastRecordedWaypointTime
+
+            if (distFromLast >= 40.0 || (timeSinceLast >= 3 * 60 * 1000L && distFromLast >= 15.0)) {
+                lastRecordedLat = loc.latitude
+                lastRecordedLng = loc.longitude
+                lastRecordedWaypointTime = System.currentTimeMillis()
+
+                val wp = DrivingWaypoint(
+                    timestamp = System.currentTimeMillis(),
+                    latitude = loc.latitude,
+                    longitude = loc.longitude,
+                    isDeparture = false,
+                    isDestination = false
+                )
+                waypoints.add(wp)
+                saveWaypointsToPrefs()
+                Log.d(TAG, "실시간 이동 궤적 Waypoint 수집: (lat=${loc.latitude}, lng=${loc.longitude}, dist=${distFromLast.toInt()}m, 총 ${waypoints.size}개)")
+                updateOngoingNotification()
+            }
+        }
+        locationListener = listener
+
+        // 1. 고정밀 GPS 공급자 (5초 간격 또는 20m 이동 시)
+        if (hasFine && lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            runCatching {
+                lm.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER,
+                    5000L,
+                    20f,
+                    listener,
+                    android.os.Looper.getMainLooper()
+                )
+                Log.d(TAG, "LocationListener: GPS_PROVIDER 등록 성공")
+            }.onFailure { Log.e(TAG, "GPS_PROVIDER 등록 실패", it) }
+        }
+
+        // 2. 내비게이션(티맵/카카오내비 등) 패시브 공급자 (2초 간격 또는 10m 이동 시)
+        if (hasFine && lm.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)) {
+            runCatching {
+                lm.requestLocationUpdates(
+                    LocationManager.PASSIVE_PROVIDER,
+                    2000L,
+                    10f,
+                    listener,
+                    android.os.Looper.getMainLooper()
+                )
+                Log.d(TAG, "LocationListener: PASSIVE_PROVIDER (내비게이션 연동) 등록 성공")
+            }.onFailure { Log.e(TAG, "PASSIVE_PROVIDER 등록 실패", it) }
+        }
+
+        // 3. 네트워크 기지국/Wi-Fi 공급자 (10초 간격 또는 50m 이동 시)
+        if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+            runCatching {
+                lm.requestLocationUpdates(
+                    LocationManager.NETWORK_PROVIDER,
+                    10000L,
+                    50f,
+                    listener,
+                    android.os.Looper.getMainLooper()
+                )
+                Log.d(TAG, "LocationListener: NETWORK_PROVIDER 등록 성공")
+            }.onFailure { Log.e(TAG, "NETWORK_PROVIDER 등록 실패", it) }
+        }
+    }
+
+    private fun stopLocationUpdates() {
+        locationListener?.let { listener ->
+            runCatching {
+                val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                lm?.removeUpdates(listener)
+                Log.d(TAG, "LocationListener 해제 완료")
+            }
+        }
+        locationListener = null
+    }
+
+    @SuppressLint("MissingPermission")
     private fun getCurrentLocation(): Location? {
+        // 1. 방금 LocationListener로 수신된 60초 이내의 최신 위치가 있으면 최우선 반환
+        latestLocation?.let { loc ->
+            if (System.currentTimeMillis() - loc.time < 60_000L && loc.latitude != 0.0 && loc.longitude != 0.0) {
+                return loc
+            }
+        }
+
         return try {
             val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER,
+                LocationManager.NETWORK_PROVIDER
+            )
             var best: Location? = null
             for (p in providers) {
                 if (lm.isProviderEnabled(p)) {
@@ -642,10 +786,10 @@ class CarDrivingTrackingService : Service() {
                     }
                 }
             }
-            best
+            best ?: latestLocation
         } catch (e: Exception) {
             Log.e(TAG, "GPS 위치 획득 실패", e)
-            null
+            latestLocation
         }
     }
 
@@ -685,6 +829,7 @@ class CarDrivingTrackingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopLocationUpdates()
         serviceScope.cancel()
         Log.d(TAG, "CarDrivingTrackingService 종료")
     }
