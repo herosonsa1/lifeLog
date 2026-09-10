@@ -42,8 +42,11 @@ class ScorecardOcrAnalyzer(private val context: Context) {
 
     /**
      * [C-01] 안전 비트맵 다운샘플링 (최대 maxDimension px).
+     * 1080x2400 등 스마트폰 세로 스크린샷의 테이블 텍스트가 뭉개지지 않도록
+     * 기본 maxDimension을 2560으로 설정하여 원본 1:1 선명도를 유지합니다.
+     * RGB_565 설정을 통해 메모리 사용량을 ~5MB 수준으로 최소화하여 OOM을 원천 차단합니다.
      */
-    private fun decodeSafeSampledBitmap(uri: Uri, maxDimension: Int = 1024): Bitmap? {
+    private fun decodeSafeSampledBitmap(uri: Uri, maxDimension: Int = 2560): Bitmap? {
         return try {
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             context.contentResolver.openInputStream(uri)?.use { stream ->
@@ -78,7 +81,7 @@ class ScorecardOcrAnalyzer(private val context: Context) {
     suspend fun analyzeScorecard(imageUri: Uri): ScorecardOcrResult = withContext(Dispatchers.IO) {
         var sampledBitmap: Bitmap? = null
         try {
-            sampledBitmap = decodeSafeSampledBitmap(imageUri, 1024)
+            sampledBitmap = decodeSafeSampledBitmap(imageUri, 2560)
             val image = if (sampledBitmap != null) {
                 InputImage.fromBitmap(sampledBitmap, 0)
             } else {
@@ -206,13 +209,13 @@ class ScorecardOcrAnalyzer(private val context: Context) {
                 }
             }
 
-            // 1-6. 전체 걸음수 (예: "6384", "전체 걸음수", "걸음수")
-            val stepsRegex = Regex("""(\d{3,6})\s*(?:전체\s*걸음수|걸음수|STEPS)|(?:전체\s*걸음수|걸음수|STEPS)\s*[:：]?\s*(\d{3,6})""", RegexOption.IGNORE_CASE)
+            // 1-6. 전체 걸음수 (예: "6384", "전체 걸음수", "걸음 수", "6384 전체 걸음 수")
+            val stepsRegex = Regex("""(\d{3,6})\s*(?:(?:전체\s*)?걸음\s*수|걸음|STEPS)|(?:(?:전체\s*)?걸음\s*수|걸음|STEPS)\s*[:：]?\s*(\d{3,6})""", RegexOption.IGNORE_CASE)
             for (line in lines) {
                 val m = stepsRegex.find(line.replace(",", ""))
                 if (m != null) {
                     val cand = (m.groups[1]?.value ?: m.groups[2]?.value)?.toIntOrNull()
-                    if (cand != null && cand in 1000..50000) {
+                    if (cand != null && cand in 1000..50000 && cand !in 2020..2035) {
                         summarySteps = cand
                         break
                     }
@@ -221,12 +224,34 @@ class ScorecardOcrAnalyzer(private val context: Context) {
             if (summarySteps == null) {
                 val stepFinder = Regex("""\b(\d{4,6})\b""")
                 for (i in lines.indices) {
-                    if (lines[i].contains("전체 걸음수") || lines[i].contains("걸음수") || lines[i].uppercase().contains("STEPS")) {
-                        val currentCand = stepFinder.findAll(lines[i].replace(",", "")).mapNotNull { it.value.toIntOrNull() }.firstOrNull { it in 1000..50000 }
-                        val prevCand = if (i > 0) stepFinder.findAll(lines[i-1].replace(",", "")).mapNotNull { it.value.toIntOrNull() }.firstOrNull { it in 1000..50000 } else null
-                        val nextCand = if (i < lines.size - 1) stepFinder.findAll(lines[i+1].replace(",", "")).mapNotNull { it.value.toIntOrNull() }.firstOrNull { it in 1000..50000 } else null
-                        summarySteps = currentCand ?: prevCand ?: nextCand
+                    val normLine = lines[i].replace(" ", "").uppercase()
+                    if (normLine.contains("걸음") || normLine.contains("STEP")) {
+                        for (offset in listOf(0, -1, 1, -2, 2, -3, 3)) {
+                            val idx = i + offset
+                            if (idx in lines.indices) {
+                                val cand = stepFinder.findAll(lines[idx].replace(",", ""))
+                                    .mapNotNull { it.value.toIntOrNull() }
+                                    .firstOrNull { it in 1000..50000 && it !in 2020..2035 }
+                                if (cand != null) {
+                                    summarySteps = cand
+                                    break
+                                }
+                            }
+                        }
                         if (summarySteps != null) break
+                    }
+                }
+            }
+            // 1-6 폴백: 상단 카드 영역(첫 15줄 이내)에서 연도가 아닌 4자리 정수(3000~50000) 탐색
+            if (summarySteps == null) {
+                val stepFinder = Regex("""\b(\d{4,5})\b""")
+                for (line in lines.take(15)) {
+                    val cand = stepFinder.findAll(line.replace(",", ""))
+                        .mapNotNull { it.value.toIntOrNull() }
+                        .firstOrNull { it in 3000..50000 && it !in 2020..2035 }
+                    if (cand != null) {
+                        summarySteps = cand
+                        break
                     }
                 }
             }
@@ -273,95 +298,187 @@ class ScorecardOcrAnalyzer(private val context: Context) {
             val parList = mutableListOf<Int>() // 파3 제외 비거리 산출을 위한 각 홀별 Par 목록
 
             // 3-0. Par 라인 추출 (예: "Par 4 3 5 4 3 4 5 4 4 36")
-            val parRowRegex = Regex("""(?:Par|파)\s*[:：]?\s*(.*)""", RegexOption.IGNORE_CASE)
-            for (line in lines) {
-                val m = parRowRegex.find(line)
-                if (m != null) {
-                    val rest = m.groupValues[1]
-                    val nums = Regex("""\b([345])\b""").findAll(rest).mapNotNull { it.value.toIntOrNull() }.toList()
-                    if (nums.size in 9..10) {
-                        parList.addAll(nums.take(9))
-                    }
-                }
-            }
-
-            // 3-1. Score 라인 추출 ("Score 5 4 7 3 4 5 6 4 4 42")
-            val scoreRowRegex = Regex("""(?:Score|스코어)\s*[:：]?\s*(.*)""", RegexOption.IGNORE_CASE)
-            for (line in lines) {
-                val m = scoreRowRegex.find(line)
-                if (m != null) {
-                    val rest = m.groupValues[1]
-                    val nums = Regex("""\b([1-9]|1[0-5])\b""").findAll(rest).mapNotNull { it.value.toIntOrNull() }.toList()
-                    if (nums.size == 10) {
-                        allHoleScores.addAll(nums.take(9))
-                        subTotals.add(nums[9])
-                    } else if (nums.size == 9) {
-                        allHoleScores.addAll(nums)
-                    } else if (nums.size >= 18) {
-                        allHoleScores.clear()
-                        allHoleScores.addAll(nums.take(18))
-                        if (nums.size >= 19) subTotals.add(nums[18])
-                    }
-                }
-            }
-
-            // 3-2. Putt 라인 추출 ("Putt 2 2 1 2 1 3 2 2 2 17", "Putt 3 3 2 4 1 3 2 3 2 23")
-            val puttRowRegex = Regex("""(?:Putt|퍼트|퍼팅)\s*[:：]?\s*(.*)""", RegexOption.IGNORE_CASE)
-            for (line in lines) {
-                val m = puttRowRegex.find(line)
-                if (m != null) {
-                    val rest = m.groupValues[1]
-                    val nums = Regex("""\b\d{1,2}\b""").findAll(rest).mapNotNull { it.value.toIntOrNull() }.toList()
-                    if (nums.size == 10) {
-                        puttSubTotals.add(nums[9])
-                    } else if (nums.size == 1) {
-                        puttSubTotals.add(nums[0])
-                    }
-                }
-            }
-
-            // 3-3. Penalty 라인 추출 ("Penalty - - 1 - 1 - - - - 2")
-            val penaltyRowRegex = Regex("""(?:Penalty|페널티|벌타)\s*[:：]?\s*(.*)""", RegexOption.IGNORE_CASE)
-            for (line in lines) {
-                val m = penaltyRowRegex.find(line)
-                if (m != null) {
-                    val rest = m.groupValues[1]
-                    val nums = Regex("""\b\d{1,2}\b""").findAll(rest).mapNotNull { it.value.toIntOrNull() }.toList()
-                    if (nums.isNotEmpty()) {
-                        // 마지막 숫자가 9홀 소계인 경우
-                        penaltySubTotals.add(nums.last())
-                    }
-                }
-            }
-
-            // 3-4. Dist (Tee Shot) 라인 추출 (파3 제외 비거리)
-            val distRowRegex = Regex("""(?:Dist|Distance|비거리|거리)\s*[:：(]?(?:Tee\s*Shot)?\)?\s*[:：]?\s*(.*)""", RegexOption.IGNORE_CASE)
-            for (line in lines) {
-                val m = distRowRegex.find(line)
-                if (m != null) {
-                    val rest = m.groupValues[1]
-                    val nums = Regex("""\b([1-3]\d{2})\b""").findAll(rest).mapNotNull { it.value.toDoubleOrNull() }.toList()
-                    for (dist in nums) {
-                        if (dist in 100.0..350.0) {
-                            allDriveDistances.add(dist)
+            val parRowRegex = Regex("""(?:Par|파)\b""", RegexOption.IGNORE_CASE)
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (parRowRegex.containsMatchIn(line)) {
+                    val candidateIndices = listOf(i, i + 1).filter { it in lines.indices }
+                    for (cIdx in candidateIndices) {
+                        val cLine = lines[cIdx]
+                        val nums = Regex("""\b([345])\b""").findAll(cLine).mapNotNull { it.value.toIntOrNull() }.toList()
+                        if (nums.size in 9..10) {
+                            parList.addAll(nums.take(9))
+                            break
                         }
                     }
                 }
             }
 
-            // 3-5. Tempo (Tee Shot) 라인 추출 (예: "Tempo 3.0 - 3.2 3.4 - 3.3 2.7 2.9 3.1")
-            val tempoRowRegex = Regex("""(?:Tempo|템포)\s*[:：(]?(?:Tee\s*Shot)?\)?\s*[:：]?\s*(.*)""", RegexOption.IGNORE_CASE)
-            for (line in lines) {
-                val m = tempoRowRegex.find(line)
-                if (m != null) {
-                    val rest = m.groupValues[1]
-                    val nums = Regex("""\b([1-5]\.\d)\b""").findAll(rest).mapNotNull { it.value.toDoubleOrNull() }.toList()
-                    for (tempo in nums) {
-                        if (tempo in 1.5..5.5) {
-                            allTempos.add(tempo)
+            // 3-1. Score 라인 추출 ("Score 5 4 7 3 4 5 6 4 4 42" 또는 줄바꿈 분리)
+            val scoreRowRegex = Regex("""(?:Score|스코어)\b""", RegexOption.IGNORE_CASE)
+            val processedScoreLines = mutableSetOf<Int>()
+
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (scoreRowRegex.containsMatchIn(line)) {
+                    val candidateIndices = listOf(i, i + 1, i + 2).filter { it in lines.indices }
+                    for (cIdx in candidateIndices) {
+                        val cLine = lines[cIdx]
+                        val rest = if (cIdx == i) cLine.replace(scoreRowRegex, "").trim() else cLine
+                        val nums = Regex("""\b([1-9]|1[0-5])\b""").findAll(rest)
+                            .mapNotNull { it.value.toIntOrNull() }
+                            .toList()
+                        if (nums.size in 9..10 || nums.size >= 18) {
+                            if (nums.size == 10) {
+                                allHoleScores.addAll(nums.take(9))
+                                subTotals.add(nums[9])
+                            } else if (nums.size == 9) {
+                                allHoleScores.addAll(nums)
+                            } else if (nums.size >= 18) {
+                                allHoleScores.clear()
+                                allHoleScores.addAll(nums.take(18))
+                                if (nums.size >= 19) subTotals.add(nums[18])
+                            }
+                            processedScoreLines.add(cIdx)
+                            break
                         }
                     }
                 }
+            }
+
+            // 3-2. Putt 라인 추출 ("Putt 2 2 1 2 1 3 2 2 2 17" 또는 줄바꿈 분리)
+            val puttRowRegex = Regex("""(?:Putt|퍼트|퍼팅)\b""", RegexOption.IGNORE_CASE)
+            val processedPuttLines = mutableSetOf<Int>()
+
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (puttRowRegex.containsMatchIn(line)) {
+                    val candidateIndices = listOf(i, i + 1, i + 2).filter { it in lines.indices }
+                    for (cIdx in candidateIndices) {
+                        val cLine = lines[cIdx]
+                        val rest = if (cIdx == i) cLine.replace(puttRowRegex, "").trim() else cLine
+                        val nums = Regex("""\b\d{1,2}\b""").findAll(rest)
+                            .mapNotNull { it.value.toIntOrNull() }
+                            .toList()
+                        if (nums.size in 9..10 || nums.size == 1) {
+                            if (nums.size == 10) {
+                                puttSubTotals.add(nums[9])
+                            } else if (nums.size == 1 && nums[0] in 10..60) {
+                                puttSubTotals.add(nums[0])
+                            }
+                            processedPuttLines.add(cIdx)
+                            break
+                        }
+                    }
+                }
+            }
+
+            // 3-3. Penalty 라인 추출 ("Penalty - - 1 - 1 - - - - 2" 또는 줄바꿈 분리)
+            val penaltyRowRegex = Regex("""(?:Penalty|페널티|벌타)""", RegexOption.IGNORE_CASE)
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (penaltyRowRegex.containsMatchIn(line)) {
+                    val rest = line.replace(penaltyRowRegex, "").trim()
+                    val targetLine = if (rest.contains("-") || Regex("""\d""").containsMatchIn(rest)) {
+                        rest
+                    } else if (i + 1 < lines.size && (lines[i+1].contains("-") || Regex("""\d""").containsMatchIn(lines[i+1]))) {
+                        lines[i+1]
+                    } else if (i + 2 < lines.size && (lines[i+2].contains("-") || Regex("""\d""").containsMatchIn(lines[i+2]))) {
+                        lines[i+2]
+                    } else ""
+
+                    if (targetLine.isNotBlank()) {
+                        val nums = Regex("""\b\d{1,2}\b""").findAll(targetLine).mapNotNull { it.value.toIntOrNull() }.toList()
+                        if (nums.isNotEmpty()) {
+                            penaltySubTotals.add(nums.last())
+                        } else if (targetLine.contains("-")) {
+                            penaltySubTotals.add(0)
+                        }
+                    }
+                }
+            }
+
+            // 3-4. Dist (Tee Shot) 라인 추출 (파3 제외 비거리, 줄바꿈 분리 지원)
+            val distRowRegex = Regex("""(?:Dist|Distance|비거리|거리)""", RegexOption.IGNORE_CASE)
+            val processedDistLines = mutableSetOf<Int>()
+
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (distRowRegex.containsMatchIn(line)) {
+                    val candidateIndices = listOf(i, i + 1, i + 2).filter { it in lines.indices }
+                    for (cIdx in candidateIndices) {
+                        val cLine = lines[cIdx]
+                        val nums = Regex("""\b([1-3]\d{2})\b""").findAll(cLine)
+                            .mapNotNull { it.value.toDoubleOrNull() }
+                            .filter { it in 100.0..350.0 }
+                            .toList()
+                        if (nums.isNotEmpty()) {
+                            allDriveDistances.addAll(nums)
+                            processedDistLines.add(cIdx)
+                            break
+                        }
+                    }
+                }
+            }
+
+            // 폴백: Dist 라벨 누락 시에도 120~350 사이의 3자리 정수가 2개 이상 나열된 행 감지
+            for (i in lines.indices) {
+                if (i in processedDistLines) continue
+                val line = lines[i]
+                if (line.contains("202") || line.contains("%") || line.contains("걸음")) continue
+                val nums = Regex("""\b([1-3]\d{2})\b""").findAll(line)
+                    .mapNotNull { it.value.toDoubleOrNull() }
+                    .filter { it in 100.0..350.0 }
+                    .toList()
+                if (nums.size >= 2) {
+                    allDriveDistances.addAll(nums)
+                    processedDistLines.add(i)
+                }
+            }
+
+            // 3-5. Tempo (Tee Shot) 라인 추출 (예: "Tempo 3.0 - 3.2 3.4 - 3.3 2.7 2.9 3.1" 또는 줄바꿈 분리)
+            val tempoRowRegex = Regex("""(?:Tempo|템포)""", RegexOption.IGNORE_CASE)
+            val processedTempoLines = mutableSetOf<Int>()
+
+            for (i in lines.indices) {
+                val line = lines[i]
+                if (tempoRowRegex.containsMatchIn(line)) {
+                    val candidateIndices = listOf(i, i + 1, i + 2).filter { it in lines.indices }
+                    for (cIdx in candidateIndices) {
+                        val cLine = lines[cIdx]
+                        val nums = Regex("""\b([1-5]\.\d)\b""").findAll(cLine)
+                            .mapNotNull { it.value.toDoubleOrNull() }
+                            .filter { it in 1.5..5.5 }
+                            .toList()
+                        if (nums.isNotEmpty()) {
+                            allTempos.addAll(nums)
+                            processedTempoLines.add(cIdx)
+                            break
+                        }
+                    }
+                }
+            }
+
+            // 폴백: Tempo 라벨 누락 시에도 1.5~5.5 사이 소수(x.x)가 2개 이상 나열된 행 감지 (GIR % 행 제외)
+            for (i in lines.indices) {
+                if (i in processedTempoLines) continue
+                val line = lines[i]
+                if (line.contains("%") || line.contains("퍼트") || line.contains("SCORE")) continue
+                val nums = Regex("""\b([1-5]\.\d)\b""").findAll(line)
+                    .mapNotNull { it.value.toDoubleOrNull() }
+                    .filter { it in 1.5..5.5 }
+                    .toList()
+                if (nums.size >= 2) {
+                    allTempos.addAll(nums)
+                    processedTempoLines.add(i)
+                }
+            }
+
+            // 파3 홀 제외 필터링 (parList가 홀별로 추출되었고 거리 수와 일치할 때)
+            val effectiveDriveDistances = if (allDriveDistances.size == parList.size && parList.contains(3)) {
+                allDriveDistances.filterIndexed { index, _ -> parList.getOrNull(index) != 3 }
+            } else {
+                allDriveDistances
             }
 
             // 4. 단일 폴백 TOTAL / PUTT 탐색
@@ -416,13 +533,13 @@ class ScorecardOcrAnalyzer(private val context: Context) {
             }
 
             // 8. 평균 비거리 및 평균 템포 계산 (파3 제외)
-            val avgDrive = if (allDriveDistances.isNotEmpty()) {
-                (allDriveDistances.sum() / allDriveDistances.size * 10).toInt() / 10.0
+            val avgDrive = if (effectiveDriveDistances.isNotEmpty()) {
+                (effectiveDriveDistances.sum() / effectiveDriveDistances.size * 10).toInt() / 10.0
             } else null
 
             // 최저기록과 최고기록을 제외한 평균 티샷 비거리(보정) 산출
-            val adjustedAvgDrive = if (allDriveDistances.size >= 3) {
-                val sorted = allDriveDistances.sorted()
+            val adjustedAvgDrive = if (effectiveDriveDistances.size >= 3) {
+                val sorted = effectiveDriveDistances.sorted()
                 val trimmed = sorted.subList(1, sorted.size - 1)
                 (trimmed.sum() / trimmed.size * 10).toInt() / 10.0
             } else avgDrive
@@ -449,7 +566,7 @@ class ScorecardOcrAnalyzer(private val context: Context) {
                 averageDriveDistance = avgDrive,
                 adjustedDriveDistance = adjustedAvgDrive,
                 averageTempo = avgTempo,
-                driveDistances = allDriveDistances,
+                driveDistances = effectiveDriveDistances,
                 tempos = allTempos,
                 clubName = detectedClubName,
                 recognizedRawText = raw

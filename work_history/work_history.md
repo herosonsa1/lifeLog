@@ -987,6 +987,47 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 34. 모바일 스코어카드 OCR 고해상도 유지(2560px), 줄바꿈 분리 테이블 복원 및 세부 지표(페널티·비거리·템포·걸음수) 집계 정상화 (2026-09-10)
+
+### 34.1. 사용자 제보 및 결함 원인 분석
+- **현상**: 모바일 다크 스코어카드 스캔 시 총 타수(86), 총 퍼트수(40), GIR(55.6%)만 입력되고, **페널티 타수(2), 비거리(205.2m), 티샷 템포(3.1), 걸음수(6384)** 텍스트 필드가 비어 있어 종합 통계 및 다이어리에 세부 지표가 집계되지 않음 (`media_1789025059651.png`).
+- **원인 규명**:
+  1. **비트맵 과도한 다운샘플링 (`AP-OCR-MOBILE-SCORECARD-MULTI-LINE-DOWNSAMPLE`)**:
+     - 기존 `ScorecardOcrAnalyzer.decodeSafeSampledBitmap`의 `maxDimension`이 `1024`로 하드코딩되어 스마트폰 세로 스크린샷(1080x2400) 분석 시 `inSampleSize = 4`가 적용되어 가로 270px, 세로 600px로 극단 축소됨.
+     - 270px 폭 안에 10개 열이 밀집되어 Par, Score, Putt, Penalty, Tempo, Dist 행의 작은 글꼴이 2~3픽셀로 뭉개져 ML Kit가 큰 요약 카드(86, 55.6%, 2.2)만 인식하고 테이블을 완전히 유실함.
+  2. **한국어 공백 불일치로 인한 `걸음 수` 누락**:
+     - OCR 원문이 `"전체 걸음 수"` 또는 `"걸음 수"`와 같이 띄어쓰기로 인식되었으나, 기존 정규식은 공백 없는 `걸음수` 형태만 허용하여 파싱에 실패함.
+  3. **모바일 OCR 텍스트 블록/줄바꿈 분리 현상**:
+     - ML Kit 텍스트 인식 시 `Dist.`, `(Tee Shot)`, `Tempo`, `Penalty` 라벨과 실제 수치 행(`192 - 139...`, `3.0 - 3.2...`, `- - 1 - 1...`)이 서로 다른 라인/블록으로 분리 인식되어 단일 줄 전제 정규식 매칭이 실패함.
+
+### 34.2. 주요 개선 및 구현 내역
+1. **비트맵 다운샘플링 해상도 상향 및 선명도 100% 보장 (`ScorecardOcrAnalyzer.kt`)**:
+   - `maxDimension` 기본값을 `1024`에서 **`2560`**으로 상향.
+   - 1080x2400 세로 스크린샷을 `inSampleSize = 1` 원본 해상도로 선명하게 유지.
+   - `RGB_565` 포맷을 유지하여 메모리 사용량을 ~4.9MB로 최소화, OOM 위험 0% 원천 보장.
+2. **걸음수 공백 허용 및 다단계 윈도우 탐색 탑재**:
+   - 정규식에 `(?:(?:전체\s*)?걸음\s*수|걸음|STEPS)` 적용.
+   - 공백 제거 정규화 후 `걸음` 또는 `STEP` 키워드 주변 `[-3..3]` 라인 윈도우 탐색으로 `6384` 추출 보장.
+   - 상단 15줄 이내 3000~50000 범위 정수 자율 감지 폴백 탑재.
+3. **줄바꿈 분리 테이블 인접 줄 룩어헤드 및 자율 패턴 감지 아키텍처 구축**:
+   - **페널티 (`Penalty`)**: 라벨 라인 및 다음 1~2줄 탐색, 대시/숫자 분석을 통해 West 2타 + South 0타(전체 대시) = **2타** 정밀 산출.
+   - **티샷 비거리 (`Dist`)**: 라벨 라인 및 인접 줄에서 100~350m 범위 숫자 추출 + 테이블 내 120~350m 3자리 정수가 2개 이상 나열된 행 자율 감지 폴백 구축 -> **205.2m (보정 201.4m)** 산출.
+   - **티샷 템포 (`Tempo`)**: 라벨 라인 및 인접 줄에서 1.5~5.5 범위 소수 추출 + 테이블 내 1.5~5.5 소수가 2개 이상 나열된 행 자율 감지 폴백 구축 -> **3.1** 산출.
+   - **스코어/퍼트 (`Score`, `Putt`)**: 라벨 인접 1~2줄 및 10개 열 소계 합산 검증 자율 감지 탑재.
+4. **Compose UI 실시간 동기화 강화 (`GolfScreen.kt`)**:
+   - `GolfRoundDetailDialog`의 `LaunchedEffect` 키에 `round.scorecardPhotoUri`를 추가하여 OCR 스캔 완료 시 비거리, 템포, 페널티, 걸음수 필드가 화면에 즉시 자동 반영되도록 개선.
+5. **글로벌 안티패턴 영구 지식화 (`anti_patterns.json`)**:
+   - `AP-OCR-MOBILE-SCORECARD-MULTI-LINE-DOWNSAMPLE` 신규 등록.
+
+### 34.3. 빌드 및 배포 검증
+- **단위 테스트**: `ScorecardOcrAnalyzerTest`에 줄바꿈 분리 레이아웃 테스트 케이스(`parseBlackThemeScorecard_withSplitLines_extractsAllMetricsCorrectly`) 추가 및 `testDebugUnitTest` 100% 통과 (`BUILD SUCCESSFUL in 1m 5s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 36s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 
 
 

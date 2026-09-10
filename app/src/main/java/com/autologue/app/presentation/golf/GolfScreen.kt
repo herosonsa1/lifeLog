@@ -615,7 +615,7 @@ fun GolfRoundDetailDialog(
     var newCompanionText by remember { mutableStateOf("") }
 
     // [동기화] 스코어카드 OCR 스캔 완료 시 총 타수, 퍼트수 및 세부 지표 자동 반영
-    LaunchedEffect(round.totalScore, round.totalPutts, round.girPercentage, round.penaltyCount, round.averageDriveDistance, round.averageTempo, round.steps) {
+    LaunchedEffect(round.scorecardPhotoUri, round.totalScore, round.totalPutts, round.girPercentage, round.penaltyCount, round.averageDriveDistance, round.averageTempo, round.steps) {
         if (round.totalScore != null) totalScoreText = round.totalScore.toString()
         if (round.totalPutts != null) totalPuttsText = round.totalPutts.toString()
         if (round.girPercentage != null) girText = round.girPercentage.toString()
@@ -623,6 +623,7 @@ fun GolfRoundDetailDialog(
         if (round.averageDriveDistance != null) driveText = round.averageDriveDistance.toString()
         if (round.averageTempo != null) tempoText = round.averageTempo.toString()
         if (round.steps != null) stepsText = round.steps.toString()
+        if (!round.clubName.isNullOrBlank() && clubName.isBlank()) clubName = round.clubName
     }
 
     // Start and End Time calculations
