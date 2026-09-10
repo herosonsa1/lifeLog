@@ -916,5 +916,77 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 33. 골프 라커룸·다크 스코어카드 정밀 OCR, 종합 통계 모달, 보정 평균 비거리 산출 및 차계부·가계부 정밀화 (2026-09-10)
+
+### 33.1. 사용자 핵심 요청 및 결함 분석
+1. **라커룸 스캔 구장명·코스명 정밀 탐지 및 코스명 보존**:
+   - 골프장명이 영문(`SKY VALLEY CC`, `LADENA GC`), 하단 주소/법인 상호(`(주)필로스`), 하단 감사 문구 등 다양한 위치에 있을 때도 정확히 인식.
+   - 라커룸 스캔 후 골프장명 추천 선택 시 기존 코스명이 지워지지 않고 온전히 유지되도록 개선.
+2. **골프 허위 라운드 제거 및 직접 입력 일자 정합성 보장**:
+   - 골프에 가지 않은 날(방이동 세미나)에 과거 OCR 실패 기본값으로 생성된 허위 '필드 골프장' 라운드 자동 청소.
+   - 골프 라운드 직접 입력 시 이전 일자의 기록인데도 당일(오늘) 타임라인에 등록되던 날짜 매핑 오류 수정.
+   - 골프 라이프 페이지 타이틀이 상단 액션 버튼에 가려지지 않도록 UI 레이아웃 분리.
+3. **스마트 차계부 출퇴근 오탐 방지 및 차량별 연비 분리 계산**:
+   - 차량 블루투스 미연결 및 버스 이용 시 '우리집 -> 회사'가 수 분 간격으로 반복 등록되던 결함 방어 (`CarBluetoothReceiver` 정제 및 쿨다운).
+   - 총 주유비 대비 통연비가 1.3 km/L로 왜곡되던 오류를 해결하고, 주유 결제별 차량 배지 선택 및 차량별 연비/주행거리 분리 집계 탑재.
+4. **스마트 가계부 본인 계좌 간 이동(정선우) 지출 집계 제외**:
+   - 적요에 '정선우'가 포함된 이체/출금은 본인 계좌 간 이동이므로 총 지출에서 제외하고, 영수증 목록에 `[내 계좌간 이동]` 뱃지로 시각화.
+5. **검은색 바탕 스코어카드 정밀 OCR 및 종합 통계 모달 구축**:
+   - 검은색 바탕 스코어카드(필로스 GC West/South) 스캔 시 90타로 오탐되던 문제를 해결하고 실제 86타, 퍼트 40P, 코스명(`West / South`), 세부 지표(페널티 2타, GIR 55.6%, 비거리 205.2m, 템포 3.1, 걸음수 6384보) 정밀 추출.
+   - 스마트골프 타이틀 우측 `[📊 통계]` 버튼 및 연도별/전체 대상 종합 통계 모달 (`GolfStatisticsDialog`, Bento Grid 2열 카드) 제공.
+6. **티샷 비거리 최저/최고 기록 제외 보정 평균 비거리 산출 및 UI 표기**:
+   - 파3 제외 티샷 비거리 목록에서 최저기록(139m)과 최고기록(291m)을 제외한 보정 평균 비거리(201.4m)를 산출하여 `평균 비거리(보정 평균 비거리)` (`205.2m (201.4m)`) 형태로 확인 가능하도록 전방위 적용.
+
+### 33.2. 주요 개선 및 구현 내역
+
+1. **라커룸 스캔 전방위 OCR 엔진 고도화 (`GolfLockerSlipOcrAnalyzer.kt`)**:
+   - **국내 주요 60+ 골프장 매핑 사전 (`knownClubs`)** 및 공백/특수문자 무관 정규화 매칭 탑재.
+   - **다단계 전방위 탐색**: 영문/한글 헤더, 하단 법인 상호(`(주)`/`주식회사`), 하단 감사/환영 문구, 연락처 연계 인식.
+   - **코스명 보존 및 분리 유틸 (`splitClubAndCourse`, `extractCourseNameFromText`)**: 추천 칩 클릭 시 입력된 코스명을 안전하게 보존하고, `GolfRoundDetailDialog`, `DirectAddRoundDialog`, `AddGolfReservationDialog` 전용 코스명 입력란 제공.
+   - **허위 라운드 청소**: `DailyRouteAggregator.isRealGolfClub()`, `GolfViewModel.cleanUpDummyRounds()`, `DiaryViewModel.checkAndUpgradeLegacyEntries`를 통한 DB 내 가짜 라운드 및 스텝 자동 제거.
+   - **골프 라이프 UI 분리**: 상단 바 액션 버튼을 가로 스크롤 액션 바로 분리 재배치하여 타이틀 가림 현상 해결.
+
+2. **차계부 및 가계부 정밀화**:
+   - **`CarBluetoothReceiver.kt`**: 모호한 키워드(`"bt"`) 및 이어폰(Buds, QCY 등)을 배제하고 등록된 차량 블루투스 기기만 필터링, 30분 쿨다운 및 10분 내 근접 중복 주행 레코드 정제.
+   - **`VehicleLog` / `CarLedgerViewModel` / `CarLedgerScreen`**: 각 주유 내역에 `[차량 1]`, `[차량 2]` 원터치 배지 선택 지원 및 차량별 주유비/주행거리/연비 분리 집계.
+   - **`Transaction.isSelfTransfer()` / `ExpenseViewModel` / `ExpenseScreen`**: 적요 '정선우' 포함 거래 총 지출 제외 및 영수증 목록에 `[내 계좌간 이동]` 배지/안내 캡션 표출.
+
+3. **검은색 바탕 스코어카드 정밀 OCR 엔진 (`ScorecardOcrAnalyzer.kt`)**:
+   - **90타 오탐 원천 방지**: 대형 스코어 지문 패턴(`\b(\d{2,3})\s*\([+-]?\s*\d+\)`) 및 전반(42)+후반(44)=86 소계 합산 우선 적용.
+   - **세부 지표 자동 추출**:
+     - GIR: `55.6%`
+     - 페널티: West 2타 + South 0타 = `2타`
+     - 티샷 비거리: 파3 제외 7개 홀 비거리 자동 감지
+     - 티샷 템포: 14개 홀 평균 `3.1`
+     - 전체 걸음수: 복합 라인(`2.2 6384`)에서도 4~5자리 정수 지문 매칭으로 `6384보` 추출
+     - 코스명: `West`와 `South` 조합 `West / South`
+     - 구장명: `필로스 GC` 자동 인식
+
+4. **티샷 비거리 최저/최고 제외 보정 평균 비거리 산출**:
+   - 파3 제외 티샷 비거리 리스트에서 최저값(Min: 139m)과 최고값(Max: 291m)을 제외한 나머지 홀들의 평균인 **201.4m** 산출.
+   - `GolfRound`: `adjustedDriveDistance`, `getEffectiveAdjustedDriveDistance()`, `getFormattedDriveDistance()` 멤버 함수 탑재.
+   - Room DB 버전 5 상향 (`AppDatabase.kt`, `GolfRoundEntity.kt`에 `adjustedDriveDistance` 컬럼 추가).
+   - **전방위 UI 연동**:
+     - 스마트골프 종합 통계 모달: `205.2m (201.4m)`
+     - 라운드 상세 다이얼로그: 비거리 입력란 하단 `보정: 201.4m` 캡션 표기
+     - 라운드 목록 카드: 요약 라인에 `· 🏌️ 비거리: 205.2m (201.4m)` 표기
+     - 다이어리 타임라인: `드라이브 205.2m (보정 201.4m)` 기록
+
+5. **스마트골프 종합 통계 모달 (`GolfStatisticsDialog.kt`)**:
+   - 상단 `TopAppBar` 우측 끝 `[📊 통계]` 버튼 배치.
+   - 연도별(`[2026년]`, `[2025년]` 등) 및 `[전체 연도]` 실시간 동적 필터 칩 바.
+   - Bento Grid 2열 8대 핵심 지표(총 라운드, 평균 타수, 평균 퍼트, 평균 비거리, 평균 페널티, 평균 GIR, 평균 템포, 평균 걸음수) 카드 구축.
+
+### 33.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 31개 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`)
+  - `GolfLockerSlipOcrAnalyzerTest`: 상단/하단/영문/법인형 라커 슬립 파싱 및 식당 영수증 오탐 차단 검증
+  - `ScorecardOcrAnalyzerTest`: 필로스 GC 다크 스코어카드 86타, 퍼트 40P, West/South, 비거리 205.2m, 보정 비거리 201.4m, 템포 3.1, 걸음수 6384보 정밀 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 20s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
 
 

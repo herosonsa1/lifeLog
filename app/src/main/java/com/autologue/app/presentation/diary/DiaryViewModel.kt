@@ -194,7 +194,10 @@ class DiaryViewModel @Inject constructor(
 
                 for (entry in entries) {
                     val date = entry.date.toLocalDate()
+                    val dayGolf = allGolf.filter { it.roundDate.toLocalDate() == date && DailyRouteAggregator.isRealGolfClub(it.clubName) }
                     val isDummyTitle = entry.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) || entry.title.contains("사진 촬영")
+                    val hasInvalidGolfTitle = entry.title.contains("일반 사진") || entry.title.contains("필드 골프장") || entry.placeName?.contains("일반 사진") == true || (entry.hasGolfRound && dayGolf.isEmpty())
+                    val hasInvalidGolfStep = entry.routeSteps.any { DailyRouteAggregator.isInvalidOrDummyGolfStep(it) || (it.stepType == RouteStepType.GOLF && dayGolf.isEmpty()) }
                     val hasTxCoordinates = entry.routeSteps.any { it.stepType == RouteStepType.TRANSACTION && (it.latitude != null || it.locationName != null) }
                     val hasLegacyPhotoTitle = entry.routeSteps.any { it.title.contains("사진 촬영") || it.locationName?.contains("사진 촬영") == true } || entry.movementSummary?.contains("사진 촬영") == true
                     val hasLegacyGuOnlyLocation = entry.title.contains("서울 송파") || entry.title.contains("서울 강남") || entry.title.contains("서울 영등포구") ||
@@ -207,11 +210,10 @@ class DiaryViewModel @Inject constructor(
                     }
                     val hasZeroDistanceWithValidSteps = entry.drivingDistanceKm <= 0.0 &&
                         entry.routeSteps.count { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 } >= 2
-                    val needsUpgrade = isDummyTitle || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps
+                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps
 
                     if (needsUpgrade) {
                         val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }
-                        val dayGolf = allGolf.filter { it.roundDate.toLocalDate() == date }
                         val dayVehicles = allVehicles.filter { it.timestamp.toLocalDate() == date }
                         val existingPhotos = entry.routeSteps
                             .filter { it.stepType == RouteStepType.PHOTO }
@@ -257,16 +259,22 @@ class DiaryViewModel @Inject constructor(
                                 }
                             }.distinctBy { it.uri }
 
+                        val cleanExistingSteps = entry.routeSteps.filter {
+                            !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) &&
+                            !(it.stepType == RouteStepType.GOLF && dayGolf.isEmpty())
+                        }
+
                         val upgraded = dailyRouteAggregator.aggregateForDate(
                             date = date,
                             photos = existingPhotos,
                             transactions = dayTxs,
                             golfRounds = dayGolf,
                             vehicleLogs = dayVehicles,
-                            existingRouteSteps = entry.routeSteps
+                            existingRouteSteps = cleanExistingSteps
                         ).copy(
                             id = entry.id,
-                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구")) "" else entry.summary
+                            hasGolfRound = dayGolf.isNotEmpty(),
+                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장")) "" else entry.summary
                         )
 
                         val finalUpgraded = if (upgraded.summary.isBlank()) {
@@ -276,8 +284,11 @@ class DiaryViewModel @Inject constructor(
                                 transactions = dayTxs,
                                 golfRounds = dayGolf,
                                 vehicleLogs = dayVehicles,
-                                existingRouteSteps = entry.routeSteps
-                            ).copy(id = entry.id)
+                                existingRouteSteps = cleanExistingSteps
+                            ).copy(
+                                id = entry.id,
+                                hasGolfRound = dayGolf.isNotEmpty()
+                            )
                         } else upgraded
 
                         diaryRepository.updateDiaryEntry(finalUpgraded)

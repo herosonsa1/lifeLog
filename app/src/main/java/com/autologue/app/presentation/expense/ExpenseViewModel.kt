@@ -6,6 +6,7 @@ import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.TransactionRule
+import com.autologue.app.domain.model.isSelfTransfer
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.usecase.expense.ManageTransactionRulesUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -100,7 +101,7 @@ class ExpenseViewModel @Inject constructor(
             }
         }
 
-        val expenseOnly = filtered.filter { it.category != ExpenseCategory.INCOME }
+        val expenseOnly = filtered.filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
         val totalExp = expenseOnly.sumOf { it.amount }
         val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
         val byCat = expenseOnly.groupBy { it.category }

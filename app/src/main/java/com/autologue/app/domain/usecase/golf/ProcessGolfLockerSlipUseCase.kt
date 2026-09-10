@@ -17,16 +17,33 @@ class ProcessGolfLockerSlipUseCase @Inject constructor(
     private val vehicleRepository: VehicleRepository,
     private val transactionRepository: TransactionRepository
 ) {
-    suspend operator fun invoke(result: GolfLockerSlipResult, photoUri: String?): GolfRound {
+    suspend operator fun invoke(result: GolfLockerSlipResult, photoUri: String?): GolfRound? {
+        // [유효성 검증] 유효한 라커 슬립이 아니거나 일반 사진인 경우 골프 라운드 및 다이어리 스텝 생성 거부
+        if (!result.isLockerSlip || result.clubName == "일반 사진") {
+            return null
+        }
+
         val teeOff = result.teeOffTime ?: LocalTime.of(7, 30)
         val startTime = LocalDateTime.of(result.date, teeOff)
         val endTime = startTime.plusHours(5).plusMinutes(30)
 
         // 1. Save or Update GolfRound
         val existingRound = golfRepository.getGolfRoundByDate(result.date)
+        val (baseClub, courseFromClub) = splitClubAndCourse(result.clubName)
+        val rawCourse = result.courseName?.trim()?.ifBlank { null } ?: courseFromClub.ifBlank { null }
+        val cleanCourseSuffix = if (!rawCourse.isNullOrBlank()) {
+            if (rawCourse.endsWith("코스")) rawCourse else "$rawCourse 코스"
+        } else null
+
+        val finalClubName = if (cleanCourseSuffix != null && !baseClub.contains(cleanCourseSuffix)) {
+            "$baseClub ($cleanCourseSuffix)"
+        } else {
+            result.clubName
+        }
+
         val memoParts = mutableListOf<String>()
+        if (!cleanCourseSuffix.isNullOrBlank()) memoParts.add("코스: $cleanCourseSuffix")
         if (!result.lockerNumber.isNullOrBlank()) memoParts.add("락커: ${result.lockerNumber}")
-        if (!result.courseName.isNullOrBlank()) memoParts.add("코스: ${result.courseName}")
         val memoStr = if (memoParts.isNotEmpty()) memoParts.joinToString(" / ") else "라커룸 안내지 분석"
 
         val photoList = listOfNotNull(photoUri).distinct()
@@ -34,7 +51,7 @@ class ProcessGolfLockerSlipUseCase @Inject constructor(
 
         val golfRound = if (existingRound != null) {
             val updated = existingRound.copy(
-                clubName = if (result.clubName != "필드 골프장") result.clubName else existingRound.clubName,
+                clubName = if (finalClubName != "필드 골프장") finalClubName else existingRound.clubName,
                 startTime = startTime,
                 endTime = endTime,
                 memo = memoStr,
@@ -46,7 +63,7 @@ class ProcessGolfLockerSlipUseCase @Inject constructor(
             updated
         } else {
             val newRound = GolfRound(
-                clubName = result.clubName,
+                clubName = finalClubName,
                 roundDate = startTime,
                 golfType = GolfType.FIELD,
                 startTime = startTime,

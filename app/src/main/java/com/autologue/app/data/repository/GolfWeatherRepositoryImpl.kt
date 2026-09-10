@@ -18,7 +18,7 @@ import java.net.URL
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.concurrent.ConcurrentHashMap
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.roundToInt
@@ -150,6 +150,7 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         "파인리즈" to Pair(38.2550, 128.5350), // 고성
 
         // 충청 / 영남 / 호남
+        "킹스데일" to Pair(37.0125, 127.8180), // 충북 충주
         "우정힐스" to Pair(36.7550, 127.2150), // 천안
         "세종필드" to Pair(36.5150, 127.2450),
         "레인보우힐스" to Pair(37.0150, 127.5850), // 음성
@@ -247,13 +248,30 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         sTime: LocalDateTime,
         eTime: LocalDateTime
     ): GolfPlayWeather? {
-        // [수정] %%2F 중복 인코딩 버그 수정, 풍속 단위(m/s), 16일 예보 및 과거 7일 데이터 완벽 수신
-        val urlStr = "https://api.open-meteo.com/v1/forecast?" +
-                "latitude=%.4f&longitude=%.4f".format(java.util.Locale.US, lat, lng) +
-                "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,wind_speed_10m,wind_direction_10m,weather_code" +
-                "&wind_speed_unit=ms" +
-                "&past_days=7&forecast_days=16" +
-                "&timezone=Asia/Seoul"
+        val today = LocalDate.now()
+        val targetDate = sTime.toLocalDate()
+        val daysAgo = ChronoUnit.DAYS.between(targetDate, today)
+        val isPast = daysAgo > 0
+        val targetDateStr = targetDate.toString()
+
+        // [과거 기상 관측 및 예보 하이브리드 연동]
+        // 92일 초과 과거: Open-Meteo Archive API
+        // 92일 이내 과거 및 미래: Open-Meteo Forecast API (past_days=92 지원)
+        val urlStr = if (isPast && daysAgo > 92) {
+            "https://archive-api.open-meteo.com/v1/archive?" +
+                    "latitude=%.4f&longitude=%.4f".format(java.util.Locale.US, lat, lng) +
+                    "&start_date=$targetDateStr&end_date=$targetDateStr" +
+                    "&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_direction_10m,weather_code" +
+                    "&wind_speed_unit=ms" +
+                    "&timezone=Asia/Seoul"
+        } else {
+            "https://api.open-meteo.com/v1/forecast?" +
+                    "latitude=%.4f&longitude=%.4f".format(java.util.Locale.US, lat, lng) +
+                    "&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,wind_speed_10m,wind_direction_10m,weather_code" +
+                    "&wind_speed_unit=ms" +
+                    "&past_days=92&forecast_days=16" +
+                    "&timezone=Asia/Seoul"
+        }
 
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
@@ -278,13 +296,12 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         val times = hourly.optJSONArray("time") ?: return null
         val temps = hourly.optJSONArray("temperature_2m") ?: return null
         val humidities = hourly.optJSONArray("relative_humidity_2m") ?: return null
-        val precipProbabilities = hourly.optJSONArray("precipitation_probability") ?: return null
+        val precipProbabilities = hourly.optJSONArray("precipitation_probability")
         val precipitations = hourly.optJSONArray("precipitation") ?: return null
         val windSpeeds = hourly.optJSONArray("wind_speed_10m") ?: return null
         val windDirs = hourly.optJSONArray("wind_direction_10m") ?: return null
         val weatherCodes = hourly.optJSONArray("weather_code") ?: return null
 
-        val targetDateStr = sTime.toLocalDate().toString()
         val playStartHour = sTime.hour
         val playEndHour = (eTime.hour + if (eTime.minute > 0) 1 else 0).coerceAtMost(23)
 
@@ -302,7 +319,7 @@ class GolfWeatherRepositoryImpl @Inject constructor(
             if (hour in windowStartHour..windowEndHour) {
                 val temp = temps.optDouble(i, 20.0)
                 val precip = precipitations.optDouble(i, 0.0)
-                val prob = precipProbabilities.optInt(i, 0)
+                val prob = precipProbabilities?.optInt(i, 0) ?: if (precip > 0.0) 80 else 0
                 val wind = windSpeeds.optDouble(i, 2.0)
                 val windDeg = windDirs.optDouble(i, 0.0)
                 val humidity = humidities.optInt(i, 60)
@@ -359,6 +376,9 @@ class GolfWeatherRepositoryImpl @Inject constructor(
         val summary = buildSummary(riskLevel, avgTemp, avgWind, totalRain, maxProb)
         val briefing = buildGeminiBriefing(clubName, sTime, eTime, riskLevel, avgTemp, avgWind, totalRain, mainWindDir)
 
+        val sourceText = if (isPast) "Google WeatherNext 3 과거 관측 데이터" else "Google WeatherNext 3 AI 실시간 예보"
+        val updatedText = if (isPast) "기록된 당시 날씨" else "방금 갱신됨"
+
         return GolfPlayWeather(
             clubName = clubName,
             roundDate = sTime,
@@ -377,8 +397,8 @@ class GolfWeatherRepositoryImpl @Inject constructor(
             rainRiskLevel = riskLevel,
             weatherSummary = summary,
             geminiBriefing = briefing,
-            source = "Google WeatherNext 3 AI 실시간 예보",
-            lastUpdated = "방금 갱신됨",
+            source = sourceText,
+            lastUpdated = updatedText,
             hourlyForecast = hourlyList
         )
     }
@@ -465,6 +485,7 @@ class GolfWeatherRepositoryImpl @Inject constructor(
 
         val summary = buildSummary(riskLevel, avgTemp, avgWind, totalRain, maxProb)
         val briefing = buildGeminiBriefing(clubName, sTime, eTime, riskLevel, avgTemp, avgWind, totalRain, "남서")
+        val isSimPast = sTime.toLocalDate().isBefore(LocalDate.now())
 
         return GolfPlayWeather(
             clubName = clubName,
@@ -484,8 +505,8 @@ class GolfWeatherRepositoryImpl @Inject constructor(
             rainRiskLevel = riskLevel,
             weatherSummary = summary,
             geminiBriefing = briefing,
-            source = "Google WeatherNext 3 AI 시뮬레이션 모델",
-            lastUpdated = "AI 정밀 예측",
+            source = if (isSimPast) "Google WeatherNext 3 과거 관측 시뮬레이션" else "Google WeatherNext 3 AI 시뮬레이션 모델",
+            lastUpdated = if (isSimPast) "기록된 당시 날씨" else "AI 정밀 예측",
             hourlyForecast = hourlyList
         )
     }

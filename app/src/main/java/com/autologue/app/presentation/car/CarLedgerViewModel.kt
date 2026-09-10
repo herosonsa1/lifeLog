@@ -10,6 +10,7 @@ import com.autologue.app.data.preferences.VehicleMaintenancePreferences
 import com.autologue.app.data.preferences.VehicleProfile
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
+import com.autologue.app.domain.model.getAssignedVehicleId
 import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
@@ -110,27 +111,45 @@ class CarLedgerViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 vehicleRepository.getAllVehicleLogsFlow(),
-                diaryRepository.getDiaryEntriesFlow()
-            ) { logs, diaryEntries ->
-                val fuelLogs = logs.filter { it.logType == VehicleLogType.REFUELING }
-                val totalFuel = fuelLogs.sumOf { it.fuelCost }
-                val latest = fuelLogs.firstOrNull()?.daysSinceLastFuel
+                diaryRepository.getDiaryEntriesFlow(),
+                multiVehiclePreferences.selectedVehicleId
+            ) { logs, diaryEntries, selectedId ->
+                val vehicleProfile = _uiState.value.vehicles.find { it.id == selectedId }
+                val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
 
-                val vehicleLogDist = logs.sumOf { it.tripDistanceKm }
-                val diaryDist = diaryEntries.sumOf { entry ->
-                    if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
-                    else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
-                }
-                val totalDist = if (vehicleLogDist > 0.0) maxOf(vehicleLogDist, diaryDist) else diaryDist
+                // 선택된 차량 기준으로 주유 로그 및 주행거리 필터링
+                val vehicleFuelLogs = logs.filter { it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId() == selectedId }
+                val totalFuel = vehicleFuelLogs.sumOf { it.fuelCost }
+                val latest = vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel
 
-                val totalFuelLiters = fuelLogs.sumOf { it.fuelAmountLiters }
-                val avgEff = if (totalDist > 0.0 && totalFuelLiters > 0.0) {
+                val vehicleDrivingLogs = logs.filter { it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId() == selectedId }
+                val vehicleLogDist = vehicleDrivingLogs.sumOf { it.tripDistanceKm }
+
+                // 다이어리 주행거리는 기본 차량(car_1)에만 보조 반영
+                val diaryDist = if (selectedId == "car_1") {
+                    diaryEntries.sumOf { entry ->
+                        if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
+                        else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+                    }
+                } else 0.0
+
+                val totalDist = if (vehicleLogDist > 0.0) {
+                    if (selectedId == "car_1") maxOf(vehicleLogDist, diaryDist) else vehicleLogDist
+                } else diaryDist
+
+                val totalFuelLiters = vehicleFuelLogs.sumOf { it.fuelAmountLiters }
+                val rawEff = if (totalDist > 0.0 && totalFuelLiters > 0.0) {
                     Math.round((totalDist / totalFuelLiters) * 10.0) / 10.0
-                } else {
-                    12.5
+                } else null
+
+                // 현실적인 연비 범위(4.0 ~ 30.0 km/L) 외의 수치는 목표/공인 연비로 보정
+                val avgEff = when {
+                    rawEff != null && rawEff in 4.0..30.0 -> rawEff
+                    else -> targetEff
                 }
 
                 _uiState.value = _uiState.value.copy(
+                    selectedVehicleId = selectedId,
                     logs = logs,
                     totalFuelExpense = totalFuel,
                     latestIntervalDays = latest,
@@ -138,6 +157,19 @@ class CarLedgerViewModel @Inject constructor(
                     averageEfficiencyKmPerL = avgEff
                 )
             }.collectLatest { }
+        }
+    }
+
+    fun assignVehicleToFuelLog(logId: Long, targetVehicleId: String) {
+        viewModelScope.launch {
+            val log = vehicleRepository.getVehicleLogById(logId) ?: return@launch
+            val currentNote = log.note ?: ""
+            // 기존 [car_1], [car_2], [차량 1], [차량 2] 태그 제거 후 새 차량 태그 지정
+            val cleanNote = currentNote.replace(Regex("\\[(car_1|car_2|차량 1|차량 2)[^\\]]*\\]\\s*"), "").trim()
+            val targetVehicle = _uiState.value.vehicles.find { it.id == targetVehicleId }
+            val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
+            val newNote = "[$targetVehicleId: $vName] $cleanNote".trim()
+            vehicleRepository.updateVehicleLog(log.copy(note = newNote))
         }
     }
 

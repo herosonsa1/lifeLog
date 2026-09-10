@@ -129,8 +129,9 @@ class DailyRouteAggregator @Inject constructor(
             )
         }
 
-        // 3. Map Golf Rounds
-        for (golf in golfRounds) {
+        // 3. Map Golf Rounds (실제 유효한 골프장명을 가진 라운드만 스텝으로 등록)
+        val validGolfRounds = golfRounds.filter { isRealGolfClub(it.clubName) }
+        for (golf in validGolfRounds) {
             val typeStr = if (golf.golfType == GolfType.FIELD) "필드" else "스크린"
             steps.add(
                 RouteStep(
@@ -183,14 +184,15 @@ class DailyRouteAggregator @Inject constructor(
             }
         }
 
-        // 5. 지능형 중복 제거 및 시간순 정렬
-        val uniqueSteps = deduplicateRouteSteps(steps)
+        // 5. 지능형 중복 제거 및 시간순 정렬 (허위/더미 골프 스텝 및 금융 입출금 스텝 제외)
+        val validSteps = steps.filter { !isIncomeOrTransferStep(it) && !isInvalidOrDummyGolfStep(it) }
+        val uniqueSteps = deduplicateRouteSteps(validSteps)
 
         // Extract Distinct Place Names for Itinerary Chain (결제 정보는 지도 이동 경로에서 제외하고 실제 방문 장소만 추출)
         val distinctPlaces = uniqueSteps
             .filter { it.stepType != RouteStepType.TRANSACTION }
             .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
-            .filter { !it.contains("촬영") }
+            .filter { !it.contains("촬영") && !it.contains("일반 사진") && !it.contains("필드 골프장") }
             .distinct()
 
         val movementSummary = if (distinctPlaces.isNotEmpty()) {
@@ -200,15 +202,17 @@ class DailyRouteAggregator @Inject constructor(
         }
 
         // Generate Smart Title
-        val hasGolf = golfRounds.isNotEmpty() || uniqueSteps.any { it.stepType == RouteStepType.GOLF || it.title.contains("CC") }
+        val realGolfSteps = uniqueSteps.filter { it.stepType == RouteStepType.GOLF && isRealGolfClub(it.locationName ?: it.title) }
+        val hasGolf = validGolfRounds.isNotEmpty() || realGolfSteps.isNotEmpty()
         val repStep = uniqueSteps.firstOrNull { it.stepType != RouteStepType.TRANSACTION && it.latitude != null }
         val mainPlace = distinctPlaces.firstOrNull() ?: repStep?.locationName ?: "서울 방이동"
 
         val title = when {
             hasGolf -> {
-                val golfPlace = uniqueSteps.firstOrNull { it.stepType == RouteStepType.GOLF || it.title.contains("CC") }?.title ?: "골프 라운드"
-                val other = distinctPlaces.firstOrNull { !it.contains("CC") && !it.contains("골프") }
-                if (other != null) "$golfPlace & $other" else "$golfPlace 기록"
+                val golfPlace = realGolfSteps.firstOrNull()?.locationName ?: realGolfSteps.firstOrNull()?.title ?: validGolfRounds.firstOrNull()?.clubName ?: "골프"
+                val cleanGolfTitle = if (golfPlace.endsWith("라운드") || golfPlace.endsWith("라운딩")) golfPlace else "$golfPlace 라운딩"
+                val other = distinctPlaces.firstOrNull { !it.contains("CC") && !it.contains("골프") && isRealGolfClub(it) }
+                if (other != null) "$cleanGolfTitle & $other" else cleanGolfTitle
             }
             distinctPlaces.size >= 2 -> "${distinctPlaces.first()} & ${distinctPlaces[1]}"
             distinctPlaces.size == 1 -> "${distinctPlaces.first()} 일정"
@@ -347,6 +351,32 @@ class DailyRouteAggregator @Inject constructor(
                 }
             }
             return false
+        }
+
+        /**
+         * '일반 사진 라운드', '필드 골프장 라운드' 등 라커룸 OCR 오탐으로 생성된 비정상 더미 골프 스텝 판별.
+         */
+        fun isInvalidOrDummyGolfStep(step: RouteStep): Boolean {
+            if (step.stepType != RouteStepType.GOLF) return false
+            val title = step.title
+            val desc = step.description ?: ""
+            val loc = step.locationName ?: ""
+            return title.contains("일반 사진") || title.contains("필드 골프장") || title == "골프 라운드" ||
+                    loc.contains("일반 사진") || loc.contains("필드 골프장") ||
+                    title.contains("GOVERNMENT", ignoreCase = true) || title.contains("acce", ignoreCase = true) ||
+                    desc.contains("일반 사진") || desc.contains("필드 골프장") ||
+                    !isRealGolfClub(loc.ifBlank { title.replace(" 라운드", "").replace(" 라운딩", "") })
+        }
+
+        /**
+         * 유효한 실제 골프장명인지 판별 (가짜/더미 골프장명 차단)
+         */
+        fun isRealGolfClub(clubName: String?): Boolean {
+            if (clubName.isNullOrBlank()) return false
+            val norm = clubName.trim()
+            if (norm in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패", "클럽하우스")) return false
+            if (norm.contains("일반 사진") || norm.contains("필드 골프장") || norm.contains("OCR") || norm.length > 30) return false
+            return true
         }
 
         /**

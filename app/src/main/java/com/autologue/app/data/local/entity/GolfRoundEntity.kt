@@ -23,5 +23,13 @@ data class GolfRoundEntity(
     val memo: String?,
     val startTime: LocalDateTime? = null,
     val endTime: LocalDateTime? = null,
-    val companions: List<String> = emptyList()
+    val companions: List<String> = emptyList(),
+    val penaltyCount: Int? = null,
+    val girPercentage: Double? = null,
+    val averageDriveDistance: Double? = null,
+    val adjustedDriveDistance: Double? = null,
+    val averageTempo: Double? = null,
+    val steps: Int? = null,
+    val driveDistances: List<Double> = emptyList(),
+    val tempos: List<Double> = emptyList()
 )

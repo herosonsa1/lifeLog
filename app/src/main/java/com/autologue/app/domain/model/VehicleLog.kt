@@ -19,3 +19,13 @@ data class VehicleLog(
     val gasStationName: String? = null,
     val note: String? = null
 )
+
+fun VehicleLog.getAssignedVehicleId(defaultVehicleId: String = "car_1"): String {
+    val n = note ?: return defaultVehicleId
+    return when {
+        n.contains("[car_2]") || n.contains("car_2") || n.contains("차량 2") -> "car_2"
+        n.contains("[car_1]") || n.contains("car_1") || n.contains("차량 1") -> "car_1"
+        else -> defaultVehicleId
+    }
+}
+

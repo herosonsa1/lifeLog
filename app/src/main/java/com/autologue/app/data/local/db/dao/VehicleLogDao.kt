@@ -18,6 +18,9 @@ interface VehicleLogDao {
     @Query("SELECT * FROM vehicle_logs WHERE timestamp = :timestamp AND fuelCost = :fuelCost AND gasStationName = :gasStationName LIMIT 1")
     suspend fun findExactFuelLog(timestamp: java.time.LocalDateTime, fuelCost: Long, gasStationName: String?): VehicleLogEntity?
 
+    @Query("SELECT * FROM vehicle_logs WHERE id = :id LIMIT 1")
+    suspend fun getVehicleLogById(id: Long): VehicleLogEntity?
+
     @Query("SELECT COALESCE(SUM(tripDistanceKm), 0.0) FROM vehicle_logs WHERE timestamp BETWEEN :start AND :end")
     suspend fun getDrivingDistanceBetween(start: Long, end: Long): Double
 

@@ -64,12 +64,20 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                 runCatching { multiVehiclePreferences.findVehicleByBluetooth(deviceName) }.getOrNull()
             } else null
 
-            // 2. 단일 거점 설정의 기기명 또는 일반 카오디오 키워드 매칭
+            // 2. 단일 거점 설정의 기기명 또는 실제 차량 인포테인먼트 키워드 매칭
+            // [오탐 방지] "bt" 등 이어폰/헤드폰과 겹치는 모호한 약어 키워드는 완전 제거
             val isCarDevice = matchedVehicle != null || (if (targetDevice.isNotBlank()) {
                 deviceName.contains(targetDevice, ignoreCase = true)
             } else {
-                val carKeywords = listOf("car", "bt", "auto", "hyundai", "kia", "genesis", "bmw", "audi", "benz", "chevy", "k5", "k7", "k8", "k9", "sonata", "avante", "grandeur")
-                carKeywords.any { deviceName.contains(it, ignoreCase = true) }
+                val carKeywords = listOf(
+                    "car", "auto", "hyundai", "kia", "genesis", "bmw", "audi", "benz", "mercedes",
+                    "chevy", "chevrolet", "k3", "k5", "k7", "k8", "k9", "sonata", "avante", "grandeur",
+                    "tucson", "santafe", "sorento", "sportage", "carnival", "palisade", "casper",
+                    "handsfree", "carplay", "android auto"
+                )
+                // 기기명이 비어있거나 단순 이어폰 키워드(buds, qcy, airpod 등)인 경우 배제
+                val isEarphone = listOf("buds", "airpod", "qcy", "earphone", "headset", "headphone", "wh-", "wf-").any { deviceName.contains(it, ignoreCase = true) }
+                !isEarphone && carKeywords.any { deviceName.contains(it, ignoreCase = true) }
             })
 
             if (!isCarDevice) return

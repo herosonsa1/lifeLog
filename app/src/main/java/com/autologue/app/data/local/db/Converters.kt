@@ -43,6 +43,17 @@ class Converters {
     }
 
     @TypeConverter
+    fun fromDoubleList(value: String?): List<Double> {
+        if (value.isNullOrEmpty()) return emptyList()
+        return value.split(",").mapNotNull { it.trim().toDoubleOrNull() }
+    }
+
+    @TypeConverter
+    fun toDoubleList(list: List<Double>?): String {
+        return list?.joinToString(",") ?: ""
+    }
+
+    @TypeConverter
     fun fromPaymentMethod(value: String?): PaymentMethod = value?.let { runCatching { enumValueOf<PaymentMethod>(it) }.getOrDefault(PaymentMethod.UNKNOWN) } ?: PaymentMethod.UNKNOWN
 
     @TypeConverter

@@ -14,7 +14,7 @@ import com.autologue.app.data.local.entity.*
         GolfRoundEntity::class,
         TransactionRuleEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

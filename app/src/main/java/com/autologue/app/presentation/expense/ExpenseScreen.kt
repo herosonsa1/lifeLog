@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
+import com.autologue.app.domain.model.isSelfTransfer
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 import java.time.LocalDate
@@ -557,6 +558,7 @@ fun SaaSTransactionRow(
     transaction: Transaction,
     onClick: () -> Unit
 ) {
+    val isSelf = transaction.isSelfTransfer()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -566,10 +568,20 @@ fun SaaSTransactionRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = transaction.merchantName,
-                style = AppTypography.h2
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = transaction.merchantName,
+                    style = AppTypography.h2
+                )
+                if (isSelf) {
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    MetricBadge(
+                        text = "내 계좌간 이동",
+                        textColor = Indigo700,
+                        backgroundColor = Indigo50
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(Spacing.xxs))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -581,13 +593,16 @@ fun SaaSTransactionRow(
                 )
                 Text("·", style = AppTypography.captionMuted)
                 Text(
-                    text = transaction.category.displayName,
-                    style = AppTypography.caption.copy(color = AppColors.primary, fontWeight = FontWeight.SemiBold)
+                    text = if (isSelf) "계좌이동 (미집계)" else transaction.category.displayName,
+                    style = AppTypography.caption.copy(
+                        color = if (isSelf) Indigo600 else AppColors.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 )
                 if (transaction.cardOrBankName != null) {
                     Text("·", style = AppTypography.captionMuted)
                     Text(
-                        text = transaction.cardOrBankName!!,
+                        text = transaction.cardOrBankName,
                         style = AppTypography.captionMuted
                     )
                 }
@@ -607,15 +622,28 @@ fun SaaSTransactionRow(
                 text = (if (isIncome) "+" else "") + "%,d원".format(transaction.amount),
                 style = AppTypography.h2.copy(
                     fontWeight = FontWeight.Bold,
-                    color = if (isIncome) Emerald600 else Slate900
+                    color = when {
+                        isIncome -> Emerald600
+                        isSelf -> Slate500
+                        else -> Slate900
+                    }
                 )
             )
             Spacer(modifier = Modifier.height(Spacing.xxs))
-            Text(
-                text = "수정/메모 →",
-                fontSize = 11.sp,
-                color = Slate400
-            )
+            if (isSelf) {
+                Text(
+                    text = "지출 미집계",
+                    fontSize = 11.sp,
+                    color = Indigo600,
+                    fontWeight = FontWeight.Medium
+                )
+            } else {
+                Text(
+                    text = "수정/메모 →",
+                    fontSize = 11.sp,
+                    color = Slate400
+                )
+            }
         }
     }
 }

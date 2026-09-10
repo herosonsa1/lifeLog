@@ -36,6 +36,14 @@ class VehicleRepositoryImpl @Inject constructor(
         vehicleLogDao.insertVehicleLog(log.toEntity())
     }
 
+    override suspend fun getVehicleLogById(id: Long): VehicleLog? = withContext(Dispatchers.IO) {
+        vehicleLogDao.getVehicleLogById(id)?.toDomain()
+    }
+
+    override suspend fun updateVehicleLog(log: VehicleLog): Unit = withContext(Dispatchers.IO) {
+        vehicleLogDao.updateVehicleLog(log.toEntity())
+    }
+
     override suspend fun getLatestRefuelingLog(): VehicleLog? = withContext(Dispatchers.IO) {
         vehicleLogDao.getLatestRefuelingLog()?.toDomain()
     }
@@ -183,9 +191,10 @@ class VehicleRepositoryImpl @Inject constructor(
                 continue
             }
 
-            // 2. 동일 날짜 중복 주행 레코드 정리
+            // 2. 동일 날짜 중복/근접 주행 레코드 정리 (최초 1건만 유지)
             val dateKey = "${log.timestamp.toLocalDate()}_${log.logType}"
-            if (dateKey in seenDates && log.logType == VehicleLogType.TRIP_DRIVING) {
+            val isCommute = note.contains("출근") || note.contains("퇴근") || note.contains("출퇴근")
+            if (dateKey in seenDates && log.logType == VehicleLogType.TRIP_DRIVING && isCommute) {
                 vehicleLogDao.deleteVehicleLogById(log.id)
                 modifiedCount++
                 continue
@@ -204,7 +213,7 @@ class VehicleRepositoryImpl @Inject constructor(
                 )
                 vehicleLogDao.updateVehicleLog(updated)
                 modifiedCount++
-            } else if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근") && log.tripDistanceKm != commuteDistanceKm) {
+            } else if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근") && commuteDistanceKm > 0.0 && log.tripDistanceKm != commuteDistanceKm) {
                 val updated = log.copy(
                     note = "출퇴근 왕복 주행 ($homeName ↔ $companyName)",
                     tripDistanceKm = commuteDistanceKm
@@ -226,9 +235,24 @@ class VehicleRepositoryImpl @Inject constructor(
         companyName: String,
         distanceKm: Double
     ): Long = withContext(Dispatchers.IO) {
+        val now = java.time.LocalDateTime.now()
+        // [중복 방어] 30분 이내에 이미 출근/퇴근 주행 기록이 있으면 중복 삽입 차단
+        val directionTag = if (isToWork) "출근" else "퇴근"
+        val existingRecent = vehicleLogDao.getAllVehicleLogsSync()
+            .filter { it.logType == VehicleLogType.TRIP_DRIVING && it.timestamp.toLocalDate() == now.toLocalDate() }
+            .filter { it.note?.contains(directionTag) == true }
+            .any { 
+                java.time.Duration.between(it.timestamp, now).abs().toMinutes() < 30
+            }
+
+        if (existingRecent) {
+            android.util.Log.d("VehicleRepository", "동일 방향 30분 이내 출퇴근 중복 기록 스킵: $directionTag")
+            return@withContext -1L
+        }
+
         val direction = if (isToWork) "출근 주행 ($homeName ➔ $companyName)" else "퇴근 주행 ($companyName ➔ $homeName)"
         val log = VehicleLog(
-            timestamp = java.time.LocalDateTime.now(),
+            timestamp = now,
             logType = VehicleLogType.TRIP_DRIVING,
             tripDistanceKm = distanceKm,
             note = direction

@@ -8,6 +8,8 @@ interface VehicleRepository {
     fun getAllVehicleLogsFlow(): Flow<List<VehicleLog>>
     fun getRefuelingLogsFlow(): Flow<List<VehicleLog>>
     suspend fun insertVehicleLog(log: VehicleLog): Long
+    suspend fun getVehicleLogById(id: Long): VehicleLog?
+    suspend fun updateVehicleLog(log: VehicleLog)
     suspend fun getLatestRefuelingLog(): VehicleLog?
     suspend fun getDrivingDistanceBetween(start: LocalDate, end: LocalDate): Double
     suspend fun cleanDuplicates(): Int

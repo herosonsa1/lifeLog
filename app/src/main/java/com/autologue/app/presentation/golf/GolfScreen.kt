@@ -46,6 +46,8 @@ import com.autologue.app.domain.model.GolfPlayWeather
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.GolfType
 import com.autologue.app.domain.model.getDisplayClubName
+import com.autologue.app.domain.model.splitClubAndCourse
+import com.autologue.app.domain.model.extractCourseNameFromText
 import com.autologue.app.presentation.common.AutoLogueTextField
 import com.autologue.app.presentation.common.AutoLogueCompactInputRow
 import com.autologue.app.presentation.common.AutoLogueActionChipButton
@@ -70,6 +72,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -132,44 +135,68 @@ fun GolfScreen(
                         }
                     },
                     actions = {
-                        AutoLogueOutlinedButton(
-                            text = "예약 추가",
-                            icon = Icons.Default.AddCircle,
-                            onClick = { viewModel.openReservationDialog() },
-                            contentColor = MenuColors.golf,
-                            containerColor = MenuColors.golfBg,
-                            borderColor = MenuColors.golfBorder
+                        AutoLogueActionChipButton(
+                            text = "통계",
+                            icon = Icons.Default.BarChart,
+                            onClick = { viewModel.openStatisticsDialog() },
+                            containerColor = Color(0xFFEFF6FF),
+                            borderColor = Color(0xFF93C5FD),
+                            contentColor = Color(0xFF1D4ED8)
                         )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        AutoLogueOutlinedButton(
-                            text = "라커룸 스캔",
-                            icon = Icons.Default.ReceiptLong,
-                            onClick = {
-                                globalLockerSlipPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            contentColor = MenuColors.golf,
-                            containerColor = MenuColors.golfBg,
-                            borderColor = MenuColors.golfBorder
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        AutoLogueOutlinedButton(
-                            text = "스코어카드 스캔",
-                            icon = Icons.Default.CameraAlt,
-                            onClick = {
-                                globalScorecardPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            contentColor = MenuColors.golf,
-                            containerColor = MenuColors.golfBg,
-                            borderColor = MenuColors.golfBorder
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.lg))
+                        Spacer(modifier = Modifier.width(Spacing.sm))
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
                 )
+                // 상단 타이틀이 가려지지 않도록 액션 버튼들을 가로 스크롤 액션 바로 배치
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(start = Spacing.lg, end = Spacing.lg, bottom = Spacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AutoLogueOutlinedButton(
+                        text = "기록 직접 입력",
+                        icon = Icons.Default.EditCalendar,
+                        onClick = { viewModel.openDirectAddDialog() },
+                        contentColor = MenuColors.golf,
+                        containerColor = MenuColors.golfBg,
+                        borderColor = MenuColors.golfBorder
+                    )
+                    AutoLogueOutlinedButton(
+                        text = "예약 추가",
+                        icon = Icons.Default.AddCircle,
+                        onClick = { viewModel.openReservationDialog() },
+                        contentColor = MenuColors.golf,
+                        containerColor = MenuColors.golfBg,
+                        borderColor = MenuColors.golfBorder
+                    )
+                    AutoLogueOutlinedButton(
+                        text = "라커룸 스캔",
+                        icon = Icons.Default.ReceiptLong,
+                        onClick = {
+                            globalLockerSlipPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        contentColor = MenuColors.golf,
+                        containerColor = MenuColors.golfBg,
+                        borderColor = MenuColors.golfBorder
+                    )
+                    AutoLogueOutlinedButton(
+                        text = "스코어카드 스캔",
+                        icon = Icons.Default.CameraAlt,
+                        onClick = {
+                            globalScorecardPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        contentColor = MenuColors.golf,
+                        containerColor = MenuColors.golfBg,
+                        borderColor = MenuColors.golfBorder
+                    )
+                }
                 HairlineDivider()
             }
         }
@@ -320,13 +347,27 @@ fun GolfScreen(
                 onSetScorecard = { uri -> viewModel.setScorecardPhoto(uiState.selectedRound!!.id, uri) },
                 onScanScorecard = { uri -> viewModel.scanScorecard(uiState.selectedRound!!.id, uri) },
                 onOpenWeatherDetail = { viewModel.openWeatherDetail(uiState.selectedRound!!) },
-                onSaveDetails = { name, score, putts, memo, sTime, eTime, companions ->
+                onSaveDetails = { name, score, putts, memo, sTime, eTime, companions, lat, lng, penalty, gir, drive, tempo, steps ->
                     viewModel.updateRoundDetails(
                         uiState.selectedRound!!.id,
-                        name, score, putts, memo, sTime, eTime, companions
+                        name, score, putts, memo, sTime, eTime, companions, lat, lng,
+                        penalty, gir, drive, tempo, steps
                     )
                 },
+                onFetchWeather = { cName, rDate, sTime, eTime, lat, lng ->
+                    viewModel.fetchWeatherForLocationAndTime(cName, rDate, sTime, eTime, lat, lng)
+                },
                 onDelete = { viewModel.deleteRound(uiState.selectedRound!!.id) }
+            )
+        }
+
+        // Golf Statistics Dialog (종합 통계 모달)
+        if (uiState.isStatisticsDialogOpen) {
+            GolfStatisticsDialog(
+                statistics = uiState.getStatistics(),
+                selectedYear = uiState.selectedStatsYear,
+                onSelectYear = { viewModel.selectStatsYear(it) },
+                onDismiss = { viewModel.closeStatisticsDialog() }
             )
         }
 
@@ -335,6 +376,22 @@ fun GolfScreen(
             PhotoPreviewDialog(
                 photoUrl = uiState.selectedPhotoPreviewUrl!!,
                 onDismiss = { viewModel.closePhotoPreview() }
+            )
+        }
+
+        // Golf Direct Add Round Dialog (이전 라운드 직접 입력)
+        if (uiState.isDirectAddDialogOpen) {
+            AddDirectGolfRoundDialog(
+                onDismiss = { viewModel.closeDirectAddDialog() },
+                onConfirm = { clubName, courseName, roundDate, startTime, endTime, totalScore, totalPutts, companions, estimatedGreenFee, memo, lat, lng ->
+                    viewModel.addDirectGolfRound(
+                        clubName, courseName, roundDate, startTime, endTime,
+                        totalScore, totalPutts, companions, estimatedGreenFee, memo, lat, lng
+                    )
+                },
+                onFetchWeather = { cName, rDate, sTime, eTime, lat, lng ->
+                    viewModel.fetchWeatherForLocationAndTime(cName, rDate, sTime, eTime, lat, lng)
+                }
             )
         }
 
@@ -475,8 +532,8 @@ fun SaaSGolfRow(
             }
         }
 
-        // Companions & Green fee summary if present
-        if (round.companions.isNotEmpty() || round.greenFeeExpense > 0) {
+        // Companions & Green fee & Drive summary if present
+        if (round.companions.isNotEmpty() || round.greenFeeExpense > 0 || round.averageDriveDistance != null) {
             Spacer(modifier = Modifier.height(Spacing.xxs))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -493,6 +550,15 @@ fun SaaSGolfRow(
                         text = "· 💳 %,d원".format(round.greenFeeExpense),
                         style = AppTypography.captionMuted
                     )
+                }
+                if (round.averageDriveDistance != null) {
+                    val driveStr = round.getFormattedDriveDistance()
+                    if (driveStr != null) {
+                        Text(
+                            text = "· 🏌️ 비거리: $driveStr",
+                            style = AppTypography.captionMuted
+                        )
+                    }
                 }
             }
         }
@@ -512,25 +578,151 @@ fun GolfRoundDetailDialog(
     onSetScorecard: (String) -> Unit,
     onScanScorecard: (Uri) -> Unit,
     onOpenWeatherDetail: () -> Unit = {},
-    onSaveDetails: (clubName: String, totalScore: Int?, totalPutts: Int?, memo: String?, startTime: LocalDateTime?, endTime: LocalDateTime?, companions: List<String>) -> Unit,
+    onSaveDetails: (clubName: String, totalScore: Int?, totalPutts: Int?, memo: String?, startTime: LocalDateTime?, endTime: LocalDateTime?, companions: List<String>, latitude: Double?, longitude: Double?, penaltyCount: Int?, girPercentage: Double?, averageDriveDistance: Double?, averageTempo: Double?, steps: Int?) -> Unit,
+    onFetchWeather: suspend (clubName: String, roundDate: LocalDateTime, startTime: LocalDateTime?, endTime: LocalDateTime?, latitude: Double?, longitude: Double?) -> GolfPlayWeather? = { _, _, _, _, _, _ -> null },
     onDelete: () -> Unit
 ) {
-    var clubName by remember { mutableStateOf(round.getDisplayClubName()) }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    val (initClub, initCourseFromClub) = splitClubAndCourse(round.clubName)
+    val initCourseFromMemo = extractCourseNameFromText(round.memo ?: "")
+    val initialCourse = initCourseFromClub.ifBlank { initCourseFromMemo ?: "" }
+    val initialClub = initClub.ifBlank { round.clubName }
+
+    var clubName by remember { mutableStateOf(initialClub) }
+    var courseName by remember { mutableStateOf(initialCourse) }
+    var selectedPreset by remember { mutableStateOf<GolfCoursePreset?>(null) }
+    var selectedLatitude by remember { mutableStateOf<Double?>(round.latitude) }
+    var selectedLongitude by remember { mutableStateOf<Double?>(round.longitude) }
+    var selectedAddress by remember { mutableStateOf<String?>(null) }
+    var suggestions by remember { mutableStateOf<List<GolfCoursePreset>>(emptyList()) }
+    var showSuggestions by remember { mutableStateOf(false) }
+
+    var currentWeather by remember { mutableStateOf<GolfPlayWeather?>(weather) }
+    var isWeatherLoading by remember { mutableStateOf(false) }
+
     var totalScoreText by remember { mutableStateOf(round.totalScore?.toString() ?: "") }
     var totalPuttsText by remember { mutableStateOf(round.totalPutts?.toString() ?: "") }
+    var girText by remember { mutableStateOf(round.girPercentage?.let { "$it" } ?: "") }
+    var penaltyText by remember { mutableStateOf(round.penaltyCount?.let { "$it" } ?: "") }
+    var driveText by remember { mutableStateOf(round.averageDriveDistance?.let { "$it" } ?: "") }
+    var tempoText by remember { mutableStateOf(round.averageTempo?.let { "$it" } ?: "") }
+    var stepsText by remember { mutableStateOf(round.steps?.let { "$it" } ?: "") }
+
     var memo by remember { mutableStateOf(round.memo ?: "") }
     var companionsList by remember { mutableStateOf(round.companions) }
     var newCompanionText by remember { mutableStateOf("") }
+
+    // [동기화] 스코어카드 OCR 스캔 완료 시 총 타수, 퍼트수 및 세부 지표 자동 반영
+    LaunchedEffect(round.totalScore, round.totalPutts, round.girPercentage, round.penaltyCount, round.averageDriveDistance, round.averageTempo, round.steps) {
+        if (round.totalScore != null) totalScoreText = round.totalScore.toString()
+        if (round.totalPutts != null) totalPuttsText = round.totalPutts.toString()
+        if (round.girPercentage != null) girText = round.girPercentage.toString()
+        if (round.penaltyCount != null) penaltyText = round.penaltyCount.toString()
+        if (round.averageDriveDistance != null) driveText = round.averageDriveDistance.toString()
+        if (round.averageTempo != null) tempoText = round.averageTempo.toString()
+        if (round.steps != null) stepsText = round.steps.toString()
+    }
 
     // Start and End Time calculations
     val initialStart = round.startTime ?: round.roundDate
     val initialEnd = round.endTime ?: initialStart.plusHours(if (round.golfType == GolfType.FIELD) 5 else 2).plusMinutes(30)
 
+    var selectedDate by remember { mutableStateOf(initialStart.toLocalDate()) }
     var startHour by remember { mutableIntStateOf(initialStart.hour) }
     var startMinute by remember { mutableIntStateOf(initialStart.minute) }
     var endHour by remember { mutableIntStateOf(initialEnd.hour) }
     var endMinute by remember { mutableIntStateOf(initialEnd.minute) }
     var showTimeEditDialog by remember { mutableStateOf(false) }
+
+    // 날씨 실시간 비동기 재수집 헬퍼 함수
+    fun refreshModalWeather(targetClub: String, lat: Double?, lng: Double?, date: LocalDate, sH: Int, sM: Int, eH: Int, eM: Int) {
+        coroutineScope.launch {
+            isWeatherLoading = true
+            val sTime = date.atTime(sH, sM)
+            val eTime = date.atTime(eH, eM)
+            val w = onFetchWeather(targetClub, sTime, sTime, eTime, lat, lng)
+            if (w != null) {
+                currentWeather = w
+            }
+            isWeatherLoading = false
+        }
+    }
+
+    // 진입 시 날씨가 없거나 좌표가 있을 때 백그라운드에서 실시간 동기화
+    LaunchedEffect(Unit) {
+        if (currentWeather == null) {
+            refreshModalWeather(clubName, selectedLatitude, selectedLongitude, selectedDate, startHour, startMinute, endHour, endMinute)
+        }
+    }
+
+    // 구글 캘린더 스타일의 골프장 장소 실시간 검색 (프리셋 정규화 매칭 + Geocoder 폴백)
+    LaunchedEffect(clubName) {
+        val q = clubName.trim()
+        if (q.length >= 2 && (selectedAddress == null || !clubName.contains(selectedAddress?.take(4) ?: "###"))) {
+            val normQuery = normalizeGolfName(q)
+            val queryWithoutSuffix = normQuery.replace("cc", "").replace("gc", "")
+
+            val matchedPresets = GOLF_COURSE_PRESETS.filter { preset ->
+                val normName = normalizeGolfName(preset.name)
+                val normAddr = normalizeGolfName(preset.address)
+                normName.contains(normQuery) || 
+                (queryWithoutSuffix.length >= 2 && normName.contains(queryWithoutSuffix)) ||
+                (normName.length >= 2 && normQuery.contains(normName.replace("cc", "").replace("gc", ""))) ||
+                normAddr.contains(normQuery)
+            }.sortedByDescending { preset ->
+                val normName = normalizeGolfName(preset.name)
+                when {
+                    normName == normQuery -> 100
+                    normName.startsWith(queryWithoutSuffix) -> 80
+                    normName.contains(queryWithoutSuffix) -> 60
+                    else -> 40
+                }
+            }
+
+            if (matchedPresets.isNotEmpty()) {
+                suggestions = matchedPresets.take(5)
+                showSuggestions = true
+            } else {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        if (android.location.Geocoder.isPresent()) {
+                            val geocoder = android.location.Geocoder(context, Locale.KOREA)
+                            @Suppress("DEPRECATION")
+                            val addrs = geocoder.getFromLocationName(q, 3)
+                                ?: geocoder.getFromLocationName("$q 골프장", 3)
+                            if (!addrs.isNullOrEmpty()) {
+                                val dynamicSuggestions = mutableListOf<GolfCoursePreset>()
+                                val firstAddr = addrs[0]
+                                val rawFullAddr = firstAddr.getAddressLine(0) ?: ""
+                                val cleanAddr = rawFullAddr
+                                    .replace("대한민국 ", "")
+                                    .replace(Regex("\\bKR\\b"), "")
+                                    .replace(Regex("\\s+"), " ")
+                                    .trim()
+                                val baseName = q.replace(Regex("(CC|GC|C\\.C|G\\.C|골프장|클럽하우스|컨트리클럽)", RegexOption.IGNORE_CASE), "").trim()
+                                val candidates = if (q.contains("CC", ignoreCase = true) || q.contains("GC", ignoreCase = true) || q.contains("클럽하우스")) {
+                                    listOf(q)
+                                } else {
+                                    listOf("$baseName CC", "$baseName GC")
+                                }
+                                for (cand in candidates) {
+                                    dynamicSuggestions.add(GolfCoursePreset(cand, cleanAddr, firstAddr.latitude, firstAddr.longitude))
+                                }
+                                suggestions = dynamicSuggestions
+                                showSuggestions = true
+                            } else {
+                                showSuggestions = false
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            showSuggestions = false
+        }
+    }
 
     // Photo pickers
     val scorecardPhotoPicker = rememberLauncherForActivityResult(
@@ -604,15 +796,272 @@ fun GolfRoundDetailDialog(
                         .padding(Spacing.xl),
                     verticalArrangement = Arrangement.spacedBy(Spacing.lg)
                 ) {
-                    // Club Name & Date Section
-                    AutoLogueTextField(
-                        value = clubName,
-                        onValueChange = { clubName = it },
-                        label = "골프장 / 코스명",
-                        placeholder = "예: 남촌CC, 안양CC",
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // Club Name & Location Search Section with Recommendations
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = clubName,
+                            onValueChange = {
+                                clubName = it
+                                if (selectedPreset != null && it != selectedPreset?.name) {
+                                    selectedPreset = null
+                                    selectedAddress = null
+                                    selectedLatitude = null
+                                    selectedLongitude = null
+                                }
+                            },
+                            label = { Text("골프장명 (위치 검색)") },
+                            placeholder = { Text("예: 남촌CC, 안양CC, 코리아CC") },
+                            leadingIcon = {
+                                Icon(imageVector = Icons.Default.Place, contentDescription = null, tint = Color(0xFF059669))
+                            },
+                            trailingIcon = {
+                                if (clubName.isNotBlank()) {
+                                    IconButton(onClick = {
+                                        clubName = ""
+                                        selectedPreset = null
+                                        selectedAddress = null
+                                        selectedLatitude = null
+                                        selectedLongitude = null
+                                        showSuggestions = false
+                                    }) {
+                                        Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(Spacing.xs))
+
+                        // 코스명 별도 입력 필드 (라커룸 스캔/직접 입력 코스명 온전 보존 및 자유로운 편집)
+                        OutlinedTextField(
+                            value = courseName,
+                            onValueChange = { courseName = it },
+                            label = { Text("코스명 (선택 입력)") },
+                            placeholder = { Text("예: 동/서 코스, 마운틴, 레이크, 잣나무") },
+                            leadingIcon = {
+                                Icon(imageVector = Icons.Default.Flag, contentDescription = null, tint = Color(0xFF10B981))
+                            },
+                            trailingIcon = {
+                                if (courseName.isNotBlank()) {
+                                    IconButton(onClick = { courseName = "" }) {
+                                        Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // [위치 확정 상태] 둥근 캡슐 바 (초록색 에메랄드 테마: 골프장명 + 코스명 동시 표출)
+                        if (!selectedAddress.isNullOrBlank() || selectedPreset != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val baseDisplayName = selectedPreset?.name ?: clubName
+                            val displayName = if (courseName.isNotBlank() && !baseDisplayName.contains(courseName)) {
+                                val cSuffix = if (courseName.endsWith("코스")) courseName else "$courseName 코스"
+                                "$baseDisplayName ($cSuffix)"
+                            } else {
+                                baseDisplayName
+                            }
+                            val displayAddress = selectedAddress ?: selectedPreset?.address ?: ""
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = Color(0xFFECFDF5),
+                                border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFD1FAE5)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = Color(0xFF059669),
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = displayName,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF065F46)
+                                        )
+                                        if (displayAddress.isNotBlank()) {
+                                            Text(
+                                                text = displayAddress,
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF047857),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            selectedPreset = null
+                                            selectedAddress = null
+                                            selectedLatitude = null
+                                            selectedLongitude = null
+                                        },
+                                        modifier = Modifier.size(22.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Clear,
+                                            contentDescription = "해제",
+                                            tint = Color(0xFF059669),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // [위치 추천 상태] 캘린더 스타일 둥근 알약형 위치 추천 바
+                        if (selectedAddress == null && selectedPreset == null && showSuggestions && suggestions.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val mainSuggestion = suggestions.first()
+
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = Color(0xFFF1F5F9),
+                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        // [핵심] 기존 입력된 구장명에 코스명이 포함되어 있거나 코스명 필드가 비어있다면 코스명 자동 보존
+                                        val (_, courseFromInput) = splitClubAndCourse(clubName)
+                                        if (courseName.isBlank() && courseFromInput.isNotBlank()) {
+                                            courseName = courseFromInput
+                                        }
+                                        clubName = mainSuggestion.name
+                                        selectedPreset = mainSuggestion
+                                        selectedLatitude = mainSuggestion.latitude
+                                        selectedLongitude = mainSuggestion.longitude
+                                        selectedAddress = mainSuggestion.address
+                                        showSuggestions = false
+                                        refreshModalWeather(mainSuggestion.name, mainSuggestion.latitude, mainSuggestion.longitude, selectedDate, startHour, startMinute, endHour, endMinute)
+                                    }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFE2E8F0)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Place,
+                                            contentDescription = null,
+                                            tint = Color(0xFF475569),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = mainSuggestion.name,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0F172A)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = Color(0xFF2563EB).copy(alpha = 0.1f)
+                                            ) {
+                                                Text(
+                                                    text = "추천 구장",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF2563EB),
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = mainSuggestion.address,
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF64748B),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "선택",
+                                        tint = Color(0xFF059669),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            if (suggestions.size > 1) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    suggestions.drop(1).forEach { subItem ->
+                                        Surface(
+                                            shape = RoundedCornerShape(14.dp),
+                                            color = Color(0xFFF8FAFC),
+                                            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                            modifier = Modifier.clickable {
+                                                val (_, courseFromInput) = splitClubAndCourse(clubName)
+                                                if (courseName.isBlank() && courseFromInput.isNotBlank()) {
+                                                    courseName = courseFromInput
+                                                }
+                                                clubName = subItem.name
+                                                selectedPreset = subItem
+                                                selectedLatitude = subItem.latitude
+                                                selectedLongitude = subItem.longitude
+                                                selectedAddress = subItem.address
+                                                showSuggestions = false
+                                                refreshModalWeather(subItem.name, subItem.latitude, subItem.longitude, selectedDate, startHour, startMinute, endHour, endMinute)
+                                            }
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Place,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF64748B),
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text(
+                                                    text = subItem.name,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    color = Color(0xFF334155)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Round Time & Duration Box
                     Surface(
@@ -643,8 +1092,8 @@ fun GolfRoundDetailDialog(
 
                             Spacer(modifier = Modifier.height(4.dp))
 
-                            val currentStartTime = initialStart.withHour(startHour).withMinute(startMinute)
-                            val currentEndTime = initialEnd.withHour(endHour).withMinute(endMinute)
+                            val currentStartTime = selectedDate.atTime(startHour, startMinute)
+                            val currentEndTime = selectedDate.atTime(endHour, endMinute)
                             val duration = Duration.between(currentStartTime, currentEndTime)
                             val durHours = duration.toHours()
                             val durMinutes = (duration.toMinutes() % 60).coerceAtLeast(0)
@@ -664,14 +1113,15 @@ fun GolfRoundDetailDialog(
                     }
 
                     // WeatherNext 3 날씨 & 시간대별 강우량 섹션
-                    if (weather != null) {
+                    if (currentWeather != null || isWeatherLoading) {
                         GolfWeatherSummaryBadge(
-                            weather = weather,
+                            weather = currentWeather,
+                            isLoading = isWeatherLoading,
                             onViewDetail = onOpenWeatherDetail
                         )
-                        if (weather.hourlyForecast.isNotEmpty()) {
+                        if (currentWeather != null && currentWeather!!.hourlyForecast.isNotEmpty()) {
                             GolfHourlyRainfallChart(
-                                hourlyList = weather.hourlyForecast,
+                                hourlyList = currentWeather!!.hourlyForecast,
                                 modifier = Modifier.clickable { onOpenWeatherDetail() }
                             )
                         }
@@ -728,6 +1178,84 @@ fun GolfRoundDetailDialog(
                                     onValueChange = { totalPuttsText = it.filter { ch -> ch.isDigit() } },
                                     label = "총 퍼트수 (P)",
                                     placeholder = "예: 32",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(Spacing.xs))
+
+                            // 세부 지표 입력 1: GIR (%) & 페널티 (타)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                            ) {
+                                AutoLogueTextField(
+                                    value = girText,
+                                    onValueChange = { girText = it },
+                                    label = "GIR 그린적중률 (%)",
+                                    placeholder = "예: 55.6",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                AutoLogueTextField(
+                                    value = penaltyText,
+                                    onValueChange = { penaltyText = it.filter { ch -> ch.isDigit() } },
+                                    label = "페널티 타수 (타)",
+                                    placeholder = "예: 2",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(Spacing.xs))
+
+                            // 세부 지표 입력 2: 비거리(m), 템포, 걸음수
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    AutoLogueTextField(
+                                        value = driveText,
+                                        onValueChange = { driveText = it },
+                                        label = "비거리 (m)",
+                                        placeholder = "예: 205",
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    val adjDrive = round.getEffectiveAdjustedDriveDistance()
+                                    if (adjDrive != null && round.averageDriveDistance != null && adjDrive != round.averageDriveDistance) {
+                                        Text(
+                                            text = "보정: ${adjDrive}m",
+                                            fontSize = 9.sp,
+                                            color = Color(0xFF7C3AED),
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.padding(start = 2.dp, top = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                AutoLogueTextField(
+                                    value = tempoText,
+                                    onValueChange = { tempoText = it },
+                                    label = "티샷 템포",
+                                    placeholder = "예: 3.1",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                AutoLogueTextField(
+                                    value = stepsText,
+                                    onValueChange = { stepsText = it.filter { ch -> ch.isDigit() } },
+                                    label = "걸음수 (보)",
+                                    placeholder = "예: 6384",
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
                                     modifier = Modifier.weight(1f)
@@ -981,16 +1509,41 @@ fun GolfRoundDetailDialog(
                         AutoLoguePrimaryButton(
                             text = "저장하기",
                             onClick = {
-                                val sTime = initialStart.withHour(startHour).withMinute(startMinute)
-                                val eTime = initialEnd.withHour(endHour).withMinute(endMinute)
+                                val sTime = selectedDate.atTime(startHour, startMinute)
+                                val eTime = selectedDate.atTime(endHour, endMinute)
+                                val resolvedPreset = selectedPreset
+                                    ?: GOLF_COURSE_PRESETS.firstOrNull { normalizeGolfName(it.name) == normalizeGolfName(clubName) }
+                                val baseClub = resolvedPreset?.name ?: clubName.trim()
+                                val cleanCourse = courseName.trim()
+                                val finalClub = if (cleanCourse.isNotBlank() && !baseClub.contains(cleanCourse)) {
+                                    val cSuffix = if (cleanCourse.endsWith("코스")) cleanCourse else "$cleanCourse 코스"
+                                    "$baseClub ($cSuffix)"
+                                } else {
+                                    baseClub
+                                }
+                                val finalMemo = if (cleanCourse.isNotBlank() && !memo.contains("코스")) {
+                                    "[코스: $cleanCourse] $memo".trim()
+                                } else {
+                                    memo.trim()
+                                }
+                                val finalLat = selectedLatitude ?: resolvedPreset?.latitude
+                                val finalLng = selectedLongitude ?: resolvedPreset?.longitude
+
                                 onSaveDetails(
-                                    clubName,
+                                    finalClub,
                                     totalScoreText.toIntOrNull(),
                                     totalPuttsText.toIntOrNull(),
-                                    memo,
+                                    finalMemo,
                                     sTime,
                                     eTime,
-                                    companionsList
+                                    companionsList,
+                                    finalLat,
+                                    finalLng,
+                                    penaltyText.toIntOrNull(),
+                                    girText.toDoubleOrNull(),
+                                    driveText.toDoubleOrNull(),
+                                    tempoText.toDoubleOrNull(),
+                                    stepsText.toIntOrNull()
                                 )
                                 onDismiss()
                             }
@@ -1002,8 +1555,21 @@ fun GolfRoundDetailDialog(
     }
 }
 
-    // Round Time Edit Sub-Dialog
+    // Round Time Edit Sub-Dialog (날짜 변경 및 24시간 형식 시간 설정)
     if (showTimeEditDialog) {
+        val detailDatePickerDialog = remember {
+            android.app.DatePickerDialog(
+                context,
+                { _, y, m, d ->
+                    selectedDate = LocalDate.of(y, m + 1, d)
+                    refreshModalWeather(clubName, selectedLatitude, selectedLongitude, selectedDate, startHour, startMinute, endHour, endMinute)
+                },
+                selectedDate.year,
+                selectedDate.monthValue - 1,
+                selectedDate.dayOfMonth
+            )
+        }
+
         var tempStartHour by remember { mutableStateOf(startHour.toString()) }
         var tempStartMinute by remember { mutableStateOf(startMinute.toString()) }
         var tempEndHour by remember { mutableStateOf(endHour.toString()) }
@@ -1011,9 +1577,37 @@ fun GolfRoundDetailDialog(
 
         AlertDialog(
             onDismissRequest = { showTimeEditDialog = false },
-            title = { Text("라운딩 시간 설정", style = AppTypography.h2) },
+            title = { Text("라운딩 일시 및 시간 설정", style = AppTypography.h2) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                    // 날짜 선택 바
+                    Surface(
+                        onClick = { detailDatePickerDialog.show() },
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFF1F5F9),
+                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.CalendarToday, contentDescription = null, tint = Color(0xFF059669), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("라운딩 일자: ", fontSize = 12.sp, color = Color(0xFF64748B))
+                            Text(
+                                text = selectedDate.format(DateTimeFormatter.ofPattern("yyyy년 M월 d일 (E)", Locale.KOREA)),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            Text("변경", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2563EB))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
                     Text("시작 시간 (시 : 분)", style = AppTypography.caption)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AutoLogueTextField(
@@ -1067,6 +1661,7 @@ fun GolfRoundDetailDialog(
                         endHour = eh
                         endMinute = em
                         showTimeEditDialog = false
+                        refreshModalWeather(clubName, selectedLatitude, selectedLongitude, selectedDate, sh, sm, eh, em)
                     }
                 )
             },
@@ -1755,6 +2350,12 @@ private val GOLF_COURSE_PRESETS = listOf(
     GolfCoursePreset("샌드파인 GC", "강원특별자치도 강릉시 저동골길 53", 37.7950, 128.8950),
     GolfCoursePreset("파인리즈 CC", "강원특별자치도 고성군 토성면 토성로 820", 38.2550, 128.5350),
 
+    // 충청
+    GolfCoursePreset("킹스데일 GC", "충청북도 충주시 주덕읍 기업도시로 230", 37.0125, 127.8180),
+    GolfCoursePreset("우정힐스 CC", "충청남도 천안시 동남구 목천읍 충절로 398", 36.7550, 127.2150),
+    GolfCoursePreset("세종필드 GC", "세종특별자치도 달빛로 40", 36.5150, 127.2450),
+    GolfCoursePreset("레인보우힐스 CC", "충청북도 음성군 생극면 생삼로 391", 37.0150, 127.5850),
+
     // 제주
     GolfCoursePreset("핀크스 GC", "제주특별자치도 서귀포시 안덕면 산록남로 863", 33.3250, 126.3980),
     GolfCoursePreset("나인브릿지 제주", "제주특별자치도 서귀포시 안덕면 광평로 34-156", 33.3420, 126.4150),
@@ -1968,7 +2569,13 @@ fun AddGolfReservationDialog(
                     // [위치 확정 상태] 캘린더 스타일 둥근 캡슐 바 (초록색 에메랄드 테마)
                     if (!selectedAddress.isNullOrBlank() || selectedPreset != null) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        val displayName = selectedPreset?.name ?: clubName
+                        val baseDisplayName = selectedPreset?.name ?: clubName
+                        val displayName = if (courseName.isNotBlank() && !baseDisplayName.contains(courseName)) {
+                            val cSuffix = if (courseName.endsWith("코스")) courseName else "$courseName 코스"
+                            "$baseDisplayName ($cSuffix)"
+                        } else {
+                            baseDisplayName
+                        }
                         val displayAddress = selectedAddress ?: selectedPreset?.address ?: ""
                         Surface(
                             shape = RoundedCornerShape(24.dp),
@@ -2045,7 +2652,11 @@ fun AddGolfReservationDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    // [핵심] 칩 클릭 시 사용자가 입력한 비공식 텍스트 대신 공식 구장명(예: "오크밸리 CC")으로 즉시 치환
+                                    // [핵심] 기존 입력된 구장명에 코스명이 포함되어 있거나 코스명 필드가 비어있다면 코스명 자동 보존
+                                    val (_, courseFromInput) = splitClubAndCourse(clubName)
+                                    if (courseName.isBlank() && courseFromInput.isNotBlank()) {
+                                        courseName = courseFromInput
+                                    }
                                     clubName = mainSuggestion.name
                                     selectedPreset = mainSuggestion
                                     selectedAddress = mainSuggestion.address
@@ -2117,7 +2728,10 @@ fun AddGolfReservationDialog(
                                         color = Color(0xFFF8FAFC),
                                         border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
                                         modifier = Modifier.clickable {
-                                            // [핵심] 서브 칩 클릭 시에도 공식 구장명으로 즉시 치환
+                                            val (_, courseFromInput) = splitClubAndCourse(clubName)
+                                            if (courseName.isBlank() && courseFromInput.isNotBlank()) {
+                                                courseName = courseFromInput
+                                            }
                                             clubName = subItem.name
                                             selectedPreset = subItem
                                             selectedAddress = subItem.address
@@ -2309,4 +2923,975 @@ fun AddGolfReservationDialog(
             }
         }
     )
+}
+
+@Composable
+fun AddDirectGolfRoundDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (
+        clubName: String,
+        courseName: String,
+        roundDate: LocalDateTime,
+        startTime: LocalDateTime,
+        endTime: LocalDateTime,
+        totalScore: Int?,
+        totalPutts: Int?,
+        companions: List<String>,
+        estimatedGreenFee: Long,
+        memo: String,
+        latitude: Double?,
+        longitude: Double?
+    ) -> Unit,
+    onFetchWeather: suspend (clubName: String, roundDate: LocalDateTime, startTime: LocalDateTime?, endTime: LocalDateTime?, latitude: Double?, longitude: Double?) -> GolfPlayWeather? = { _, _, _, _, _, _ -> null }
+) {
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var clubName by remember { mutableStateOf("") }
+    var courseName by remember { mutableStateOf("") }
+    var companionsText by remember { mutableStateOf("") }
+    var feeText by remember { mutableStateOf("") }
+    var memoText by remember { mutableStateOf("") }
+    var totalScoreText by remember { mutableStateOf("") }
+    var totalPuttsText by remember { mutableStateOf("") }
+
+    // 위치 좌표, 주소 및 선택된 공식 프리셋 상태
+    var selectedPreset by remember { mutableStateOf<GolfCoursePreset?>(null) }
+    var selectedLatitude by remember { mutableStateOf<Double?>(null) }
+    var selectedLongitude by remember { mutableStateOf<Double?>(null) }
+    var selectedAddress by remember { mutableStateOf<String?>(null) }
+
+    // 검색 추천 리스트
+    var suggestions by remember { mutableStateOf<List<GolfCoursePreset>>(emptyList()) }
+    var showSuggestions by remember { mutableStateOf(false) }
+
+    // 날짜 선택 상태 (기본값: 어제 라운딩)
+    var selectedDate by remember { mutableStateOf(LocalDate.now().minusDays(1)) }
+    // 24시간 표기형식 시간 직접 입력 상태 (시작: "07:30", 종료: "13:00")
+    var startTimeText by remember { mutableStateOf("07:30") }
+    var endTimeText by remember { mutableStateOf("13:00") }
+
+    // 실시간 날씨 미리보기 상태
+    var previewWeather by remember { mutableStateOf<GolfPlayWeather?>(null) }
+    var isWeatherLoading by remember { mutableStateOf(false) }
+
+    fun parse24Hour(input: String, defaultHour: Int, defaultMin: Int): LocalTime {
+        val clean = input.trim().replace(":", "")
+        return try {
+            when {
+                clean.length == 4 -> {
+                    val h = clean.substring(0, 2).toInt().coerceIn(0, 23)
+                    val m = clean.substring(2, 4).toInt().coerceIn(0, 59)
+                    LocalTime.of(h, m)
+                }
+                clean.length == 3 -> {
+                    val h = clean.substring(0, 1).toInt().coerceIn(0, 23)
+                    val m = clean.substring(1, 3).toInt().coerceIn(0, 59)
+                    LocalTime.of(h, m)
+                }
+                input.contains(":") -> {
+                    val parts = input.split(":")
+                    val h = parts[0].trim().toInt().coerceIn(0, 23)
+                    val m = parts.getOrNull(1)?.trim()?.toInt()?.coerceIn(0, 59) ?: 0
+                    LocalTime.of(h, m)
+                }
+                else -> {
+                    val h = clean.toIntOrNull()?.coerceIn(0, 23) ?: defaultHour
+                    LocalTime.of(h, defaultMin)
+                }
+            }
+        } catch (e: Exception) {
+            LocalTime.of(defaultHour, defaultMin)
+        }
+    }
+
+    // 날씨 비동기 로드 함수
+    fun updateWeatherPreview(targetClub: String, lat: Double?, lng: Double?, date: LocalDate, sText: String, eText: String) {
+        if (targetClub.isBlank()) return
+        coroutineScope.launch {
+            isWeatherLoading = true
+            val sTime = date.atTime(parse24Hour(sText, 7, 30))
+            val eTime = date.atTime(parse24Hour(eText, 13, 0))
+            val w = onFetchWeather(targetClub, sTime, sTime, eTime, lat, lng)
+            if (w != null) {
+                previewWeather = w
+            }
+            isWeatherLoading = false
+        }
+    }
+
+    // 구글 캘린더 스타일의 골프장 장소 실시간 검색 (프리셋 정규화 매칭 + Geocoder 폴백)
+    LaunchedEffect(clubName) {
+        val q = clubName.trim()
+        if (q.length >= 2 && (selectedAddress == null || !clubName.contains(selectedAddress?.take(4) ?: "###"))) {
+            val normQuery = normalizeGolfName(q)
+            val queryWithoutSuffix = normQuery.replace("cc", "").replace("gc", "")
+
+            val matchedPresets = GOLF_COURSE_PRESETS.filter { preset ->
+                val normName = normalizeGolfName(preset.name)
+                val normAddr = normalizeGolfName(preset.address)
+                normName.contains(normQuery) || 
+                (queryWithoutSuffix.length >= 2 && normName.contains(queryWithoutSuffix)) ||
+                (normName.length >= 2 && normQuery.contains(normName.replace("cc", "").replace("gc", ""))) ||
+                normAddr.contains(normQuery)
+            }.sortedByDescending { preset ->
+                val normName = normalizeGolfName(preset.name)
+                when {
+                    normName == normQuery -> 100
+                    normName.startsWith(queryWithoutSuffix) -> 80
+                    normName.contains(queryWithoutSuffix) -> 60
+                    else -> 40
+                }
+            }
+
+            if (matchedPresets.isNotEmpty()) {
+                suggestions = matchedPresets.take(5)
+                showSuggestions = true
+            } else {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        if (android.location.Geocoder.isPresent()) {
+                            val geocoder = android.location.Geocoder(context, Locale.KOREA)
+                            @Suppress("DEPRECATION")
+                            val addrs = geocoder.getFromLocationName(q, 3)
+                                ?: geocoder.getFromLocationName("$q 골프장", 3)
+                            if (!addrs.isNullOrEmpty()) {
+                                val dynamicSuggestions = mutableListOf<GolfCoursePreset>()
+                                val firstAddr = addrs[0]
+                                val rawFullAddr = firstAddr.getAddressLine(0) ?: ""
+                                val cleanAddr = rawFullAddr
+                                    .replace("대한민국 ", "")
+                                    .replace(Regex("\\bKR\\b"), "")
+                                    .replace(Regex("\\s+"), " ")
+                                    .trim()
+
+                                val baseName = q.replace(Regex("(CC|GC|C\\.C|G\\.C|골프장|클럽하우스|컨트리클럽)", RegexOption.IGNORE_CASE), "").trim()
+                                val candidates = if (q.contains("CC", ignoreCase = true) || q.contains("GC", ignoreCase = true) || q.contains("클럽하우스")) {
+                                    listOf(q)
+                                } else {
+                                    listOf("$baseName CC", "$baseName GC")
+                                }
+
+                                for (cand in candidates) {
+                                    dynamicSuggestions.add(
+                                        GolfCoursePreset(cand, cleanAddr, firstAddr.latitude, firstAddr.longitude)
+                                    )
+                                }
+                                suggestions = dynamicSuggestions
+                                showSuggestions = true
+                            } else {
+                                showSuggestions = false
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            showSuggestions = false
+        }
+    }
+
+    val datePickerDialog = remember {
+        android.app.DatePickerDialog(
+            context,
+            { _, y, m, d ->
+                selectedDate = LocalDate.of(y, m + 1, d)
+                updateWeatherPreview(clubName, selectedLatitude, selectedLongitude, selectedDate, startTimeText, endTimeText)
+            },
+            selectedDate.year,
+            selectedDate.monthValue - 1,
+            selectedDate.dayOfMonth
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(decorFitsSystemWindows = false),
+        modifier = Modifier.imePadding(),
+        title = { Text("⛳ 이전 골프 라운드 직접 기록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("골프장 위치 검색과 추천을 통해 과거 라운딩 일시의 날씨와 스코어를 함께 직접 기록합니다.", fontSize = 12.sp, color = Color(0xFF64748B))
+
+                // 골프장명 입력 필드 & 위치 추천 칩
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = clubName,
+                        onValueChange = {
+                            clubName = it
+                            if (selectedPreset != null && it != selectedPreset?.name) {
+                                selectedPreset = null
+                                selectedAddress = null
+                                selectedLatitude = null
+                                selectedLongitude = null
+                            }
+                        },
+                        label = { Text("골프장명 (위치 검색)") },
+                        placeholder = { Text("골프장명을 검색하세요 (예: 코리아cc, 오크밸리)") },
+                        leadingIcon = {
+                            Icon(imageVector = Icons.Default.Place, contentDescription = null, tint = Color(0xFF059669))
+                        },
+                        trailingIcon = {
+                            if (clubName.isNotBlank()) {
+                                IconButton(onClick = {
+                                    clubName = ""
+                                    selectedPreset = null
+                                    selectedAddress = null
+                                    selectedLatitude = null
+                                    selectedLongitude = null
+                                    showSuggestions = false
+                                    previewWeather = null
+                                }) {
+                                    Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // 위치 확정 상태
+                    if (!selectedAddress.isNullOrBlank() || selectedPreset != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val baseDisplayName = selectedPreset?.name ?: clubName
+                        val displayName = if (courseName.isNotBlank() && !baseDisplayName.contains(courseName)) {
+                            val cSuffix = if (courseName.endsWith("코스")) courseName else "$courseName 코스"
+                            "$baseDisplayName ($cSuffix)"
+                        } else {
+                            baseDisplayName
+                        }
+                        val displayAddress = selectedAddress ?: selectedPreset?.address ?: ""
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = Color(0xFFECFDF5),
+                            border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFD1FAE5)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF059669),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = displayName,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF065F46)
+                                    )
+                                    if (displayAddress.isNotBlank()) {
+                                        Text(
+                                            text = displayAddress,
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF047857),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = {
+                                        selectedPreset = null
+                                        selectedAddress = null
+                                        selectedLatitude = null
+                                        selectedLongitude = null
+                                    },
+                                    modifier = Modifier.size(22.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Clear,
+                                        contentDescription = "해제",
+                                        tint = Color(0xFF059669),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 추천 항목 바
+                    if (selectedAddress == null && selectedPreset == null && showSuggestions && suggestions.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val mainSuggestion = suggestions.first()
+
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = Color(0xFFF1F5F9),
+                            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val (_, courseFromInput) = splitClubAndCourse(clubName)
+                                    if (courseName.isBlank() && courseFromInput.isNotBlank()) {
+                                        courseName = courseFromInput
+                                    }
+                                    clubName = mainSuggestion.name
+                                    selectedPreset = mainSuggestion
+                                    selectedLatitude = mainSuggestion.latitude
+                                    selectedLongitude = mainSuggestion.longitude
+                                    selectedAddress = mainSuggestion.address
+                                    showSuggestions = false
+                                    updateWeatherPreview(mainSuggestion.name, mainSuggestion.latitude, mainSuggestion.longitude, selectedDate, startTimeText, endTimeText)
+                                }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFE2E8F0)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Place,
+                                        contentDescription = null,
+                                        tint = Color(0xFF475569),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = mainSuggestion.name,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF0F172A)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFF2563EB).copy(alpha = 0.1f)
+                                        ) {
+                                            Text(
+                                                text = "추천 구장",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF2563EB),
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = mainSuggestion.address,
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF64748B),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "선택",
+                                    tint = Color(0xFF059669),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        if (suggestions.size > 1) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                suggestions.drop(1).forEach { subItem ->
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = Color(0xFFF8FAFC),
+                                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                        modifier = Modifier.clickable {
+                                            val (_, courseFromInput) = splitClubAndCourse(clubName)
+                                            if (courseName.isBlank() && courseFromInput.isNotBlank()) {
+                                                courseName = courseFromInput
+                                            }
+                                            clubName = subItem.name
+                                            selectedPreset = subItem
+                                            selectedLatitude = subItem.latitude
+                                            selectedLongitude = subItem.longitude
+                                            selectedAddress = subItem.address
+                                            showSuggestions = false
+                                            updateWeatherPreview(subItem.name, subItem.latitude, subItem.longitude, selectedDate, startTimeText, endTimeText)
+                                        }
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Place,
+                                                contentDescription = null,
+                                                tint = Color(0xFF64748B),
+                                                modifier = Modifier.size(11.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = subItem.name,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF334155)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = courseName,
+                    onValueChange = { courseName = it },
+                    label = { Text("코스명 (선택)") },
+                    placeholder = { Text("예: 서 코스, 동 코스") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // 라운딩 일시
+                Text("라운딩 일시 (날짜 선택 & 시작/종료 시간)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF334155))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 날짜 선택 버튼
+                    Surface(
+                        onClick = { datePickerDialog.show() },
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFFF8FAFC),
+                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .height(56.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarToday,
+                                contentDescription = null,
+                                tint = Color(0xFF059669),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text("라운딩 일자", fontSize = 10.sp, color = Color(0xFF64748B))
+                                Text(
+                                    text = selectedDate.format(DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA)),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0F172A)
+                                )
+                            }
+                        }
+                    }
+
+                    // 시작 시간
+                    OutlinedTextField(
+                        value = startTimeText,
+                        onValueChange = { newVal ->
+                            val filtered = newVal.filter { it.isDigit() || it == ':' }.take(5)
+                            startTimeText = if (filtered.length == 4 && !filtered.contains(":")) {
+                                "${filtered.substring(0, 2)}:${filtered.substring(2, 4)}"
+                            } else filtered
+                            updateWeatherPreview(clubName, selectedLatitude, selectedLongitude, selectedDate, startTimeText, endTimeText)
+                        },
+                        label = { Text("시작") },
+                        placeholder = { Text("07:30") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(0.9f)
+                    )
+
+                    // 종료 시간
+                    OutlinedTextField(
+                        value = endTimeText,
+                        onValueChange = { newVal ->
+                            val filtered = newVal.filter { it.isDigit() || it == ':' }.take(5)
+                            endTimeText = if (filtered.length == 4 && !filtered.contains(":")) {
+                                "${filtered.substring(0, 2)}:${filtered.substring(2, 4)}"
+                            } else filtered
+                            updateWeatherPreview(clubName, selectedLatitude, selectedLongitude, selectedDate, startTimeText, endTimeText)
+                        },
+                        label = { Text("종료") },
+                        placeholder = { Text("13:00") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(0.9f)
+                    )
+                }
+
+                // 해당 라운딩 일시 & 위치의 날씨 미리보기
+                if (previewWeather != null || isWeatherLoading) {
+                    GolfWeatherSummaryBadge(
+                        weather = previewWeather,
+                        isLoading = isWeatherLoading,
+                        onViewDetail = {}
+                    )
+                }
+
+                // 스코어 입력
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = totalScoreText,
+                        onValueChange = { totalScoreText = it.filter { ch -> ch.isDigit() }.take(3) },
+                        label = { Text("총 타수 (타, 선택)") },
+                        placeholder = { Text("예: 88") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    OutlinedTextField(
+                        value = totalPuttsText,
+                        onValueChange = { totalPuttsText = it.filter { ch -> ch.isDigit() }.take(2) },
+                        label = { Text("총 퍼트수 (P, 선택)") },
+                        placeholder = { Text("예: 32") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                OutlinedTextField(
+                    value = companionsText,
+                    onValueChange = { companionsText = it },
+                    label = { Text("동반자 명단 (선택, 쉼표 구분)") },
+                    placeholder = { Text("예: 김프로, 박대표, 이이사") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = feeText,
+                    onValueChange = { feeText = it.filter { c -> c.isDigit() } },
+                    label = { Text("지출 그린피 (원, 선택)") },
+                    placeholder = { Text("예: 220000") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = memoText,
+                    onValueChange = { memoText = it },
+                    label = { Text("메모 / 라운딩 후기 (선택)") },
+                    placeholder = { Text("예: 코스 컨디션 매우 좋음, 드라이버 비거리 안정적") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val rawClubName = clubName.trim()
+                    if (rawClubName.isBlank()) {
+                        Toast.makeText(context, "골프장명을 입력하거나 검색해 주세요.", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+
+                    val resolvedPreset = selectedPreset
+                        ?: suggestions.firstOrNull { preset ->
+                            val normPreset = normalizeGolfName(preset.name)
+                            val normInput = normalizeGolfName(rawClubName)
+                            val cleanPreset = normPreset.replace("cc", "").replace("gc", "")
+                            val cleanInput = normInput.replace("cc", "").replace("gc", "")
+                            normPreset == normInput ||
+                            (cleanInput.length >= 2 && cleanPreset.contains(cleanInput)) ||
+                            (cleanPreset.length >= 2 && cleanInput.contains(cleanPreset))
+                        }
+                        ?: GOLF_COURSE_PRESETS.firstOrNull { preset ->
+                            val normPreset = normalizeGolfName(preset.name)
+                            val normInput = normalizeGolfName(rawClubName)
+                            val cleanPreset = normPreset.replace("cc", "").replace("gc", "")
+                            val cleanInput = normInput.replace("cc", "").replace("gc", "")
+                            normPreset == normInput ||
+                            (cleanInput.length >= 2 && cleanPreset.contains(cleanInput)) ||
+                            (cleanPreset.length >= 2 && cleanInput.contains(cleanPreset))
+                        }
+
+                    val finalClubName = resolvedPreset?.name ?: rawClubName
+                    val finalLat = selectedLatitude ?: resolvedPreset?.latitude
+                    val finalLng = selectedLongitude ?: resolvedPreset?.longitude
+
+                    val sTime = selectedDate.atTime(parse24Hour(startTimeText, 7, 30))
+                    val eTime = selectedDate.atTime(parse24Hour(endTimeText, 13, 0))
+                    val comps = companionsText.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                    val fee = feeText.toLongOrNull() ?: 0L
+                    val score = totalScoreText.toIntOrNull()
+                    val putts = totalPuttsText.toIntOrNull()
+
+                    onConfirm(finalClubName, courseName.trim(), sTime, sTime, eTime, score, putts, comps, fee, memoText.trim(), finalLat, finalLng)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+            ) {
+                Text("기록 저장", color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("취소", color = Color(0xFF64748B))
+            }
+        }
+    )
+}
+
+/**
+ * 📊 골프 라이프 종합 통계 모달 다이얼로그 (연도별 및 전체 연도 종합 집계 분석)
+ */
+@Composable
+fun GolfStatisticsDialog(
+    statistics: GolfStatistics,
+    selectedYear: Int?,
+    onSelectYear: (Int?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.88f),
+            shape = RoundedCornerShape(16.dp),
+            color = AppColors.background,
+            shadowElevation = 8.dp
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // 1. 헤더 (타이틀 + 닫기 버튼)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.xl, vertical = Spacing.md),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("📊 골프 라이프 종합 통계", style = AppTypography.h2)
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            MetricBadge(
+                                text = if (selectedYear != null) "${selectedYear}년" else "전체 연도",
+                                textColor = Forest700,
+                                backgroundColor = Forest50
+                            )
+                        }
+                        Text(
+                            text = "평균 타수, 퍼트, 비거리, 템포, GIR 세부 종합 분석",
+                            style = AppTypography.captionMuted
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "닫기", tint = AppColors.secondary)
+                    }
+                }
+
+                HairlineDivider()
+
+                // 2. 연도별 필터 칩 바 (가로 스크롤)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // "전체 연도" 칩
+                    FilterChip(
+                        selected = selectedYear == null,
+                        onClick = { onSelectYear(null) },
+                        label = { Text("전체 연도") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MenuColors.golf,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+
+                    // 등록된 연도 목록 칩
+                    statistics.availableYears.forEach { year ->
+                        FilterChip(
+                            selected = selectedYear == year,
+                            onClick = { onSelectYear(year) },
+                            label = { Text("${year}년") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MenuColors.golf,
+                                selectedLabelColor = Color.White
+                            )
+                        )
+                    }
+                }
+
+                HairlineDivider()
+
+                // 3. 본문 스크롤 (Bento Grid 통계 카드들)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(Spacing.xl),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                ) {
+                    // 라운드 요약 상단 배너
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFF0FDF4),
+                        border = BorderStroke(1.dp, Color(0xFFBBF7D0))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(Spacing.md),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = if (selectedYear != null) "${selectedYear}년 총 라운드" else "누적 총 라운드",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF166534),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "${statistics.totalRounds}회 라운딩",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF14532D)
+                                )
+                            }
+                            if (statistics.bestScore != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFDCFCE7)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        horizontalAlignment = Alignment.End
+                                    ) {
+                                        Text("라이프 베스트 (라베)", fontSize = 10.sp, color = Color(0xFF15803D))
+                                        Text("${statistics.bestScore}타", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF166534))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2x3 Bento Grid 통계 카드
+                    // Row 1: 평균 타수 & 평균 퍼트수
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                    ) {
+                        GolfStatCard(
+                            title = "평균 타수",
+                            value = statistics.averageScore?.let { "${it}타" } ?: "-",
+                            subValue = statistics.bestScore?.let { "라베: ${it}타" } ?: "기록 없음",
+                            icon = Icons.Default.Stars,
+                            accentColor = Color(0xFF059669),
+                            modifier = Modifier.weight(1f)
+                        )
+                        GolfStatCard(
+                            title = "평균 퍼트수",
+                            value = statistics.averagePutts?.let { "${it}P" } ?: "-",
+                            subValue = statistics.averagePutts?.let { "홀당 약 ${(it / 18.0 * 10).toInt() / 10.0}P" } ?: "기록 없음",
+                            icon = Icons.Default.Flag,
+                            accentColor = Color(0xFF2563EB),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    // Row 2: 평균 비거리 & 평균 페널티
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                    ) {
+                        val driveVal = when {
+                            statistics.averageDriveDistance != null && statistics.averageAdjustedDriveDistance != null ->
+                                "${statistics.averageDriveDistance}m (${statistics.averageAdjustedDriveDistance}m)"
+                            statistics.averageDriveDistance != null ->
+                                "${statistics.averageDriveDistance}m"
+                            else -> "-"
+                        }
+                        GolfStatCard(
+                            title = "평균 비거리 (파3 제외)",
+                            value = driveVal,
+                            subValue = if (statistics.averageAdjustedDriveDistance != null) "최저/최고 제외 보정치 병기" else "드라이버 티샷 평균",
+                            icon = Icons.Default.TrendingUp,
+                            accentColor = Color(0xFF7C3AED),
+                            modifier = Modifier.weight(1f)
+                        )
+                        GolfStatCard(
+                            title = "평균 페널티",
+                            value = statistics.averagePenalty?.let { "${it}타" } ?: "-",
+                            subValue = "라운드당 벌타/OB",
+                            icon = Icons.Default.Warning,
+                            accentColor = Color(0xFFEA580C),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    // Row 3: 그린 적중률(GIR) & 티샷 템포
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                    ) {
+                        GolfStatCard(
+                            title = "그린 적중률 (GIR)",
+                            value = statistics.averageGir?.let { "${it}%" } ?: "-",
+                            subValue = statistics.averageGir?.let { "18홀 중 약 ${(it * 0.18).toInt()}홀 온그린" } ?: "기록 없음",
+                            icon = Icons.Default.CheckCircle,
+                            accentColor = Color(0xFF0D9488),
+                            modifier = Modifier.weight(1f)
+                        )
+                        GolfStatCard(
+                            title = "티샷 템포",
+                            value = statistics.averageTempo?.let { "${it}" } ?: "-",
+                            subValue = "스윙 템포 비율 (이상치: 3.0)",
+                            icon = Icons.Default.Schedule,
+                            accentColor = Color(0xFF4F46E5),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    // Row 4: 전체 걸음수 (전폭 카드)
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFF8FAFC),
+                        border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(Spacing.md),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFE0E7FF)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.DirectionsWalk, contentDescription = null, tint = Color(0xFF4338CA))
+                                }
+                                Spacer(modifier = Modifier.width(Spacing.sm))
+                                Column {
+                                    Text("라운딩 누적 걸음수", fontSize = 12.sp, color = Color(0xFF64748B))
+                                    Text(
+                                        text = "${String.format(Locale.KOREA, "%,d", statistics.totalSteps)}보",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF1E293B)
+                                    )
+                                }
+                            }
+                            if (statistics.averageSteps != null) {
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("라운드당 평균", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                    Text("${String.format(Locale.KOREA, "%,d", statistics.averageSteps)}보", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF334155))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HairlineDivider()
+
+                // 4. 하단 닫기 바
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(Spacing.md),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    AutoLoguePrimaryButton(
+                        text = "닫기",
+                        onClick = onDismiss
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GolfStatCard(
+    title: String,
+    value: String,
+    subValue: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFFF8FAFC),
+        border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+    ) {
+        Column(modifier = Modifier.padding(Spacing.md)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = title,
+                    fontSize = 11.sp,
+                    color = Color(0xFF64748B),
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Icon(icon, contentDescription = null, tint = accentColor, modifier = Modifier.size(16.dp))
+            }
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Text(
+                text = value,
+                fontSize = if (value.length > 10) 14.sp else 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = accentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subValue,
+                fontSize = 10.sp,
+                color = Color(0xFF94A3B8),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }

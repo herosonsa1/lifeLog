@@ -47,7 +47,11 @@ class GolfRepositoryImpl @Inject constructor(
         latitude = latitude, longitude = longitude, totalScore = totalScore,
         totalPutts = totalPutts, holeScores = holeScores, scorecardPhotoUri = scorecardPhotoUri,
         matchingPhotoUris = matchingPhotoUris, greenFeeExpense = greenFeeExpense, memo = memo,
-        startTime = startTime, endTime = endTime, companions = companions
+        startTime = startTime, endTime = endTime, companions = companions,
+        penaltyCount = penaltyCount, girPercentage = girPercentage,
+        averageDriveDistance = averageDriveDistance, adjustedDriveDistance = adjustedDriveDistance,
+        averageTempo = averageTempo,
+        steps = steps, driveDistances = driveDistances, tempos = tempos
     )
 
     private fun GolfRound.toEntity() = GolfRoundEntity(
@@ -55,6 +59,10 @@ class GolfRepositoryImpl @Inject constructor(
         latitude = latitude, longitude = longitude, totalScore = totalScore,
         totalPutts = totalPutts, holeScores = holeScores, scorecardPhotoUri = scorecardPhotoUri,
         matchingPhotoUris = matchingPhotoUris, greenFeeExpense = greenFeeExpense, memo = memo,
-        startTime = startTime, endTime = endTime, companions = companions
+        startTime = startTime, endTime = endTime, companions = companions,
+        penaltyCount = penaltyCount, girPercentage = girPercentage,
+        averageDriveDistance = averageDriveDistance, adjustedDriveDistance = adjustedDriveDistance,
+        averageTempo = averageTempo,
+        steps = steps, driveDistances = driveDistances, tempos = tempos
     )
 }

@@ -35,3 +35,14 @@ data class Transaction(
     val isAutoCategorized: Boolean = false,
     val ruleIdApplied: Long? = null
 )
+
+/**
+ * 적요/가맹점/원문에 사용자 이름("정선우")이 포함된 본인 계좌 간 이동 내역 여부 판별
+ */
+fun Transaction.isSelfTransfer(): Boolean {
+    val target = "정선우"
+    return merchantName.contains(target) ||
+           (transferMemo?.contains(target) == true) ||
+           originalText.contains(target)
+}
+

@@ -24,8 +24,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autologue.app.data.preferences.CommuteConfig
+import com.autologue.app.data.preferences.VehicleProfile
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
+import com.autologue.app.domain.model.getAssignedVehicleId
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 import java.time.format.DateTimeFormatter
@@ -420,7 +422,11 @@ fun CarLedgerScreen(
                 }
             } else {
                 items(uiState.logs) { log ->
-                    SaaSCarLogRow(log = log)
+                    SaaSCarLogRow(
+                        log = log,
+                        vehicles = uiState.vehicles,
+                        onAssignVehicle = { logId, vId -> viewModel.assignVehicleToFuelLog(logId, vId) }
+                    )
                     HairlineDivider()
                 }
             }
@@ -429,7 +435,11 @@ fun CarLedgerScreen(
 }
 
 @Composable
-fun SaaSCarLogRow(log: VehicleLog) {
+fun SaaSCarLogRow(
+    log: VehicleLog,
+    vehicles: List<VehicleProfile> = emptyList(),
+    onAssignVehicle: ((Long, String) -> Unit)? = null
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -490,6 +500,49 @@ fun SaaSCarLogRow(log: VehicleLog) {
                         text = "${log.daysSinceLastFuel}일 만에 주유",
                         style = AppTypography.caption.copy(color = AppColors.primary, fontWeight = FontWeight.SemiBold)
                     )
+                }
+            }
+            if (log.logType == VehicleLogType.REFUELING && vehicles.isNotEmpty() && onAssignVehicle != null) {
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    val assignedId = log.getAssignedVehicleId()
+                    vehicles.forEach { v ->
+                        val isSelected = assignedId == v.id
+                        val shortName = v.name.split(" ").firstOrNull() ?: v.name
+                        androidx.compose.material3.Surface(
+                            onClick = { onAssignVehicle(log.id, v.id) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) MenuColors.carLedgerBg else Slate100,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isSelected) MenuColors.carLedger else Slate300
+                            )
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = MenuColors.carLedger,
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                }
+                                Text(
+                                    text = shortName,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) MenuColors.carLedger else Slate600
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
