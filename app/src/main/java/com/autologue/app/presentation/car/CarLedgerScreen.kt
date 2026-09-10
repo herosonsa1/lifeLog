@@ -176,7 +176,14 @@ fun CarLedgerScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("평균 연비", style = AppTypography.caption)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("평균 연비", style = AppTypography.caption)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "1,650원/L 기준",
+                                style = AppTypography.captionMuted.copy(fontSize = 10.sp)
+                            )
+                        }
                         Spacer(modifier = Modifier.height(Spacing.xxs))
                         Text(
                             "%.1f km/L".format(uiState.averageEfficiencyKmPerL),
@@ -397,14 +404,36 @@ fun CarLedgerScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "운행 및 주유 기록",
-                        style = AppTypography.caption
-                    )
-                    Text(
-                        text = "${uiState.logs.size}건",
-                        style = AppTypography.captionMuted
-                    )
+                    val currentVehicleName = uiState.vehicles.find { it.id == uiState.selectedVehicleId }?.name?.split(" ")?.firstOrNull() ?: "차량"
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (uiState.filterCurrentVehicleOnly) "$currentVehicleName 운행·주유 기록" else "전체 운행·주유 기록",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        Text(
+                            text = "${uiState.logs.size}건",
+                            style = AppTypography.captionMuted
+                        )
+                    }
+
+                    androidx.compose.material3.Surface(
+                        onClick = { viewModel.toggleVehicleFilter() },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (uiState.filterCurrentVehicleOnly) MenuColors.carLedgerBg else Slate100,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (uiState.filterCurrentVehicleOnly) MenuColors.carLedgerBorder else Slate300
+                        )
+                    ) {
+                        Text(
+                            text = if (uiState.filterCurrentVehicleOnly) "현재 차량만 보기" else "전체 차량 보기",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (uiState.filterCurrentVehicleOnly) MenuColors.carLedger else Slate600,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
                 }
                 HairlineDivider()
             }
@@ -502,6 +531,31 @@ fun SaaSCarLogRow(
                     )
                 }
             }
+
+            // 주유 시점 간 주행거리 및 구간 실연비 뱃지
+            if (log.logType == VehicleLogType.REFUELING && (log.tripDistanceKm > 0.0 || log.estimatedEfficiencyKmPerL != null)) {
+                Spacer(modifier = Modifier.height(Spacing.xxs))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    if (log.tripDistanceKm > 0.0) {
+                        MetricBadge(
+                            text = "🚗 이전 주유 후 %.1f km".format(log.tripDistanceKm),
+                            textColor = Slate700,
+                            backgroundColor = Slate100
+                        )
+                    }
+                    if (log.estimatedEfficiencyKmPerL != null) {
+                        MetricBadge(
+                            text = "⛽ 실연비 %.1f km/L".format(log.estimatedEfficiencyKmPerL),
+                            textColor = Emerald700,
+                            backgroundColor = Emerald50
+                        )
+                    }
+                }
+            }
+
             if (log.logType == VehicleLogType.REFUELING && vehicles.isNotEmpty() && onAssignVehicle != null) {
                 Spacer(modifier = Modifier.height(Spacing.xs))
                 Row(
@@ -554,7 +608,10 @@ fun SaaSCarLogRow(
                     style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
                 )
                 if (log.fuelAmountLiters > 0) {
-                    Text("%.1f L".format(log.fuelAmountLiters), style = AppTypography.captionMuted)
+                    Text(
+                        text = "%.1f L (1,650원/L)".format(log.fuelAmountLiters),
+                        style = AppTypography.captionMuted.copy(fontSize = 11.sp)
+                    )
                 }
             }
         } else {

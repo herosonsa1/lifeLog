@@ -14,6 +14,7 @@ import com.autologue.app.domain.model.getAssignedVehicleId
 import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
+import com.autologue.app.util.FuelEconomyCalculator
 import com.autologue.app.util.LocationDistanceUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
@@ -40,7 +42,8 @@ data class CarLedgerUiState(
     val showMaintenanceDialog: Boolean = false,
     val vehicles: List<VehicleProfile> = emptyList(),
     val selectedVehicleId: String = "car_1",
-    val showVehicleManageDialog: Boolean = false
+    val showVehicleManageDialog: Boolean = false,
+    val filterCurrentVehicleOnly: Boolean = true
 )
 
 @HiltViewModel
@@ -117,47 +120,90 @@ class CarLedgerViewModel @Inject constructor(
                 val vehicleProfile = _uiState.value.vehicles.find { it.id == selectedId }
                 val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
 
-                // 선택된 차량 기준으로 주유 로그 및 주행거리 필터링
-                val vehicleFuelLogs = logs.filter { it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId() == selectedId }
+                // 다이어리 이동 동선 거리 조회 람다 (car_1 차량의 경우 교차 검증)
+                val diaryLookup: (LocalDateTime?, LocalDateTime) -> Double = { start, end ->
+                    if (selectedId == "car_1") {
+                        diaryEntries.filter { entry ->
+                            val afterStart = if (start != null) !entry.date.isBefore(start) else true
+                            val beforeEnd = !entry.date.isAfter(end)
+                            afterStart && beforeEnd
+                        }.sumOf { entry ->
+                            if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
+                            else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
+                        }
+                    } else 0.0
+                }
+
+                // 1. 선택된 차량에 대해 Full-to-Full 주유 주기 및 구간 연비 계산
+                val calculationResult = FuelEconomyCalculator.calculateForVehicle(
+                    targetVehicleId = selectedId,
+                    allLogs = logs,
+                    additionalDrivingDistanceLookup = diaryLookup
+                )
+
+                // 계산된 주유 로그 맵 생성 (ID 기준)
+                val enrichedFuelMap = calculationResult.enrichedFuelLogs.associateBy { it.id }
+
+                // 전체 로그 리스트에 계산된 주유 로그 치환
+                val enrichedLogs = logs.map { log ->
+                    enrichedFuelMap[log.id] ?: log
+                }
+
+                // 선택된 차량의 주유 로그 필터링
+                val vehicleFuelLogs = enrichedLogs.filter {
+                    it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId() == selectedId
+                }
                 val totalFuel = vehicleFuelLogs.sumOf { it.fuelCost }
-                val latest = vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel
 
-                val vehicleDrivingLogs = logs.filter { it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId() == selectedId }
+                // 선택된 차량의 총 주행거리 (주행 로그 및 다이어리 종합)
+                val vehicleDrivingLogs = enrichedLogs.filter {
+                    it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId() == selectedId
+                }
                 val vehicleLogDist = vehicleDrivingLogs.sumOf { it.tripDistanceKm }
-
-                // 다이어리 주행거리는 기본 차량(car_1)에만 보조 반영
-                val diaryDist = if (selectedId == "car_1") {
-                    diaryEntries.sumOf { entry ->
-                        if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
-                        else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
-                    }
-                } else 0.0
-
+                val diaryDist = diaryLookup(null, LocalDateTime.now())
                 val totalDist = if (vehicleLogDist > 0.0) {
                     if (selectedId == "car_1") maxOf(vehicleLogDist, diaryDist) else vehicleLogDist
                 } else diaryDist
 
+                // 총 주유 리터 합계 (1,650원 기준 환산량 반영)
                 val totalFuelLiters = vehicleFuelLogs.sumOf { it.fuelAmountLiters }
-                val rawEff = if (totalDist > 0.0 && totalFuelLiters > 0.0) {
+                val rawEffFromTotal = if (totalDist > 0.0 && totalFuelLiters > 0.0) {
                     Math.round((totalDist / totalFuelLiters) * 10.0) / 10.0
                 } else null
 
-                // 현실적인 연비 범위(4.0 ~ 30.0 km/L) 외의 수치는 목표/공인 연비로 보정
+                // 최종 평균 연비 (구간 가중평균 우선 -> 전체 누적 연비 -> 차량 프로필 목표 연비)
                 val avgEff = when {
-                    rawEff != null && rawEff in 4.0..30.0 -> rawEff
+                    calculationResult.weightedAverageEfficiencyKmPerL != null &&
+                    calculationResult.weightedAverageEfficiencyKmPerL in 4.0..30.0 ->
+                        calculationResult.weightedAverageEfficiencyKmPerL
+                    rawEffFromTotal != null && rawEffFromTotal in 4.0..30.0 ->
+                        rawEffFromTotal
                     else -> targetEff
+                }
+
+                // 표시할 로그 목록: 현재 차량 필터 여부에 따라 분기
+                val displayedLogs = if (_uiState.value.filterCurrentVehicleOnly) {
+                    enrichedLogs.filter { it.getAssignedVehicleId() == selectedId }
+                } else {
+                    enrichedLogs
                 }
 
                 _uiState.value = _uiState.value.copy(
                     selectedVehicleId = selectedId,
-                    logs = logs,
+                    logs = displayedLogs,
                     totalFuelExpense = totalFuel,
-                    latestIntervalDays = latest,
+                    latestIntervalDays = calculationResult.latestIntervalDays ?: vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel,
                     totalDrivingDistanceKm = Math.round(totalDist * 10.0) / 10.0,
                     averageEfficiencyKmPerL = avgEff
                 )
             }.collectLatest { }
         }
+    }
+
+    fun toggleVehicleFilter() {
+        val newFilter = !_uiState.value.filterCurrentVehicleOnly
+        _uiState.value = _uiState.value.copy(filterCurrentVehicleOnly = newFilter)
+        loadData()
     }
 
     fun assignVehicleToFuelLog(logId: Long, targetVehicleId: String) {

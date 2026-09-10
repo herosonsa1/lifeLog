@@ -1093,3 +1093,44 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 15s`)
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 37. 차량별 주유 시점 간 실제 주행거리 및 전국 평균 휘발유 가격(1,650원/L) 기준 실연비 계산 아키텍처 구축 (2026-09-10)
+
+### 37.1. 사용자 요청 및 구현 배경
+- **요청 사항**:
+  1. 차량 주유 시점($t_{i-1}$)부터 다음번 주유 시점($t_i$) 사이에 주행한 실제 거리($D_i$)를 정밀하게 계산.
+  2. 현재 전국 평균 휘발유 가격(**1,650원/L**)을 기준으로 주유량($L_i = \text{fuelCost} / 1650.0$)을 산출하여 구간 실연비($E_i = D_i / L_i$) 및 누적 가중평균 연비 산출.
+  3. 차량 1(`car_1`)과 차량 2(`car_2`) 간의 주유 및 주행 데이터가 섞이지 않고 **차량별로 완전히 독립 격리 연산**되도록 보장.
+  4. 차계부 UI(상단 요약 Bento Grid 및 각 주유 내역 카드)에 이전 주유 후 주행거리, 구간 실연비, 환산 주유량이 직관적으로 표출되도록 구현.
+
+### 37.2. 주요 개선 및 구현 내역
+1. **Full-to-Full 주유 주기 기반 구간 연산 유틸리티 구축 (`FuelEconomyCalculator.kt`)**:
+   - `calculateFuelLiters`: 실주유량(OCR) 우선 사용, 결제 금액 기준 시 전국 평균 유가 1,650원/L로 환산(소수점 1자리).
+   - `calculateIntervalEfficiency`: 구간 주행거리($D_i$)와 주유량($L_i$)을 나눈 실제 구간 연비(km/L) 산출 및 유효 범위(3.0..35.0 km/L) 검증.
+   - `calculateForVehicle`:
+     - 대상 차량(`targetVehicleId`)의 주유 로그와 주행 로그를 엄격히 필터링하여 타 차량 데이터 침범 원천 차단.
+     - 주유 로그를 시간순으로 정렬하여 직전 주유 시점($t_{i-1}$)과 현재 주유 시점($t_i$) 사이의 주행 로그(`TRIP_DRIVING`) 및 다이어리 동선 거리 합산.
+     - 구간 누적 주행거리 및 누적 주유량 기반 가중평균 실연비(`weightedAverageEfficiencyKmPerL`) 도출.
+2. **ViewModel 통합 및 실시간 연산 파이프라인 연동 (`CarLedgerViewModel.kt`)**:
+   - `loadData()` 내부에서 `FuelEconomyCalculator.calculateForVehicle`를 호출하여 각 주유 로그에 `tripDistanceKm`(이전 주유 후 주행거리), `fuelAmountLiters`(1,650원 기준 리터), `daysSinceLastFuel`(경과일수), `estimatedEfficiencyKmPerL`(구간 실연비)를 실시간 보강 매핑.
+   - 상단 요약 카드에 가중평균 실연비 반영.
+   - `filterCurrentVehicleOnly` 상태 및 `toggleVehicleFilter()`를 추가하여 현재 선택된 차량의 기록만 집중 조회하거나 전체 기록을 원클릭으로 비교할 수 있는 필터링 지원.
+3. **스마트 차계부 UI 시각적 위계 및 직관적 데이터 표출 (`CarLedgerScreen.kt`)**:
+   - **상단 평균 연비 요약**: 레이블 옆에 `1,650원/L 기준` 캡션을 병기하여 공인연비가 아닌 실연비 기준임을 명확히 표시.
+   - **운행 및 주유 피드 헤더**: 현재 선택된 차량 이름(예: `차량 1 운행·주유 기록 12건`)과 함께 `현재 차량만 보기 / 전체 차량 보기` 토글 칩 배치.
+   - **주유 카드(`SaaSCarLogRow`) 고도화**:
+     - 주유 금액 하단에 `%.1f L (1,650원/L)` 환산 주유량 표출.
+     - 이전 주유 후 경과 일수(`14일 만에 주유`)와 함께 `🚗 이전 주유 후 400.0 km`, `⛽ 실연비 13.2 km/L` 메트릭 뱃지 직관적 표출.
+4. **철저한 차량별 독립 연산 및 유가 환산 단위 테스트 (`FuelEconomyTest.kt`)**:
+   - 1,650원 기준 리터 환산(50,000원 -> 30.3L, 70,000원 -> 42.4L, 실주유량 31.5L 우선) 검증.
+   - 구간 연비(400km / 30.3L -> 13.2 km/L) 검증.
+   - 차량 1(`car_1`)과 차량 2(`car_2`)의 주유·주행 로그가 섞여 있는 복합 상황에서 상호 침범 없이 독립 구간 주행거리 및 연비가 정확히 분리 산출되는지 100% 검증.
+
+### 37.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 33개 전체 단위 테스트 100% 통과 (`BUILD SUCCESSFUL in 33s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 28s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
