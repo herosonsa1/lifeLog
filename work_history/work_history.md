@@ -1027,7 +1027,37 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
 
+## 35. 모바일 스코어카드 2D 공간 바운딩 박스 기반 가로 그리드 재구성 및 전/후반 7대 지표(Hole/Par/Score/Putt/Penalty/Tempo/Dist) 테이블 정밀 모델링 (2026-09-10)
 
+### 35.1. 사용자 핵심 요청 사항
+- 스코어카드 이미지가 아래와 같은 전반코스 / 후반코스 그리드(Grid) 테이블 구조로 되어 있으므로, 해당 표를 2D 그리드로 모델링하여 각각의 행에 해당하는 값을 계산하거나 가져오도록 요청:
+  - **전반코스**: `Hole 1..9 Total`, `Par`, `Score`, `Putt`, `Penalty`, `GIR`, `Tempo`, `Dist.`
+  - **후반코스**: `Hole 10..18 Total`, `Par`, `Score`, `Putt`, `Penalty`, `GIR`, `Tempo`, `Dist.`
+- 터치 하이라이트 박스나 모바일 UI 세로 열 분할 현상에서도 18홀 홀별 스코어, 총 타수, 퍼트 수, 페널티, 비거리(평균 및 최저/최고 제외 보정), 템포, 걸음수가 100% 정상 집계되도록 처리.
 
+### 35.2. 원인 분석 및 해결 전략
+1. **모바일 UI 하이라이트 박스로 인한 세로 열 분할 위험 방어**:
+   - 모바일 골프 앱(스마트스코어 등)에서 특정 홀을 탭하면 분홍색 세로 테두리 박스가 생성되어, OCR 엔진이 테이블을 가로 행이 아닌 세로 열(`1 4 5 2 - 3.0 192`) 단위로 쪼개어 인식할 위험 존재.
+   - **해결 (`reconstructSpatialGrid`)**: ML Kit의 `Text.Element` 2D 바운딩 박스 좌표를 추출하여, 글자 높이 기반 허용 오차(`rowTolerance = medianHeight * 0.65`) 내에 위치한 요소들을 중앙 Y좌표 기준으로 그룹화(Row 클러스터링)한 후, 각 행 내부를 X좌표 순으로 정렬하여 완벽한 가로 그리드 행으로 재조립.
+2. **전반 / 후반 코스 스마트 분할 및 `CourseGridData` 모델링**:
+   - `HOLE 10` 또는 후반 코스 키워드(`South`, `Lake`, `In` 등)를 기준으로 `frontLines`와 `backLines`를 명확히 분리.
+   - 전반 및 후반 각각에 대해 독립적으로 `extractCourseGrid`를 가동하여 Hole, Par, Score, Putt, Penalty, Tempo, Dist 행을 정밀 추출.
+3. **요약 라벨(`홀당 평균 퍼트 수`)과 테이블 행 오인식 원천 차단**:
+   - 상단 요약 카드의 "홀당 평균 퍼트 수"에 포함된 "홀", "퍼트" 키워드로 인해 HOLE 행 인덱스가 상단으로 오인되거나 홀 번호(1..9)가 퍼트로 잘못 파싱되던 결함 발견.
+   - `isHoleLine` 헬퍼 함수를 통해 "홀당", "평균" 키워드를 엄격히 배제하고, 코스명(West, Hill 등)을 HOLE 행 바로 윗줄 및 인근 영역에서 정확히 역추적 탐색.
+   - 퍼트 행 검증 시 각 홀 퍼트 수 유효 범위(0..5) 검증 필터를 결합하여 홀 번호 오인식 완벽 차단.
+4. **전체 홀 티샷 템포 및 비거리 종합 연산**:
+   - Tempo와 Dist 행은 각 홀(파3 제외 7개 홀씩 총 14개 홀)의 개별 측정값이므로, 전체 수집된 템포들의 산술 평균(`avgTempo = 3.1`) 및 비거리 산술 평균(`205.2m`), 최저/최고 제외 보정 비거리(`201.4m`) 산출 로직 고도화.
 
+### 35.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 33개 단위 테스트 100% 통과 (`BUILD SUCCESSFUL in 33s`)
+  - `parseMobileSmartScorecard_extractsAccurateScoresAndPutts`: Hill/Lake 91타, 40P, 18홀 스코어 완벽 검증
+  - `parseBlackThemeScorecard_extractsAllMetricsCorrectly`: West/South 86타, 40P, 페널티 2, 비거리 205.2m(보정 201.4m), 템포 3.1, 걸음수 6384보 검증
+  - `parseBlackThemeScorecard_withSplitLines_extractsAllMetricsCorrectly`: 줄바꿈 분리 레이아웃 검증
+  - `parsePaperScorecard_extractsTotalAndPutts`: 지류 영수증 스코어카드 호환성 검증
+  - `golfRound_formattedDriveDistance_displaysBothAverageAndAdjusted`: 보정 비거리 포맷 검증
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 33s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
