@@ -28,6 +28,8 @@ import com.autologue.app.data.preferences.VehicleProfile
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.domain.model.getAssignedVehicleId
+import com.autologue.app.domain.model.getExplicitUnitPrice
+import com.autologue.app.domain.model.isCustomFuel
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 import java.time.format.DateTimeFormatter
@@ -88,6 +90,17 @@ fun CarLedgerScreen(
             onDismiss = { viewModel.closeVehicleManageDialog() },
             onSaveVehicles = { car1, car2 ->
                 viewModel.saveVehicleProfiles(car1, car2)
+            }
+        )
+    }
+
+    if (uiState.editingRefuelLog != null) {
+        RefuelDetailEditDialog(
+            log = uiState.editingRefuelLog!!,
+            vehicles = uiState.vehicles,
+            onDismiss = { viewModel.closeRefuelEditDialog() },
+            onSave = { logId, vId, cost, liters, unitPrice ->
+                viewModel.updateRefuelDetail(logId, vId, cost, liters, unitPrice)
             }
         )
     }
@@ -454,7 +467,8 @@ fun CarLedgerScreen(
                     SaaSCarLogRow(
                         log = log,
                         vehicles = uiState.vehicles,
-                        onAssignVehicle = { logId, vId -> viewModel.assignVehicleToFuelLog(logId, vId) }
+                        onAssignVehicle = { logId, vId -> viewModel.assignVehicleToFuelLog(logId, vId) },
+                        onEditRefuel = { viewModel.openRefuelEditDialog(it) }
                     )
                     HairlineDivider()
                 }
@@ -467,7 +481,8 @@ fun CarLedgerScreen(
 fun SaaSCarLogRow(
     log: VehicleLog,
     vehicles: List<VehicleProfile> = emptyList(),
-    onAssignVehicle: ((Long, String) -> Unit)? = null
+    onAssignVehicle: ((Long, String) -> Unit)? = null,
+    onEditRefuel: ((VehicleLog) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
@@ -479,6 +494,8 @@ fun SaaSCarLogRow(
         val isCommute = log.note?.contains("출퇴근") == true
         val isGolf = log.note?.contains("골프") == true || log.note?.contains("라운딩") == true || log.note?.contains("CC") == true
         val carTag = Regex("\\[(.*?)\\]").find(log.note ?: "")?.groupValues?.get(1)?.split(" ")?.firstOrNull()
+        val isCustom = log.isCustomFuel()
+        val explicitUnitPrice = log.getExplicitUnitPrice()
 
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -507,6 +524,22 @@ fun SaaSCarLogRow(
                         else -> Slate100
                     }
                 )
+                if (log.logType == VehicleLogType.REFUELING) {
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    if (isCustom) {
+                        MetricBadge(
+                            text = "정밀 실측",
+                            textColor = Emerald700,
+                            backgroundColor = Emerald50
+                        )
+                    } else {
+                        MetricBadge(
+                            text = "1,650원/L 추정",
+                            textColor = Slate600,
+                            backgroundColor = Slate100
+                        )
+                    }
+                }
                 if (carTag != null) {
                     val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(log.note)
                     Spacer(modifier = Modifier.width(Spacing.xs))
@@ -602,16 +635,35 @@ fun SaaSCarLogRow(
         }
 
         if (log.logType == VehicleLogType.REFUELING) {
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = "%,d원".format(log.fuelCost),
-                    style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
-                )
-                if (log.fuelAmountLiters > 0) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "%.1f L (1,650원/L)".format(log.fuelAmountLiters),
-                        style = AppTypography.captionMuted.copy(fontSize = 11.sp)
+                        text = "%,d원".format(log.fuelCost),
+                        style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
                     )
+                    if (log.fuelAmountLiters > 0) {
+                        val unitPrice = explicitUnitPrice ?: if (log.fuelAmountLiters > 0) log.fuelCost / log.fuelAmountLiters else 1650.0
+                        Text(
+                            text = if (isCustom) "%.1f L (%,d원/L)".format(log.fuelAmountLiters, unitPrice.toInt())
+                                   else "%.1f L (1,650원/L 추정)".format(log.fuelAmountLiters),
+                            style = if (isCustom) AppTypography.caption.copy(color = Emerald700, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                   else AppTypography.captionMuted.copy(fontSize = 11.sp)
+                        )
+                    }
+                }
+                if (onEditRefuel != null) {
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    IconButton(
+                        onClick = { onEditRefuel(log) },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "주유 상세 설정",
+                            tint = MenuColors.carLedger,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                 }
             }
         } else {
@@ -732,4 +784,274 @@ private fun MaintenanceItemCard(
         }
     }
 }
+
+@Composable
+fun RefuelDetailEditDialog(
+    log: VehicleLog,
+    vehicles: List<VehicleProfile>,
+    onDismiss: () -> Unit,
+    onSave: (logId: Long, vehicleId: String, cost: Long, liters: Double?, unitPrice: Double?) -> Unit
+) {
+    var selectedVehicleId by remember { mutableStateOf(log.getAssignedVehicleId()) }
+    var costText by remember { mutableStateOf(if (log.fuelCost > 0) log.fuelCost.toString() else "") }
+    var unitPriceText by remember {
+        mutableStateOf(
+            log.getExplicitUnitPrice()?.let { "%.1f".format(Locale.US, it) } ?: ""
+        )
+    }
+    var litersText by remember {
+        mutableStateOf(
+            if (log.fuelAmountLiters > 0.0) "%.1f".format(Locale.US, log.fuelAmountLiters) else ""
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Color(0x80000000))
+                .imePadding()
+                .systemBarsPadding(),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = AppColors.surface,
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .clip(RoundedCornerShape(16.dp))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(Spacing.xl)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    // 헤더
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "주유 상세 설정",
+                                style = AppTypography.h2
+                            )
+                            Text(
+                                text = log.gasStationName ?: "주유 내역",
+                                style = AppTypography.captionMuted
+                            )
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "닫기", tint = Slate500)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+
+                    // 안내 뱃지
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MenuColors.carLedgerBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(modifier = Modifier.padding(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            Text(
+                                text = "L당 단가나 실제 주유량을 입력하시면 실연비가 더 정교하게 계산됩니다. (선택 사항)",
+                                style = AppTypography.caption.copy(color = MenuColors.carLedger, fontSize = 11.sp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(Spacing.md))
+
+                    // 차량 선택
+                    Text("주유 차량 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                    ) {
+                        vehicles.forEach { v ->
+                            val isSel = selectedVehicleId == v.id
+                            Surface(
+                                onClick = { selectedVehicleId = v.id },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) MenuColors.carLedgerBg else Slate100,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isSel) MenuColors.carLedger else Slate300
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isSel) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        text = v.name,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSel) MenuColors.carLedger else Slate700
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(Spacing.md))
+
+                    // 주유 총금액
+                    Text("주유 총 결제 금액 (원)", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                    OutlinedTextField(
+                        value = costText,
+                        onValueChange = { costText = it.filter { c -> c.isDigit() } },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        trailingIcon = { Text("원", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                    )
+
+                    Spacer(modifier = Modifier.height(Spacing.md))
+
+                    // L당 단가
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("L당 주유 단가 (원/L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                        Text(
+                            text = "평균가: 1,650원",
+                            style = AppTypography.captionMuted.copy(fontSize = 10.sp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                    OutlinedTextField(
+                        value = unitPriceText,
+                        onValueChange = { text ->
+                            unitPriceText = text
+                            val cost = costText.toLongOrNull() ?: 0L
+                            val price = text.toDoubleOrNull() ?: 0.0
+                            if (cost > 0 && price > 0.0) {
+                                litersText = "%.1f".format(Locale.US, cost / price)
+                            }
+                        },
+                        placeholder = { Text("예: 1680 (미입력 시 1,650원 기준)", style = AppTypography.captionMuted) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        trailingIcon = { Text("원/L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                    )
+
+                    Spacer(modifier = Modifier.height(Spacing.md))
+
+                    // 실제 주유량 (L)
+                    Text("실제 주유량 (L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                    OutlinedTextField(
+                        value = litersText,
+                        onValueChange = { text ->
+                            litersText = text
+                            val cost = costText.toLongOrNull() ?: 0L
+                            val liters = text.toDoubleOrNull() ?: 0.0
+                            if (cost > 0 && liters > 0.0) {
+                                unitPriceText = "%.1f".format(Locale.US, cost / liters)
+                            }
+                        },
+                        placeholder = { Text("예: 32.5 (미입력 시 자동 계산)", style = AppTypography.captionMuted) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        trailingIcon = { Text("L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                    )
+
+                    Spacer(modifier = Modifier.height(Spacing.sm))
+
+                    // 자동 계산 도우미 버튼들
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                    ) {
+                        Surface(
+                            onClick = {
+                                val cost = costText.toLongOrNull() ?: 0L
+                                unitPriceText = "1650.0"
+                                if (cost > 0) {
+                                    litersText = "%.1f".format(Locale.US, cost / 1650.0)
+                                }
+                            },
+                            shape = RoundedCornerShape(6.dp),
+                            color = Slate100,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "1,650원 기준 자동 채움",
+                                fontSize = 11.sp,
+                                color = Slate700,
+                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+
+                        Surface(
+                            onClick = {
+                                unitPriceText = ""
+                                litersText = ""
+                            },
+                            shape = RoundedCornerShape(6.dp),
+                            color = Slate100,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "선택 항목 비우기",
+                                fontSize = 11.sp,
+                                color = Slate700,
+                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(Spacing.xl))
+
+                    // 저장 및 취소 버튼
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    ) {
+                        AutoLogueSecondaryButton(
+                            text = "취소",
+                            modifier = Modifier.weight(1f),
+                            onClick = onDismiss
+                        )
+                        AutoLoguePrimaryButton(
+                            text = "저장 및 연비 반영",
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                val cost = costText.toLongOrNull() ?: log.fuelCost
+                                val unitPrice = unitPriceText.toDoubleOrNull()
+                                val liters = litersText.toDoubleOrNull()
+                                onSave(log.id, selectedVehicleId, cost, liters, unitPrice)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 

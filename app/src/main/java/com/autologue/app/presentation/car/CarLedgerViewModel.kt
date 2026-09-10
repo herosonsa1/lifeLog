@@ -27,6 +27,9 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import com.autologue.app.domain.model.buildUpdatedNote
+import com.autologue.app.domain.model.getExplicitUnitPrice
+import com.autologue.app.domain.model.isCustomFuel
 import javax.inject.Inject
 
 data class CarLedgerUiState(
@@ -43,7 +46,8 @@ data class CarLedgerUiState(
     val vehicles: List<VehicleProfile> = emptyList(),
     val selectedVehicleId: String = "car_1",
     val showVehicleManageDialog: Boolean = false,
-    val filterCurrentVehicleOnly: Boolean = true
+    val filterCurrentVehicleOnly: Boolean = true,
+    val editingRefuelLog: VehicleLog? = null
 )
 
 @HiltViewModel
@@ -216,6 +220,50 @@ class CarLedgerViewModel @Inject constructor(
             val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
             val newNote = "[$targetVehicleId: $vName] $cleanNote".trim()
             vehicleRepository.updateVehicleLog(log.copy(note = newNote))
+        }
+    }
+
+    fun openRefuelEditDialog(log: VehicleLog) {
+        _uiState.value = _uiState.value.copy(editingRefuelLog = log)
+    }
+
+    fun closeRefuelEditDialog() {
+        _uiState.value = _uiState.value.copy(editingRefuelLog = null)
+    }
+
+    fun updateRefuelDetail(
+        logId: Long,
+        targetVehicleId: String,
+        fuelCost: Long,
+        explicitLiters: Double?,
+        unitPrice: Double?
+    ) {
+        viewModelScope.launch {
+            val log = vehicleRepository.getVehicleLogById(logId) ?: return@launch
+            val targetVehicle = _uiState.value.vehicles.find { it.id == targetVehicleId }
+            val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
+
+            val isCustom = (explicitLiters != null && explicitLiters > 0.0) || (unitPrice != null && unitPrice > 0.0)
+            val updatedNote = log.buildUpdatedNote(
+                targetVehicleId = targetVehicleId,
+                vehicleShortName = vName,
+                unitPrice = unitPrice,
+                isCustom = isCustom
+            )
+
+            val finalLiters = when {
+                explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
+                unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
+                else -> Math.round((fuelCost.toDouble() / FuelEconomyCalculator.DEFAULT_GAS_PRICE) * 10.0) / 10.0
+            }
+
+            val updatedLog = log.copy(
+                fuelCost = fuelCost,
+                fuelAmountLiters = finalLiters,
+                note = updatedNote
+            )
+            vehicleRepository.updateVehicleLog(updatedLog)
+            closeRefuelEditDialog()
         }
     }
 

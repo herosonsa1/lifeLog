@@ -6,6 +6,18 @@ import com.autologue.app.domain.model.getAssignedVehicleId
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 
+import com.autologue.app.domain.model.getExplicitUnitPrice
+import com.autologue.app.domain.model.isCustomFuel
+
+/**
+ * 주유량 및 단가 하이브리드 계산 상세 결과
+ */
+data class FuelCalculationDetail(
+    val liters: Double,
+    val unitPrice: Double,
+    val isEstimated: Boolean
+)
+
 /**
  * 차량별 Full-to-Full 주유 주기 기반 구간 연비 및 주행거리 계산 결과
  */
@@ -24,6 +36,55 @@ object FuelEconomyCalculator {
     const val DEFAULT_GAS_PRICE = 1650.0 // 전국 평균 휘발유 가격 (원/L)
 
     /**
+     * 하이브리드 주유량 및 단가 산출:
+     * 1순위: 사용자 직접 입력 실주유량 (explicitLiters > 0.0)
+     * 2순위: 사용자 직접 입력 L당 단가 (explicitUnitPrice != null && explicitUnitPrice > 0.0) -> fuelCost / explicitUnitPrice
+     * 3순위 (폴백): 전국 평균 유가 (기본 1,650원/L) -> fuelCost / defaultGasPrice (추정치)
+     */
+    fun calculateFuelDetailHybrid(
+        fuelCost: Long,
+        explicitLiters: Double = 0.0,
+        explicitUnitPrice: Double? = null,
+        isCustom: Boolean = false,
+        defaultGasPrice: Double = DEFAULT_GAS_PRICE
+    ): FuelCalculationDetail {
+        // 1순위: 실주유량이 명시된 경우
+        if (explicitLiters > 0.0) {
+            val roundedLiters = Math.round(explicitLiters * 10.0) / 10.0
+            val price = explicitUnitPrice ?: if (roundedLiters > 0.0 && fuelCost > 0L) {
+                Math.round((fuelCost.toDouble() / roundedLiters) * 10.0) / 10.0
+            } else defaultGasPrice
+            return FuelCalculationDetail(
+                liters = roundedLiters,
+                unitPrice = price,
+                isEstimated = !isCustom && explicitUnitPrice == null
+            )
+        }
+
+        // 2순위: 실주유량은 없으나 L당 단가가 명시된 경우
+        if (explicitUnitPrice != null && explicitUnitPrice > 0.0) {
+            val calculatedLiters = if (fuelCost > 0L) {
+                Math.round((fuelCost.toDouble() / explicitUnitPrice) * 10.0) / 10.0
+            } else 0.0
+            return FuelCalculationDetail(
+                liters = calculatedLiters,
+                unitPrice = explicitUnitPrice,
+                isEstimated = false
+            )
+        }
+
+        // 3순위: 둘 다 미입력 시 전국 평균 유가 기준 폴백
+        val fallbackLiters = if (fuelCost > 0L && defaultGasPrice > 0.0) {
+            Math.round((fuelCost.toDouble() / defaultGasPrice) * 10.0) / 10.0
+        } else 0.0
+        return FuelCalculationDetail(
+            liters = fallbackLiters,
+            unitPrice = defaultGasPrice,
+            isEstimated = true
+        )
+    }
+
+    /**
      * 주유 금액 또는 실주유량으로부터 리터(L) 계산 (소수점 1자리 반올림)
      */
     fun calculateFuelLiters(
@@ -31,13 +92,12 @@ object FuelEconomyCalculator {
         explicitLiters: Double = 0.0,
         gasPrice: Double = DEFAULT_GAS_PRICE
     ): Double {
-        if (explicitLiters > 0.0) {
-            return Math.round(explicitLiters * 10.0) / 10.0
-        }
-        if (fuelCost > 0L && gasPrice > 0.0) {
-            return Math.round((fuelCost.toDouble() / gasPrice) * 10.0) / 10.0
-        }
-        return 0.0
+        return calculateFuelDetailHybrid(
+            fuelCost = fuelCost,
+            explicitLiters = explicitLiters,
+            explicitUnitPrice = null,
+            defaultGasPrice = gasPrice
+        ).liters
     }
 
     /**
@@ -90,7 +150,14 @@ object FuelEconomyCalculator {
         val enrichedList = mutableListOf<VehicleLog>()
 
         for (currentFuel in vehicleFuelLogs) {
-            val liters = calculateFuelLiters(currentFuel.fuelCost, currentFuel.fuelAmountLiters, gasPrice)
+            val detail = calculateFuelDetailHybrid(
+                fuelCost = currentFuel.fuelCost,
+                explicitLiters = currentFuel.fuelAmountLiters,
+                explicitUnitPrice = currentFuel.getExplicitUnitPrice(),
+                isCustom = currentFuel.isCustomFuel(),
+                defaultGasPrice = gasPrice
+            )
+            val liters = detail.liters
 
             val (intervalDist, daysSince) = if (prevFuelLog != null) {
                 val dist = getDrivingDistance(prevFuelLog.timestamp, currentFuel.timestamp)

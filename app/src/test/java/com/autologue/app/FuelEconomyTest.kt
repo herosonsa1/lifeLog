@@ -142,4 +142,84 @@ class FuelEconomyTest {
         // 500.0 / 48.5 = 10.3 km/L
         assertEquals(10.3, car2FuelResult.estimatedEfficiencyKmPerL!!, 0.01)
     }
+
+    @Test
+    fun calculateFuelDetailHybrid_withExplicitLiters_prioritizesExplicitLiters() {
+        // 50,000원 결제, 실제 주유량 32.5 L 직접 입력한 경우
+        val detail = FuelEconomyCalculator.calculateFuelDetailHybrid(
+            fuelCost = 50000L,
+            explicitLiters = 32.5,
+            explicitUnitPrice = null,
+            isCustom = true
+        )
+        assertEquals(32.5, detail.liters, 0.01)
+        // 단가는 50000 / 32.5 = 1538.5원/L
+        assertEquals(1538.5, detail.unitPrice, 0.1)
+        assertEquals(false, detail.isEstimated)
+    }
+
+    @Test
+    fun calculateFuelDetailHybrid_withExplicitUnitPrice_calculatesExactLiters() {
+        // 51,000원 결제, L당 단가 1,700원/L 입력한 경우 -> 30.0 L
+        val detail = FuelEconomyCalculator.calculateFuelDetailHybrid(
+            fuelCost = 51000L,
+            explicitLiters = 0.0,
+            explicitUnitPrice = 1700.0,
+            isCustom = true
+        )
+        assertEquals(30.0, detail.liters, 0.01)
+        assertEquals(1700.0, detail.unitPrice, 0.01)
+        assertEquals(false, detail.isEstimated)
+    }
+
+    @Test
+    fun calculateFuelDetailHybrid_withoutInputs_fallsBackToDefaultGasPrice() {
+        // 미입력 시: 전국 평균 유가 1,650원/L 적용 -> 30.3 L
+        val detail = FuelEconomyCalculator.calculateFuelDetailHybrid(
+            fuelCost = 50000L,
+            explicitLiters = 0.0,
+            explicitUnitPrice = null,
+            isCustom = false
+        )
+        assertEquals(30.3, detail.liters, 0.01)
+        assertEquals(1650.0, detail.unitPrice, 0.01)
+        assertEquals(true, detail.isEstimated)
+    }
+
+    @Test
+    fun calculateForVehicle_withHybridRefuelLogs_calculatesAccurateIntervalEfficiency() {
+        val car1Fuel1 = VehicleLog(
+            id = 1L,
+            timestamp = LocalDateTime.of(2026, 8, 1, 10, 0),
+            logType = VehicleLogType.REFUELING,
+            fuelCost = 50000L,
+            note = "[car_1] 주유" // 미입력 -> 1,650원 기준
+        )
+        val car1Driving = VehicleLog(
+            id = 2L,
+            timestamp = LocalDateTime.of(2026, 8, 8, 10, 0),
+            logType = VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 400.0,
+            note = "[car_1] 주행"
+        )
+        val car1Fuel2 = VehicleLog(
+            id = 3L,
+            timestamp = LocalDateTime.of(2026, 8, 15, 11, 0),
+            logType = VehicleLogType.REFUELING,
+            fuelCost = 54000L,
+            fuelAmountLiters = 0.0,
+            note = "[car_1: G80] [unit_price: 1800.0] [custom_fuel:true] 주유" // 단가 1,800원 -> 주유량 30.0 L
+        )
+
+        val result = FuelEconomyCalculator.calculateForVehicle("car_1", listOf(car1Fuel1, car1Driving, car1Fuel2))
+        assertEquals(2, result.enrichedFuelLogs.size)
+
+        val secondFuel = result.enrichedFuelLogs[1]
+        // 54000 / 1800 = 30.0 L
+        assertEquals(30.0, secondFuel.fuelAmountLiters, 0.01)
+        // 주행거리 = 400.0 km
+        assertEquals(400.0, secondFuel.tripDistanceKm, 0.01)
+        // 구간 실연비 = 400.0 / 30.0 = 13.3 km/L
+        assertEquals(13.3, secondFuel.estimatedEfficiencyKmPerL!!, 0.01)
+    }
 }

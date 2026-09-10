@@ -1134,3 +1134,49 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
+---
+
+## 38. 하이브리드 주유량·L당 단가 선택 입력 및 정밀 실연비 계산 아키텍처 구축 (2026-09-10)
+
+### 38.1. 사용자 요청 및 구현 배경
+- **요청 사항**:
+  1. 주유 결제 내역 등록/수정 시 주유 차량 선택뿐만 아니라, **L당 단가(원/L)** 및 **실제 주유량(L)**을 선택적으로 입력할 수 있는 기능 지원.
+  2. 단가나 실주유량이 입력되었을 때는 정확한 수치 기반으로 실연비를 정밀 계산하고, 미입력 시에는 기존처럼 전국 평균 휘발유 가격(1,650원/L) 추정치를 적용하는 **3단계 하이브리드 연산 아키텍처** 구축.
+  3. 차량 1과 차량 2의 독립적인 연비 분리 및 차계부 UI에서 실측 데이터와 추정 데이터의 명확한 시각적 구분.
+
+### 38.2. 주요 개선 및 구현 내역
+1. **3단계 하이브리드 주유량 및 단가 연산 엔진 (`FuelEconomyCalculator.kt`)**:
+   - `calculateFuelDetailHybrid`:
+     - **1순위 (실주유량 우선)**: 사용자 직접 입력 실주유량(`explicitLiters > 0.0`) 채택 ($\rightarrow$ 단가 미입력 시 `fuelCost / explicitLiters` 자동 도출, 실측 플래그 활성화).
+     - **2순위 (L당 주유 단가 기반 정밀 계산)**: 실주유량이 없으나 단가(`unitPrice > 0.0`) 입력 시 $\rightarrow$ `fuelCost / unitPrice`로 정밀 주유량 산출 (실측 플래그 활성화).
+     - **3순위 (가정 금액 폴백)**: 둘 다 미입력 시 $\rightarrow$ 기본 1,650원/L 기준으로 `fuelCost / 1650.0` 산출 (추정 플래그 유지).
+   - `calculateForVehicle`: 각 주유 로그별로 위 하이브리드 결과를 반영하여 구간 실연비 및 차량 누적 가중평균 연비 산출.
+2. **도메인 모델 확장 및 메타데이터 헬퍼 (`VehicleLog.kt`)**:
+   - `getExplicitUnitPrice()`: `note` 내 `[unit_price: XXXX]` 단가 안전 추출.
+   - `isCustomFuel()`: 실측 주유량 또는 단가 입력 여부 판별.
+   - `buildUpdatedNote()`: 차량 배정 태그, 단가 태그, 커스텀 실측 태그(`[custom_fuel:true]`)의 안전한 병합 처리.
+3. **주유 상세 설정 다이얼로그 탑재 (`RefuelDetailEditDialog` & `CarLedgerViewModel.kt`)**:
+   - `CarLedgerViewModel.updateRefuelDetail`: 차량 ID, 결제 금액, 실주유량, L당 단가를 받아 `VehicleLog` 갱신 및 DB 저장 후 즉시 연비 재계산.
+   - `RefuelDetailEditDialog`:
+     - 주유 차량 원클릭 선택 ([차량 1], [차량 2]).
+     - 총 결제 금액, L당 단가, 실제 주유량 입력 폼.
+     - **양방향 인터랙티브 자동 계산**: 단가 입력 시 주유량 자동 환산, 주유량 입력 시 단가 자동 환산.
+     - "1,650원 기준 자동 채움" 및 "선택 항목 비우기" 도우미 버튼 제공.
+     - 안티패턴 `AP-ANDROID-IME-DIALOG-OBSCURATION` 방어: 소프트 키보드 대응 및 스크롤 완벽 지원.
+4. **차계부 주유 카드 UI 고도화 (`CarLedgerScreen.kt`)**:
+   - 각 주유 카드에 `정밀 실측` (Emerald 뱃지) vs `1,650원/L 추정` (Slate 뱃지) 시각적 구분.
+   - 우측에 환산 주유량 및 단가 병기: `32.5 L (1,680원/L)` 또는 `30.3 L (1,650원/L 추정)`.
+   - 주유 카드 우측에 편집 연필 아이콘(`Icons.Default.Edit`) 배치하여 원클릭으로 주유 상세 다이얼로그 호출.
+5. **하이브리드 연산 단위 테스트 완벽 검증 (`FuelEconomyTest.kt`)**:
+   - 실주유량(32.5L) 우선 채택 및 실단가 자동 도출 검증.
+   - 단가(1,700원/L) 입력 시 51,000원 결제에서 정확한 30.0L 산출 검증.
+   - 미입력 시 1,650원 기준 추정치(30.3L) 자동 폴백 검증.
+   - 하이브리드 주유 로그 혼재 시 실제 주행거리 400km와 30.0L로 13.3 km/L 정밀 구간 연비 산출 검증.
+
+### 38.3. 빌드 및 배포 검증
+- **단위 테스트**: `testDebugUnitTest` 37개 전체 단위 테스트 100% 통과 (`BUILD SUCCESSFUL in 34s`)
+- **Gradle 빌드 결과**: `assembleDebug` 41개 태스크 100% 성공 (`BUILD SUCCESSFUL in 28s`)
+- **생성된 APK**: `app/build/outputs/apk/debug/app-debug.apk`
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+
