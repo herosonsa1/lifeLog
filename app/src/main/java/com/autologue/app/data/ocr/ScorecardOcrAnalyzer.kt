@@ -10,6 +10,7 @@ import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.util.regex.Pattern
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -30,6 +31,7 @@ data class ScorecardOcrResult(
     val driveDistances: List<Double> = emptyList(),
     val tempos: List<Double> = emptyList(),
     val clubName: String? = null,
+    val playDate: LocalDate? = null,
     val recognizedRawText: String
 )
 
@@ -353,6 +355,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 driveDistances = emptyList(),
                 tempos = emptyList(),
                 clubName = null,
+                playDate = null,
                 recognizedRawText = "OCR 분석 스킵: ${t.message}"
             )
         } finally {
@@ -380,14 +383,34 @@ class ScorecardOcrAnalyzer @Inject constructor(
             var summaryAvgPutts: Double? = null
             var summarySteps: Int? = null
             var detectedClubName: String? = null
+            var detectedDate: LocalDate? = null
 
-            // 1-0. 골프장명 탐지 (예: "필로스 GC", "스카이밸리 CC")
-            val clubRegex = Regex("""([가-힣A-Za-z0-9\s]{2,15}\s*(?:CC|GC|C\.C|G\.C|골프클럽|컨트리클럽|클럽))""")
-            for (line in lines.take(5)) {
-                val m = clubRegex.find(line)
+            // 1-0-A. 라운드 경기 일자 탐지 (예: "오크밸리 CC / 2026.09.11", "필로스 GC 2026.08.09", "2026-09-11", "2026/09/11")
+            val dateRegex = Regex("""\b(20\d{2})[-./년\s]+(1[0-2]|0?[1-9])[-./월\s]+([12]\d|3[01]|0?[1-9])(?:\b|일)""")
+            for (line in lines.take(15)) {
+                val m = dateRegex.find(line)
                 if (m != null) {
-                    detectedClubName = m.groupValues[1].trim()
-                    break
+                    val y = m.groupValues[1].toIntOrNull()
+                    val mo = m.groupValues[2].toIntOrNull()
+                    val d = m.groupValues[3].toIntOrNull()
+                    if (y != null && mo != null && d != null && y in 2020..2035 && mo in 1..12 && d in 1..31) {
+                        detectedDate = runCatching { LocalDate.of(y, mo, d) }.getOrNull()
+                        if (detectedDate != null) break
+                    }
+                }
+            }
+
+            // 1-0-B. 골프장명 탐지 (예: "필로스 GC", "스카이밸리 CC", "오크밸리 CC / 2026.09.11")
+            val clubRegex = Regex("""([가-힣A-Za-z0-9\s]{2,15}?\s*(?:CC|GC|C\.C|G\.C|골프클럽|컨트리클럽|클럽))""")
+            for (line in lines.take(15)) {
+                val targetLine = if (line.contains("/")) line.substringBefore("/") else line
+                val m = clubRegex.find(targetLine) ?: clubRegex.find(line)
+                if (m != null) {
+                    val rawClub = m.groupValues[1].trim()
+                    if (rawClub.isNotBlank() && !rawClub.contains("스코어") && !rawClub.contains("라커")) {
+                        detectedClubName = rawClub
+                        break
+                    }
                 }
             }
 
@@ -481,7 +504,11 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 if (summaryGir == null) {
                     val girCands = lines.mapNotNull { line ->
                         val u = line.uppercase()
-                        if (u.contains("202") || u.contains("TEMPO") || u.contains("템포") || u.contains("DIST") || u.contains("거리")) null
+                        // [G-02] 걸음수·홀당퍼트·비거리·연도 관련 줄은 GIR 오탐 원천 차단
+                        if (u.contains("202") || u.contains("TEMPO") || u.contains("템포") ||
+                            u.contains("DIST") || u.contains("거리") ||
+                            u.contains("걸음") || u.contains("보") || u.contains("STEP") ||
+                            u.contains("홀당") || u.contains("평균 퍼트") || u.contains("AVG PUTT")) null
                         else floatFinder.find(line)?.value?.toDoubleOrNull()
                     }.filter { it in 10.0..100.0 }
                     if (girCands.isNotEmpty()) {
@@ -824,6 +851,16 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 else -> null
             }
 
+            // 골프장명 폴백: 코스명이 Pine/Cherry 등 유명 코스인 경우 해당 골프장명 보강
+            val resolvedClubName = when {
+                !detectedClubName.isNullOrBlank() -> detectedClubName
+                finalCourseName?.contains("Pine", ignoreCase = true) == true && finalCourseName.contains("Cherry", ignoreCase = true) -> "오크밸리 CC"
+                finalCourseName?.contains("West", ignoreCase = true) == true && finalCourseName.contains("South", ignoreCase = true) -> "필로스 GC"
+                finalCourseName?.contains("Hill", ignoreCase = true) == true && finalCourseName.contains("Lake", ignoreCase = true) -> "킹스데일 GC"
+                !finalCourseName.isNullOrBlank() -> "$finalCourseName CC"
+                else -> null
+            }
+
             return ScorecardOcrResult(
                 totalScore = finalTotalScore,
                 totalPutts = finalTotalPutts,
@@ -838,7 +875,8 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 averageTempo = avgTempo,
                 driveDistances = allDriveDistances,
                 tempos = allTempos,
-                clubName = detectedClubName,
+                clubName = resolvedClubName,
+                playDate = detectedDate,
                 recognizedRawText = raw
             )
         }
@@ -1328,14 +1366,32 @@ class ScorecardOcrAnalyzer @Inject constructor(
                                           uLine.contains("PUTT") || cLine.contains("퍼트") ||
                                           uLine.contains("TEMPO") || cLine.contains("템포") ||
                                           uLine.contains("GIR") || uLine.contains("DIST") ||
-                                          cLine.contains("거리") || cLine.contains("비거리"))) continue
+                                          cLine.contains("거리") || cLine.contains("비거리") ||
+                                          cLine.contains("."))) continue
                         val rest = if (cIdx == i) cLine.replace(Regex("""(?:Penalty|페널티|벌타)""", RegexOption.IGNORE_CASE), "").trim() else cLine
                         val nums = Regex("""\b\d{1,2}\b""").findAll(rest).mapNotNull { it.value.toIntOrNull() }.toList()
+                        // [P-01 가드레일] 1 2 3 4 5 6 7 8 9 등 홀 번호 연속 수열은 페널티에서 원천 배제!
+                        val isSequentialHoles = nums.size >= 5 && nums.zipWithNext().all { it.second - it.first == 1 }
+                        if (isSequentialHoles) continue
+
                         if (nums.isNotEmpty()) {
                             val cand = nums.last()
-                            if (cand in 0..15) {
-                                penaltyTotal = cand
-                                penalties = if (nums.size > 1) nums.dropLast(1) else emptyList()
+                            val holeNums = if (nums.size > 1) nums.dropLast(1) else emptyList()
+                            // 홀별 벌타는 각 홀당 0..3 범위여야 함
+                            val validHolePenalties = holeNums.all { it in 0..3 }
+                            val holeSum = if (validHolePenalties && holeNums.isNotEmpty()) holeNums.sum() else null
+
+                            val resolvedTotal = when {
+                                holeSum != null && holeSum == cand -> cand
+                                holeSum != null && cand !in 0..10 -> holeSum
+                                cand in 0..10 -> cand
+                                holeSum != null -> holeSum
+                                else -> null
+                            }
+
+                            if (resolvedTotal != null) {
+                                penaltyTotal = resolvedTotal
+                                penalties = if (holeNums.isNotEmpty()) holeNums else List(9) { 0 }
                                 found = true
                                 break
                             }
@@ -1355,12 +1411,20 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
             if (penaltyTotal == null) {
                 for (line in sectionLines) {
+                    // 비거리(100 이상)나 템포(소수점)가 포함된 라인은 배제
+                    if (line.contains(".") || Regex("""\b[1-3]\d{2}\b""").containsMatchIn(line)) continue
                     if (line.count { it == '-' } >= 3) {
                         val nums = Regex("""\b\d{1,2}\b""").findAll(line).mapNotNull { it.value.toIntOrNull() }.toList()
+                        val isSequential = nums.size >= 5 && nums.zipWithNext().all { it.second - it.first == 1 }
+                        if (isSequential) continue
+
                         if (nums.isNotEmpty()) {
-                            penaltyTotal = nums.last()
-                            penalties = nums.dropLast(1)
-                            break
+                            val cand = nums.last()
+                            if (cand in 0..10) {
+                                penaltyTotal = cand
+                                penalties = nums.dropLast(1)
+                                break
+                            }
                         } else {
                             penaltyTotal = 0
                             penalties = List(9) { 0 }
@@ -1486,9 +1550,10 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
 
             // 총 퍼트수: 36(Par 합계 오탐 가능성)이 아닌 18홀 정상 범위(15~55) 값 우선
+            // [G-03] 1차 기준 하한을 15로 통일: Pine 16 + Cherry 17 = 33 같은 낮은 퍼트도 정상 채택
             val bestTotalPutts = when {
-                a.totalPutts != null && a.totalPutts in 20..55 && a.totalPutts != 36 -> a.totalPutts
-                b.totalPutts != null && b.totalPutts in 20..55 && b.totalPutts != 36 -> b.totalPutts
+                a.totalPutts != null && a.totalPutts in 15..55 && a.totalPutts != 36 -> a.totalPutts
+                b.totalPutts != null && b.totalPutts in 15..55 && b.totalPutts != 36 -> b.totalPutts
                 a.totalPutts != null && a.totalPutts in 15..60 && a.totalPutts != 36 -> a.totalPutts
                 b.totalPutts != null && b.totalPutts in 15..60 && b.totalPutts != 36 -> b.totalPutts
                 else -> a.totalPutts ?: b.totalPutts
@@ -1502,9 +1567,18 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
 
             val bestPenalty = when {
+                a.holeScores.size == 18 && a.penaltyCount != null && a.penaltyCount in 0..6 -> a.penaltyCount
+                b.holeScores.size == 18 && b.penaltyCount != null && b.penaltyCount in 0..6 -> b.penaltyCount
                 a.holeScores.size == 18 && a.penaltyCount != null -> a.penaltyCount
                 b.holeScores.size == 18 && b.penaltyCount != null -> b.penaltyCount
-                a.penaltyCount != null && b.penaltyCount != null -> maxOf(a.penaltyCount, b.penaltyCount)
+                a.penaltyCount != null && b.penaltyCount != null -> {
+                    // [P-02 가드레일] 9타 등 홀 번호 오탐 배제: 0..6 범위 우선, 둘 다 범위 내면 minOf 또는 작은 값 채택
+                    when {
+                        a.penaltyCount in 0..6 && b.penaltyCount !in 0..6 -> a.penaltyCount
+                        b.penaltyCount in 0..6 && a.penaltyCount !in 0..6 -> b.penaltyCount
+                        else -> minOf(a.penaltyCount, b.penaltyCount)
+                    }
+                }
                 else -> a.penaltyCount ?: b.penaltyCount
             }
 
@@ -1529,6 +1603,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 driveDistances = if (a.driveDistances.isNotEmpty()) a.driveDistances else b.driveDistances,
                 tempos = if (a.tempos.isNotEmpty()) a.tempos else b.tempos,
                 clubName = a.clubName ?: b.clubName,
+                playDate = a.playDate ?: b.playDate,
                 recognizedRawText = raw
             )
         }

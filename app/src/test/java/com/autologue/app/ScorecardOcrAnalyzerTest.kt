@@ -518,29 +518,31 @@ class ScorecardOcrAnalyzerTest {
         // 사용자 실제 오크밸리 CC 모바일 스코어카드 (Pine / Cherry 18홀)
         val oakValleyRawText = """
             스코어카드
-            오크밸리 CC
-            92
-            SCORE
-            27.8
-            GIR
-            2.1
-            홀당 평균 퍼트 수
-            6983
-            전체 걸음수
+            오크밸리 CC / 2026.09.11
+            92(+20) 27.8%
+            SCORE GIR
+            2.1 6983
+            홀당 평균 퍼트 수 전체 걸음수
             
             Pine
             HOLE 1 2 3 4 5 6 7 8 9 Total
-            Par 4 4 3 5 4 4 3 5 4 36
+            Par 4 4 3 4 5 4 3 4 5 36
             Score 4 8 3 5 5 6 4 7 6 48
-            Putt 2 3 1 2 2 3 2 3 2 20
-            Penalty - - - - - 1 - 1 - 2
+            Putt 1 3 1 2 2 3 2 3 3 20
+            Penalty - 1 - - - 1 - - - 2
+            GIR
+            Tempo (Tee Shot) 3.0 3.0 - 3.0 3.1 2.8 - 3.8 3.1
+            Dist. (Tee Shot) 167 222 - 239 241 182 - 209 199
             
             Cherry
             HOLE 10 11 12 13 14 15 16 17 18 Total
-            Par 4 4 5 3 4 5 4 3 4 36
-            Score 4 5 5 6 4 5 5 5 5 44
-            Putt 2 2 2 3 1 2 2 2 2 18
+            Par 4 3 4 4 4 3 5 4 5 36
+            Score 5 3 5 4 6 4 5 6 6 44
+            Putt 2 2 3 1 3 2 2 1 2 18
             Penalty - - - - - - - 1 - 1
+            GIR
+            Tempo (Tee Shot) 3.3 - 3.0 3.2 3.1 - 2.6 3.3 2.8
+            Dist. (Tee Shot) 262 - 229 195 196 - 202 187 179
         """.trimIndent()
 
         val result = ScorecardOcrAnalyzer.parse(oakValleyRawText)
@@ -552,7 +554,7 @@ class ScorecardOcrAnalyzerTest {
         assertEquals(38, result.totalPutts)
 
         // 3. 18홀 홀별 타수 검증
-        val expectedHoles = listOf(4, 8, 3, 5, 5, 6, 4, 7, 6, 4, 5, 5, 6, 4, 5, 5, 5, 5)
+        val expectedHoles = listOf(4, 8, 3, 5, 5, 6, 4, 7, 6, 5, 3, 5, 4, 6, 4, 5, 6, 6)
         assertEquals(18, result.holeScores.size)
         assertEquals(expectedHoles, result.holeScores)
 
@@ -562,14 +564,44 @@ class ScorecardOcrAnalyzerTest {
         // 5. 골프장명 검증 (오크밸리 CC)
         assertEquals("오크밸리 CC", result.clubName)
 
-        // 6. GIR 검증 (% 기호 없이 인접 줄 분리된 27.8 감지)
+        // 6. 경기 일자 검증 (2026.09.11)
+        assertNotNull(result.playDate)
+        assertEquals(java.time.LocalDate.of(2026, 9, 11), result.playDate)
+
+        // 7. GIR 검증 (27.8%)
         assertNotNull(result.girPercentage)
         assertEquals(27.8, result.girPercentage!!, 0.01)
 
-        // 7. 전체 걸음수 검증 (6983)
+        // 8. 전체 걸음수 검증 (6983)
         assertEquals(6983, result.steps)
 
-        // 8. 총 페널티 검증 (전반 2 + 후반 1 = 3)
+        // 9. 총 페널티 검증 (전반 2 + 후반 1 = 3)
         assertEquals(3, result.penaltyCount)
+
+        // 10. [핵심 검증] 18홀 홀별 Par 배열 검증 (Pine 9홀 + Cherry 9홀)
+        val expectedPars = listOf(4, 4, 3, 4, 5, 4, 3, 4, 5, 4, 3, 4, 4, 4, 3, 5, 4, 5)
+        assertEquals(18, result.holePars.size)
+        assertEquals(expectedPars, result.holePars)
+
+        // 11. [핵심 검증] GolfRound.getScorecardStats()가 실제 holePars를 기반으로 정확히 계산하는지 검증
+        // 오크밸리 스코어: [4, 8, 3, 5, 5, 6, 4, 7, 6, 5, 3, 5, 4, 6, 4, 5, 6, 6]
+        // 오크밸리 파:    [4, 4, 3, 4, 5, 4, 3, 4, 5, 4, 3, 4, 4, 4, 3, 5, 4, 5]
+        // 차이:          [0, +4, 0, +1, 0, +2, +1, +3, +1, +1, 0, +1, 0, +2, +1, 0, +2, +1]
+        // -> 버디: 0, 파: 6, 보기: 7, 더블+: 5, 페널티: 3
+        val oakValleyRound = com.autologue.app.domain.model.GolfRound(
+            clubName = result.clubName ?: "오크밸리 CC",
+            roundDate = java.time.LocalDateTime.now(),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            holeScores = result.holeScores,
+            holePars = result.holePars,
+            penaltyCount = result.penaltyCount
+        )
+        val stats = oakValleyRound.getScorecardStats()
+        assertNotNull(stats)
+        assertEquals(0, stats!!.birdieCount)      // 버디 0개 (표준 파로 계산 시 3번 홀 파5 오탐으로 버디가 잘못 나옴)
+        assertEquals(6, stats.parCount)         // 파 6개 (1, 3, 5, 11, 13, 16)
+        assertEquals(7, stats.bogeyCount)       // 보기 7개 (4, 7, 9, 10, 12, 15, 18)
+        assertEquals(5, stats.doublePlusCount)  // 더블+ 5개 (2, 6, 8, 14, 17)
+        assertEquals(3, stats.penaltyCount)     // 벌타 3타
     }
 }

@@ -17,6 +17,8 @@ data class GolfRoundEntity(
     val totalScore: Int?,
     val totalPutts: Int?,
     val holeScores: List<Int>,
+    // [H-02] OCR 추출 실제 홀별 파 정보 저장 — getScorecardStats() 집계 정확도 보장
+    val holePars: List<Int> = emptyList(),
     val scorecardPhotoUri: String?,
     val matchingPhotoUris: List<String>,
     val greenFeeExpense: Long,

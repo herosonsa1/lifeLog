@@ -97,6 +97,12 @@ fun GolfScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
+            // [U-01] 앱 재시작 후에도 URI 접근이 유지되도록 영구 읽기 권한 취득
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             viewModel.scanGolfLockerSlip(uri)
         }
     }
@@ -106,8 +112,14 @@ fun GolfScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val targetRoundId = (uiState.selectedRound ?: uiState.rounds.firstOrNull())?.id
-            viewModel.scanScorecard(targetRoundId, uri)
+            // [U-01] 앱 재시작 후에도 URI 접근이 유지되도록 영구 읽기 권한 취득
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            // 상단 액션 바 스캔은 스코어카드 사진을 분석하여 날짜/골프장 기준 신규 라운드 생성(또는 자동 매칭)하도록 null 전달
+            viewModel.scanScorecard(null, uri)
         }
     }
 
@@ -797,6 +809,12 @@ fun GolfRoundDetailDialog(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
+            // [U-01] 앱 재시작 후에도 URI 접근이 유지되도록 영구 읽기 권한 취득
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             onScanScorecard(uri)
         }
     }
@@ -805,6 +823,14 @@ fun GolfRoundDetailDialog(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
+            // [U-01] 복수 선택 사진 모두에 영구 읽기 권한 취득
+            uris.forEach { uri ->
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            }
             onAddPhotos(uris.map { it.toString() })
         }
     }

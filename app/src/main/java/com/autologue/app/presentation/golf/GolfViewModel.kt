@@ -203,9 +203,15 @@ class GolfViewModel @Inject constructor(
             val list = golfRepository.getAllGolfRoundsFlow().first()
             for (round in list) {
                 val (officialName, coords) = resolveOfficialGolfCourse(round.clubName)
-                if (officialName != round.clubName || (round.latitude == null && coords != null)) {
+                // [G-01] resolveOfficialGolfCourse가 knownCourses에 실제 매칭된 경우에만 클럽명 업데이트.
+                // coords == null이면 fallback(미매칭) 결과이므로 클럽명은 그대로 유지하고 좌표만 보강한다.
+                // 이를 통해 OCR이 설정한 유효한 클럽명이 fallback 이름으로 덮어씌워지는 버그를 방지.
+                val isKnownCourseMatch = coords != null
+                val needsNameUpdate = isKnownCourseMatch && officialName != round.clubName
+                val needsCoordsUpdate = round.latitude == null && coords != null
+                if (needsNameUpdate || needsCoordsUpdate) {
                     val updated = round.copy(
-                        clubName = officialName,
+                        clubName = if (needsNameUpdate) officialName else round.clubName,
                         latitude = round.latitude ?: coords?.first,
                         longitude = round.longitude ?: coords?.second
                     )
@@ -499,7 +505,7 @@ class GolfViewModel @Inject constructor(
                 val result = scorecardOcrAnalyzer.analyzeScorecard(imageUri)
                 val target = if (roundId != null) golfRepository.getGolfRoundById(roundId) else null
                 val updatedRound = if (roundId != null && target != null) {
-                    val finalScore = result.totalScore ?: target.totalScore ?: 86
+                    val finalScore = result.totalScore ?: target.totalScore ?: (if (result.holeScores.isNotEmpty()) result.holeScores.sum() else 86)
                     extractScorecardOcrUseCase.saveOcrResult(
                         roundId = roundId,
                         totalScore = finalScore,
@@ -515,17 +521,20 @@ class GolfViewModel @Inject constructor(
                         steps = result.steps,
                         driveDistances = result.driveDistances,
                         tempos = result.tempos,
-                        holePars = result.holePars
+                        holePars = result.holePars,
+                        clubName = result.clubName
                     )
                     golfRepository.getGolfRoundById(roundId)
                 } else {
                     // targetRound가 없더라도 새 라운드를 자동 생성하여 스코어카드 반영
-                    extractScorecardOcrUseCase.processScorecardResult(result, imageUri.toString(), LocalDate.now())
+                    val targetDate = result.playDate ?: LocalDate.now()
+                    extractScorecardOcrUseCase.processScorecardResult(result, imageUri.toString(), targetDate)
                 }
                 _uiState.value = _uiState.value.copy(
                     isOcrScanning = false,
                     selectedRound = updatedRound
                 )
+                loadRounds()
             } catch (t: Throwable) {
                 android.util.Log.e("GolfViewModel", "스코어카드 스캔 중 오류", t)
                 _uiState.value = _uiState.value.copy(isOcrScanning = false)

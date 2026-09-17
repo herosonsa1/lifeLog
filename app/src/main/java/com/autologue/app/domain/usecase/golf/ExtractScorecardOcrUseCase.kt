@@ -1,4 +1,4 @@
-package com.autologue.app.domain.usecase.golf
+﻿package com.autologue.app.domain.usecase.golf
 
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.RouteStep
@@ -28,7 +28,8 @@ class ExtractScorecardOcrUseCase @Inject constructor(
         steps: Int? = null,
         driveDistances: List<Double> = emptyList(),
         tempos: List<Double> = emptyList(),
-        holePars: List<Int> = emptyList()
+        holePars: List<Int> = emptyList(),
+        clubName: String? = null
     ) {
         val round = golfRepository.getGolfRoundById(roundId) ?: return
 
@@ -39,16 +40,18 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             round.memo ?: ""
         }
 
+        // [H-02] OCR 추출 실제 파 배열 우선, 없으면 표준 기본 파 폴백
+        val effectivePars = if (holePars.size == holeScores.size && holePars.isNotEmpty()) holePars
+        else listOf(4, 3, 5, 4, 3, 4, 5, 4, 4, 4, 4, 5, 3, 4, 5, 4, 3, 4)
+
         // 2. 홀별 성적 통계(버디, 파, 보기, 더블+) 태그 보강
         if (holeScores.isNotEmpty()) {
-            val defaultPars = if (holePars.size == holeScores.size && holePars.isNotEmpty()) holePars
-            else listOf(4, 3, 5, 4, 3, 4, 5, 4, 4, 4, 4, 5, 3, 4, 5, 4, 3, 4)
             var birdie = 0
             var par = 0
             var bogey = 0
             var doublePlus = 0
             holeScores.forEachIndexed { idx, score ->
-                val expectedPar = defaultPars.getOrElse(idx) { 4 }
+                val expectedPar = effectivePars.getOrElse(idx) { 4 }
                 val diff = score - expectedPar
                 when {
                     diff <= -1 -> birdie++
@@ -75,10 +78,17 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             (trimmed.sum() / trimmed.size * 10).toInt() / 10.0
         } else averageDriveDistance
 
+        val finalClub = if (!clubName.isNullOrBlank() && (round.clubName == "필드 골프장" || round.clubName.contains("일반 사진") || round.clubName.isBlank())) {
+            clubName
+        } else round.clubName
+
         val updated = round.copy(
+            clubName = finalClub,
             totalScore = totalScore,
             totalPutts = totalPutts,
             holeScores = holeScores,
+            // [H-02] OCR 추출 실제 파 배열 저장 — 버디/파/보기/더블+ 집계 정확도 보장
+            holePars = if (holePars.isNotEmpty()) holePars else round.holePars,
             scorecardPhotoUri = scorecardUri,
             memo = updatedMemo,
             penaltyCount = penaltyCount ?: round.penaltyCount,
@@ -112,11 +122,9 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             if (penaltyCount != null && penaltyCount > 0) statsList.add("벌타 ${penaltyCount}타")
             if (steps != null) statsList.add("걸음 ${steps}보")
             if (holeScores.isNotEmpty()) {
-                val defaultPars = if (holePars.size == holeScores.size && holePars.isNotEmpty()) holePars
-                else listOf(4, 3, 5, 4, 3, 4, 5, 4, 4, 4, 4, 5, 3, 4, 5, 4, 3, 4)
-                val b = holeScores.indices.count { holeScores[it] - defaultPars.getOrElse(it) { 4 } <= -1 }
-                val p = holeScores.indices.count { holeScores[it] - defaultPars.getOrElse(it) { 4 } == 0 }
-                val d = holeScores.indices.count { holeScores[it] - defaultPars.getOrElse(it) { 4 } >= 2 }
+                val b = holeScores.indices.count { holeScores[it] - effectivePars.getOrElse(it) { 4 } <= -1 }
+                val p = holeScores.indices.count { holeScores[it] - effectivePars.getOrElse(it) { 4 } == 0 }
+                val d = holeScores.indices.count { holeScores[it] - effectivePars.getOrElse(it) { 4 } >= 2 }
                 statsList.add("버디 ${b}·파 ${p}·더블+ ${d}")
             }
 
@@ -168,12 +176,15 @@ class ExtractScorecardOcrUseCase @Inject constructor(
         targetDate: java.time.LocalDate
     ): GolfRound? {
         val totalScore = result.totalScore ?: (if (result.holeScores.isNotEmpty()) result.holeScores.sum() else null) ?: return null
-        val existingRound = golfRepository.getGolfRoundByDate(targetDate)
+        val effectiveDate = result.playDate ?: targetDate
+        val existingRound = golfRepository.getGolfRoundByDate(effectiveDate)
 
         val finalRound = if (existingRound != null) {
-            val candidateClub = result.clubName ?: (if (!result.courseName.isNullOrBlank()) "${result.courseName} 코스" else null)
-            val updatedClub = if ((existingRound.clubName == "필드 골프장" || existingRound.clubName.isBlank()) && candidateClub != null) {
+            val candidateClub = result.clubName ?: (if (!result.courseName.isNullOrBlank()) "${result.courseName} CC" else null)
+            val updatedClub = if ((existingRound.clubName == "필드 골프장" || existingRound.clubName.contains("일반 사진") || existingRound.clubName.isBlank()) && candidateClub != null) {
                 candidateClub
+            } else if (!result.clubName.isNullOrBlank() && (existingRound.clubName == "필드 골프장" || existingRound.clubName.contains("일반 사진") || existingRound.clubName.isBlank())) {
+                result.clubName
             } else existingRound.clubName
 
             val updatedWithPhoto = existingRound.copy(
@@ -184,9 +195,9 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             golfRepository.updateGolfRound(updatedWithPhoto)
             updatedWithPhoto
         } else {
-            val club = result.clubName ?: (if (!result.courseName.isNullOrBlank()) "${result.courseName} 코스" else "필드 골프장")
-            val startTime = targetDate.atTime(8, 0)
-            val endTime = targetDate.atTime(13, 30)
+            val club = result.clubName ?: (if (!result.courseName.isNullOrBlank()) "${result.courseName} CC" else "필드 골프장")
+            val startTime = effectiveDate.atTime(8, 0)
+            val endTime = effectiveDate.atTime(13, 30)
             val memo = if (!result.courseName.isNullOrBlank()) "코스: ${result.courseName}" else "스코어카드 자동 분석"
             val newRound = GolfRound(
                 clubName = club,
@@ -217,7 +228,8 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             steps = result.steps,
             driveDistances = result.driveDistances,
             tempos = result.tempos,
-            holePars = result.holePars
+            holePars = result.holePars,
+            clubName = finalRound.clubName
         )
 
         return golfRepository.getGolfRoundById(finalRound.id) ?: finalRound

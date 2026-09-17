@@ -1343,3 +1343,47 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
   - 상단 `[🔄 정기지출 (2)]` 필터 칩 클릭 시 정기지출 내역 모아보기 정상 작동 확인.
   - `[🏛️ 계좌 관리]` 다이얼로그 팝업 및 계좌 등록/삭제 정상 작동 확인.
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+
+---
+
+## 44. 골프 라운딩 스코어카드 OCR 연동 및 통계 집계 정밀화 (2026-09-17)
+
+### 44.1. 사용자 핵심 요청 사항
+> 1. "골프 라운딩 기록이 여전히 동작하지 않아."  
+> 2. "골프 라운딩 기록이 여전히 동작하지 않는 부분에 대해 조치했다는데, 반복해서 해결되지 않는 이유까지 모두 조치됐는지 다시 점검해줘"  
+> 3. "스코어카드 분석하여 데이터 집계하는 부분에 대한 오류여부도 점검해줘"  
+> 4. "타수, 벌타수, 버디, 파, 더블이상 집계도 정상적으로 동작하나?"  
+> 5. "이 응답을 봐서는 정상인데, 모바일에서 구동해보면, 수치가 다르게 집계되더라구"
+
+### 44.2. 주요 개선 및 결함 해결 내역
+1. **상단 액션 바 [📷 스코어카드 스캔] 시 신규 라운드 생성 차단 버그 해결 (`GolfScreen.kt`, `GolfViewModel.kt`)**:
+   - `globalScorecardPicker`에서 `(uiState.selectedRound ?: uiState.rounds.firstOrNull())?.id`를 타겟 ID로 넘기던 코드를 제거하고 `null`을 전달하여 기존 라운드 덮어쓰기 방지 및 신규 라운드 자동 생성 보장.
+   - `scanScorecard()`에서 `result.playDate ?: LocalDate.now()` 기반 타겟 날짜 설정 및 스캔 완료 후 `loadRounds()` 호출로 즉각 화면 갱신.
+2. **스코어카드 경기 일자(`playDate`) 정밀 추출 및 골프장명 폴백 (`ScorecardOcrAnalyzer.kt`, `ExtractScorecardOcrUseCase.kt`)**:
+   - `ScorecardOcrResult`에 `playDate: LocalDate?` 필드 추가 및 상단 15줄 대상 2자리 월/일 우선 매칭 정규식(`1[0-2]|0?[1-9]`) 탑재.
+   - `오크밸리 CC / 2026.09.11` 형태의 슬래시 분리 처리, Pine/Cherry 코스명 기반 오크밸리 CC 자동 폴백 지원.
+   - 신규 라운드 생성 시 `effectiveDate.atTime(8, 0)`로 경기 시작일시 정확 설정.
+3. **기존 라운드 정규화 덮어쓰기 버그 수정 (`GolfViewModel.kt`)**:
+   - `normalizeExistingRoundsOnce()`에서 `coords != null`(knownCourses 매칭) 가드를 추가하여, 미매칭 시 OCR이 정밀 추출한 클럽명이 원본 fallback 이름으로 덮어씌워지는 문제 원천 차단.
+4. **Android 11+ URI 영구 읽기 권한 누락 해결 (`GolfScreen.kt`)**:
+   - `takePersistableUriPermission`을 4개 이미지 피커(`globalLockerSlipPicker`, `globalScorecardPicker`, `scorecardPhotoPicker`, `roundPhotosPicker`)에 전면 적용하여 앱 재시작 시 사진 로드 `SecurityException` 방어.
+5. **홀별 파 정보(`holePars`) 영속화 및 비표준 파 코스 성적 집계 정상화 (`GolfRound.kt`, `GolfRoundEntity.kt`, `GolfRepositoryImpl.kt`, `AppDatabase.kt`, `ExtractScorecardOcrUseCase.kt`)**:
+   - 기존에는 도메인/DB에 `holePars`가 없어 획일적 기본 파(`4,3,5,4,...`)로만 계산되어 오크밸리 CC(Pine/Cherry) 등 비표준 코스에서 버디/파/보기가 엉뚱하게 왜곡되던 구조적 결함 해결.
+   - Room DB `version = 6` 갱신 및 `holePars` 컬럼 추가 (`Converters.kt`의 `fromIntList`/`toIntList`로 직렬화).
+   - `GolfRound.getScorecardStats()`에서 실제 파 우선 적용: 오크밸리 CC 기준 **버디 0, 파 6, 보기 7, 더블+ 5, 벌타 3** 100% 정확 일치.
+6. **페널티(벌타) 9타 오탐 원천 차단 및 GIR/퍼트 가드레일 (`ScorecardOcrAnalyzer.kt`)**:
+   - 홀 번호 수열(`1 2 3 4 5 6 7 8 9`)이 `Penalty` 인접 행으로 인식될 때 마지막 9번 홀의 `9`가 페널티 Total로 오탐되던 결함 수정:
+     - `1..9`, `10..18` 등 홀 번호 연속 수열 페널티 파싱에서 원천 배제.
+     - 템포/비거리 행(소수점 또는 100 이상 숫자) 페널티 폴백 대상에서 원천 배제.
+     - `mergeResults`에서 정상 범위(`0..6타`) 우선 채택으로 9타 오탐 방어.
+   - GIR 2단계 폴백에 걸음수/홀당평균퍼트 키워드 필터 추가로 오탐 차단.
+   - 퍼트 수 하한 기준을 `15`로 일관 통일.
+
+### 44.3. 빌드 및 테스트 검증
+- **단위 테스트 전원 통과**:
+  - `ScorecardOcrAnalyzerTest` (14개 테스트 전원 통과)
+  - `AutoProcessGolfMediaUseCaseTest` (3개 테스트 전원 통과)
+  - 실제 오크밸리 CC 및 필로스 GC 스코어카드 파싱 및 집계 검증 통과 (`BUILD SUCCESSFUL in 1m 3s`).
+- **전체 APK 빌드**: `assembleDebug` `BUILD SUCCESSFUL (exit code 0)`.
+- **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
+

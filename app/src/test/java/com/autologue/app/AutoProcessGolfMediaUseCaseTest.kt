@@ -110,6 +110,58 @@ class AutoProcessGolfMediaUseCaseTest {
         assertEquals(1, fakeGolfRepository.rounds.size)
     }
 
+    @Test
+    fun processScorecardResult_persistsHoleParsAndGeneratesAccurateStats() = runBlocking {
+        // 오크밸리 CC 실제 스코어카드 데이터 (비표준 파 코스: Pine + Cherry)
+        val oakValleyPars = listOf(4, 4, 3, 4, 5, 4, 3, 4, 5, 4, 3, 4, 4, 4, 3, 5, 4, 5)
+        val oakValleyScores = listOf(4, 8, 3, 5, 5, 6, 4, 7, 6, 5, 3, 5, 4, 6, 4, 5, 6, 6)
+        val testDate = LocalDate.of(2026, 9, 11)
+
+        val result = ScorecardOcrResult(
+            totalScore = 92,
+            totalPutts = 38,
+            holeScores = oakValleyScores,
+            holePars = oakValleyPars,
+            courseName = "Pine / Cherry",
+            clubName = "오크밸리 CC",
+            girPercentage = 27.8,
+            steps = 6983,
+            penaltyCount = 3,
+            playDate = testDate,
+            recognizedRawText = "오크밸리 CC / 2026.09.11 SCORE 92"
+        )
+
+        val round = extractScorecardOcrUseCase.processScorecardResult(
+            result = result,
+            scorecardUri = "content://media/oak_valley.png",
+            targetDate = testDate
+        )
+
+        // 1. GolfRound에 holePars가 온전히 저장되었는지 검증
+        assertNotNull(round)
+        assertEquals(18, round!!.holePars.size)
+        assertEquals(oakValleyPars, round.holePars)
+        assertEquals(92, round.totalScore)
+        assertEquals(38, round.totalPutts)
+        assertEquals(3, round.penaltyCount)
+
+        // 2. round.getScorecardStats()가 실제 holePars를 반영하여 정확히 집계하는지 검증
+        val stats = round.getScorecardStats()
+        assertNotNull(stats)
+        assertEquals(0, stats!!.birdieCount)
+        assertEquals(6, stats.parCount)
+        assertEquals(7, stats.bogeyCount)
+        assertEquals(5, stats.doublePlusCount)
+        assertEquals(3, stats.penaltyCount)
+
+        // 3. 메모에 [통계: 버디 0, 파 6, 보기 7, 더블+ 5] 태그가 반영되었는지 검증
+        assertNotNull(round.memo)
+        assertTrue("메모에 버디 0이 포함되어야 함: ${round.memo}", round.memo!!.contains("버디 0"))
+        assertTrue("메모에 파 6이 포함되어야 함: ${round.memo}", round.memo!!.contains("파 6"))
+        assertTrue("메모에 보기 7이 포함되어야 함: ${round.memo}", round.memo!!.contains("보기 7"))
+        assertTrue("메모에 더블+ 5가 포함되어야 함: ${round.memo}", round.memo!!.contains("더블+ 5"))
+    }
+
     // Fake Repositories for testing
     class FakeGolfRepository : GolfRepository {
         val rounds = mutableListOf<GolfRound>()

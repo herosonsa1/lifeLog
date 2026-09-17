@@ -14,6 +14,8 @@ data class GolfRound(
     val totalScore: Int? = null,
     val totalPutts: Int? = null,
     val holeScores: List<Int> = emptyList(),
+    // [H-02] OCR 추출 실제 홀별 파 정보 — getScorecardStats() 정확한 집계에 사용
+    val holePars: List<Int> = emptyList(),
     val scorecardPhotoUri: String? = null,
     val matchingPhotoUris: List<String> = emptyList(),
     val greenFeeExpense: Long = 0L,
@@ -72,16 +74,19 @@ data class ScorecardStats(
  * 스코어카드 통계 집계 반환 (holeScores 기반 자동 계산 최우선, 없으면 memo에 저장된 태그 폴백)
  */
 fun GolfRound.getScorecardStats(): ScorecardStats? {
-    // 1. holeScores 기반 자동 계산 (표준 18홀 파 또는 4타 기준) - 실제 스코어가 항상 최우선 진실의 원천
+    // 1. holeScores 기반 자동 계산 (실제 스코어가 항상 최우선 진실의 원천)
     if (holeScores.isNotEmpty()) {
-        val defaultPars = listOf(4, 3, 5, 4, 3, 4, 5, 4, 4, 4, 4, 5, 3, 4, 5, 4, 3, 4)
+        // [H-02] OCR로 저장된 실제 홀별 파 배열 우선 사용, 없으면 표준 18홀 기본 파 폴백
+        val standardPars = listOf(4, 3, 5, 4, 3, 4, 5, 4, 4, 4, 4, 5, 3, 4, 5, 4, 3, 4)
+        val effectivePars = if (holePars.size == holeScores.size && holePars.isNotEmpty()) holePars
+                           else standardPars
         var birdie = 0
         var par = 0
         var bogey = 0
         var doublePlus = 0
 
         holeScores.forEachIndexed { idx, score ->
-            val expectedPar = if (idx < defaultPars.size) defaultPars[idx] else 4
+            val expectedPar = effectivePars.getOrElse(idx) { 4 }
             val diff = score - expectedPar
             when {
                 diff <= -1 -> birdie++
