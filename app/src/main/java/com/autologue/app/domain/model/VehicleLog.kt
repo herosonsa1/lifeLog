@@ -75,4 +75,78 @@ fun VehicleLog.buildUpdatedNote(
     return (tags.joinToString(" ") + if (clean.isNotBlank()) " $clean" else "").trim()
 }
 
+/**
+ * 주행 기록에서 메인 타이틀로 표시할 시작지점 ➔ 종료지점 경로 문자열 추출
+ */
+fun VehicleLog.getDrivingRouteTitle(): String? {
+    if (logType != VehicleLogType.TRIP_DRIVING) return null
+    val n = note ?: return null
+
+    // 1. 신규 포맷: "[출발지 ➔ 도착지 (거리 km)]" 대괄호 패턴 검색
+    val routeBracketMatch = Regex("\\[([^\\]]+➔[^\\]]+)\\]").find(n)
+    if (routeBracketMatch != null) {
+        return routeBracketMatch.groupValues[1].trim()
+    }
+
+    // 2. 괄호 없는 "출발지 ➔ 도착지" 패턴 검색
+    val arrowMatch = Regex("([^(\\[]+➔[^)\\]]+)").find(n)
+    if (arrowMatch != null) {
+        val title = arrowMatch.groupValues[1].trim()
+        return if (tripDistanceKm > 0.0 && !title.contains("km")) {
+            "$title (%.1f km)".format(tripDistanceKm)
+        } else title
+    }
+
+    // 3. 기존 출퇴근 패턴
+    if (n.contains("출근")) {
+        return if (tripDistanceKm > 0.0) "출근 주행 (%.1f km)".format(tripDistanceKm) else "출근 주행"
+    }
+    if (n.contains("퇴근")) {
+        return if (tripDistanceKm > 0.0) "퇴근 주행 (%.1f km)".format(tripDistanceKm) else "퇴근 주행"
+    }
+
+    // 4. 레거시 포맷 폴백
+    if (tripDistanceKm > 0.0) {
+        return "자동 주행 (%.1f km)".format(tripDistanceKm)
+    }
+
+    return "차량 주행 완료"
+}
+
+/**
+ * 주행 기록의 상세 보조 정보 (운행 시간, GPS 지점 수 등) 추출
+ */
+fun VehicleLog.getDrivingDetailSubtitle(): String? {
+    if (logType != VehicleLogType.TRIP_DRIVING) return null
+    val n = note ?: return null
+
+    // 소괄호 안의 운행시간/GPS 지점 정보 추출
+    val parenMatch = Regex("\\(([0-9]+분 운행[^)]*)\\)").find(n)
+    if (parenMatch != null) {
+        return parenMatch.groupValues[1]
+            .replace(", 10분 주기 GPS 추적,", " · GPS")
+            .replace(", GPS 추적,", " · GPS")
+            .replace("10분 주기 GPS 추적,", "GPS")
+            .replace("GPS 추적,", "GPS")
+            .replace("10분 주기 GPS", "GPS")
+            .replace(",", " ·")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
+    return null
+}
+
+/**
+ * UI 리스트에서 최상단 헤드라인으로 표출할 대표 타이틀
+ */
+fun VehicleLog.displayTitle(): String {
+    return when (logType) {
+        VehicleLogType.REFUELING -> gasStationName ?: "주유"
+        VehicleLogType.TRIP_DRIVING -> getDrivingRouteTitle() ?: (note ?: "주행 완료")
+        VehicleLogType.MAINTENANCE -> note ?: "차량 정비"
+        VehicleLogType.PARKING -> note ?: "주차 기록"
+    }
+}
+
 

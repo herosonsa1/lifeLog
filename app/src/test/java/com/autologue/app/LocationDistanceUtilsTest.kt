@@ -1,7 +1,6 @@
 package com.autologue.app
 
-import com.autologue.app.domain.model.RouteStep
-import com.autologue.app.domain.model.RouteStepType
+import com.autologue.app.domain.model.*
 import com.autologue.app.util.LocationDistanceUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -111,5 +110,65 @@ class LocationDistanceUtilsTest {
 
         val totalDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints)
         assertEquals(0.0, totalDist, 0.01)
+    }
+
+    @Test
+    fun testDrivingRouteTitleFromBracketFormat() {
+        val log = com.autologue.app.domain.model.VehicleLog(
+            id = 1L,
+            timestamp = LocalDateTime.now(),
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 15.2,
+            note = "[car_1: 제네시스 G80] [서울 방이동 ➔ 성남 백현동 (15.2 km)] (59분 운행 · GPS 21개 지점)"
+        )
+
+        assertEquals("서울 방이동 ➔ 성남 백현동 (15.2 km)", log.getDrivingRouteTitle())
+        assertEquals("59분 운행 · GPS 21개 지점", log.getDrivingDetailSubtitle())
+        assertEquals("서울 방이동 ➔ 성남 백현동 (15.2 km)", log.displayTitle())
+        assertEquals("car_1", log.getAssignedVehicleId())
+    }
+
+    @Test
+    fun testLegacyFormatFallback() {
+        val log = com.autologue.app.domain.model.VehicleLog(
+            id = 2L,
+            timestamp = LocalDateTime.now(),
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 18.5,
+            note = "[G80] 블루투스 연동 자동 주행 (59분 운행, 10분 주기 GPS 추적, 21개 지점)"
+        )
+
+        assertEquals("자동 주행 (18.5 km)", log.getDrivingRouteTitle())
+        assertEquals("59분 운행 · GPS 21개 지점", log.getDrivingDetailSubtitle())
+        assertEquals("자동 주행 (18.5 km)", log.displayTitle())
+    }
+
+    @Test
+    fun testCommuteTripTitle() {
+        val log = com.autologue.app.domain.model.VehicleLog(
+            id = 3L,
+            timestamp = LocalDateTime.now(),
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 24.8,
+            note = "[car_2: 쏘렌토 MQ4] [우리집 ➔ 회사 (출근 24.8 km)] (35분 운행 · GPS 12개 지점)"
+        )
+
+        assertEquals("우리집 ➔ 회사 (출근 24.8 km)", log.getDrivingRouteTitle())
+        assertEquals("우리집 ➔ 회사 (출근 24.8 km)", log.displayTitle())
+        assertEquals("car_2", log.getAssignedVehicleId())
+    }
+
+    @Test
+    fun testRefuelingTitle() {
+        val log = com.autologue.app.domain.model.VehicleLog(
+            id = 4L,
+            timestamp = LocalDateTime.now(),
+            logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
+            gasStationName = "GS칼텍스 삼평주유소",
+            note = "[car_1: 제네시스 G80] [custom_fuel:true]"
+        )
+
+        assertEquals("GS칼텍스 삼평주유소", log.displayTitle())
+        assertEquals("car_1", log.getAssignedVehicleId())
     }
 }

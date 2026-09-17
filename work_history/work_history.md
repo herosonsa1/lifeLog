@@ -1406,3 +1406,33 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
   - `e38bdd1`: `fix(golf): 오크밸리 다크모드 상단 92타 정밀 추출 및 1024px 저해상도 전후반 판정 정상화`
   - `e12201a`: `fix(sync): 다이어리 과거 동기화 시 스코어카드 자동 등록 누락 해결 (스마트 필터링 및 후보 수집 확장)`
 
+---
+
+## 45. 블루투스 연동 자동 주행거리 1.0km 고정 버그 해결, 시작-종료 타이틀 직관화 및 차량 식별 뱃지 개선 (2026-09-18)
+
+### 45.1. 사용자 핵심 요청 사항
+> "블루투스 연동 자동 주행 항목들이 10분주기 지점까지도 정확히 분석이 되는듯 한데, 거리가 1.0km 로 밖에 표시가 안돼. 백그라운드에서 동작할때의 알림에서도 마찬가지로 주행거리가 1.0km 로 표시되더라고.
+> 그리고 해당 기록의 타이틀은 시작지점과 종료지점 의 주행거리로 표시되어야 하고,
+> 블루투스 연결정보를 통해 어떤차량인지 배지로 표시되게 해줘"
+
+### 45.2. 근본 원인 분석 및 해결 내역
+1. **주행거리 1.0km 고정 및 포그라운드 알림 정체 버그 해결 (`AndroidManifest.xml`, `CarDrivingTrackingService.kt`)**:
+   - **WakeLock 부재로 인한 CPU Sleep 방지**: `AndroidManifest.xml`에 `android.permission.WAKE_LOCK` 권한을 추가하고, `CarDrivingTrackingService` 시작 시 `PowerManager.PARTIAL_WAKE_LOCK`을 최대 10시간 타임아웃으로 획득(`acquire`), 서비스 종료 및 파괴 시 안전 해제(`release`)하여 화면이 꺼져도 CPU 절전(Doze)으로 인한 백그라운드 GPS 수신 중단을 원천 차단.
+   - **Fresh GPS 위치 비동기 요청 (`getFreshLocation`) 구현**: 기존에 3분 주기 타이머에서 `lm.getLastKnownLocation()`을 호출하여 출발 시점의 단일 캐시 좌표만 21~33회 중복 획득하던 결함을 제거하고, Android 11(API 30)+ `LocationManager.getCurrentLocation()` 비동기 API를 탑재하여 실제 현재 시점의 새로운 하드웨어 GPS 픽스를 신선하게 수신.
+   - **제자리 정차 중복 좌표 필터링 및 실시간 알림 갱신**: 신호 대기 등 15m 미만 미세 이동 좌표는 중복 수집을 방지하고, 주행 중 알림에 `실시간 주행 중 · %.1f km (운행 M분, N개 지점 수집)` 형태로 0.1km 단위 실제 이동거리를 즉각 반영.
+   - **연속 Waypoint 도로 주행거리 정밀 계산**: 주행 완료 시 10분 주기 GPS Waypoint들을 순차 연결하고 국내 도로 굴곡도 계수(1.25배)를 반영하여 실제 도로 주행거리를 정밀 산출. 제자리 시동 켬/끔 왜곡 방지.
+
+2. **시작지점 ➔ 종료지점 기반 타이틀 직관화 (`CarDrivingTrackingService.kt`, `VehicleLog.kt`)**:
+   - **거점 및 역지오코딩 지명 해석 (`resolveLocationName`)**: 사용자 거점(집/회사) 반경 800m 이내 매칭 우선 적용(`우리집`, `회사`), 거점 외 지역은 `PlaceResolver.resolveGeoLocation`을 통해 시/군/구 및 읍/면/동/건물명 추출.
+   - **메인 타이틀 생성**: 기존의 난잡한 디버그 문자열(`[$activeVehicleName] 블루투스 연동 자동 주행 (59분 운행, 10분 주기 GPS 추적, 21개 지점)`) 대신 `서울 방이동 ➔ 성남 백현동 (15.2 km)` 또는 `우리집 ➔ 판교 오피스 (출근 24.8 km)` 형식으로 직관적 헤드라인 생성.
+   - **보조 캡션 분리 (`VehicleLog.getDrivingDetailSubtitle`)**: 운행 시간 및 GPS 지점 수(`59분 운행 · GPS 21개 지점`)는 메인 타이틀 아래 은은한 캡션 텍스트로 분리하여 시각적 위계(Visual Hierarchy) 정돈.
+
+3. **다중 차량 식별 전용 뱃지 표출 (`CarLedgerScreen.kt`, `VehicleLog.kt`)**:
+   - `MultiVehiclePreferences`의 등록 차량 프로필과 연동하여 블루투스로 연동된 차량의 엠블럼과 이름(예: `[🚘 제네시스 G80]`, `[🚙 쏘렌토 MQ4]`)을 전용 뱃지(`MetricBadge`)로 메인 타이틀 상단에 렌더링.
+   - 차량 1(인디고 테마)과 차량 2(에메랄드 테마)를 색상으로 구분하여 한눈에 식별 가능하도록 구현.
+   - 주행 유형 뱃지(`[일반주행]`, `[출근]`, `[퇴근]`, `[골프주행]`)와 차량 식별 뱃지를 결합하여 차계부 피드의 가독성을 극대화.
+
+### 45.3. 빌드 및 테스트 검증
+- **전체 72개 유닛 테스트 100% 통과**: `LocationDistanceUtilsTest` 내 연속 궤적 거리 계산, 단일 지점 폴백, 신규 타이틀/서브타이틀/차량ID 추출 단위 테스트 전원 통과 (`BUILD SUCCESSFUL in 46s`).
+- **전체 디버그 APK 빌드 완료**: `.\gradlew.bat assembleDebug` 빌드 및 패키징 완료 (`BUILD SUCCESSFUL in 48s`).
+

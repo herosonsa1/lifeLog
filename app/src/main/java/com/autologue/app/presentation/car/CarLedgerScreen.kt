@@ -25,11 +25,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autologue.app.data.preferences.CommuteConfig
 import com.autologue.app.data.preferences.VehicleProfile
-import com.autologue.app.domain.model.VehicleLog
-import com.autologue.app.domain.model.VehicleLogType
-import com.autologue.app.domain.model.getAssignedVehicleId
-import com.autologue.app.domain.model.getExplicitUnitPrice
-import com.autologue.app.domain.model.isCustomFuel
+import com.autologue.app.domain.model.*
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 import java.time.format.DateTimeFormatter
@@ -495,17 +491,36 @@ fun SaaSCarLogRow(
         val isToHome = log.note?.contains("퇴근") == true && log.note?.contains("출퇴근") != true
         val isCommuteRound = log.note?.contains("출퇴근") == true
         val isGolf = log.note?.contains("골프") == true || log.note?.contains("라운딩") == true || log.note?.contains("CC") == true
-        val carTag = Regex("\\[(.*?)\\]").find(log.note ?: "")?.groupValues?.get(1)?.split(" ")?.firstOrNull()
         val isCustom = log.isCustomFuel()
         val explicitUnitPrice = log.getExplicitUnitPrice()
 
+        val assignedVehicleId = log.getAssignedVehicleId()
+        val matchedVehicle = vehicles.find { it.id == assignedVehicleId }
+        val vehicleName = matchedVehicle?.name?.split(" ")?.firstOrNull()
+            ?: Regex("\\[(car_[12]:?\\s*|차량\\s*[12]:?\\s*)([^\\]]+)\\]").find(log.note ?: "")?.groupValues?.get(2)?.trim()
+            ?: Regex("\\[(G80|쏘렌토|그랜저|아반떼|카니발|[A-Za-z0-9가-힣]+)\\]").find(log.note ?: "")?.groupValues?.get(1)
+            ?: (if (assignedVehicleId == "car_2") "차량 2" else "차량 1")
+
+        val vehicleEmoji = matchedVehicle?.emblemEmoji
+            ?: com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(vehicleName ?: log.note)
+
+        val isCar2 = assignedVehicleId == "car_2"
+        val drivingSubtitle = log.getDrivingDetailSubtitle()
+
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = if (log.logType == VehicleLogType.REFUELING) (log.gasStationName ?: "주유") else (log.note ?: "주행 완료"),
-                    style = AppTypography.h2
+            // 상단 뱃지 영역: 차량 식별 뱃지 + 주행/주유 유형 뱃지
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+            ) {
+                // 1. 차량 식별 뱃지 (블루투스 연동 차량 정보)
+                MetricBadge(
+                    text = "$vehicleEmoji $vehicleName",
+                    textColor = if (isCar2) Emerald700 else Indigo700,
+                    backgroundColor = if (isCar2) Emerald50 else Indigo50
                 )
-                Spacer(modifier = Modifier.width(Spacing.sm))
+
+                // 2. 주행 유형 / 주유 뱃지
                 MetricBadge(
                     text = when {
                         log.logType == VehicleLogType.REFUELING -> "주유"
@@ -513,7 +528,7 @@ fun SaaSCarLogRow(
                         isToHome -> "퇴근"
                         isCommuteRound -> "출퇴근"
                         isGolf -> "골프주행"
-                        else -> "주행"
+                        else -> "일반주행"
                     },
                     textColor = when {
                         log.logType == VehicleLogType.REFUELING -> Amber700
@@ -528,8 +543,8 @@ fun SaaSCarLogRow(
                         else -> Slate100
                     }
                 )
+
                 if (log.logType == VehicleLogType.REFUELING) {
-                    Spacer(modifier = Modifier.width(Spacing.xs))
                     if (isCustom) {
                         MetricBadge(
                             text = "정밀 실측",
@@ -537,8 +552,7 @@ fun SaaSCarLogRow(
                             backgroundColor = Emerald50
                         )
                     } else {
-                        val assignedVehicle = vehicles.find { it.id == log.getAssignedVehicleId() }
-                        val defPrice = assignedVehicle?.defaultGasPrice ?: 1650.0
+                        val defPrice = matchedVehicle?.defaultGasPrice ?: 1650.0
                         MetricBadge(
                             text = "%,d원/L 추정".format(defPrice.toInt()),
                             textColor = Slate600,
@@ -546,22 +560,34 @@ fun SaaSCarLogRow(
                         )
                     }
                 }
-                if (carTag != null) {
-                    val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(log.note)
-                    Spacer(modifier = Modifier.width(Spacing.xs))
-                    MetricBadge(
-                        text = "$brandEmoji $carTag",
-                        textColor = Indigo700,
-                        backgroundColor = Indigo50
-                    )
-                }
             }
+
+            Spacer(modifier = Modifier.height(Spacing.xs))
+
+            // 메인 헤드라인: 시작지점 ➔ 종료지점 (거리 km) 또는 주유소명
+            Text(
+                text = log.displayTitle(),
+                style = AppTypography.h2
+            )
+
             Spacer(modifier = Modifier.height(Spacing.xxs))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+
+            // 날짜 및 세부 운행 정보(시간, 지점수) 서브 캡션
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+            ) {
                 Text(
                     text = log.timestamp.format(DateTimeFormatter.ofPattern("M.d(E) HH:mm", Locale.KOREA)),
                     style = AppTypography.captionMuted
                 )
+                drivingSubtitle?.takeIf { it.isNotBlank() }?.let { sub ->
+                    Text("·", style = AppTypography.captionMuted)
+                    Text(
+                        text = sub,
+                        style = AppTypography.captionMuted
+                    )
+                }
                 if (log.daysSinceLastFuel != null && log.daysSinceLastFuel > 0) {
                     Text("·", style = AppTypography.captionMuted)
                     Text(
