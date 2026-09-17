@@ -60,6 +60,8 @@ data class GolfUiState(
     val averageScore: Double = 0.0,
     val bestScore: Int? = null,
     val isOcrScanning: Boolean = false,
+    val ocrScanningMessage: String = "",
+    val isGalleryScanDialogOpen: Boolean = false,
     val selectedRound: GolfRound? = null,
     val selectedPhotoPreviewUrl: String? = null,
     val isReservationDialogOpen: Boolean = false,
@@ -222,13 +224,35 @@ class GolfViewModel @Inject constructor(
     }
 
     /**
-     * DB에 남아있는 가짜 골프 라운드('필드 골프장', '일반 사진', 과거 더미 예약, 광고/배너 캡처 오탐 등)를 깨끗하게 영구 삭제하고
+     * DB에 남아있는 가짜 골프 라운드('일반 사진', 과거 더미 예약, 광고/배너 캡처 오탐 등)를 깨끗하게 영구 삭제하고
      * 해당 날짜 다이어리의 가짜 골프 스텝 및 hasGolfRound도 함께 정상화합니다.
+     * [보호 가드레일] 유효한 스코어(totalScore, holeScores)가 존재하는 실제 스코어카드는 클럽명이 미확정 상태이더라도 절대 삭제하지 않습니다.
      */
     private fun cleanUpDummyRounds() {
         viewModelScope.launch(Dispatchers.IO) {
             val list = golfRepository.getAllGolfRoundsFlow().first()
             for (round in list) {
+                // [안전 가드레일] 유효한 스코어카드 데이터(총타수 in 50..144 또는 18홀 스코어)가 있는 실제 라운드는
+                // 클럽명이 미확정 상태("필드 골프장", "골프장")이더라도 절대 삭제하지 않고 보존 및 정규화
+                val hasValidScorecardData = (round.totalScore != null && round.totalScore in 50..144) ||
+                        round.holeScores.isNotEmpty() ||
+                        !round.scorecardPhotoUri.isNullOrBlank()
+
+                if (hasValidScorecardData && (round.clubName.contains("필드 골프장") || round.clubName in listOf("골프장", "필드 골프장", "일반 사진"))) {
+                    // 삭제 대신 "골프 라운드 (스코어카드)" 또는 다이어리 장소명으로 스마트 승격
+                    val day = (round.startTime ?: round.roundDate).toLocalDate()
+                    val diaries = runCatching { diaryRepository.getDiaryEntriesByDateRange(day, day).first() }.getOrDefault(emptyList())
+                    val realPlace = diaries.firstOrNull()?.placeName
+                    val safeClubName = if (!realPlace.isNullOrBlank() && realPlace != "서울 방이동" && !realPlace.contains("사진") && !realPlace.contains("필드")) {
+                        if (realPlace.endsWith("CC") || realPlace.endsWith("GC")) realPlace else "$realPlace CC"
+                    } else {
+                        "골프 라운드"
+                    }
+                    val preservedRound = round.copy(clubName = safeClubName)
+                    golfRepository.updateGolfRound(preservedRound)
+                    continue
+                }
+
                 val isAdBannerRound = round.clubName.contains("대여") ||
                         round.clubName.contains("하루종일") ||
                         round.clubName.contains("기프트카드") ||
@@ -575,28 +599,43 @@ class GolfViewModel @Inject constructor(
         }
     }
 
+    fun openGalleryScanDialog() {
+        _uiState.value = _uiState.value.copy(isGalleryScanDialogOpen = true)
+    }
+
+    fun closeGalleryScanDialog() {
+        _uiState.value = _uiState.value.copy(isGalleryScanDialogOpen = false)
+    }
+
     /**
      * 갤러리 및 캡처된 사진(스크린샷)에서 라커룸 전표와 스코어카드를 자동 스캔하여 라운드를 생성/결합합니다.
+     * @param daysBack null이면 과거 전체 기간, 숫자면 최근 N일간의 사진을 스캔합니다.
+     * @param limit 스캔할 최대 후보 사진 수 (기본 200장)
      */
-    fun scanAllGolfMediaFromGallery() {
+    fun scanAllGolfMediaFromGallery(daysBack: Int? = 30, limit: Int = 200) {
+        closeGalleryScanDialog()
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = _uiState.value.copy(isOcrScanning = true)
+            val periodText = if (daysBack != null) "최근 ${daysBack}일" else "과거 전체"
+            _uiState.value = _uiState.value.copy(
+                isOcrScanning = true,
+                ocrScanningMessage = "$periodText 갤러리 골프 미디어(스코어카드·라커룸) 전수 분석 중..."
+            )
             try {
-                val candidates = historicalDataImporter.scanHistoricalGolfCandidates(appContext, daysBack = 30, limit = 25)
+                val candidates = historicalDataImporter.scanHistoricalGolfCandidates(appContext, daysBack = daysBack, limit = limit)
                 val processedCount = autoProcessGolfMediaUseCase.processBatchCandidates(candidates)
                 android.util.Log.d("GolfViewModel", "갤러리 골프 미디어 자동 스캔 완료: $processedCount 건 처리")
                 loadRounds()
             } catch (t: Throwable) {
                 android.util.Log.e("GolfViewModel", "갤러리 골프 미디어 자동 스캔 중 오류", t)
             } finally {
-                _uiState.value = _uiState.value.copy(isOcrScanning = false)
+                _uiState.value = _uiState.value.copy(isOcrScanning = false, ocrScanningMessage = "")
             }
         }
     }
 
     @Deprecated("Use scanAllGolfMediaFromGallery instead")
     fun scanAllLockerSlipsFromGallery() {
-        scanAllGolfMediaFromGallery()
+        scanAllGolfMediaFromGallery(daysBack = 30, limit = 200)
     }
 
     fun deleteRound(roundId: Long) {

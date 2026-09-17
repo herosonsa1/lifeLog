@@ -65,8 +65,8 @@ class SyncHistoricalDataUseCase @Inject constructor(
             val photos = importer.scanHistoricalPhotos(context, daysBack = daysBack)
             val photoCount = photos.size
 
-            // 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지 및 라운드 등록
-            val golfCandidates = importer.scanHistoricalGolfCandidates(context, daysBack = daysBack, limit = 60)
+            // 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지 및 라운드 등록 (최대 200장 전수 분석)
+            val golfCandidates = importer.scanHistoricalGolfCandidates(context, daysBack = daysBack, limit = 200)
             var golfSyncedCount = 0
             if (golfCandidates.isNotEmpty()) {
                 emit(SyncProgress(isRunning = true, stage = "$periodDesc 스코어카드·라커룸 자동 분석 중 (${golfCandidates.size}장 발견)...", syncedTxCount = txCount, syncedPhotoCount = photoCount, syncedGolfCount = 0))

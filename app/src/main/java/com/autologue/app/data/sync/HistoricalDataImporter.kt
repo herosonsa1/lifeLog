@@ -188,7 +188,22 @@ class HistoricalDataImporter @Inject constructor(
      * 일반 다이어리 스캔과 달리 스크린샷(Screenshots 폴더 및 파일)을 허용하며,
      * 골프/스코어/라커룸 관련 키워드를 가진 이미지를 최우선으로 수집합니다.
      */
-    suspend fun scanHistoricalGolfCandidates(context: Context, daysBack: Int? = 60, limit: Int = 60): List<ScannedPhoto> = withContext(Dispatchers.IO) {
+    /**
+     * 캡처된 스크린샷 및 갤러리 사진에서 스코어카드와 라커룸 안내지 후보 사진을 전수 검색합니다.
+     * 일반 다이어리 스캔과 달리 스크린샷(Screenshots 폴더 및 파일)을 허용하며,
+     * 골프/스코어/라커룸 관련 키워드 및 스크린샷 이미지를 최우선으로 수집합니다.
+     */
+    suspend fun scanHistoricalGolfCandidates(context: Context, daysBack: Int? = 60, limit: Int = 200): List<ScannedPhoto> = withContext(Dispatchers.IO) {
+        val hasReadPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+        if (!hasReadPermission) {
+            android.util.Log.w("HistoricalDataImporter", "미디어 읽기 권한 없음 — 골프 후보 스캔 건너뜀")
+            return@withContext emptyList()
+        }
+
         val candidates = mutableListOf<ScannedPhoto>()
         try {
             val projectionList = mutableListOf(
@@ -264,14 +279,21 @@ class HistoricalDataImporter @Inject constructor(
                             searchStr.contains("locker") || searchStr.contains("락커") || searchStr.contains("라커") ||
                             searchStr.contains("round") || searchStr.contains("라운드") ||
                             searchStr.contains("smartscore") || searchStr.contains("스마트스코어") ||
+                            searchStr.contains("kakaogolf") || searchStr.contains("카카오골프") ||
+                            searchStr.contains("golfzon") || searchStr.contains("골프존") ||
+                            searchStr.contains("shot") || searchStr.contains("티샷") ||
+                            searchStr.contains("putt") || searchStr.contains("퍼트") ||
                             searchStr.contains("cc") || searchStr.contains("gc") ||
                             searchStr.contains("c.c") || searchStr.contains("g.c") ||
-                            searchStr.contains("골프장") || searchStr.contains("전표") ||
-                            searchStr.contains("야디지") || searchStr.contains("골프존") ||
-                            searchStr.contains("카카오골프") || searchStr.contains("kakaotalk") ||
+                            searchStr.contains("골프장") || searchStr.contains("골프클럽") ||
+                            searchStr.contains("컨트리클럽") || searchStr.contains("전표") ||
+                            searchStr.contains("야디지") || searchStr.contains("yardage") ||
+                            searchStr.contains("kakaotalk") ||
                             searchStr.contains("pine") || searchStr.contains("cherry") ||
-                            searchStr.contains("파인") || searchStr.contains("체리") ||
-                            searchStr.contains("오크밸리") || searchStr.contains("필로스")
+                            searchStr.contains("oak") || searchStr.contains("파인") ||
+                            searchStr.contains("체리") || searchStr.contains("오크") ||
+                            searchStr.contains("오크밸리") || searchStr.contains("필로스") ||
+                            searchStr.contains("킹스데일") || searchStr.contains("남촌")
 
                     val item = ScannedPhoto(
                         uri = uriString,
@@ -280,12 +302,13 @@ class HistoricalDataImporter @Inject constructor(
                     )
 
                     if (hasGolfKeyword) {
+                        // 1순위: 파일명/경로에 명확한 골프/스코어/클럽명 키워드가 있는 미디어
                         highPriority.add(item)
-                    } else if (isSc) {
-                        // 스크린샷 이미지는 골프 스코어카드일 확률이 높으므로 2순위 후보로 수집
+                    } else if (isSc || searchStr.contains("download") || searchStr.contains("kakaotalk") || searchStr.contains("pictures")) {
+                        // 2순위: 스마트폰 화면 캡처(스크린샷) 및 다운로드/메신저 저장 사진 (모바일 스코어카드 유력 후보)
                         mediumPriority.add(item)
                     } else {
-                        // 3순위: 카메라 등으로 촬영한 지류 영수증/스코어카드 후보 (일반 사진 풀)
+                        // 3순위: 카메라 등으로 직접 촬영한 지류 영수증/스코어카드 후보 (일반 카메라 롤)
                         lowPriority.add(item)
                     }
                 }
@@ -300,7 +323,7 @@ class HistoricalDataImporter @Inject constructor(
                     candidates.addAll(lowPriority.take(remainingForLow))
                 }
             }
-            android.util.Log.d("HistoricalDataImporter", "골프 후보 사진 스캔 완료: 총 ${candidates.size}장 수집됨")
+            android.util.Log.d("HistoricalDataImporter", "골프 후보 사진 스캔 완료: 총 ${candidates.size}장 수집됨 (limit=$limit)")
         } catch (t: Throwable) {
             android.util.Log.e("HistoricalDataImporter", "골프 후보 사진 스캔 중 오류", t)
             t.printStackTrace()

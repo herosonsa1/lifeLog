@@ -211,7 +211,7 @@ fun GolfScreen(
                     AutoLogueOutlinedButton(
                         text = "사진 자동 분석",
                         icon = Icons.Default.AutoAwesome,
-                        onClick = { viewModel.scanAllGolfMediaFromGallery() },
+                        onClick = { viewModel.openGalleryScanDialog() },
                         contentColor = MenuColors.golf,
                         containerColor = MenuColors.golfBg,
                         borderColor = MenuColors.golfBorder
@@ -451,6 +451,48 @@ fun GolfScreen(
                     )
                 }
             )
+        }
+
+        // Golf Gallery Scan Dialog (갤러리 골프 미디어 전수 스캔 기간 선택 모달)
+        if (uiState.isGalleryScanDialogOpen) {
+            GolfGalleryScanDialog(
+                onDismiss = { viewModel.closeGalleryScanDialog() },
+                onConfirm = { days ->
+                    viewModel.scanAllGolfMediaFromGallery(daysBack = days, limit = 200)
+                }
+            )
+        }
+
+        // 스캔 진행 중 로딩 인디케이터 모달
+        if (uiState.isOcrScanning && uiState.ocrScanningMessage.isNotBlank()) {
+            Dialog(
+                onDismissRequest = { /* 차단 방지 */ },
+                properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
+            ) {
+                Surface(
+                    shape = AppShapes.card,
+                    color = AppColors.surface,
+                    tonalElevation = 6.dp,
+                    modifier = Modifier.fillMaxWidth().padding(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularProgressIndicator(color = MenuColors.golf)
+                        Text(
+                            text = uiState.ocrScanningMessage,
+                            style = AppTypography.body,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "화면을 닫지 마시고 잠시만 기다려주세요...",
+                            style = AppTypography.captionMuted
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -4032,3 +4074,90 @@ private fun GolfStatCard(
         }
     }
 }
+
+@Composable
+fun GolfGalleryScanDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (Int?) -> Unit
+) {
+    var selectedDays by remember { mutableStateOf<Int?>(30) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "과거 갤러리 골프 미디어 전수 스캔",
+                style = AppTypography.h2
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                Text(
+                    text = "스마트폰 갤러리의 스크린샷, 카메라 사진 및 다운로드 이미지에서 라커룸 전표와 스코어카드를 고속으로 전수 분석하여 골프 라운드를 자동 복원합니다.\n스캔할 기간을 선택하세요.",
+                    style = AppTypography.bodySecondary
+                )
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                ) {
+                    val periods: List<Pair<Int?, String>> = listOf(
+                        30 to "최근 30일 (추천 · 스코어카드/라커룸 복원)",
+                        60 to "최근 60일 (2달치 집중 분석)",
+                        null to "전체 기간 (갤러리 내 모든 과거 스코어카드 전수 스캔)"
+                    )
+
+                    periods.forEach { (days, label) ->
+                        val isSelected = selectedDays == days
+                        Surface(
+                            shape = AppShapes.card,
+                            color = if (isSelected) MenuColors.golf.copy(alpha = 0.08f) else AppColors.surface,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) MenuColors.golf else AppColors.border
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedDays = days }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(Spacing.md),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { selectedDays = days },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = MenuColors.golf
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(Spacing.sm))
+                                Text(
+                                    text = label,
+                                    style = if (isSelected) AppTypography.body.copy(fontWeight = FontWeight.Bold) else AppTypography.body
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            AutoLoguePrimaryButton(
+                text = "스캔 시작",
+                onClick = { onConfirm(selectedDays) }
+            )
+        },
+        dismissButton = {
+            AutoLogueSecondaryButton(
+                text = "취소",
+                onClick = onDismiss
+            )
+        },
+        containerColor = AppColors.surface,
+        shape = AppShapes.modal
+    )
+}
+

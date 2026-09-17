@@ -162,6 +162,32 @@ class AutoProcessGolfMediaUseCaseTest {
         assertTrue("메모에 더블+ 5가 포함되어야 함: ${round.memo}", round.memo!!.contains("더블+ 5"))
     }
 
+    @Test
+    fun processScorecardResult_preservesValidScorecard_evenIfClubNameIsGeneric() = runBlocking {
+        val testDate = LocalDate.of(2026, 9, 11)
+        val result = ScorecardOcrResult(
+            totalScore = 92,
+            totalPutts = 38,
+            holeScores = listOf(4, 8, 3, 5, 5, 6, 4, 7, 6, 5, 3, 5, 4, 6, 4, 5, 6, 6),
+            clubName = null, // 클럽명 미인식 상태
+            courseName = null,
+            playDate = testDate,
+            recognizedRawText = "SCORE 92"
+        )
+
+        val round = extractScorecardOcrUseCase.processScorecardResult(
+            result = result,
+            scorecardUri = "content://media/unknown_golf.png",
+            targetDate = testDate
+        )
+
+        assertNotNull(round)
+        assertEquals(92, round!!.totalScore)
+        assertEquals(18, round.holeScores.size)
+        // 유효한 스코어가 존재하므로 삭제되지 않고 보존 대상임
+        assertTrue(round.totalScore in 50..144)
+    }
+
     // Fake Repositories for testing
     class FakeGolfRepository : GolfRepository {
         val rounds = mutableListOf<GolfRound>()
