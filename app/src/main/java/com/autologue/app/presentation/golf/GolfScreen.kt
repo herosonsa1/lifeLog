@@ -46,9 +46,11 @@ import com.autologue.app.domain.model.GolfPlayWeather
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.GolfType
 import com.autologue.app.domain.model.getDisplayClubName
+import com.autologue.app.domain.model.getScorecardStats
 import com.autologue.app.domain.model.splitClubAndCourse
 import com.autologue.app.domain.model.extractCourseNameFromText
 import com.autologue.app.presentation.common.AutoLogueTextField
+import com.autologue.app.presentation.common.NumberCommaVisualTransformation
 import com.autologue.app.presentation.common.AutoLogueCompactInputRow
 import com.autologue.app.presentation.common.AutoLogueActionChipButton
 import com.autologue.app.presentation.common.AutoLoguePrimaryButton
@@ -104,10 +106,8 @@ fun GolfScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val targetRound = uiState.selectedRound ?: uiState.rounds.firstOrNull()
-            if (targetRound != null) {
-                viewModel.scanScorecard(targetRound.id, uri)
-            }
+            val targetRoundId = (uiState.selectedRound ?: uiState.rounds.firstOrNull())?.id
+            viewModel.scanScorecard(targetRoundId, uri)
         }
     }
 
@@ -196,6 +196,14 @@ fun GolfScreen(
                         containerColor = MenuColors.golfBg,
                         borderColor = MenuColors.golfBorder
                     )
+                    AutoLogueOutlinedButton(
+                        text = "사진 자동 분석",
+                        icon = Icons.Default.AutoAwesome,
+                        onClick = { viewModel.scanAllGolfMediaFromGallery() },
+                        contentColor = MenuColors.golf,
+                        containerColor = MenuColors.golfBg,
+                        borderColor = MenuColors.golfBorder
+                    )
                 }
                 HairlineDivider()
             }
@@ -258,7 +266,7 @@ fun GolfScreen(
                             .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
                     ) {
                         Text(
-                            text = "⛳ 다가오는 라운드 예약 (${uiState.upcomingReservations.size}건)",
+                            text = "다가오는 라운드 예약 (${uiState.upcomingReservations.size}건)",
                             style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
                         )
                         Spacer(modifier = Modifier.height(Spacing.xs))
@@ -483,6 +491,22 @@ fun SaaSGolfRow(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("(${round.totalPutts}P)", style = AppTypography.captionMuted)
                     }
+                    if (round.penaltyCount != null && round.penaltyCount > 0) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFFFEE2E2),
+                            border = BorderStroke(0.5.dp, Color(0xFFFCA5A5))
+                        ) {
+                            Text(
+                                text = "벌타 ${round.penaltyCount}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFDC2626),
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
             } else {
                 Text(
@@ -523,7 +547,7 @@ fun SaaSGolfRow(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "📷 사진 $totalPhotos",
+                        text = "사진 $totalPhotos",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Medium,
                         color = Slate700
@@ -532,8 +556,8 @@ fun SaaSGolfRow(
             }
         }
 
-        // Companions & Green fee & Drive summary if present
-        if (round.companions.isNotEmpty() || round.greenFeeExpense > 0 || round.averageDriveDistance != null) {
+        // Companions & Green fee & Drive & Penalty summary if present
+        if (round.companions.isNotEmpty() || round.greenFeeExpense > 0 || round.averageDriveDistance != null || (round.penaltyCount != null && round.penaltyCount > 0)) {
             Spacer(modifier = Modifier.height(Spacing.xxs))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -541,13 +565,13 @@ fun SaaSGolfRow(
             ) {
                 if (round.companions.isNotEmpty()) {
                     Text(
-                        text = "👤 ${round.companions.joinToString(", ")}",
+                        text = round.companions.joinToString(", "),
                         style = AppTypography.captionMuted
                     )
                 }
                 if (round.greenFeeExpense > 0) {
                     Text(
-                        text = "· 💳 %,d원".format(round.greenFeeExpense),
+                        text = "· %,d원".format(round.greenFeeExpense),
                         style = AppTypography.captionMuted
                     )
                 }
@@ -555,12 +579,55 @@ fun SaaSGolfRow(
                     val driveStr = round.getFormattedDriveDistance()
                     if (driveStr != null) {
                         Text(
-                            text = "· 🏌️ 비거리: $driveStr",
+                            text = "· 비거리: $driveStr",
                             style = AppTypography.captionMuted
                         )
                     }
                 }
+                if (round.penaltyCount != null && round.penaltyCount > 0) {
+                    Text(
+                        text = "· 벌타: ${round.penaltyCount}타",
+                        style = AppTypography.captionMuted.copy(color = Color(0xFFDC2626), fontWeight = FontWeight.SemiBold)
+                    )
+                }
             }
+        }
+    }
+}
+
+/**
+ * 스코어카드 성적 요약 칩 (버디, 파, 보기, 더블+, 벌타)
+ */
+@Composable
+fun ScoreSummaryChip(
+    title: String,
+    count: Int,
+    textColor: Color,
+    bgColor: Color,
+    borderColor: Color
+) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = bgColor,
+        border = BorderStroke(0.8.dp, borderColor)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = title,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = textColor
+            )
+            Text(
+                text = "$count",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = textColor
+            )
         }
     }
 }
@@ -774,7 +841,7 @@ fun GolfRoundDetailDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("⛳ 라운드 상세 기록", style = AppTypography.h2)
+                        Text("라운드 상세 기록", style = AppTypography.h2)
                         Spacer(modifier = Modifier.width(Spacing.xs))
                         MetricBadge(
                             text = if (round.golfType == GolfType.FIELD) "FIELD" else "SCREEN",
@@ -1171,6 +1238,7 @@ fun GolfRoundDetailDialog(
                                     placeholder = "예: 88",
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
+                                    isCompact = true,
                                     modifier = Modifier.weight(1f)
                                 )
 
@@ -1181,6 +1249,7 @@ fun GolfRoundDetailDialog(
                                     placeholder = "예: 32",
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
+                                    isCompact = true,
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -1199,6 +1268,7 @@ fun GolfRoundDetailDialog(
                                     placeholder = "예: 55.6",
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                     singleLine = true,
+                                    isCompact = true,
                                     modifier = Modifier.weight(1f)
                                 )
 
@@ -1209,6 +1279,7 @@ fun GolfRoundDetailDialog(
                                     placeholder = "예: 2",
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
+                                    isCompact = true,
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -1228,6 +1299,7 @@ fun GolfRoundDetailDialog(
                                         placeholder = "예: 205",
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                         singleLine = true,
+                                        isCompact = true,
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                     val adjDrive = round.getEffectiveAdjustedDriveDistance()
@@ -1249,6 +1321,7 @@ fun GolfRoundDetailDialog(
                                     placeholder = "예: 3.1",
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                     singleLine = true,
+                                    isCompact = true,
                                     modifier = Modifier.weight(1f)
                                 )
 
@@ -1259,8 +1332,41 @@ fun GolfRoundDetailDialog(
                                     placeholder = "예: 6384",
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
+                                    isCompact = true,
+                                    visualTransformation = NumberCommaVisualTransformation(),
                                     modifier = Modifier.weight(1f)
                                 )
+                            }
+
+                            // 스코어 성적 집계 (버디, 파, 보기, 더블+, 벌타 - 읽기 전용 요약 칩 스트립)
+                            val scorecardStats = round.getScorecardStats()
+                            if (scorecardStats != null) {
+                                Spacer(modifier = Modifier.height(Spacing.xs))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Slate50,
+                                    border = BorderStroke(1.dp, Slate200),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                        Text(
+                                            text = "스코어 성적 집계 (읽기 전용)",
+                                            style = AppTypography.caption.copy(fontSize = 11.sp, color = Slate600, fontWeight = FontWeight.SemiBold)
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            ScoreSummaryChip("버디", scorecardStats.birdieCount, Color(0xFFDC2626), Color(0xFFFEE2E2), Color(0xFFFCA5A5))
+                                            ScoreSummaryChip("파", scorecardStats.parCount, Color(0xFF2563EB), Color(0xFFEFF6FF), Color(0xFFBFDBFE))
+                                            ScoreSummaryChip("보기", scorecardStats.bogeyCount, Color(0xFF475569), Slate100, Slate300)
+                                            ScoreSummaryChip("더블+", scorecardStats.doublePlusCount, Color(0xFF7C3AED), Color(0xFFF5F3FF), Color(0xFFDDD6FE))
+                                            ScoreSummaryChip("벌타", round.penaltyCount ?: scorecardStats.penaltyCount, Color(0xFFB45309), Color(0xFFFEF3C7), Color(0xFFFDE68A))
+                                        }
+                                    }
+                                }
                             }
 
                             // Hole Scores Table (if present)
@@ -1300,16 +1406,19 @@ fun GolfRoundDetailDialog(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(140.dp)
+                                        .heightIn(min = 200.dp, max = 340.dp)
                                         .clip(RoundedCornerShape(8.dp))
-                                        .background(Slate100)
-                                        .clickable { onPhotoClick(round.scorecardPhotoUri) }
+                                        .background(Color(0xFF0F172A))
+                                        .clickable { onPhotoClick(round.scorecardPhotoUri) },
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     AsyncImage(
                                         model = round.scorecardPhotoUri,
                                         contentDescription = "스코어카드 사진",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 200.dp, max = 340.dp)
                                     )
                                     Surface(
                                         modifier = Modifier
@@ -2521,7 +2630,7 @@ fun AddGolfReservationDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(decorFitsSystemWindows = false),
         modifier = Modifier.imePadding(),
-        title = { Text("⛳ 골프 라운드 예약 등록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
+        title = { Text("골프 라운드 예약 등록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
         text = {
             Column(
                 modifier = Modifier
@@ -3108,7 +3217,7 @@ fun AddDirectGolfRoundDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(decorFitsSystemWindows = false),
         modifier = Modifier.imePadding(),
-        title = { Text("⛳ 이전 골프 라운드 직접 기록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
+        title = { Text("이전 골프 라운드 직접 기록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
         text = {
             Column(
                 modifier = Modifier
@@ -3495,9 +3604,10 @@ fun AddDirectGolfRoundDialog(
                     value = feeText,
                     onValueChange = { feeText = it.filter { c -> c.isDigit() } },
                     label = { Text("지출 그린피 (원, 선택)") },
-                    placeholder = { Text("예: 220000") },
+                    placeholder = { Text("예: 220,000") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
+                    visualTransformation = NumberCommaVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
 

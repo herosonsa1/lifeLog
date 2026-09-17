@@ -45,11 +45,17 @@ class PhotoIndexerWorker @AssistedInject constructor(
         }
 
         try {
-            val projection = arrayOf(
+            val projectionList = mutableListOf(
                 MediaStore.Images.Media._ID,
                 MediaStore.Images.Media.DATE_TAKEN,
-                MediaStore.Images.Media.DISPLAY_NAME
+                MediaStore.Images.Media.DISPLAY_NAME,
+                @Suppress("DEPRECATION")
+                MediaStore.Images.Media.DATA
             )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                projectionList.add(MediaStore.Images.Media.RELATIVE_PATH)
+            }
+            val projection = projectionList.toTypedArray()
 
             val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC"
             val queryUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -57,9 +63,25 @@ class PhotoIndexerWorker @AssistedInject constructor(
             context.contentResolver.query(queryUri, projection, null, null, sortOrder)?.use { cursor ->
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val dateTakenColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+                val displayNameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                val dataCol = cursor.getColumnIndex(@Suppress("DEPRECATION") MediaStore.Images.Media.DATA)
+                val relativePathCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+                } else -1
 
                 var count = 0
                 while (cursor.moveToNext() && count < 20) {
+                    val displayName = if (displayNameCol >= 0) cursor.getString(displayNameCol) else null
+                    val dataPath = if (dataCol >= 0) cursor.getString(dataCol) else null
+                    val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
+                    val isScreenshotFlag = false
+
+                    // 스크린샷/화면캡처 이미지는 일상 다이어리 자동 색인에서 제외
+                    if (com.autologue.app.data.sync.HistoricalDataImporter.isScreenshot(displayName, relativePath, dataPath, isScreenshotFlag)) {
+                        count++
+                        continue
+                    }
+
                     val id = cursor.getLong(idColumn)
                     val dateTaken = cursor.getLong(dateTakenColumn)
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)

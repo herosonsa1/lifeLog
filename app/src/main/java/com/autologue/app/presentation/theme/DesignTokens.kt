@@ -92,6 +92,11 @@ object MenuColors {
     val golf = Color(0xFF15803D)
     val golfBg = Color(0xFFF0FDF4)
     val golfBorder = Color(0xFFBBF7D0)
+
+    // 5. 라이프 궤도 (Lifestyle): 삶의 궤적, 밸런스 레이더, 인텔리전스 - 딥 인디고 퍼플
+    val lifestyle = Color(0xFF6366F1)
+    val lifestyleBg = Color(0xFFEEF2FF)
+    val lifestyleBorder = Color(0xFFC7D2FE)
 }
 
 /**

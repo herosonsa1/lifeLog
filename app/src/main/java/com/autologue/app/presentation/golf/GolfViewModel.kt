@@ -2,6 +2,7 @@ package com.autologue.app.presentation.golf
 
 import android.content.Context
 import android.net.Uri
+import java.time.LocalDate
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.autologue.app.data.ocr.GolfLockerSlipOcrAnalyzer
@@ -181,6 +182,7 @@ class GolfViewModel @Inject constructor(
     private val diaryRepository: DiaryRepository,
     private val golfLockerSlipOcrAnalyzer: GolfLockerSlipOcrAnalyzer,
     private val processGolfLockerSlipUseCase: ProcessGolfLockerSlipUseCase,
+    private val autoProcessGolfMediaUseCase: com.autologue.app.domain.usecase.golf.AutoProcessGolfMediaUseCase,
     private val golfWeatherRepository: GolfWeatherRepository
 ) : ViewModel() {
 
@@ -214,17 +216,27 @@ class GolfViewModel @Inject constructor(
     }
 
     /**
-     * DB에 남아있는 가짜 골프 라운드('필드 골프장', '일반 사진', 과거 더미 예약 등)를 깨끗하게 영구 삭제하고
+     * DB에 남아있는 가짜 골프 라운드('필드 골프장', '일반 사진', 과거 더미 예약, 광고/배너 캡처 오탐 등)를 깨끗하게 영구 삭제하고
      * 해당 날짜 다이어리의 가짜 골프 스텝 및 hasGolfRound도 함께 정상화합니다.
      */
     private fun cleanUpDummyRounds() {
         viewModelScope.launch(Dispatchers.IO) {
             val list = golfRepository.getAllGolfRoundsFlow().first()
             for (round in list) {
+                val isAdBannerRound = round.clubName.contains("대여") ||
+                        round.clubName.contains("하루종일") ||
+                        round.clubName.contains("기프트카드") ||
+                        round.clubName.contains("칠 수 있다") ||
+                        round.clubName.contains("ROOM") ||
+                        round.clubName.contains("NX PLUS") ||
+                        round.clubName.contains("쿠폰") ||
+                        round.clubName.contains("이벤트") ||
+                        round.clubName.contains("할인")
                 val isDummyOrInvalid = round.clubName in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패") ||
                         round.clubName.contains("일반 사진") ||
                         round.clubName.contains("필드 골프장") ||
-                        (round.clubName == "아난티 코드 GC" && round.memo?.contains("주말 친목 라운딩") == true)
+                        (round.clubName == "아난티 코드 GC" && round.memo?.contains("주말 친목 라운딩") == true) ||
+                        isAdBannerRound
                 if (isDummyOrInvalid) {
                     golfRepository.deleteGolfRound(round.id)
                     // 해당 날짜 다이어리에서도 가짜 골프 스텝 즉시 제거 및 제목 복구
@@ -233,8 +245,8 @@ class GolfViewModel @Inject constructor(
                     for (diary in diaries) {
                         val cleanSteps = diary.routeSteps.filter { !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) }
                         val cleanTitle = if (diary.title.contains("필드 골프장") || diary.title.contains("일반 사진") || diary.title.contains("라운딩")) {
-                            val place = diary.placeName ?: "서울 방이동"
-                            "$place 일정"
+                            val place = diary.placeName
+                            if (place != null && place != "서울 방이동") "$place 일정" else "${day.monthValue}월 ${day.dayOfMonth}일의 다이어리"
                         } else diary.title
                         val cleanDiary = diary.copy(
                             title = cleanTitle,
@@ -480,33 +492,44 @@ class GolfViewModel @Inject constructor(
         }
     }
 
-    fun scanScorecard(roundId: Long, imageUri: Uri) {
+    fun scanScorecard(roundId: Long?, imageUri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isOcrScanning = true)
-            val result = scorecardOcrAnalyzer.analyzeScorecard(imageUri)
-            val target = golfRepository.getGolfRoundById(roundId)
-            val finalScore = result.totalScore ?: target?.totalScore ?: 86
-            extractScorecardOcrUseCase.saveOcrResult(
-                roundId = roundId,
-                totalScore = finalScore,
-                totalPutts = result.totalPutts,
-                holeScores = result.holeScores,
-                scorecardUri = imageUri.toString(),
-                courseName = result.courseName,
-                penaltyCount = result.penaltyCount,
-                girPercentage = result.girPercentage,
-                averageDriveDistance = result.averageDriveDistance,
-                adjustedDriveDistance = result.adjustedDriveDistance,
-                averageTempo = result.averageTempo,
-                steps = result.steps,
-                driveDistances = result.driveDistances,
-                tempos = result.tempos
-            )
-            val updated = golfRepository.getGolfRoundById(roundId)
-            _uiState.value = _uiState.value.copy(
-                isOcrScanning = false,
-                selectedRound = updated
-            )
+            try {
+                val result = scorecardOcrAnalyzer.analyzeScorecard(imageUri)
+                val target = if (roundId != null) golfRepository.getGolfRoundById(roundId) else null
+                val updatedRound = if (roundId != null && target != null) {
+                    val finalScore = result.totalScore ?: target.totalScore ?: 86
+                    extractScorecardOcrUseCase.saveOcrResult(
+                        roundId = roundId,
+                        totalScore = finalScore,
+                        totalPutts = result.totalPutts,
+                        holeScores = result.holeScores,
+                        scorecardUri = imageUri.toString(),
+                        courseName = result.courseName,
+                        penaltyCount = result.penaltyCount,
+                        girPercentage = result.girPercentage,
+                        averageDriveDistance = result.averageDriveDistance,
+                        adjustedDriveDistance = result.adjustedDriveDistance,
+                        averageTempo = result.averageTempo,
+                        steps = result.steps,
+                        driveDistances = result.driveDistances,
+                        tempos = result.tempos,
+                        holePars = result.holePars
+                    )
+                    golfRepository.getGolfRoundById(roundId)
+                } else {
+                    // targetRound가 없더라도 새 라운드를 자동 생성하여 스코어카드 반영
+                    extractScorecardOcrUseCase.processScorecardResult(result, imageUri.toString(), LocalDate.now())
+                }
+                _uiState.value = _uiState.value.copy(
+                    isOcrScanning = false,
+                    selectedRound = updatedRound
+                )
+            } catch (t: Throwable) {
+                android.util.Log.e("GolfViewModel", "스코어카드 스캔 중 오류", t)
+                _uiState.value = _uiState.value.copy(isOcrScanning = false)
+            }
         }
     }
 
@@ -523,48 +546,44 @@ class GolfViewModel @Inject constructor(
     }
 
     fun scanGolfLockerSlip(imageUri: Uri) {
-        // [H-01] context 파라미터 제거 — GolfLockerSlipOcrAnalyzer는 @Singleton이며 ApplicationContext 보유
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = _uiState.value.copy(isOcrScanning = true)
-            val result = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(imageUri)
-            val round = processGolfLockerSlipUseCase(result, imageUri.toString())
-            _uiState.value = _uiState.value.copy(
-                isOcrScanning = false,
-                selectedRound = round
-            )
-        }
-    }
-
-    fun scanAllLockerSlipsFromGallery() {
-        // [H-01] context 파라미터 제거 — appContext 사용
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isOcrScanning = true)
             try {
-                // [OOM 방어] 최근 14일 사진 중 골프/라커룸 후보 사진 최대 5장으로 엄격 제한하여 OCR 실행
-                val photos = historicalDataImporter.scanHistoricalPhotos(appContext, daysBack = 14, limit = 30)
-                val golfCandidates = photos.filter { photo ->
-                    photo.uri.contains("golf", ignoreCase = true) ||
-                    photo.uri.contains("locker", ignoreCase = true) ||
-                    (photo.placeName ?: "").contains("골프") ||
-                    photo.tags.any { it.contains("골프") }
-                }.take(5).ifEmpty { photos.take(3) }
-
-                for (photo in golfCandidates) {
-                    if (photo.uri.isBlank()) continue
-                    runCatching {
-                        val uri = Uri.parse(photo.uri)
-                        val result = golfLockerSlipOcrAnalyzer.analyzeLockerSlip(uri, fallbackDate = photo.time.toLocalDate())
-                        if (result.isLockerSlip) {
-                            processGolfLockerSlipUseCase(result, photo.uri)
-                        }
-                    }
-                }
+                // 라커룸 또는 스코어카드 구분 없이 스마트 자율 분석
+                val round = autoProcessGolfMediaUseCase.processSinglePhoto(imageUri)
+                _uiState.value = _uiState.value.copy(
+                    isOcrScanning = false,
+                    selectedRound = round
+                )
             } catch (t: Throwable) {
-                android.util.Log.e("GolfViewModel", "라커룸 일괄 스캔 중 오류", t)
+                android.util.Log.e("GolfViewModel", "사진 분석 중 오류", t)
+                _uiState.value = _uiState.value.copy(isOcrScanning = false)
+            }
+        }
+    }
+
+    /**
+     * 갤러리 및 캡처된 사진(스크린샷)에서 라커룸 전표와 스코어카드를 자동 스캔하여 라운드를 생성/결합합니다.
+     */
+    fun scanAllGolfMediaFromGallery() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(isOcrScanning = true)
+            try {
+                val candidates = historicalDataImporter.scanHistoricalGolfCandidates(appContext, daysBack = 30, limit = 25)
+                val processedCount = autoProcessGolfMediaUseCase.processBatchCandidates(candidates)
+                android.util.Log.d("GolfViewModel", "갤러리 골프 미디어 자동 스캔 완료: $processedCount 건 처리")
+                loadRounds()
+            } catch (t: Throwable) {
+                android.util.Log.e("GolfViewModel", "갤러리 골프 미디어 자동 스캔 중 오류", t)
             } finally {
                 _uiState.value = _uiState.value.copy(isOcrScanning = false)
             }
         }
+    }
+
+    @Deprecated("Use scanAllGolfMediaFromGallery instead")
+    fun scanAllLockerSlipsFromGallery() {
+        scanAllGolfMediaFromGallery()
     }
 
     fun deleteRound(roundId: Long) {
@@ -585,8 +604,8 @@ class GolfViewModel @Inject constructor(
                         !(it.stepType == RouteStepType.GOLF && (it.title.contains(target.clubName) || remainingGolfRounds.isEmpty()))
                     }
                     val updatedTitle = if (diary.title.contains("골프") || diary.title.contains("라운딩")) {
-                        val place = diary.placeName ?: "서울 방이동"
-                        "$place 일정"
+                        val place = diary.placeName
+                        if (place != null && place != "서울 방이동") "$place 일정" else "${roundDay.monthValue}월 ${roundDay.dayOfMonth}일의 다이어리"
                     } else diary.title
 
                     val updatedDiary = diary.copy(
@@ -857,7 +876,13 @@ class GolfViewModel @Inject constructor(
             try {
                 val roundDate = round.roundDate.toLocalDate()
                 val photos = historicalDataImporter.scanHistoricalPhotos(appContext, daysBack = 30)
-                val sameDayPhotos = photos.filter { it.time.toLocalDate() == roundDate }
+                // 스크린샷/캡처 이미지는 라운딩 현장 사진으로 자동 첨부되지 않도록 철저히 차단 (카메라 촬영 사진만 허용)
+                val sameDayPhotos = photos.filter { photo ->
+                    photo.time.toLocalDate() == roundDate &&
+                    !photo.tags.contains("스크린샷") &&
+                    !photo.uri.lowercase().contains("screenshot") &&
+                    photo.uri != round.scorecardPhotoUri
+                }
                 if (sameDayPhotos.isNotEmpty()) {
                     val uris = sameDayPhotos.map { it.uri }
                     val companions = sameDayPhotos.flatMap { it.companions }.distinct()

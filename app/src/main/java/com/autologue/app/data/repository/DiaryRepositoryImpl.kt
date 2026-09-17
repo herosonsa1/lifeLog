@@ -12,9 +12,14 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
 import com.autologue.app.data.preferences.ExcludedPhotoPreferences
+import com.autologue.app.data.sync.HistoricalDataImporter
+import com.autologue.app.domain.model.RouteStepType
+import dagger.hilt.android.qualifiers.ApplicationContext
+import android.content.Context
 import javax.inject.Inject
 
 class DiaryRepositoryImpl @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val diaryDao: DiaryDao,
     private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) : DiaryRepository {
@@ -50,8 +55,13 @@ class DiaryRepositoryImpl @Inject constructor(
                 existing.routeSteps + entry.routeSteps
             }
             val combinedSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(rawCombined)
-            val mergedSteps = combinedSteps.map { step ->
-                step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+            val mergedSteps = combinedSteps.mapNotNull { step ->
+                val photos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
+                if (step.stepType == RouteStepType.PHOTO && photos.isEmpty()) {
+                    null
+                } else {
+                    step.copy(photoUris = photos)
+                }
             }
             val merged = existing.copy(
                 title = if (isUserCustomTitle) existing.title else entry.title,
@@ -74,8 +84,13 @@ class DiaryRepositoryImpl @Inject constructor(
         val cleanEntry = entry.copy(
             photoUris = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) },
             tags = entry.tags.distinct(),
-            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).map { step ->
-                step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
+                val photos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
+                if (step.stepType == RouteStepType.PHOTO && photos.isEmpty()) {
+                    null
+                } else {
+                    step.copy(photoUris = photos)
+                }
             }
         )
         diaryDao.insertEntry(cleanEntry.toEntity())
@@ -85,8 +100,13 @@ class DiaryRepositoryImpl @Inject constructor(
         val cleanEntry = entry.copy(
             photoUris = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) },
             tags = entry.tags.distinct(),
-            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).map { step ->
-                step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
+                val photos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
+                if (step.stepType == RouteStepType.PHOTO && photos.isEmpty()) {
+                    null
+                } else {
+                    step.copy(photoUris = photos)
+                }
             }
         )
         diaryDao.updateEntry(cleanEntry.toEntity())
@@ -107,14 +127,50 @@ class DiaryRepositoryImpl @Inject constructor(
                 modifiedCount++
             } else {
                 seen.add(d)
-                // 내부 중복 데이터(routeSteps, photoUris, tags) 정리
+
+                // 1. 스크린샷 이미지 탐색 및 영구 제외 등록
+                val allUris = (entry.photoUris + entry.routeSteps.flatMap { it.photoUris }).distinct()
+                val screenshotUris = allUris.filter { HistoricalDataImporter.isUriScreenshot(context, it) }
+                for (uri in screenshotUris) {
+                    excludedPhotoPreferences.excludePhoto(uri)
+                }
+
+                // 2. 내부 중복 데이터(routeSteps, photoUris, tags) 및 스크린샷 정리
                 val cleanPhotos = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) }
                 val cleanTags = entry.tags.distinct()
-                val cleanSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).map { step ->
-                    step.copy(photoUris = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) })
+                val cleanSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
+                    val stepPhotos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
+                    // 사진 전용 스텝인데 사진이 0장이 된 경우(스크린샷만 있던 스텝 등) 스텝 자체 제거
+                    if (step.stepType == RouteStepType.PHOTO && stepPhotos.isEmpty()) {
+                        null
+                    } else {
+                        val newTitle = if (step.title == "서울 방이동" && step.stepType == RouteStepType.PHOTO) {
+                            step.locationName ?: "사진 기록"
+                        } else step.title
+                        step.copy(
+                            title = newTitle,
+                            photoUris = stepPhotos,
+                            description = if (step.stepType == RouteStepType.PHOTO) {
+                                "사진 ${stepPhotos.size}장 촬영"
+                            } else step.description
+                        )
+                    }
                 }
-                if (cleanSteps.size != entry.routeSteps.size || cleanPhotos.size != entry.photoUris.size || cleanTags.size != entry.tags.size) {
+
+                // 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동' 등 보정
+                var newTitle = entry.title
+                if (newTitle == "서울 방이동 일정" || newTitle == "서울 방이동" || newTitle.contains("사진 촬영")) {
+                    val repPlace = cleanSteps.firstOrNull { it.latitude != null }?.locationName
+                    newTitle = if (repPlace != null) "${repPlace} 일정" else "${d.monthValue}월 ${d.dayOfMonth}일의 다이어리"
+                }
+
+                if (cleanSteps.size != entry.routeSteps.size ||
+                    cleanPhotos.size != entry.photoUris.size ||
+                    cleanTags.size != entry.tags.size ||
+                    newTitle != entry.title
+                ) {
                     val updated = entry.copy(
+                        title = newTitle,
                         photoUris = cleanPhotos,
                         tags = cleanTags,
                         routeSteps = cleanSteps

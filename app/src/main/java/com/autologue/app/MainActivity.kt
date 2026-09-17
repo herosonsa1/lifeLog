@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var transactionRepository: TransactionRepository
     @Inject lateinit var golfRepository: GolfRepository
     @Inject lateinit var historicalDataImporter: HistoricalDataImporter
+    @Inject lateinit var scorecardOcrAnalyzer: com.autologue.app.data.ocr.ScorecardOcrAnalyzer
 
     private val _isInitialSyncDone = MutableStateFlow(false)
     val isInitialSyncDone: StateFlow<Boolean> = _isInitialSyncDone.asStateFlow()
@@ -162,59 +163,7 @@ class MainActivity : ComponentActivity() {
             try {
                 Log.d("AUTOLOGUE_INIT", "Starting syncInitialData...")
 
-                // 1. Seed realistic fuel transactions if not already present
-                val existingTxs = transactionRepository.getAllTransactionsFlow().first()
-                val hasFuelTx = existingTxs.any { it.category == ExpenseCategory.FUEL || it.merchantName.contains("주유") }
-                if (!hasFuelTx) {
-                    val sampleGasTxs = listOf(
-                        Transaction(
-                            timestamp = LocalDateTime.of(2026, 8, 12, 18, 30),
-                            amount = 70000L,
-                            merchantName = "SK에너지 분당주유소",
-                            originalText = "[Web발신] 신한카드 승인 70,000원 08/12 18:30 SK에너지 분당주유소",
-                            paymentMethod = PaymentMethod.CREDIT_CARD,
-                            category = ExpenseCategory.FUEL,
-                            cardOrBankName = "신한카드",
-                            isAutoCategorized = true
-                        ),
-                        Transaction(
-                            timestamp = LocalDateTime.of(2026, 8, 20, 14, 15),
-                            amount = 65000L,
-                            merchantName = "GS칼텍스 삼정주유소",
-                            originalText = "[Web발신] 신한카드 승인 65,000원 08/20 14:15 GS칼텍스 삼정주유소",
-                            paymentMethod = PaymentMethod.CREDIT_CARD,
-                            category = ExpenseCategory.FUEL,
-                            cardOrBankName = "신한카드",
-                            isAutoCategorized = true
-                        ),
-                        Transaction(
-                            timestamp = LocalDateTime.of(2026, 8, 28, 9, 40),
-                            amount = 75000L,
-                            merchantName = "S-OIL 판교주유소",
-                            originalText = "[Web발신] 현대카드 승인 75,000원 08/28 09:40 S-OIL 판교주유소",
-                            paymentMethod = PaymentMethod.CREDIT_CARD,
-                            category = ExpenseCategory.FUEL,
-                            cardOrBankName = "현대카드",
-                            isAutoCategorized = true
-                        ),
-                        Transaction(
-                            timestamp = LocalDateTime.of(2026, 9, 2, 19, 10),
-                            amount = 68000L,
-                            merchantName = "SK에너지 강남주유소",
-                            originalText = "[Web발신] 신한카드 승인 68,000원 09/02 19:10 SK에너지 강남주유소",
-                            paymentMethod = PaymentMethod.CREDIT_CARD,
-                            category = ExpenseCategory.FUEL,
-                            cardOrBankName = "신한카드",
-                            isAutoCategorized = true
-                        )
-                    )
-                    for (tx in sampleGasTxs) {
-                        transactionRepository.insertTransaction(tx)
-                    }
-                    Log.d("AUTOLOGUE_INIT", "Inserted sample gas station transactions")
-                }
-
-                // Sync refueling logs to car ledger
+                // [더미 데이터 영구 제거] 실제 모바일 단말기의 SMS/사진/알림 데이터만으로 기록 및 분석 수행
                 val allTxs = transactionRepository.getAllTransactionsFlow().first()
                 val syncedCount = vehicleRepository.syncRefuelingFromTransactions(allTxs)
                 Log.d("AUTOLOGUE_INIT", "Synced $syncedCount refueling logs to car ledger")

@@ -56,7 +56,7 @@ class ProcessGolfLockerSlipUseCase @Inject constructor(
                 endTime = endTime,
                 memo = memoStr,
                 matchingPhotoUris = (existingRound.matchingPhotoUris + photoList).distinct(),
-                scorecardPhotoUri = existingRound.scorecardPhotoUri ?: photoUri,
+                scorecardPhotoUri = existingRound.scorecardPhotoUri,
                 companions = (existingRound.companions + companionsList).distinct()
             )
             golfRepository.updateGolfRound(updated)
@@ -69,7 +69,7 @@ class ProcessGolfLockerSlipUseCase @Inject constructor(
                 startTime = startTime,
                 endTime = endTime,
                 memo = memoStr,
-                scorecardPhotoUri = photoUri,
+                scorecardPhotoUri = null,
                 matchingPhotoUris = photoList,
                 companions = companionsList
             )

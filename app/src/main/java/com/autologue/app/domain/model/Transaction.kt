@@ -41,8 +41,10 @@ data class Transaction(
  */
 fun Transaction.isSelfTransfer(): Boolean {
     val target = "정선우"
-    return merchantName.contains(target) ||
-           (transferMemo?.contains(target) == true) ||
-           originalText.contains(target)
+    // 신용카드/체크카드 결제 승인 문자에 포함된 회원명("정선우")은 계좌간 이동이 아닌 정상 카드 결제임
+    if (paymentMethod == PaymentMethod.CREDIT_CARD || paymentMethod == PaymentMethod.CHECK_CARD) {
+        return false
+    }
+    return merchantName.contains(target) || (transferMemo?.contains(target) == true)
 }
 

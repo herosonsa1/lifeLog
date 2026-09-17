@@ -1,6 +1,7 @@
 package com.autologue.app
 
 import com.autologue.app.data.ocr.ScorecardOcrAnalyzer
+import com.autologue.app.domain.model.getScorecardStats
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
@@ -246,5 +247,329 @@ class ScorecardOcrAnalyzerTest {
 
         assertEquals("205.2m (201.4m)", round.getFormattedDriveDistance())
         assertEquals(201.4, round.getEffectiveAdjustedDriveDistance()!!, 0.01)
+    }
+
+    @Test
+    fun parseScorecard_withMergedHoles_prevents54Misdetection_andRecovers86Total() {
+        // 1번 홀 선택선 등으로 1-2번 홀이 "54"로 뭉쳐서 인식된 사용자 실제 케이스 시뮬레이션
+        val mergedSampleText = """
+            스코어카드
+            필로스 GC 2026.08.09
+            86(+14) 55.6%
+            SCORE GIR
+            2.2 6384
+            홀당 평균 퍼트 수 전체 걸음수
+            
+            West
+            HOLE 1 2 3 4 5 6 7 8 9 Total
+            Par 4 3 5 4 3 4 5 4 4 36
+            Score 54 7 3 4 5 6 4 4 42
+            Putt 2 2 1 2 1 3 2 2 2 17
+            Penalty - - 1 - 1 - - - - 2
+            
+            South
+            HOLE 10 11 12 13 14 15 16 17 18 Total
+            Par 4 4 5 3 4 5 4 3 4 36
+            Score 5 5 6 6 4 6 4 4 4 44
+            Putt 3 3 2 4 1 3 2 3 2 23
+            Penalty - - - - - - - - - -
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(mergedSampleText)
+
+        // 1. "54"가 총 타수로 오탐되지 않고 정확히 86타로 파싱되는지 검증
+        assertEquals(86, result.totalScore)
+
+        // 2. "54"가 5타, 4타로 분리되어 18홀 홀별 스코어가 모두 복원되었는지 검증
+        assertEquals(18, result.holeScores.size)
+        assertEquals(listOf(5, 4, 7, 3, 4, 5, 6, 4, 4, 5, 5, 6, 6, 4, 6, 4, 4, 4), result.holeScores)
+
+        // 3. 페널티 2타 정상 파싱 검증
+        assertEquals(2, result.penaltyCount)
+
+        // 4. 걸음수 6384 정상 파싱 검증
+        assertEquals(6384, result.steps)
+    }
+
+    @Test
+    fun getScorecardStats_calculatesBirdieParBogeyDoubleCorrectly() {
+        val round = com.autologue.app.domain.model.GolfRound(
+            clubName = "필로스 GC",
+            roundDate = java.time.LocalDateTime.now(),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            holeScores = listOf(5, 4, 7, 3, 4, 5, 6, 4, 4, 5, 5, 6, 6, 4, 6, 4, 4, 4),
+            penaltyCount = 2
+        )
+
+        val stats = round.getScorecardStats()
+        assertNotNull(stats)
+        assertEquals(1, stats!!.birdieCount)     // 4번 홀 3타 (Par 4 -> 버디)
+        assertEquals(5, stats.parCount)          // West 8,9 및 South 14,16,18
+        assertEquals(10, stats.bogeyCount)       // 보기 10개
+        assertEquals(2, stats.doublePlusCount)   // West 3번 더블 + South 13번 트리플
+        assertEquals(2, stats.penaltyCount)      // 벌타 2타
+    }
+
+    @Test
+    fun numberCommaVisualTransformation_formatsNumberWithCommas() {
+        val transformation = com.autologue.app.presentation.common.NumberCommaVisualTransformation()
+
+        val input = androidx.compose.ui.text.AnnotatedString("6384")
+        val transformed = transformation.filter(input)
+        assertEquals("6,384", transformed.text.text)
+
+        val largeInput = androidx.compose.ui.text.AnnotatedString("1234567")
+        val largeTransformed = transformation.filter(largeInput)
+        assertEquals("1,234,567", largeTransformed.text.text)
+
+        val emptyInput = androidx.compose.ui.text.AnnotatedString("")
+        val emptyTransformed = transformation.filter(emptyInput)
+        assertEquals("", emptyTransformed.text.text)
+    }
+
+    @Test
+    fun parseScorecard_withPinkSelectionBoxOnHole1_deducesHole1AndRecoversFull18Holes() {
+        // 실제 필로스 GC에서 1번 홀 선택선으로 인해 1번 홀 스코어(5타)가 별도 분리되어
+        // West 스코어 줄에 8개 홀 타수 + Total(42)만 인식된 실제 시뮬레이션
+        val rawTextWithSeparatedHole1 = """
+            스코어카드
+            필로스 GC 2026.08.09
+            86(+14) 55.6%
+            SCORE GIR
+            2.2 6384
+            홀당 평균 퍼트 수 전체 걸음수
+            
+            West
+            HOLE 1 2 3 4 5 6 7 8 9 Total
+            Par 4 3 5 4 3 4 5 4 4 36
+            Score 4 7 3 4 5 6 4 4 42
+            Putt 2 2 1 2 1 3 2 2 2 17
+            Penalty - - 1 - 1 - - - - 2
+            
+            닫기^
+            
+            South
+            HOLE 10 11 12 13 14 15 16 17 18 Total
+            Par 4 4 5 3 4 5 4 3 4 36
+            Score 5 5 6 6 4 6 4 4 4 44
+            Putt 3 3 2 4 1 3 2 3 2 23
+            Penalty - - - - - - - - - -
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(rawTextWithSeparatedHole1)
+
+        // 1. 총 타수 86타 확정 (전반 42 + 후반 44 = 86)
+        assertEquals(86, result.totalScore)
+
+        // 2. 총 퍼트 수 40개 확정 (전반 17 + 후반 23 = 40)
+        assertEquals(40, result.totalPutts)
+
+        // 3. 18홀 전체 스코어 복원 (1번 홀 42 - 37 = 5타 수학적 역산 포함)
+        val expectedScores = listOf(5, 4, 7, 3, 4, 5, 6, 4, 4, 5, 5, 6, 6, 4, 6, 4, 4, 4)
+        assertEquals(18, result.holeScores.size)
+        assertEquals(expectedScores, result.holeScores)
+
+        // 4. 코스명 종합
+        assertEquals("West / South", result.courseName)
+
+        // 5. 스코어 성적 집계 (버디 1, 파 5, 보기 10, 더블+ 2, 벌타 2)
+        val stats = com.autologue.app.domain.model.GolfRound(
+            clubName = result.clubName ?: "필로스 GC",
+            roundDate = java.time.LocalDateTime.now(),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            holeScores = result.holeScores,
+            penaltyCount = result.penaltyCount
+        ).getScorecardStats()
+
+        assertNotNull(stats)
+        assertEquals(1, stats!!.birdieCount)
+        assertEquals(5, stats.parCount)
+        assertEquals(10, stats.bogeyCount)
+        assertEquals(2, stats.doublePlusCount)
+        assertEquals(2, stats.penaltyCount)
+    }
+
+    @Test
+    fun parseScorecard_preventsParRowMisdetectionAsScoreAndPutt() {
+        // Score 행의 인식이 불안정하여 Par 행만 온전히 읽혔을 때,
+        // Par 행(36)이 스코어나 퍼트로 오탐되지 않도록 차단하는 테스트
+        val textWithParOnly = """
+            스코어카드
+            필로스 GC
+            86(+14) SCORE
+            2.2 홀당 평균 퍼트 수
+            
+            West
+            HOLE 1 2 3 4 5 6 7 8 9 Total
+            Par 4 3 5 4 3 4 5 4 4 36
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(textWithParOnly)
+
+        // 총 타수는 상단 대형 스코어 86으로 보장되며 36이 되지 않음
+        assertEquals(86, result.totalScore)
+        // Par 행이 스코어로 채택되지 않아 holeScores는 빈 리스트임
+        assertEquals(0, result.holeScores.size)
+        // 퍼트 역시 36으로 채택되지 않고 2.2 * 18 = 40 (또는 null)으로 안전 보장
+        assertEquals(40, result.totalPutts)
+    }
+
+    @Test
+    fun parseScorecard_mergesSpatialAndRawIntelligently() {
+        // 9홀만 파싱되고 36타로 잘못 계산된 spatial 결과
+        val badSpatialResult = com.autologue.app.data.ocr.ScorecardOcrResult(
+            totalScore = 36,
+            totalPutts = 36,
+            holeScores = listOf(4, 3, 5, 4, 3, 4, 5, 4, 4),
+            holePars = listOf(4, 3, 5, 4, 3, 4, 5, 4, 4),
+            courseName = "West",
+            recognizedRawText = "spatial"
+        )
+
+        // 18홀 전체와 86타를 온전히 복원한 raw 결과
+        val goodRawResult = com.autologue.app.data.ocr.ScorecardOcrResult(
+            totalScore = 86,
+            totalPutts = 40,
+            holeScores = listOf(5, 4, 7, 3, 4, 5, 6, 4, 4, 5, 5, 6, 6, 4, 6, 4, 4, 4),
+            holePars = listOf(4, 3, 5, 4, 3, 4, 5, 4, 4, 4, 4, 5, 3, 4, 5, 4, 3, 4),
+            courseName = "West / South",
+            recognizedRawText = "raw"
+        )
+
+        val merged = ScorecardOcrAnalyzer.mergeResults(badSpatialResult, goodRawResult, "raw")
+
+        // 18홀과 86타, 40퍼트, West / South가 온전히 채택되었는지 검증
+        assertEquals(86, merged.totalScore)
+        assertEquals(40, merged.totalPutts)
+        assertEquals(18, merged.holeScores.size)
+        assertEquals("West / South", merged.courseName)
+    }
+
+    @Test
+    fun parseScorecard_withColumnStyleRawText_recoversScoresAccurately() {
+        // ML Kit가 라벨 열을 먼저 읽고, 그 뒤에 숫자들을 따로 읽은 파편화된 원문 시뮬레이션
+        val columnFragmentedText = """
+            스코어카드
+            필로스 GC 2026.08.09
+            86(+14) SCORE
+            55.6% GIR
+            2.2 홀당 평균 퍼트 수
+            6384 전체 걸음 수
+            
+            West
+            HOLE
+            Par
+            Score
+            Putt
+            Penalty
+            4 3 5 4 3 4 5 4 4 36
+            2 2 1 2 1 3 2 2 2 17
+            - - 1 - 1 - - - - 2
+            5 4 7 3 4 5 6 4 4 42
+            
+            South
+            HOLE
+            Par
+            Score
+            Putt
+            Penalty
+            4 4 5 3 4 5 4 3 4 36
+            3 3 2 4 1 3 2 3 2 23
+            - - - - - - - - - -
+            5 5 6 6 4 6 4 4 4 44
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(columnFragmentedText)
+
+        // 1. 총 타수 86타
+        assertEquals(86, result.totalScore)
+        // 2. 총 퍼트 수 40개
+        assertEquals(40, result.totalPutts)
+        // 3. 18홀 전체 복원
+        assertEquals(18, result.holeScores.size)
+        assertEquals(listOf(5, 4, 7, 3, 4, 5, 6, 4, 4, 5, 5, 6, 6, 4, 6, 4, 4, 4), result.holeScores)
+    }
+
+    @Test
+    fun getScorecardStats_prioritizesHoleScoresOverOldMemoTag() {
+        // 메모에 이전 버그 때의 잘못된 태그([통계: 버디 0, 파 9, 보기 0, 더블+ 0])가 남아있더라도,
+        // holeScores가 있으면 실제 스코어를 최우선 계산하는지 검증
+        val round = com.autologue.app.domain.model.GolfRound(
+            clubName = "필로스 GC",
+            roundDate = java.time.LocalDateTime.now(),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            memo = "코스: West / South / [통계: 버디 0, 파 9, 보기 0, 더블+ 0]",
+            holeScores = listOf(5, 4, 7, 3, 4, 5, 6, 4, 4, 5, 5, 6, 6, 4, 6, 4, 4, 4),
+            penaltyCount = 2
+        )
+
+        val stats = round.getScorecardStats()
+        assertNotNull(stats)
+        // 메모의 "버디 0, 파 9"에 오염되지 않고, 실제 스코어 기반 버디 1, 파 5, 보기 10, 더블+ 2가 반환되어야 함!
+        assertEquals(1, stats!!.birdieCount)
+        assertEquals(5, stats.parCount)
+        assertEquals(10, stats.bogeyCount)
+        assertEquals(2, stats.doublePlusCount)
+        assertEquals(2, stats.penaltyCount)
+    }
+
+    @Test
+    fun parseOakValleyScorecard_extracts18HolesPineCherryAndAllMetrics() {
+        // 사용자 실제 오크밸리 CC 모바일 스코어카드 (Pine / Cherry 18홀)
+        val oakValleyRawText = """
+            스코어카드
+            오크밸리 CC
+            92
+            SCORE
+            27.8
+            GIR
+            2.1
+            홀당 평균 퍼트 수
+            6983
+            전체 걸음수
+            
+            Pine
+            HOLE 1 2 3 4 5 6 7 8 9 Total
+            Par 4 4 3 5 4 4 3 5 4 36
+            Score 4 8 3 5 5 6 4 7 6 48
+            Putt 2 3 1 2 2 3 2 3 2 20
+            Penalty - - - - - 1 - 1 - 2
+            
+            Cherry
+            HOLE 10 11 12 13 14 15 16 17 18 Total
+            Par 4 4 5 3 4 5 4 3 4 36
+            Score 4 5 5 6 4 5 5 5 5 44
+            Putt 2 2 2 3 1 2 2 2 2 18
+            Penalty - - - - - - - 1 - 1
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(oakValleyRawText)
+
+        // 1. 총 타수 검증 (상단 SCORE 92 및 18홀 전후반 합산 48 + 44 = 92)
+        assertEquals(92, result.totalScore)
+
+        // 2. 총 퍼트수 검증 (전반 20 + 후반 18 = 38)
+        assertEquals(38, result.totalPutts)
+
+        // 3. 18홀 홀별 타수 검증
+        val expectedHoles = listOf(4, 8, 3, 5, 5, 6, 4, 7, 6, 4, 5, 5, 6, 4, 5, 5, 5, 5)
+        assertEquals(18, result.holeScores.size)
+        assertEquals(expectedHoles, result.holeScores)
+
+        // 4. 코스명 검증 (Pine / Cherry)
+        assertEquals("Pine / Cherry", result.courseName)
+
+        // 5. 골프장명 검증 (오크밸리 CC)
+        assertEquals("오크밸리 CC", result.clubName)
+
+        // 6. GIR 검증 (% 기호 없이 인접 줄 분리된 27.8 감지)
+        assertNotNull(result.girPercentage)
+        assertEquals(27.8, result.girPercentage!!, 0.01)
+
+        // 7. 전체 걸음수 검증 (6983)
+        assertEquals(6983, result.steps)
+
+        // 8. 총 페널티 검증 (전반 2 + 후반 1 = 3)
+        assertEquals(3, result.penaltyCount)
     }
 }

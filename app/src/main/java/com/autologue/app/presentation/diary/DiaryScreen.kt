@@ -1753,9 +1753,10 @@ fun SyncProgressDialog(
                     )
                 }
                 Text(progress.stage, style = AppTypography.bodySecondary)
-                if (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0) {
+                if (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0) {
+                    val golfSummary = if (progress.syncedGolfCount > 0) " / ⛳ 골프 ${progress.syncedGolfCount}건" else ""
                     Text(
-                        "• 결제 ${progress.syncedTxCount}건 / 사진 ${progress.syncedPhotoCount}장 색인됨",
+                        "• 결제 ${progress.syncedTxCount}건 / 사진 ${progress.syncedPhotoCount}장 색인됨$golfSummary",
                         style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold)
                     )
                 }
@@ -1818,9 +1819,9 @@ fun SyncingBannerCard(
 @Composable
 fun ManualSyncPeriodDialog(
     onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit
+    onConfirm: (Int?) -> Unit
 ) {
-    var selectedDays by remember { mutableStateOf(7) }
+    var selectedDays by remember { mutableStateOf<Int?>(30) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1833,7 +1834,7 @@ fun ManualSyncPeriodDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    text = "결제 문자(SMS) 및 사진 위치 정보를 분석하여 타임라인과 이동 경로를 복원합니다.\n동기화할 기간을 선택하세요.",
+                    text = "결제 문자(SMS) 및 사진 위치·스코어카드·라커룸 이미지를 분석하여 타임라인과 골프 라운드를 자동 복원합니다.\n동기화할 기간을 선택하세요.",
                     style = AppTypography.bodySecondary
                 )
 
@@ -1841,10 +1842,10 @@ fun ManualSyncPeriodDialog(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
-                    val periods = listOf(
-                        7 to "최근 7일 (추천 · 빠르고 안전)",
-                        14 to "최근 14일 (2주치 일상 복원)",
-                        30 to "최근 30일 (최대 1달치 분석)"
+                    val periods: List<Pair<Int?, String>> = listOf(
+                        30 to "최근 30일 (추천 · 사진/골프/결제 복원)",
+                        60 to "최근 60일 (2달치 집중 분석)",
+                        null to "전체 기간 (갤러리/문자 전수 스캔 및 골프 자동 등록)"
                     )
 
                     periods.forEach { (days, label) ->

@@ -221,4 +221,31 @@ class GolfLockerSlipOcrAnalyzerTest {
         org.junit.Assert.assertFalse("일반 식당 영수증은 골프 라커 슬립으로 오탐되지 않아야 함", result.isLockerSlip)
         assertEquals("일반 사진", result.clubName)
     }
+
+    @Test
+    fun parseAdBannerScreenshot_shouldBeRejected() {
+        // 1. 대여/NX PLUS 광고 배너 캡처 (사용자가 업로드했던 실제 케이스)
+        val adText1 = """
+            1일 ROOM 대여
+            NX PLUS
+            하루종일! 골프 칠 수 있다!
+            주중 250,000 주말 300,000
+        """.trimIndent()
+
+        val result1 = GolfLockerSlipOcrAnalyzer.parse(adText1)
+        org.junit.Assert.assertFalse("골프 대여/하루종일 광고 배너는 라커 슬립으로 오탐되지 않아야 함", result1.isLockerSlip)
+        assertEquals("일반 사진", result1.clubName)
+
+        // 2. 기프트카드/할인 이벤트 배너 캡처
+        val adText2 = """
+            골프존 모바일 상품권
+            CJ ONE 기프트카드
+            골프존 매장에서 결제시 최대 10% 할인 혜택
+            이벤트 기간: 2026.09.01 ~ 2026.09.30
+        """.trimIndent()
+
+        val result2 = GolfLockerSlipOcrAnalyzer.parse(adText2)
+        org.junit.Assert.assertFalse("기프트카드/할인 이벤트 배너는 라커 슬립으로 오탐되지 않아야 함", result2.isLockerSlip)
+        assertEquals("일반 사진", result2.clubName)
+    }
 }

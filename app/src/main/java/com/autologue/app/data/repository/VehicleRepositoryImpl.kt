@@ -104,43 +104,9 @@ class VehicleRepositoryImpl @Inject constructor(
     override suspend fun syncDrivingLogsFromDiary(
         diaryEntries: List<com.autologue.app.domain.model.DiaryEntry>
     ): Int = withContext(Dispatchers.IO) {
-        var addedCount = 0
-        val existingLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }
-
-        for (entry in diaryEntries) {
-            val dist = if (entry.drivingDistanceKm > 0.0) {
-                entry.drivingDistanceKm
-            } else {
-                LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
-            }
-
-            if (dist > 0.0) {
-                val date = entry.date.toLocalDate()
-                val alreadyHasDrivingLog = existingLogs.any {
-                    it.logType == VehicleLogType.TRIP_DRIVING &&
-                    it.timestamp.toLocalDate() == date &&
-                    it.tripDistanceKm > 0.0
-                }
-
-                if (!alreadyHasDrivingLog) {
-                    val noteText = if (!entry.movementSummary.isNullOrBlank() && entry.movementSummary != "기록된 활동 없음") {
-                        "다이어리 이동 동선 (${entry.movementSummary})"
-                    } else {
-                        "${entry.title} 이동"
-                    }
-
-                    val log = VehicleLog(
-                        timestamp = entry.date,
-                        logType = VehicleLogType.TRIP_DRIVING,
-                        tripDistanceKm = dist,
-                        note = noteText
-                    )
-                    vehicleLogDao.insertVehicleLog(log.toEntity())
-                    addedCount++
-                }
-            }
-        }
-        addedCount
+        // [원칙] 차량 이동은 오직 실제 차량 블루투스 연결/해제 세션에 의해서만 기록됩니다.
+        // 다이어리의 일상 이동(도보, 대중교통, 식사 이동 등)은 차계부 주행 기록으로 등록하지 않습니다.
+        0
     }
 
     override suspend fun cleanDuplicates(): Int = withContext(Dispatchers.IO) {
@@ -181,9 +147,19 @@ class VehicleRepositoryImpl @Inject constructor(
         for (log in all) {
             val note = log.note ?: ""
 
-            // 1. OCR 쓰레기 문자열이 포함된 비정상 레코드 영구 삭제
+            // 1. 다이어리 이동 동선(도보/대중교통 오인입) 레코드 전수 영구 삭제
+            val isDiaryMovement = note.contains("다이어리 이동 동선") ||
+                    (log.logType == VehicleLogType.TRIP_DRIVING && (note.contains("방이동") || note.contains("동작동") || note.contains("영등포동") || note.contains("잠실동")) && !note.contains("블루투스"))
+
+            if (isDiaryMovement) {
+                vehicleLogDao.deleteVehicleLogById(log.id)
+                modifiedCount++
+                continue
+            }
+
+            // 2. OCR 쓰레기 문자열이 포함된 비정상 레코드 영구 삭제
             val isCorrupted = corruptedKeywords.any { note.contains(it, ignoreCase = true) } ||
-                    (log.logType == VehicleLogType.TRIP_DRIVING && note.length > 30 && !note.contains("출퇴근"))
+                    (log.logType == VehicleLogType.TRIP_DRIVING && note.length > 30 && !note.contains("출근") && !note.contains("퇴근") && !note.contains("블루투스") && !note.contains("주행"))
 
             if (isCorrupted) {
                 vehicleLogDao.deleteVehicleLogById(log.id)
@@ -191,8 +167,18 @@ class VehicleRepositoryImpl @Inject constructor(
                 continue
             }
 
-            // 2. 동일 날짜 중복/근접 주행 레코드 정리 (최초 1건만 유지)
-            val dateKey = "${log.timestamp.toLocalDate()}_${log.logType}"
+            // 3. 비정상 시각(새벽 00시~05시 또는 대낮 비정상 시간대)에 생성된 가짜 '출퇴근 왕복' 더미 레코드 삭제
+            val hour = log.timestamp.hour
+            val isUnusualCommuteTime = (hour in 0..5 || hour in 11..16) && note.contains("출퇴근 왕복")
+            if (isUnusualCommuteTime && log.logType == VehicleLogType.TRIP_DRIVING) {
+                vehicleLogDao.deleteVehicleLogById(log.id)
+                modifiedCount++
+                continue
+            }
+
+            // 4. 동일 날짜 중복 출근/퇴근 주행 레코드 정리 (방향별 1건만 유지)
+            val directionKey = if (note.contains("출근")) "WORK" else if (note.contains("퇴근")) "HOME" else "OTHER"
+            val dateKey = "${log.timestamp.toLocalDate()}_${log.logType}_$directionKey"
             val isCommute = note.contains("출근") || note.contains("퇴근") || note.contains("출퇴근")
             if (dateKey in seenDates && log.logType == VehicleLogType.TRIP_DRIVING && isCommute) {
                 vehicleLogDao.deleteVehicleLogById(log.id)
@@ -201,22 +187,12 @@ class VehicleRepositoryImpl @Inject constructor(
             }
             seenDates.add(dateKey)
 
-            // 3. 평일(월~금) 잘못 생성된 골프장 주행 -> 출퇴근 왕복 주행으로 정상 복구
-            val dayOfWeek = log.timestamp.dayOfWeek
-            val isWeekday = dayOfWeek !in listOf(java.time.DayOfWeek.SATURDAY, java.time.DayOfWeek.SUNDAY)
-            val isFakeGolf = note.contains("필드 골프장") || note.contains("동강시스타") || note.contains("라운딩 왕복")
-
-            if (isWeekday && isFakeGolf && log.logType == VehicleLogType.TRIP_DRIVING) {
+            // 5. 과거 '출퇴근 왕복'으로 잘못 묶여 있던 레코드를 실제 출근 편도로 정상화
+            if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근 왕복")) {
+                val oneWayDistance = if (commuteDistanceKm > 0.0) commuteDistanceKm / 2.0 else log.tripDistanceKm
                 val updated = log.copy(
-                    note = "출퇴근 왕복 주행 ($homeName ↔ $companyName)",
-                    tripDistanceKm = commuteDistanceKm
-                )
-                vehicleLogDao.updateVehicleLog(updated)
-                modifiedCount++
-            } else if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근") && commuteDistanceKm > 0.0 && log.tripDistanceKm != commuteDistanceKm) {
-                val updated = log.copy(
-                    note = "출퇴근 왕복 주행 ($homeName ↔ $companyName)",
-                    tripDistanceKm = commuteDistanceKm
+                    note = "출근 주행 ($homeName ➔ $companyName)",
+                    tripDistanceKm = oneWayDistance
                 )
                 vehicleLogDao.updateVehicleLog(updated)
                 modifiedCount++

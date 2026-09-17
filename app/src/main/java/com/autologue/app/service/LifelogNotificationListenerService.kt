@@ -33,6 +33,11 @@ class LifelogNotificationListenerService : NotificationListenerService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    companion object {
+        // [중복 방어] 안드로이드 시스템 알림 업데이트로 인한 10초 이내 동일 알림 중복 처리 원천 차단
+        private val recentNotificationCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         val sbnNonNull = sbn ?: return
@@ -40,6 +45,18 @@ class LifelogNotificationListenerService : NotificationListenerService() {
         val title = extras.getString("android.title") ?: ""
         val text = extras.getCharSequence("android.text")?.toString() ?: ""
         val packageName = sbnNonNull.packageName ?: ""
+
+        val cacheKey = "${packageName}_${title.trim()}_${text.trim()}"
+        val now = System.currentTimeMillis()
+        val lastTime = recentNotificationCache[cacheKey]
+        if (lastTime != null && (now - lastTime) < 10_000L) {
+            // 10초 이내 동일 알림 재호출은 즉시 스킵
+            return
+        }
+        recentNotificationCache[cacheKey] = now
+        if (recentNotificationCache.size > 50) {
+            recentNotificationCache.entries.removeIf { (now - it.value) > 30_000L }
+        }
 
         val result = NotificationParser.parse(packageName, title, text) ?: return
 

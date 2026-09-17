@@ -16,4 +16,5 @@ sealed class Screen(
     object Expense : Screen("expense", "가계부", Icons.Default.AccountBalanceWallet, MenuColors.expense)
     object CarLedger : Screen("car_ledger", "차계부", Icons.Default.DirectionsCar, MenuColors.carLedger)
     object Golf : Screen("golf", "골프", Icons.Default.SportsGolf, MenuColors.golf)
+    object Lifestyle : Screen("lifestyle", "라이프 궤도", Icons.Default.Insights, MenuColors.lifestyle)
 }

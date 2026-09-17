@@ -73,10 +73,10 @@ class PlaceResolver @Inject constructor() {
     }
 
     fun resolvePhotoLocation(
-        context: Context,
-        uri: Uri,
+        context: Context? = null,
+        uri: Uri? = null,
         streamProvider: () -> InputStream?
-    ): ResolvedLocation {
+    ): ResolvedLocation? {
         val fromExif = runCatching {
             streamProvider()?.use { inputStream ->
                 val exif = ExifInterface(inputStream)
@@ -91,12 +91,8 @@ class PlaceResolver @Inject constructor() {
             }
         }.getOrNull()
 
-        return fromExif ?: ResolvedLocation(
-            placeName = "서울 방이동",
-            address = "서울특별시 송파구 방이동",
-            latitude = 37.5145,
-            longitude = 127.1058
-        )
+        // EXIF 위치 정보(GPS)가 없으면 임의의 위치(방이동 등)로 왜곡하지 않고 null을 반환합니다.
+        return fromExif
     }
 
     private fun extractDong(addr: android.location.Address): String? {
@@ -202,8 +198,8 @@ class PlaceResolver @Inject constructor() {
 
                         val fullAddress = addr.getAddressLine(0) ?: "$admin $locality ${dong ?: ""}".trim()
                         val res = ResolvedLocation(
-                            placeName = if (shortName.isNotBlank()) shortName else "서울 방이동",
-                            address = fullAddress,
+                            placeName = if (shortName.isNotBlank()) shortName else if (fullAddress.isNotBlank()) fullAddress else "기록된 장소",
+                            address = fullAddress.ifBlank { "위치 정보" },
                             latitude = lat,
                             longitude = lng
                         )
@@ -214,7 +210,8 @@ class PlaceResolver @Inject constructor() {
             }
         }
 
-        val fallback = ResolvedLocation("서울 방이동", "서울특별시 송파구 방이동", lat, lng)
+        val fallbackPlace = "위도 %.3f, 경도 %.3f".format(java.util.Locale.US, lat, lng)
+        val fallback = ResolvedLocation(fallbackPlace, "위치 정보 ($fallbackPlace)", lat, lng)
         geoCache[cacheKey] = fallback
         return fallback
     }

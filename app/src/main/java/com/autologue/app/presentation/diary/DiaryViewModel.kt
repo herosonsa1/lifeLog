@@ -22,6 +22,7 @@ import com.autologue.app.domain.usecase.sync.SyncHistoricalDataUseCase
 import com.autologue.app.domain.usecase.sync.SyncProgress
 import com.autologue.app.util.LocationDistanceUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -70,6 +71,7 @@ data class DiaryUiState(
 
 @HiltViewModel
 class DiaryViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val diaryRepository: DiaryRepository,
     private val transactionRepository: TransactionRepository,
     private val golfRepository: GolfRepository,
@@ -220,11 +222,11 @@ class DiaryViewModel @Inject constructor(
                             .flatMap { step ->
                                 val isLegacyGu = step.locationName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
                                 val cleanPlace = if (step.locationName?.contains("사진 촬영") == true || isLegacyGu) null else step.locationName
-                                val lat = step.latitude ?: 37.5145
-                                val lng = step.longitude ?: 127.1058
-                                val resolved = if (cleanPlace == null) placeResolver.resolveGeoLocation(null, lat, lng) else null
-                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "서울 방이동"
-                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "서울특별시 송파구 방이동" else step.address
+                                val lat = step.latitude
+                                val lng = step.longitude
+                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(null, lat, lng) else null
+                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "사진 기록"
+                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "" else step.address
 
                                 step.photoUris.map { uri ->
                                     ScannedPhoto(
@@ -241,11 +243,11 @@ class DiaryViewModel @Inject constructor(
                             }.ifEmpty {
                                 val isLegacyGu = entry.placeName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
                                 val cleanPlace = if (entry.placeName?.contains("사진 촬영") == true || isLegacyGu) null else entry.placeName
-                                val lat = entry.latitude ?: 37.5145
-                                val lng = entry.longitude ?: 127.1058
-                                val resolved = if (cleanPlace == null) placeResolver.resolveGeoLocation(null, lat, lng) else null
-                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "서울 방이동"
-                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "서울특별시 송파구 방이동" else entry.address
+                                val lat = entry.latitude
+                                val lng = entry.longitude
+                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(null, lat, lng) else null
+                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "사진 기록"
+                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "" else entry.address
 
                                 entry.photoUris.map {
                                     ScannedPhoto(
@@ -257,7 +259,9 @@ class DiaryViewModel @Inject constructor(
                                         longitude = lng
                                     )
                                 }
-                            }.distinctBy { it.uri }
+                            }
+                            .filterNot { com.autologue.app.data.sync.HistoricalDataImporter.isUriScreenshot(appContext, it.uri) }
+                            .distinctBy { it.uri }
 
                         val cleanExistingSteps = entry.routeSteps.filter {
                             !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) &&
@@ -680,7 +684,7 @@ class DiaryViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isManualSyncDialogOpen = false)
     }
 
-    fun executeManualSync(daysBack: Int, context: Context) {
+    fun executeManualSync(daysBack: Int?, context: Context) {
         closeManualSyncDialog()
         viewModelScope.launch(Dispatchers.IO) {
             try {

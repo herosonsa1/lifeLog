@@ -401,6 +401,15 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
                 val cleaned = line.replace(Regex("""[^가-힣A-Za-z0-9\s\.\-_&]"""), "").trim()
                 if (cleaned.length < 2) continue
 
+                // 광고/이벤트성 문구가 포함된 라인은 골프장명 후보에서 즉시 배제
+                val isAdLine = cleaned.contains("칠 수") || cleaned.contains("있다") || cleaned.contains("하루종일") ||
+                        cleaned.contains("대여") || cleaned.contains("결제") || cleaned.contains("기프트") ||
+                        cleaned.contains("드려요") || cleaned.contains("이벤트") || cleaned.contains("할인") ||
+                        cleaned.contains("쿠폰") || cleaned.contains("선물") || cleaned.contains("주중") ||
+                        cleaned.contains("주말") || cleaned.contains("ROOM") || cleaned.contains("NX") ||
+                        cleaned.contains("시간") || cleaned.contains("원")
+                if (isAdLine) continue
+
                 // 알려진 구장 매핑 우선
                 val matched = knownClubs.entries.firstOrNull { cleaned.contains(it.key, ignoreCase = true) }?.value
                 if (matched != null) {
@@ -408,9 +417,11 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
                     break
                 }
 
-                // 영문 또는 한글 CC/GC/골프클럽 패턴
-                if (ccGcRegex.containsMatchIn(cleaned) || cleaned.contains("골프") || cleaned.contains("클럽") || cleaned.contains("컨트리")) {
-                    clubName = cleaned
+                // 영문 또는 한글 CC/GC/골프클럽 패턴 (엄격한 골프장 형식만 허용)
+                val specificClubRegex = Regex("""\b([가-힣A-Za-z0-9]{2,12}\s*(?:CC|GC|C\.C|G\.C|컨트리클럽|골프클럽))\b""", RegexOption.IGNORE_CASE)
+                val clubMatch = specificClubRegex.find(cleaned)
+                if (clubMatch != null) {
+                    clubName = clubMatch.value.trim()
                     break
                 }
             }
@@ -637,11 +648,19 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
         else if (raw.contains("(여)") || raw.contains("여성") || raw.contains("락카(여)") || upperRaw.contains("FEMALE") || upperRaw.contains("(F)")) gender = "여"
 
         // 7. Final Slip Decision (구체적인 골프장명이 식별되었거나 명확한 골프/라커 특성이 있을 때만 인정)
-        val isLockerSlip = ((hasExplicitLocker && (hasGolfTerms || hasCcGc || hasKnownClub || lockerNumber != null)) ||
-                (hasKnownClub && (lockerNumber != null || teeOffTime != null || hasGolfTerms)) ||
-                (lockerNumber != null && teeOffTime != null && (hasGolfTerms || hasCcGc || hasThankYouNotice)) ||
-                (lockerNumber != null && (hasGolfTerms && hasThankYouNotice)) ||
-                (hasCcGc && (lockerNumber != null || (teeOffTime != null && hasGolfTerms)))) && clubName != null
+        // [광고/이벤트 배너 배제] 마케팅 배너, 스크린골프 대여, 결제 이벤트 등의 캡처 사진은 라커룸 전표에서 원천 차단
+        val isAdBanner = upperRaw.contains("하루종일") || upperRaw.contains("대여") || upperRaw.contains("기프트카드") ||
+                upperRaw.contains("드려요") || upperRaw.contains("이벤트") || upperRaw.contains("할인") ||
+                upperRaw.contains("쿠폰") || upperRaw.contains("결제시") || upperRaw.contains("캐시백") ||
+                upperRaw.contains("선물") || upperRaw.contains("증정") || upperRaw.contains("칠 수 있다") ||
+                (upperRaw.contains("주중") && upperRaw.contains("주말")) || upperRaw.contains("ROOM 대여") || upperRaw.contains("NX PLUS")
+
+        // 라커룸 전표의 필수 요건: 반드시 유효한 라커 번호(lockerNumber)가 있거나 명시적 라커 레이블(락카/라커)이 존재해야 함!
+        val hasLockerFeature = (hasExplicitLocker && lockerNumber != null) ||
+                (hasExplicitLocker && (hasGolfTerms || hasCcGc || hasKnownClub)) ||
+                (lockerNumber != null && (teeOffTime != null || hasCcGc || hasThankYouNotice || hasKnownClub))
+
+        val isLockerSlip = !isAdBanner && clubName != null && clubName != "일반 사진" && hasLockerFeature
 
         return GolfLockerSlipResult(
             isLockerSlip = isLockerSlip,

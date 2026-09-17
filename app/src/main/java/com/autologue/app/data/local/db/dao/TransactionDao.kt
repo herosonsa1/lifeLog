@@ -22,6 +22,9 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE originalText = :originalText AND originalText != '' LIMIT 1")
     suspend fun findByOriginalText(originalText: String): TransactionEntity?
 
+    @Query("SELECT * FROM transactions WHERE amount = :amount AND timestamp BETWEEN :start AND :end ORDER BY id DESC")
+    suspend fun findTransactionsByAmountAndDateRange(amount: Long, start: Long, end: Long): List<TransactionEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTransaction(transaction: TransactionEntity): Long
 

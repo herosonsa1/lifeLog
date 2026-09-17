@@ -491,7 +491,9 @@ fun SaaSCarLogRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val isCommute = log.note?.contains("출퇴근") == true
+        val isToWork = log.note?.contains("출근") == true && log.note?.contains("출퇴근") != true
+        val isToHome = log.note?.contains("퇴근") == true && log.note?.contains("출퇴근") != true
+        val isCommuteRound = log.note?.contains("출퇴근") == true
         val isGolf = log.note?.contains("골프") == true || log.note?.contains("라운딩") == true || log.note?.contains("CC") == true
         val carTag = Regex("\\[(.*?)\\]").find(log.note ?: "")?.groupValues?.get(1)?.split(" ")?.firstOrNull()
         val isCustom = log.isCustomFuel()
@@ -507,19 +509,21 @@ fun SaaSCarLogRow(
                 MetricBadge(
                     text = when {
                         log.logType == VehicleLogType.REFUELING -> "주유"
-                        isCommute -> "출퇴근"
+                        isToWork -> "출근"
+                        isToHome -> "퇴근"
+                        isCommuteRound -> "출퇴근"
                         isGolf -> "골프주행"
                         else -> "주행"
                     },
                     textColor = when {
                         log.logType == VehicleLogType.REFUELING -> Amber700
-                        isCommute -> Emerald700
+                        isToWork || isToHome || isCommuteRound -> Emerald700
                         isGolf -> Indigo700
                         else -> Slate700
                     },
                     backgroundColor = when {
                         log.logType == VehicleLogType.REFUELING -> Amber50
-                        isCommute -> Emerald50
+                        isToWork || isToHome || isCommuteRound -> Emerald50
                         isGolf -> Indigo50
                         else -> Slate100
                     }
@@ -678,9 +682,11 @@ fun SaaSCarLogRow(
                 )
                 Text(
                     text = when {
-                        isCommute -> "출퇴근 왕복"
-                        isGolf -> "골프장 왕복"
-                        else -> "왕복 주행"
+                        isToWork -> "출근 편도"
+                        isToHome -> "퇴근 편도"
+                        isCommuteRound -> "출퇴근 왕복"
+                        isGolf -> "골프장 이동"
+                        else -> "일반 주행"
                     },
                     style = AppTypography.captionMuted
                 )

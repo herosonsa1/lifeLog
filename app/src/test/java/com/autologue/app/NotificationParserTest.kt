@@ -34,4 +34,26 @@ class NotificationParserTest {
         val tmap = result as NotificationParser.ParsedNotificationResult.TmapResult
         assertEquals(42.5, tmap.distanceKm, 0.01)
     }
+
+    @Test
+    fun parseBankTransferNotification_extractsCorrectDetails() {
+        val packageName = "nh.smart.banking"
+        val title = "[NH스마트알림]"
+        val text = "09/14 00:23 312-****-9414-21 이민희 22,000원 출금 잔액383,252원"
+        val result = NotificationParser.parse(packageName, title, text)
+
+        assertNotNull(result)
+        assertTrue(result is NotificationParser.ParsedNotificationResult.TxResult)
+        val tx = (result as NotificationParser.ParsedNotificationResult.TxResult).transaction
+        assertEquals(22000L, tx.amount)
+        assertEquals("이민희", tx.merchantName)
+        assertEquals(ExpenseCategory.TRANSFER, tx.category)
+        assertEquals(9, tx.timestamp.monthValue)
+        assertEquals(14, tx.timestamp.dayOfMonth)
+        assertEquals(0, tx.timestamp.hour)
+        assertEquals(23, tx.timestamp.minute)
+        assertNotNull(tx.transferMemo)
+        assertTrue(tx.transferMemo!!.contains("383,252"))
+        assertTrue(tx.transferMemo!!.contains("312-****-9414-21"))
+    }
 }

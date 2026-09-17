@@ -66,10 +66,10 @@ class DailyRouteAggregator @Inject constructor(
         for (cluster in photoClusters) {
             val repTime = cluster.first().time
             val repPlace = cluster.firstNotNullOfOrNull { it.placeName?.takeIf { p -> !p.contains("사진 촬영") && !p.contains("촬영 장소") } }
-                ?: "서울 방이동"
-            val repAddress = cluster.firstNotNullOfOrNull { it.address } ?: "서울특별시 송파구 방이동"
-            val repLat = cluster.firstNotNullOfOrNull { it.latitude } ?: 37.5145
-            val repLng = cluster.firstNotNullOfOrNull { it.longitude } ?: 127.1058
+                ?: "사진 기록"
+            val repAddress = cluster.firstNotNullOfOrNull { it.address }
+            val repLat = cluster.firstNotNullOfOrNull { it.latitude }
+            val repLng = cluster.firstNotNullOfOrNull { it.longitude }
             val uris = cluster.map { it.uri }.distinct()
             val companions = cluster.flatMap { it.companions }.distinct()
             val tags = cluster.flatMap { it.tags }.distinct()
@@ -205,7 +205,7 @@ class DailyRouteAggregator @Inject constructor(
         val realGolfSteps = uniqueSteps.filter { it.stepType == RouteStepType.GOLF && isRealGolfClub(it.locationName ?: it.title) }
         val hasGolf = validGolfRounds.isNotEmpty() || realGolfSteps.isNotEmpty()
         val repStep = uniqueSteps.firstOrNull { it.stepType != RouteStepType.TRANSACTION && it.latitude != null }
-        val mainPlace = distinctPlaces.firstOrNull() ?: repStep?.locationName ?: "서울 방이동"
+        val mainPlace = distinctPlaces.firstOrNull() ?: repStep?.locationName ?: "일상 기록"
 
         val title = when {
             hasGolf -> {
@@ -216,7 +216,7 @@ class DailyRouteAggregator @Inject constructor(
             }
             distinctPlaces.size >= 2 -> "${distinctPlaces.first()} & ${distinctPlaces[1]}"
             distinctPlaces.size == 1 -> "${distinctPlaces.first()} 일정"
-            cleanPhotos.isNotEmpty() -> "${mainPlace} 일정"
+            cleanPhotos.isNotEmpty() -> if (mainPlace == "일상 기록") "오늘의 사진 기록" else "${mainPlace} 일정"
             else -> "${date.monthValue}월 ${date.dayOfMonth}일의 다이어리"
         }
 

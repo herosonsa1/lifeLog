@@ -40,6 +40,15 @@ object SmsParser {
         val nhBankResult = parseNhBank(cleanBody, year, fallbackDateTime)
         if (nhBankResult != null) return nhBankResult
 
+        // 7-2. 계좌번호 또는 출금/송금/이체/잔액 패턴 기반 은행 이체 SMS 정밀 파싱
+        val isBankTransferSms = cleanBody.contains("출금") || cleanBody.contains("송금") ||
+                cleanBody.contains("이체") || cleanBody.contains("잔액") ||
+                Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(cleanBody)
+        if (isBankTransferSms) {
+            val transferResult = parseBankTransferSms(cleanBody, sender, year, fallbackDateTime)
+            if (transferResult != null) return transferResult
+        }
+
         // 8. 신한, 현대, 롯데, 우리, BC 등 표준 카드 승인 문자
         val standardCardResult = parseStandardCard(cleanBody, sender, year, fallbackDateTime)
         if (standardCardResult != null) return standardCardResult
@@ -255,15 +264,23 @@ object SmsParser {
             val isIncome = (txType == "입금")
             val category = if (isIncome) ExpenseCategory.INCOME else ExpenseCategory.TRANSFER
 
+            val rawMemo = m.group("memo")?.trim() ?: "출금"
+            val acc = m.group("acc")?.trim()
+            val displayMerchant = if (rawMemo.matches(Regex("""^[\d* -]{6,}$"""))) {
+                "출금 내역"
+            } else {
+                rawMemo
+            }
+
             return Transaction(
                 amount = amount,
-                merchantName = "$memo ($txType)",
+                merchantName = displayMerchant,
                 originalText = body,
                 timestamp = timestamp,
                 paymentMethod = PaymentMethod.BANK_TRANSFER,
                 category = category,
-                cardOrBankName = "KB국민은행",
-                transferMemo = "$txType 내역 (적요: $memo)",
+                cardOrBankName = "KB국민",
+                transferMemo = "$txType 내역" + (if (!acc.isNullOrBlank()) " (계좌: $acc)" else "") + (if (rawMemo != displayMerchant) " (적요: $rawMemo)" else ""),
                 isAutoCategorized = true
             )
         }
@@ -308,6 +325,89 @@ object SmsParser {
             )
         }
         return null
+    }
+
+    private fun parseBankTransferSms(body: String, sender: String?, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
+        // 잔액 정보 사전 분리 (거래 금액과 잔액 혼동 원천 차단)
+        val balanceMatch = Regex("""잔액\s*(?<balance>[\d,]+)원?""").find(body)
+        val balanceStr = balanceMatch?.groups?.get("balance")?.value
+        val textWithoutBalance = if (balanceMatch != null) body.replace(balanceMatch.value, "") else body
+
+        // 1. 거래 금액 추출
+        val amtMatch = Regex("""(?:출금|송금|이체)?\s*(?<amt>[\d,]+)원\s*(?:출금|송금|이체)?""").find(textWithoutBalance)
+            ?: Regex("""\b(?<amt>[\d,]+)원\b""").find(textWithoutBalance)
+        val amount = amtMatch?.groups?.get("amt")?.value?.replace(",", "")?.toLongOrNull() ?: return null
+        if (amount <= 0) return null
+
+        // 2. 날짜/시간 추출
+        val dateMatch = Regex("""(?<month>\d{1,2})/(?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})""").find(body)
+        val timestamp = if (dateMatch != null) {
+            val mo = dateMatch.groups["month"]?.value?.toIntOrNull() ?: fallbackDateTime.monthValue
+            val da = dateMatch.groups["day"]?.value?.toIntOrNull() ?: fallbackDateTime.dayOfMonth
+            val ho = dateMatch.groups["hour"]?.value?.toIntOrNull() ?: fallbackDateTime.hour
+            val mi = dateMatch.groups["minute"]?.value?.toIntOrNull() ?: fallbackDateTime.minute
+            runCatching { LocalDateTime.of(year, mo, da, ho, mi) }.getOrDefault(fallbackDateTime)
+        } else {
+            fallbackDateTime
+        }
+
+        // 3. 은행명 추출
+        val bankBracketMatch = Regex("""\[(?<bank>[^\]]+)\]""").find(body)
+        val bankCandidate = bankBracketMatch?.groups?.get("bank")?.value?.trim()
+        val bankName = when {
+            bankCandidate != null && (bankCandidate.contains("농협") || bankCandidate.contains("NH")) -> "NH농협"
+            bankCandidate != null && (bankCandidate.contains("국민") || bankCandidate.contains("KB")) -> "KB국민"
+            body.contains("농협") || body.contains("NH") || body.contains("312-") -> "NH농협"
+            body.contains("국민") || body.contains("KB") || body.contains("0749") -> "KB국민"
+            body.contains("신한") -> "신한은행"
+            body.contains("우리") -> "우리은행"
+            body.contains("하나") -> "하나은행"
+            body.contains("카카오뱅크") -> "카카오뱅크"
+            body.contains("토스뱅크") -> "토스뱅크"
+            else -> bankCandidate ?: sender ?: "은행 이체"
+        }
+
+        // 4. 계좌번호 추출
+        val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(body)
+        val accNo = accMatch?.groups?.get("acc")?.value
+
+        // 5. 수취인/가맹점 추출: 잔액, 금액, 일시, 계좌번호, 특수문자 제거 후 남은 이름 추출
+        var remain = body
+        if (bankBracketMatch != null) remain = remain.replace(bankBracketMatch.value, "")
+        if (balanceMatch != null) remain = remain.replace(balanceMatch.value, "")
+        remain = remain.replace(amtMatch.value, "")
+        remain = remain.replace(Regex("""\d{1,2}/\d{1,2}\s*\d{1,2}:\d{1,2}"""), "")
+        if (accNo != null) remain = remain.replace(accNo, "")
+        remain = remain.replace(Regex("""(?:출금|송금|이체|결제|승인|완료|잔액|원)\b"""), "")
+        remain = remain.replace("출금", "").replace("송금", "").replace("이체", "")
+        remain = remain.trim()
+
+        val nameCandidateMatch = Regex("""([가-힣a-zA-Z\s]{2,10})""").find(remain)
+        val receiverName = nameCandidateMatch?.value?.trim()?.takeIf { it.isNotBlank() && !it.contains("은행") && !it.contains("알림") }
+
+        // [핵심] 계좌번호는 merchantName(제목)에 절대 노출하지 않고 이민희 또는 출금 내역으로 설정
+        val merchant = if (!receiverName.isNullOrBlank()) {
+            receiverName
+        } else {
+            "출금 내역"
+        }
+
+        val memoParts = mutableListOf<String>()
+        if (!accNo.isNullOrBlank()) memoParts.add("계좌: $accNo")
+        if (!balanceStr.isNullOrBlank()) memoParts.add("잔액 ${balanceStr}원")
+        val transferMemo = if (memoParts.isNotEmpty()) memoParts.joinToString(" · ") else "이체/출금"
+
+        return Transaction(
+            amount = amount,
+            merchantName = merchant,
+            originalText = body,
+            timestamp = timestamp,
+            paymentMethod = PaymentMethod.BANK_TRANSFER,
+            category = ExpenseCategory.TRANSFER,
+            cardOrBankName = bankName,
+            transferMemo = transferMemo,
+            isAutoCategorized = true
+        )
     }
 
     private fun parseStandardCard(body: String, sender: String?, year: Int, fallbackDateTime: LocalDateTime): Transaction? {

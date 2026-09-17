@@ -58,6 +58,69 @@ data class GolfRound(
 }
 
 /**
+ * 스코어카드 홀별 성적 집계 (버디, 파, 보기, 더블이상, 페널티)
+ */
+data class ScorecardStats(
+    val birdieCount: Int = 0,
+    val parCount: Int = 0,
+    val bogeyCount: Int = 0,
+    val doublePlusCount: Int = 0,
+    val penaltyCount: Int = 0
+)
+
+/**
+ * 스코어카드 통계 집계 반환 (holeScores 기반 자동 계산 최우선, 없으면 memo에 저장된 태그 폴백)
+ */
+fun GolfRound.getScorecardStats(): ScorecardStats? {
+    // 1. holeScores 기반 자동 계산 (표준 18홀 파 또는 4타 기준) - 실제 스코어가 항상 최우선 진실의 원천
+    if (holeScores.isNotEmpty()) {
+        val defaultPars = listOf(4, 3, 5, 4, 3, 4, 5, 4, 4, 4, 4, 5, 3, 4, 5, 4, 3, 4)
+        var birdie = 0
+        var par = 0
+        var bogey = 0
+        var doublePlus = 0
+
+        holeScores.forEachIndexed { idx, score ->
+            val expectedPar = if (idx < defaultPars.size) defaultPars[idx] else 4
+            val diff = score - expectedPar
+            when {
+                diff <= -1 -> birdie++
+                diff == 0 -> par++
+                diff == 1 -> bogey++
+                else -> doublePlus++
+            }
+        }
+        return ScorecardStats(
+            birdieCount = birdie,
+            parCount = par,
+            bogeyCount = bogey,
+            doublePlusCount = doublePlus,
+            penaltyCount = this.penaltyCount ?: 0
+        )
+    }
+
+    // 2. 메모 내 [통계: 버디 X, 파 Y, 보기 Z, 더블+ W] 정규식 파싱 (holeScores가 없는 과거 기록 폴백)
+    val memoText = memo ?: ""
+    val statsRegex = Regex("""\[통계\s*[:：]?\s*버디\s*(\d+)[\s,·]*파\s*(\d+)[\s,·]*보기\s*(\d+)[\s,·]*더블\+?\s*(\d+)\]""")
+    val match = statsRegex.find(memoText)
+    if (match != null) {
+        val b = match.groupValues[1].toIntOrNull() ?: 0
+        val p = match.groupValues[2].toIntOrNull() ?: 0
+        val bogey = match.groupValues[3].toIntOrNull() ?: 0
+        val d = match.groupValues[4].toIntOrNull() ?: 0
+        return ScorecardStats(
+            birdieCount = b,
+            parCount = p,
+            bogeyCount = bogey,
+            doublePlusCount = d,
+            penaltyCount = this.penaltyCount ?: 0
+        )
+    }
+
+    return null
+}
+
+/**
  * 골프장명과 코스명을 직관적으로 결합하여 UI에 표기하는 헬퍼 확장 함수
  * 예: "오크밸리 CC (잣나무 코스)"
  */

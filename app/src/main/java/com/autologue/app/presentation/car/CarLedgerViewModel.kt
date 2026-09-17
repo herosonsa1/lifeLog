@@ -132,19 +132,9 @@ class CarLedgerViewModel @Inject constructor(
                 val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
                 val targetGasPrice = vehicleProfile?.defaultGasPrice ?: 1650.0
 
-                // 다이어리 이동 동선 거리 조회 람다 (car_1 차량의 경우 교차 검증)
-                val diaryLookup: (LocalDateTime?, LocalDateTime) -> Double = { start, end ->
-                    if (selectedId == "car_1") {
-                        diaryEntries.filter { entry ->
-                            val afterStart = if (start != null) !entry.date.isBefore(start) else true
-                            val beforeEnd = !entry.date.isAfter(end)
-                            afterStart && beforeEnd
-                        }.sumOf { entry ->
-                            if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
-                            else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
-                        }
-                    } else 0.0
-                }
+                // [원칙] 차량 주행거리는 오직 실제 차량 블루투스 세션(TRIP_DRIVING)만 반영하며,
+                // 다이어리의 도보/대중교통 일반 이동은 차량 연비/소모품에 합산하지 않음
+                val diaryLookup: (LocalDateTime?, LocalDateTime) -> Double = { _, _ -> 0.0 }
 
                 // 1. 선택된 차량에 대해 Full-to-Full 주유 주기 및 구간 연비 계산 (차량별 설정 기본 유가 전달)
                 val calculationResult = FuelEconomyCalculator.calculateForVehicle(
@@ -282,18 +272,19 @@ class CarLedgerViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSyncing = true)
             val cfg = locationPreferences.config.value
-            if (cfg.isConfigured) {
-                vehicleRepository.cleanDuplicatesAndCorruptedLogs(cfg.homeName, cfg.companyName, cfg.commuteRoundTripKm)
-            }
+            val home = if (cfg.homeName.isNotBlank()) cfg.homeName else "우리집"
+            val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
+            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
+
+            // 1. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
+            vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
+
+            // 2. 주유 결제 내역 동기화
             val txs = transactionRepository.getAllTransactionsFlow().first()
             vehicleRepository.syncRefuelingFromTransactions(txs)
 
-            val diaryList = diaryRepository.getDiaryEntriesFlow().first()
-            vehicleRepository.syncDrivingLogsFromDiary(diaryList)
-
-            if (cfg.isConfigured) {
-                vehicleRepository.cleanDuplicatesAndCorruptedLogs(cfg.homeName, cfg.companyName, cfg.commuteRoundTripKm)
-            }
+            // 3. 재정제 보장
+            vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
             _uiState.value = _uiState.value.copy(isSyncing = false)
         }
     }

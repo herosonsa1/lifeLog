@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material3.*
+import com.autologue.app.data.preferences.UserAccount
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -143,15 +145,25 @@ fun ExpenseScreen(
                         }
                     }
 
-                    // Quick Period Setting Button
-                    AutoLogueActionChipButton(
-                        text = "기간 설정",
-                        icon = Icons.Default.CalendarMonth,
-                        onClick = { viewModel.openDateRangeDialog() },
-                        containerColor = Color(0xFFEFF6FF),
-                        borderColor = Color(0xFFBFDBFE),
-                        contentColor = Color(0xFF1D4ED8)
-                    )
+                    // Quick Period Setting & Account Management Buttons
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                        AutoLogueActionChipButton(
+                            text = "계좌 관리",
+                            icon = Icons.Default.AccountBalance,
+                            onClick = { viewModel.openAccountManageDialog() },
+                            containerColor = Color(0xFFF1F5F9),
+                            borderColor = Color(0xFFCBD5E1),
+                            contentColor = Color(0xFF334155)
+                        )
+                        AutoLogueActionChipButton(
+                            text = "기간 설정",
+                            icon = Icons.Default.CalendarMonth,
+                            onClick = { viewModel.openDateRangeDialog() },
+                            containerColor = Color(0xFFEFF6FF),
+                            borderColor = Color(0xFFBFDBFE),
+                            contentColor = Color(0xFF1D4ED8)
+                        )
+                    }
                 }
                 HairlineDivider()
             }
@@ -382,10 +394,10 @@ fun ExpenseScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (uiState.selectedCategory != null) {
-                                "${uiState.selectedCategory!!.displayName} (${uiState.filteredTransactions.size}건)"
-                            } else {
-                                "결제 내역 (전체)"
+                            text = when {
+                                uiState.isRecurringFilterOnly -> "정기지출 내역 (${uiState.filteredTransactions.size}건)"
+                                uiState.selectedCategory != null -> "${uiState.selectedCategory!!.displayName} (${uiState.filteredTransactions.size}건)"
+                                else -> "결제 내역 (전체)"
                             },
                             style = AppTypography.caption
                         )
@@ -403,24 +415,43 @@ fun ExpenseScreen(
                             .padding(horizontal = Spacing.xl, vertical = Spacing.xxs),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                     ) {
+                        val isAllSelected = uiState.selectedCategory == null && !uiState.isRecurringFilterOnly
                         Surface(
                             onClick = { viewModel.setCategoryFilter(null) },
                             shape = RoundedCornerShape(8.dp),
-                            color = if (uiState.selectedCategory == null) AppColors.primary else Slate50,
-                            shadowElevation = if (uiState.selectedCategory == null) 2.dp else 1.dp,
-                            border = BorderStroke(1.dp, if (uiState.selectedCategory == null) AppColors.primaryDark else Slate200)
+                            color = if (isAllSelected) AppColors.primary else Slate50,
+                            shadowElevation = if (isAllSelected) 2.dp else 1.dp,
+                            border = BorderStroke(1.dp, if (isAllSelected) AppColors.primaryDark else Slate200)
                         ) {
                             Text(
                                 text = "전체 (${uiState.transactions.size})",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (uiState.selectedCategory == null) PureWhite else Slate700,
+                                color = if (isAllSelected) PureWhite else Slate700,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+
+                        // 정기지출 모아보기 필터 칩
+                        val currentMonthRecurringCount = uiState.transactions.count { it.id in uiState.recurringTransactionIds }
+                        Surface(
+                            onClick = { viewModel.toggleRecurringFilter() },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (uiState.isRecurringFilterOnly) Color(0xFF4338CA) else Color(0xFFEEF2FF),
+                            shadowElevation = if (uiState.isRecurringFilterOnly) 2.dp else 1.dp,
+                            border = BorderStroke(1.dp, if (uiState.isRecurringFilterOnly) Color(0xFF3730A3) else Color(0xFFC7D2FE))
+                        ) {
+                            Text(
+                                text = "🔄 정기지출 ($currentMonthRecurringCount)",
+                                fontSize = 11.sp,
+                                fontWeight = if (uiState.isRecurringFilterOnly) FontWeight.Bold else FontWeight.Medium,
+                                color = if (uiState.isRecurringFilterOnly) PureWhite else Color(0xFF4338CA),
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                             )
                         }
 
                         uiState.categoryTotals.keys.forEach { cat ->
-                            val isSelected = uiState.selectedCategory == cat
+                            val isSelected = uiState.selectedCategory == cat && !uiState.isRecurringFilterOnly
                             val count = uiState.transactions.count { it.category == cat }
                             Surface(
                                 onClick = { viewModel.toggleCategoryFilter(cat) },
@@ -461,8 +492,12 @@ fun ExpenseScreen(
                 }
             } else {
                 items(uiState.filteredTransactions) { tx ->
+                    val matchingAccount = viewModel.getMatchingAccount(tx)
+                    val isRecurring = tx.id in uiState.recurringTransactionIds
                     SaaSTransactionRow(
                         transaction = tx,
+                        matchingAccount = matchingAccount,
+                        isRecurring = isRecurring,
                         onClick = { viewModel.openEditDialog(tx) }
                     )
                     HairlineDivider()
@@ -551,11 +586,27 @@ fun ExpenseScreen(
             }
         )
     }
+
+    // Account Manage Dialog
+    if (uiState.isAccountManageDialogOpen) {
+        AccountManageDialog(
+            accounts = uiState.userAccounts,
+            onDismiss = { viewModel.closeAccountManageDialog() },
+            onAddAccount = { bankName, pattern, alias ->
+                viewModel.addAccount(bankName, pattern, alias)
+            },
+            onDeleteAccount = { id ->
+                viewModel.deleteAccount(id)
+            }
+        )
+    }
 }
 
 @Composable
 fun SaaSTransactionRow(
     transaction: Transaction,
+    matchingAccount: UserAccount? = null,
+    isRecurring: Boolean = false,
     onClick: () -> Unit
 ) {
     val isSelf = transaction.isSelfTransfer()
@@ -568,13 +619,29 @@ fun SaaSTransactionRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+            ) {
                 Text(
                     text = transaction.merchantName,
                     style = AppTypography.h2
                 )
+                if (matchingAccount != null) {
+                    MetricBadge(
+                        text = matchingAccount.badgeLabel,
+                        textColor = Color(0xFF1E40AF),
+                        backgroundColor = Color(0xFFDBEAFE)
+                    )
+                }
+                if (isRecurring) {
+                    MetricBadge(
+                        text = "정기지출",
+                        textColor = Color(0xFF5B21B6),
+                        backgroundColor = Color(0xFFEDE9FE)
+                    )
+                }
                 if (isSelf) {
-                    Spacer(modifier = Modifier.width(Spacing.xs))
                     MetricBadge(
                         text = "내 계좌간 이동",
                         textColor = Indigo700,
@@ -602,15 +669,20 @@ fun SaaSTransactionRow(
                 if (transaction.cardOrBankName != null) {
                     Text("·", style = AppTypography.captionMuted)
                     Text(
-                        text = transaction.cardOrBankName,
+                        text = if (matchingAccount != null) matchingAccount.alias else transaction.cardOrBankName,
                         style = AppTypography.captionMuted
                     )
                 }
             }
             if (!transaction.transferMemo.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(2.dp))
+                val memoToDisplay = if (matchingAccount != null && transaction.transferMemo.contains(matchingAccount.accountNumberPattern)) {
+                    transaction.transferMemo.replace(matchingAccount.accountNumberPattern, matchingAccount.alias)
+                } else {
+                    transaction.transferMemo
+                }
                 Text(
-                    text = "📝 ${transaction.transferMemo}",
+                    text = "📝 $memoToDisplay",
                     style = AppTypography.caption.copy(color = Slate600)
                 )
             }

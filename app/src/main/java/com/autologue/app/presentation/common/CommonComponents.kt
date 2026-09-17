@@ -19,6 +19,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +62,7 @@ fun TopMenuAccentBar(
 
 /**
  * 표준 Input 텍스트필드 (상단 라벨 + 기존 톤의 소프트 배경 + 그림자 입체 효과 + 슬레이트 테두리)
+ * isCompact = true 설정 시 입력필드 높이를 컴팩트하게 줄여 다이얼로그나 그리드 내에서 깔끔하게 표출합니다.
  */
 @Composable
 fun AutoLogueTextField(
@@ -72,48 +77,160 @@ fun AutoLogueTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     leadingIcon: @Composable (() -> Unit)? = null,
-    trailingIcon: @Composable (() -> Unit)? = null
+    trailingIcon: @Composable (() -> Unit)? = null,
+    isCompact: Boolean = false,
+    visualTransformation: VisualTransformation = VisualTransformation.None
 ) {
     Column(modifier = modifier) {
         if (label != null) {
             Text(
                 text = label,
-                style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold),
-                modifier = Modifier.padding(bottom = 4.dp, start = 2.dp)
+                style = if (isCompact) AppTypography.caption.copy(fontSize = 11.sp, color = Slate600, fontWeight = FontWeight.SemiBold)
+                        else AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold),
+                modifier = Modifier.padding(bottom = if (isCompact) 2.dp else 4.dp, start = 2.dp)
             )
         }
         Surface(
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(if (isCompact) 6.dp else 8.dp),
             color = Slate50,
-            shadowElevation = 1.5.dp,
+            shadowElevation = if (isCompact) 0.5.dp else 1.5.dp,
             border = BorderStroke(1.dp, Slate200),
             modifier = Modifier.fillMaxWidth()
         ) {
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                placeholder = if (placeholder != null) { { Text(placeholder, fontSize = 13.sp, color = Slate400) } } else null,
-                singleLine = singleLine,
-                maxLines = maxLines,
-                minLines = minLines,
-                keyboardOptions = keyboardOptions,
-                keyboardActions = keyboardActions,
-                leadingIcon = leadingIcon,
-                trailingIcon = trailingIcon,
-                shape = RoundedCornerShape(8.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Slate50,
-                    unfocusedContainerColor = Slate50,
-                    disabledContainerColor = Slate100,
-                    focusedBorderColor = Color(0xFF2563EB),
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Slate900,
-                    unfocusedTextColor = Slate900,
-                    cursorColor = Color(0xFF2563EB)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
+            if (isCompact) {
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = singleLine,
+                    maxLines = maxLines,
+                    minLines = minLines,
+                    keyboardOptions = keyboardOptions,
+                    keyboardActions = keyboardActions,
+                    visualTransformation = visualTransformation,
+                    textStyle = AppTypography.body.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Slate900
+                    ),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color(0xFF2563EB)),
+                    decorationBox = { innerTextField ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (leadingIcon != null) {
+                                leadingIcon()
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                if (value.isEmpty() && placeholder != null) {
+                                    Text(
+                                        text = placeholder,
+                                        fontSize = 12.sp,
+                                        color = Slate400
+                                    )
+                                }
+                                innerTextField()
+                            }
+                            if (trailingIcon != null) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                trailingIcon()
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    placeholder = if (placeholder != null) { { Text(placeholder, fontSize = 13.sp, color = Slate400) } } else null,
+                    singleLine = singleLine,
+                    maxLines = maxLines,
+                    minLines = minLines,
+                    keyboardOptions = keyboardOptions,
+                    keyboardActions = keyboardActions,
+                    leadingIcon = leadingIcon,
+                    trailingIcon = trailingIcon,
+                    visualTransformation = visualTransformation,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Slate50,
+                        unfocusedContainerColor = Slate50,
+                        disabledContainerColor = Slate100,
+                        focusedBorderColor = Color(0xFF2563EB),
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedTextColor = Slate900,
+                        unfocusedTextColor = Slate900,
+                        cursorColor = Color(0xFF2563EB)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
+    }
+}
+
+/**
+ * 정수 숫자 문자열에 천단위 콤마(,)를 시각적으로 추가해주는 VisualTransformation
+ * (예: "6384" -> "6,384", "1234567" -> "1,234,567")
+ */
+class NumberCommaVisualTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val originalText = text.text
+        if (originalText.isEmpty()) {
+            return TransformedText(text, OffsetMapping.Identity)
+        }
+
+        val isNegative = originalText.startsWith("-")
+        val cleanDigits = if (isNegative) originalText.substring(1) else originalText
+        if (!cleanDigits.all { it.isDigit() }) {
+            return TransformedText(text, OffsetMapping.Identity)
+        }
+
+        val formattedBuilder = StringBuilder()
+        val originalToTransformed = IntArray(originalText.length + 1)
+        val transformedToOriginal = mutableListOf<Int>()
+
+        val n = cleanDigits.length
+        if (isNegative) {
+            formattedBuilder.append("-")
+            transformedToOriginal.add(0)
+        }
+
+        var digitsProcessed = 0
+        for (i in cleanDigits.indices) {
+            val originalIndex = (if (isNegative) 1 else 0) + i
+            originalToTransformed[originalIndex] = formattedBuilder.length
+            formattedBuilder.append(cleanDigits[i])
+            transformedToOriginal.add(originalIndex)
+            digitsProcessed++
+
+            val remaining = n - digitsProcessed
+            if (remaining > 0 && remaining % 3 == 0) {
+                formattedBuilder.append(',')
+                transformedToOriginal.add(originalIndex + 1)
+            }
+        }
+        val transformedLength = formattedBuilder.length
+        originalToTransformed[originalText.length] = transformedLength
+        transformedToOriginal.add(originalText.length)
+
+        val offsetMapping = object : OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int {
+                val clamped = offset.coerceIn(0, originalText.length)
+                return originalToTransformed[clamped]
+            }
+
+            override fun transformedToOriginal(offset: Int): Int {
+                val clamped = offset.coerceIn(0, transformedToOriginal.size - 1)
+                return transformedToOriginal[clamped]
+            }
+        }
+
+        return TransformedText(AnnotatedString(formattedBuilder.toString()), offsetMapping)
     }
 }
 
