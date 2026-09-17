@@ -65,13 +65,26 @@ class SyncHistoricalDataUseCase @Inject constructor(
             val photos = importer.scanHistoricalPhotos(context, daysBack = daysBack)
             val photoCount = photos.size
 
-            // 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지 및 라운드 등록 (최대 200장 전수 분석)
-            val golfCandidates = importer.scanHistoricalGolfCandidates(context, daysBack = daysBack, limit = 200)
+            // 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지 및 라운드 등록 (최대 300장 전수 분석)
+            val golfCandidates = importer.scanHistoricalGolfCandidates(context, daysBack = daysBack, limit = 300)
             var golfSyncedCount = 0
             if (golfCandidates.isNotEmpty()) {
-                emit(SyncProgress(isRunning = true, stage = "$periodDesc 스코어카드·라커룸 자동 분석 중 (${golfCandidates.size}장 발견)...", syncedTxCount = txCount, syncedPhotoCount = photoCount, syncedGolfCount = 0))
+                emit(SyncProgress(isRunning = true, stage = "$periodDesc 갤러리 사진 OCR 스캔 준비 중 (${golfCandidates.size}장)...", syncedTxCount = txCount, syncedPhotoCount = photoCount, syncedGolfCount = 0))
                 golfSyncedCount = runCatching {
-                    autoProcessGolfMediaUseCase.processBatchCandidates(golfCandidates)
+                    autoProcessGolfMediaUseCase.processBatchCandidates(golfCandidates) { current, total, foundCount ->
+                        if (current % 5 == 0 || current == total || foundCount > 0) {
+                            val foundMsg = if (foundCount > 0) " (⛳ 골프 ${foundCount}건 발견)" else ""
+                            emit(
+                                SyncProgress(
+                                    isRunning = true,
+                                    stage = "갤러리 사진 OCR 분석 중... (${current}/${total}장$foundMsg)",
+                                    syncedTxCount = txCount,
+                                    syncedPhotoCount = photoCount,
+                                    syncedGolfCount = foundCount
+                                )
+                            )
+                        }
+                    }
                 }.getOrDefault(0)
                 if (golfSyncedCount > 0) {
                     emit(SyncProgress(isRunning = true, stage = "골프 라운드 ${golfSyncedCount}건 자동 등록 완료!", syncedTxCount = txCount, syncedPhotoCount = photoCount, syncedGolfCount = golfSyncedCount))

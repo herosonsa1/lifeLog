@@ -189,11 +189,11 @@ class HistoricalDataImporter @Inject constructor(
      * 골프/스코어/라커룸 관련 키워드를 가진 이미지를 최우선으로 수집합니다.
      */
     /**
-     * 캡처된 스크린샷 및 갤러리 사진에서 스코어카드와 라커룸 안내지 후보 사진을 전수 검색합니다.
-     * 일반 다이어리 스캔과 달리 스크린샷(Screenshots 폴더 및 파일)을 허용하며,
-     * 골프/스코어/라커룸 관련 키워드 및 스크린샷 이미지를 최우선으로 수집합니다.
+     * 갤러리 내 사진(카메라 롤 및 스크린샷)에서 스코어카드와 라커룸 전표를 탐지하기 위한 대상 사진을 전수 수집합니다.
+     * 카메라 원본(20260911_...)과 스크린샷은 파일명에 골프 키워드가 없으므로 문자열 필터링을 전면 배제하고,
+     * 메타데이터 크기 필터(400px 이상, 20KB 이상)만 거쳐 실제 OCR 지문 분석 단계로 전달합니다.
      */
-    suspend fun scanHistoricalGolfCandidates(context: Context, daysBack: Int? = 60, limit: Int = 200): List<ScannedPhoto> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalGolfCandidates(context: Context, daysBack: Int? = 60, limit: Int = 300): List<ScannedPhoto> = withContext(Dispatchers.IO) {
         val hasReadPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
         } else {
@@ -211,6 +211,9 @@ class HistoricalDataImporter @Inject constructor(
                 MediaStore.Images.Media.DATE_TAKEN,
                 MediaStore.Images.Media.DATE_ADDED,
                 MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.WIDTH,
+                MediaStore.Images.Media.HEIGHT,
+                MediaStore.Images.Media.SIZE,
                 @Suppress("DEPRECATION")
                 MediaStore.Images.Media.DATA
             )
@@ -236,16 +239,15 @@ class HistoricalDataImporter @Inject constructor(
                 val dateTakenCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
                 val dateAddedCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
                 val displayNameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                val widthCol = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+                val heightCol = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+                val sizeCol = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
                 val dataCol = cursor.getColumnIndex(@Suppress("DEPRECATION") MediaStore.Images.Media.DATA)
                 val relativePathCol = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
                 } else -1
 
-                val highPriority = mutableListOf<ScannedPhoto>()
-                val mediumPriority = mutableListOf<ScannedPhoto>()
-                val lowPriority = mutableListOf<ScannedPhoto>()
-
-                while (cursor.moveToNext()) {
+                while (cursor.moveToNext() && candidates.size < limit) {
                     if (idCol < 0) continue
                     val id = cursor.getLong(idCol)
                     val dateTaken = if (dateTakenCol >= 0) cursor.getLong(dateTakenCol) else 0L
@@ -253,7 +255,14 @@ class HistoricalDataImporter @Inject constructor(
                     val displayName = if (displayNameCol >= 0) cursor.getString(displayNameCol) else null
                     val dataPath = if (dataCol >= 0) cursor.getString(dataCol) else null
                     val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
-                    val isScreenshotFlag = false
+                    val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
+                    val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
+                    val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
+
+                    // 0ms 메타데이터 컷: 가로/세로 400px 미만 또는 20KB 미만 극소형 아이콘/썸네일 배제
+                    if ((width > 0 && width < 400) || (height > 0 && height < 400) || (size in 1..19999)) {
+                        continue
+                    }
 
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     val uriString = contentUri.toString()
@@ -272,55 +281,15 @@ class HistoricalDataImporter @Inject constructor(
                         .atZone(ZoneId.systemDefault())
                         .toLocalDateTime()
 
-                    val isSc = isScreenshot(displayName, relativePath, dataPath, isScreenshotFlag)
-                    val searchStr = "${displayName ?: ""} ${relativePath ?: ""} ${dataPath ?: ""}".lowercase(java.util.Locale.ROOT)
-                    val hasGolfKeyword = searchStr.contains("golf") || searchStr.contains("골프") ||
-                            searchStr.contains("score") || searchStr.contains("스코어") ||
-                            searchStr.contains("locker") || searchStr.contains("락커") || searchStr.contains("라커") ||
-                            searchStr.contains("round") || searchStr.contains("라운드") ||
-                            searchStr.contains("smartscore") || searchStr.contains("스마트스코어") ||
-                            searchStr.contains("kakaogolf") || searchStr.contains("카카오골프") ||
-                            searchStr.contains("golfzon") || searchStr.contains("골프존") ||
-                            searchStr.contains("shot") || searchStr.contains("티샷") ||
-                            searchStr.contains("putt") || searchStr.contains("퍼트") ||
-                            searchStr.contains("cc") || searchStr.contains("gc") ||
-                            searchStr.contains("c.c") || searchStr.contains("g.c") ||
-                            searchStr.contains("골프장") || searchStr.contains("골프클럽") ||
-                            searchStr.contains("컨트리클럽") || searchStr.contains("전표") ||
-                            searchStr.contains("야디지") || searchStr.contains("yardage") ||
-                            searchStr.contains("kakaotalk") ||
-                            searchStr.contains("pine") || searchStr.contains("cherry") ||
-                            searchStr.contains("oak") || searchStr.contains("파인") ||
-                            searchStr.contains("체리") || searchStr.contains("오크") ||
-                            searchStr.contains("오크밸리") || searchStr.contains("필로스") ||
-                            searchStr.contains("킹스데일") || searchStr.contains("남촌")
+                    val isSc = isScreenshot(displayName, relativePath, dataPath, false)
 
-                    val item = ScannedPhoto(
-                        uri = uriString,
-                        time = photoTime,
-                        tags = if (isSc) listOf("스크린샷") else emptyList()
+                    candidates.add(
+                        ScannedPhoto(
+                            uri = uriString,
+                            time = photoTime,
+                            tags = if (isSc) listOf("스크린샷") else emptyList()
+                        )
                     )
-
-                    if (hasGolfKeyword) {
-                        // 1순위: 파일명/경로에 명확한 골프/스코어/클럽명 키워드가 있는 미디어
-                        highPriority.add(item)
-                    } else if (isSc || searchStr.contains("download") || searchStr.contains("kakaotalk") || searchStr.contains("pictures")) {
-                        // 2순위: 스마트폰 화면 캡처(스크린샷) 및 다운로드/메신저 저장 사진 (모바일 스코어카드 유력 후보)
-                        mediumPriority.add(item)
-                    } else {
-                        // 3순위: 카메라 등으로 직접 촬영한 지류 영수증/스코어카드 후보 (일반 카메라 롤)
-                        lowPriority.add(item)
-                    }
-                }
-
-                candidates.addAll(highPriority)
-                val remainingForMedium = limit - candidates.size
-                if (remainingForMedium > 0) {
-                    candidates.addAll(mediumPriority.take(remainingForMedium))
-                }
-                val remainingForLow = limit - candidates.size
-                if (remainingForLow > 0) {
-                    candidates.addAll(lowPriority.take(remainingForLow))
                 }
             }
             android.util.Log.d("HistoricalDataImporter", "골프 후보 사진 스캔 완료: 총 ${candidates.size}장 수집됨 (limit=$limit)")
@@ -328,7 +297,7 @@ class HistoricalDataImporter @Inject constructor(
             android.util.Log.e("HistoricalDataImporter", "골프 후보 사진 스캔 중 오류", t)
             t.printStackTrace()
         }
-        candidates.take(limit)
+        candidates
     }
 
     suspend fun generateIntegratedDiaries(

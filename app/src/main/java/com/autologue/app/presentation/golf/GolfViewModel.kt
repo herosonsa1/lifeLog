@@ -612,17 +612,25 @@ class GolfViewModel @Inject constructor(
      * @param daysBack null이면 과거 전체 기간, 숫자면 최근 N일간의 사진을 스캔합니다.
      * @param limit 스캔할 최대 후보 사진 수 (기본 200장)
      */
-    fun scanAllGolfMediaFromGallery(daysBack: Int? = 30, limit: Int = 200) {
+    fun scanAllGolfMediaFromGallery(daysBack: Int? = 30, limit: Int = 300) {
         closeGalleryScanDialog()
         viewModelScope.launch(Dispatchers.IO) {
             val periodText = if (daysBack != null) "최근 ${daysBack}일" else "과거 전체"
             _uiState.value = _uiState.value.copy(
                 isOcrScanning = true,
-                ocrScanningMessage = "$periodText 갤러리 골프 미디어(스코어카드·라커룸) 전수 분석 중..."
+                ocrScanningMessage = "$periodText 갤러리 미디어 수집 중..."
             )
             try {
                 val candidates = historicalDataImporter.scanHistoricalGolfCandidates(appContext, daysBack = daysBack, limit = limit)
-                val processedCount = autoProcessGolfMediaUseCase.processBatchCandidates(candidates)
+                _uiState.value = _uiState.value.copy(
+                    ocrScanningMessage = "$periodText 갤러리 사진 OCR 스캔 시작 (${candidates.size}장)..."
+                )
+                val processedCount = autoProcessGolfMediaUseCase.processBatchCandidates(candidates) { current, total, foundCount ->
+                    val foundMsg = if (foundCount > 0) " (⛳ 골프 ${foundCount}건 발견)" else ""
+                    _uiState.value = _uiState.value.copy(
+                        ocrScanningMessage = "갤러리 사진 OCR 분석 중... (${current}/${total}장$foundMsg)"
+                    )
+                }
                 android.util.Log.d("GolfViewModel", "갤러리 골프 미디어 자동 스캔 완료: $processedCount 건 처리")
                 loadRounds()
             } catch (t: Throwable) {
@@ -635,7 +643,7 @@ class GolfViewModel @Inject constructor(
 
     @Deprecated("Use scanAllGolfMediaFromGallery instead")
     fun scanAllLockerSlipsFromGallery() {
-        scanAllGolfMediaFromGallery(daysBack = 30, limit = 200)
+        scanAllGolfMediaFromGallery(daysBack = 30, limit = 300)
     }
 
     fun deleteRound(roundId: Long) {

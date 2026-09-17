@@ -458,7 +458,8 @@ fun GolfScreen(
             GolfGalleryScanDialog(
                 onDismiss = { viewModel.closeGalleryScanDialog() },
                 onConfirm = { days ->
-                    viewModel.scanAllGolfMediaFromGallery(daysBack = days, limit = 200)
+                    val limit = if (days == null) 500 else 300
+                    viewModel.scanAllGolfMediaFromGallery(daysBack = days, limit = limit)
                 }
             )
         }
