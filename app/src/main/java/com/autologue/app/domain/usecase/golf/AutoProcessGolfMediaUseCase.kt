@@ -34,8 +34,13 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
 
             // 2. 라커룸이 아니면 스코어카드인지 분석
             val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
-            val isValidScorecard = (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..150) ||
-                    scorecardResult.holeScores.isNotEmpty()
+            val rawUpper = scorecardResult.recognizedRawText.uppercase()
+            val hasGolfKeywords = rawUpper.contains("SCORE") || rawUpper.contains("PAR") || rawUpper.contains("HOLE") ||
+                    rawUpper.contains("GIR") || rawUpper.contains("PUTT") || rawUpper.contains("스코어") || rawUpper.contains("퍼트")
+            val isValidScorecard = hasGolfKeywords && (
+                    (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..150 && scorecardResult.holeScores.size >= 9) ||
+                    scorecardResult.holeScores.size == 18
+            )
             if (isValidScorecard) {
                 return@withContext extractScorecardOcrUseCase.processScorecardResult(scorecardResult, uri.toString(), photoDate)
             }
@@ -86,8 +91,13 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
 
             try {
                 val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
-                val isValidScorecard = (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..150) ||
-                        scorecardResult.holeScores.isNotEmpty()
+                val rawUpper = scorecardResult.recognizedRawText.uppercase()
+                val hasGolfKeywords = rawUpper.contains("SCORE") || rawUpper.contains("PAR") || rawUpper.contains("HOLE") ||
+                        rawUpper.contains("GIR") || rawUpper.contains("PUTT") || rawUpper.contains("스코어") || rawUpper.contains("퍼트")
+                val isValidScorecard = hasGolfKeywords && (
+                        (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..150 && scorecardResult.holeScores.size >= 9) ||
+                        scorecardResult.holeScores.size == 18
+                )
                 if (isValidScorecard) {
                     val round = extractScorecardOcrUseCase.processScorecardResult(scorecardResult, photo.uri, photoDate)
                     if (round != null) {

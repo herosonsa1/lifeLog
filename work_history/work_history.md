@@ -1378,6 +1378,11 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
      - `mergeResults`에서 정상 범위(`0..6타`) 우선 채택으로 9타 오탐 방어.
    - GIR 2단계 폴백에 걸음수/홀당평균퍼트 키워드 필터 추가로 오탐 차단.
    - 퍼트 수 하한 기준을 `15`로 일관 통일.
+7. **비골프 사진(영수증/증명서) 가짜 골프장 오탐 원천 차단 및 자동 청소 (`AutoProcessGolfMediaUseCase.kt`, `GolfViewModel.kt`, `ScorecardOcrAnalyzer.kt`)**:
+   - 갤러리에 있던 영수증·식단표·증명서 사진(예: '음성안내•위변조방지', '모두 아침 오후 저녁')이 백그라운드 동기화 시 스코어카드로 둔갑하여 가짜 라운드가 생성되던 문제 해결.
+   - `AutoProcessGolfMediaUseCase`에 `HOLE`, `PAR`, `SCORE`, `GIR`, `PUTT` 등 골프 필수 키워드 존재 검증 가드레일 탑재.
+   - `ScorecardOcrAnalyzer`에서 비골프 일반 단어 뒤에 무조건 `CC`를 붙이던 폴백을 제거하고 검증된 코스 키워드만 허용.
+   - `GolfViewModel.cleanUpDummyRounds()`에 `음성안내`, `위변조`, `아침`, `저녁` 등 오탐 키워드를 추가하여 기존에 생성된 가짜 라운드를 시작 시 자동 영구 청소.
 
 ### 44.3. 빌드 및 테스트 검증
 - **단위 테스트 전원 통과**:

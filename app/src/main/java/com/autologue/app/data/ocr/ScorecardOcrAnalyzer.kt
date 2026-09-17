@@ -852,12 +852,15 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
 
             // 골프장명 폴백: 코스명이 Pine/Cherry 등 유명 코스인 경우 해당 골프장명 보강
+            val isKnownCourseKeyword = allKnownCourseKeywords.any { kw ->
+                finalCourseName?.contains(kw, ignoreCase = true) == true
+            }
             val resolvedClubName = when {
                 !detectedClubName.isNullOrBlank() -> detectedClubName
                 finalCourseName?.contains("Pine", ignoreCase = true) == true && finalCourseName.contains("Cherry", ignoreCase = true) -> "오크밸리 CC"
                 finalCourseName?.contains("West", ignoreCase = true) == true && finalCourseName.contains("South", ignoreCase = true) -> "필로스 GC"
                 finalCourseName?.contains("Hill", ignoreCase = true) == true && finalCourseName.contains("Lake", ignoreCase = true) -> "킹스데일 GC"
-                !finalCourseName.isNullOrBlank() -> "$finalCourseName CC"
+                isKnownCourseKeyword && !finalCourseName.isNullOrBlank() -> "$finalCourseName CC"
                 else -> null
             }
 

@@ -237,7 +237,11 @@ class GolfViewModel @Inject constructor(
                         round.clubName.contains("NX PLUS") ||
                         round.clubName.contains("쿠폰") ||
                         round.clubName.contains("이벤트") ||
-                        round.clubName.contains("할인")
+                        round.clubName.contains("할인") ||
+                        round.clubName.contains("음성안내") ||
+                        round.clubName.contains("위변조") ||
+                        round.clubName.contains("아침") ||
+                        round.clubName.contains("저녁")
                 val isDummyOrInvalid = round.clubName in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패") ||
                         round.clubName.contains("일반 사진") ||
                         round.clubName.contains("필드 골프장") ||
