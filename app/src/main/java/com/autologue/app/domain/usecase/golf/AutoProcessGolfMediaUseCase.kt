@@ -35,11 +35,11 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
             // 2. 라커룸이 아니면 스코어카드인지 분석
             val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
             val rawUpper = scorecardResult.recognizedRawText.uppercase()
-            val hasGolfKeywords = rawUpper.contains("SCORE") || rawUpper.contains("PAR") || rawUpper.contains("HOLE") ||
-                    rawUpper.contains("GIR") || rawUpper.contains("PUTT") || rawUpper.contains("스코어") || rawUpper.contains("퍼트")
-            val isValidScorecard = hasGolfKeywords && (
-                    (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..150 && scorecardResult.holeScores.size >= 9) ||
-                    scorecardResult.holeScores.size == 18
+            val golfFingerprints = listOf("SCORE", "스코어", "PAR", "HOLE", "PUTT", "퍼트", "GIR", "PENALTY", "페널티", "벌타")
+            val matchedKeywords = golfFingerprints.count { rawUpper.contains(it) }
+            val isValidScorecard = matchedKeywords >= 1 && (
+                    (scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144) ||
+                    scorecardResult.holeScores.isNotEmpty()
             )
             if (isValidScorecard) {
                 return@withContext extractScorecardOcrUseCase.processScorecardResult(scorecardResult, uri.toString(), photoDate)
@@ -62,8 +62,8 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
         val processedRounds = mutableSetOf<Long>()
         val remainingForScorecard = mutableListOf<ScannedPhoto>()
 
-        // [Pass 1] 라커룸 전표 선제 분석 (최대 30장)
-        for (photo in photos.take(30)) {
+        // [Pass 1] 라커룸 전표 선제 분석 (최대 50장)
+        for (photo in photos.take(50)) {
             if (photo.uri.isBlank()) continue
             val uri = runCatching { Uri.parse(photo.uri) }.getOrNull() ?: continue
             val photoDate = photo.time.toLocalDate()
@@ -84,19 +84,19 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
             }
         }
 
-        // [Pass 2] 스코어카드 분석 및 해당 날짜 라운드에 결합 (최대 30장)
-        for (photo in remainingForScorecard.take(30)) {
+        // [Pass 2] 스코어카드 분석 및 해당 날짜 라운드에 결합 (최대 50장)
+        for (photo in remainingForScorecard.take(50)) {
             val uri = runCatching { Uri.parse(photo.uri) }.getOrNull() ?: continue
             val photoDate = photo.time.toLocalDate()
 
             try {
                 val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
                 val rawUpper = scorecardResult.recognizedRawText.uppercase()
-                val hasGolfKeywords = rawUpper.contains("SCORE") || rawUpper.contains("PAR") || rawUpper.contains("HOLE") ||
-                        rawUpper.contains("GIR") || rawUpper.contains("PUTT") || rawUpper.contains("스코어") || rawUpper.contains("퍼트")
-                val isValidScorecard = hasGolfKeywords && (
-                        (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..150 && scorecardResult.holeScores.size >= 9) ||
-                        scorecardResult.holeScores.size == 18
+                val golfFingerprints = listOf("SCORE", "스코어", "PAR", "HOLE", "PUTT", "퍼트", "GIR", "PENALTY", "페널티", "벌타")
+                val matchedKeywords = golfFingerprints.count { rawUpper.contains(it) }
+                val isValidScorecard = matchedKeywords >= 1 && (
+                        (scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144) ||
+                        scorecardResult.holeScores.isNotEmpty()
                 )
                 if (isValidScorecard) {
                     val round = extractScorecardOcrUseCase.processScorecardResult(scorecardResult, photo.uri, photoDate)
@@ -106,7 +106,7 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
                     }
                 }
             } catch (t: Throwable) {
-                // 스코어카드가 아니거나 파싱 실패 시 건너뜀
+                android.util.Log.w("AutoProcessGolfMedia", "스코어카드 분석 중 예외 건너뜀 (${photo.uri}): ${t.message}")
             }
         }
 

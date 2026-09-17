@@ -188,7 +188,7 @@ class HistoricalDataImporter @Inject constructor(
      * 일반 다이어리 스캔과 달리 스크린샷(Screenshots 폴더 및 파일)을 허용하며,
      * 골프/스코어/라커룸 관련 키워드를 가진 이미지를 최우선으로 수집합니다.
      */
-    suspend fun scanHistoricalGolfCandidates(context: Context, daysBack: Int? = 60, limit: Int = 50): List<ScannedPhoto> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalGolfCandidates(context: Context, daysBack: Int? = 60, limit: Int = 60): List<ScannedPhoto> = withContext(Dispatchers.IO) {
         val candidates = mutableListOf<ScannedPhoto>()
         try {
             val projectionList = mutableListOf(
@@ -268,7 +268,10 @@ class HistoricalDataImporter @Inject constructor(
                             searchStr.contains("c.c") || searchStr.contains("g.c") ||
                             searchStr.contains("골프장") || searchStr.contains("전표") ||
                             searchStr.contains("야디지") || searchStr.contains("골프존") ||
-                            searchStr.contains("카카오골프")
+                            searchStr.contains("카카오골프") || searchStr.contains("kakaotalk") ||
+                            searchStr.contains("pine") || searchStr.contains("cherry") ||
+                            searchStr.contains("파인") || searchStr.contains("체리") ||
+                            searchStr.contains("오크밸리") || searchStr.contains("필로스")
 
                     val item = ScannedPhoto(
                         uri = uriString,

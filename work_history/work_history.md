@@ -1387,13 +1387,17 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 8. **다크모드 상단 대형 스코어(92타) 세로 분리 파편화 대응 및 1024px 저해상도 전/후반 판정 정상화 (`ScorecardOcrAnalyzer.kt`)**:
    - 오크밸리 스코어카드 다크모드 상단 4개 카드가 세로로 쪼개져 인식될 때 `SCORE` 라벨 인접 거리를 벗어나 92타를 놓치던 결함을 상단 20줄 정밀 탐색 및 괄호 분리 패턴 탑재로 해결.
    - 1024px 원본 이미지에서 `reconstructSpatialGrid`의 `parBox.top < 1200` 하드코딩으로 인해 후반 Cherry 코스가 전반으로 오판되어 누락되던 결함을 상대 높이 비율(`totalCanvasHeight * 0.55`) 및 10~18홀 번호 판정으로 전면 교정.
-   - `Par` 라벨과 숫자가 줄바꿈 분리된 경우에도 파 행을 100% 정상 탐색하도록 보강.
+9. **스마트 다이어리 과거 동기화 시 스코어카드 자동 등록 누락 해결 (`AutoProcessGolfMediaUseCase.kt`, `HistoricalDataImporter.kt`, `SyncHistoricalDataUseCase.kt`)**:
+   - 수동 스캔(`scanScorecard`)에서는 정상 등록되던 스코어카드가 다이어리 과거 동기화(`processBatchCandidates`)에서는 `holeScores.size >= 9`라는 과도한 제한 때문에 탈락하던 결함 해결.
+   - 핵심 골프 지문(`SCORE`, `PAR`, `HOLE`, `GIR`, `PUTT`, `PENALTY` 등) 1개 이상 존재 및 유효 타수(`54..144`) 또는 홀 스코어 존재 시 100% 정상 스코어카드로 등록되도록 스마트 필터링 교정.
+   - 카카오톡/다운로드 폴더에 저장된 스코어카드 사진 누락 방지를 위해 파일명/경로 탐색 키워드(`kakaotalk`, `pine`, `cherry`, `오크밸리`, `필로스` 등) 대폭 보강 및 후보 스캔 limit을 60장으로 확장.
+   - 배치 2-Pass 스캔 수량을 30장에서 50장으로 확대하고 예외 로깅 강화.
 
 ### 44.3. 빌드 및 테스트 검증
 - **단위 테스트 전원 통과**:
   - `ScorecardOcrAnalyzerTest` (14개 테스트 전원 통과)
   - `AutoProcessGolfMediaUseCaseTest` (3개 테스트 전원 통과)
   - 실제 오크밸리 CC 및 필로스 GC 스코어카드 파싱 및 집계 검증 통과 (`BUILD SUCCESSFUL in 1m 3s`).
-- **전체 APK 빌드**: `assembleDebug` `BUILD SUCCESSFUL (exit code 0)` (2026-09-17 14:35:00 생성).
+- **전체 APK 빌드**: `assembleDebug` `BUILD SUCCESSFUL (exit code 0)` (2026-09-17 16:57:18 생성).
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
