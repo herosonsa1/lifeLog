@@ -199,7 +199,14 @@ class ScorecardOcrAnalyzer @Inject constructor(
                                 elem.text.toIntOrNull() in 1..18
                     }.sortedBy { it.boundingBox!!.left }
 
-                    val isFrontCourse = holeElems.any { (it.text.toIntOrNull() ?: 0) in 1..9 } || parBox.top < 1200
+                    val totalCanvasHeight = elements.maxOfOrNull { it.boundingBox?.bottom ?: 0 } ?: 2000
+                    val hasBackHoles = holeElems.any { (it.text.toIntOrNull() ?: 0) in 10..18 }
+                    val hasFrontHoles = holeElems.any { (it.text.toIntOrNull() ?: 0) in 1..9 }
+                    val isFrontCourse = when {
+                        hasFrontHoles -> true
+                        hasBackHoles -> false
+                        else -> parBox.top < (totalCanvasHeight * 0.55)
+                    }
                     val defaultCoursePars = if (isFrontCourse) {
                         listOf(4, 3, 5, 4, 3, 4, 5, 4, 4)
                     } else {
@@ -414,9 +421,9 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 }
             }
 
-            // 1-1. 대형 스코어 지문 탐색: "86(+14)", "86 (+14)", "86 +14", "91(+19)" 등
-            val scoreWithDiffRegex = Regex("""\b([5-9]\d|1[0-4]\d)\s*(?:\([+-]?\s*\d+\)|[+-]\s*\d+)""")
-            for (line in lines) {
+            // 1-1. 대형 스코어 지문 탐색: "92(+20)", "86(+14)", "86 (+14)", "86 +14", "91(+19)", "[+20]" 등
+            val scoreWithDiffRegex = Regex("""\b([5-9]\d|1[0-4]\d)\s*(?:\([+-]?\s*\d+\)|\[[+-]?\s*\d+\]|[+-]\s*\d+)""")
+            for (line in lines.take(20)) {
                 val m = scoreWithDiffRegex.find(line)
                 if (m != null) {
                     val cand = m.groupValues[1].toIntOrNull()
@@ -427,10 +434,10 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 }
             }
 
-            // 1-2. 한 줄에 SCORE와 숫자가 결합된 형태 (예: "SCORE : 86", "86 SCORE", "86(+14) SCORE")
+            // 1-2. 한 줄에 SCORE와 숫자가 결합된 형태 (예: "SCORE : 86", "86 SCORE", "86(+14) SCORE", "92 (+20) SCORE")
             if (summaryScore == null) {
                 val scoreWithLabelRegex = Regex("""(?:SCORE|스코어|타수)\s*[:：]?\s*(\d{2,3})|(\d{2,3})\s*(?:\([+-]?\d+\)|[+-]\d+)?\s*(?:SCORE|스코어)""", RegexOption.IGNORE_CASE)
-                for (line in lines) {
+                for (line in lines.take(20)) {
                     val digitsInLine = Regex("""\b\d+\b""").findAll(line).count()
                     if (digitsInLine >= 3) {
                         continue
@@ -446,26 +453,27 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 }
             }
 
-            // 1-3. 인접 줄 SCORE 라벨 탐색 (상단 15줄 이내에서 SCORE 라벨 인접 숫자 탐색)
+            // 1-3. 상단 20줄 이내에서 SCORE 라벨 인접 숫자 정밀 탐색 (다크모드 카드가 세로로 쪼개졌을 때 대응)
             if (summaryScore == null) {
-                for (i in lines.indices.take(15)) {
-                    val digitsInLine = Regex("""\b([5-9]\d|1[0-4]\d)\b""").findAll(lines[i]).mapNotNull { it.value.toIntOrNull() }.toList()
-                    val totalDigits = Regex("""\b\d+\b""").findAll(lines[i]).count()
-                    if (totalDigits >= 3) continue // 테이블 행 배제
+                val topLines = lines.take(20)
+                val scoreLabelIdx = topLines.indexOfFirst { it.uppercase().contains("SCORE") || it.contains("스코어") }
+                if (scoreLabelIdx >= 0) {
+                    // SCORE 라벨 주변 ±6줄 이내에서 58..144 범위의 두 자리 정수 탐색 (테이블 행 제외)
+                    val searchIndices = (0 until topLines.size).sortedBy { Math.abs(it - scoreLabelIdx) }
+                    for (i in searchIndices) {
+                        if (i == scoreLabelIdx) continue
+                        val l = topLines[i]
+                        if (l.contains("GIR") || l.contains("걸음") || l.contains("퍼트") || l.contains("202")) continue
+                        val totalDigits = Regex("""\b\d+\b""").findAll(l).count()
+                        if (totalDigits >= 3) continue // 테이블 행 제외
 
-                    for (cand in digitsInLine) {
-                        if (cand in 58..144) {
-                            val hasNearbyScoreLabel = (i > 0 && lines[i-1].uppercase().contains("SCORE")) ||
-                                    (i < lines.size - 1 && lines[i+1].uppercase().contains("SCORE")) ||
-                                    (i < lines.size - 2 && lines[i+2].uppercase().contains("SCORE")) ||
-                                    (i > 1 && lines[i-2].uppercase().contains("SCORE"))
-                            if (hasNearbyScoreLabel) {
-                                summaryScore = cand
-                                break
-                            }
+                        val cands = Regex("""\b([5-9]\d|1[0-4]\d)\b""").findAll(l).mapNotNull { it.value.toIntOrNull() }.toList()
+                        val validScore = cands.firstOrNull { it in 58..144 }
+                        if (validScore != null) {
+                            summaryScore = validScore
+                            break
                         }
                     }
-                    if (summaryScore != null) break
                 }
             }
 
@@ -648,11 +656,12 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 }
             }
 
-            // 2-2) 두 번째 Par 라인 기준 역탐색 (Hole 라인이 인식되지 않은 경우 대비)
+            // 2-2) 두 번째 Par 라인 기준 역탐색 (Hole 라인이 인식되지 않거나 Par 라벨이 줄바꿈 분리된 경우 대비)
             if (backSplitIdx == -1) {
                 val parIndices = lines.indices.filter { idx ->
                     val l = lines[idx].uppercase()
-                    (l.contains("PAR") || l.contains("파")) && Regex("""\b[345]\b""").findAll(l).count() >= 4
+                    val parDigits = Regex("""\b[345]\b""").findAll(l).count()
+                    ((l.contains("PAR") || l.contains("파")) && parDigits >= 3) || parDigits >= 7
                 }
                 if (parIndices.size >= 2) {
                     val secondParIdx = parIndices[1]

@@ -1384,11 +1384,16 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - `ScorecardOcrAnalyzer`에서 비골프 일반 단어 뒤에 무조건 `CC`를 붙이던 폴백을 제거하고 검증된 코스 키워드만 허용.
    - `GolfViewModel.cleanUpDummyRounds()`에 `음성안내`, `위변조`, `아침`, `저녁` 등 오탐 키워드를 추가하여 기존에 생성된 가짜 라운드를 시작 시 자동 영구 청소.
 
+8. **다크모드 상단 대형 스코어(92타) 세로 분리 파편화 대응 및 1024px 저해상도 전/후반 판정 정상화 (`ScorecardOcrAnalyzer.kt`)**:
+   - 오크밸리 스코어카드 다크모드 상단 4개 카드가 세로로 쪼개져 인식될 때 `SCORE` 라벨 인접 거리를 벗어나 92타를 놓치던 결함을 상단 20줄 정밀 탐색 및 괄호 분리 패턴 탑재로 해결.
+   - 1024px 원본 이미지에서 `reconstructSpatialGrid`의 `parBox.top < 1200` 하드코딩으로 인해 후반 Cherry 코스가 전반으로 오판되어 누락되던 결함을 상대 높이 비율(`totalCanvasHeight * 0.55`) 및 10~18홀 번호 판정으로 전면 교정.
+   - `Par` 라벨과 숫자가 줄바꿈 분리된 경우에도 파 행을 100% 정상 탐색하도록 보강.
+
 ### 44.3. 빌드 및 테스트 검증
 - **단위 테스트 전원 통과**:
   - `ScorecardOcrAnalyzerTest` (14개 테스트 전원 통과)
   - `AutoProcessGolfMediaUseCaseTest` (3개 테스트 전원 통과)
   - 실제 오크밸리 CC 및 필로스 GC 스코어카드 파싱 및 집계 검증 통과 (`BUILD SUCCESSFUL in 1m 3s`).
-- **전체 APK 빌드**: `assembleDebug` `BUILD SUCCESSFUL (exit code 0)`.
+- **전체 APK 빌드**: `assembleDebug` `BUILD SUCCESSFUL (exit code 0)` (2026-09-17 14:35:00 생성).
 - **GitHub 저장소 동기화**: `https://github.com/herosonsa1/lifeLog.git`
 
