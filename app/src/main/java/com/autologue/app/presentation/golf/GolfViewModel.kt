@@ -266,11 +266,26 @@ class GolfViewModel @Inject constructor(
                         round.clubName.contains("위변조") ||
                         round.clubName.contains("아침") ||
                         round.clubName.contains("저녁")
+                val isMedicalOrReceiptFakeRound = round.clubName.contains("외래") ||
+                        round.clubName.contains("진료비") ||
+                        round.clubName.contains("계산서") ||
+                        round.clubName.contains("영수증") ||
+                        round.clubName.contains("일반사항") ||
+                        round.clubName.contains("안내 CC") ||
+                        round.clubName.contains("처방") ||
+                        round.clubName.contains("환자") ||
+                        round.clubName.contains("약국") ||
+                        round.clubName.contains("병원") ||
+                        round.memo?.contains("외래 코스") == true ||
+                        round.memo?.contains("진료비") == true ||
+                        (round.totalScore != null && round.totalScore < 50 && round.holeScores.size < 8)
+
                 val isDummyOrInvalid = round.clubName in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패") ||
                         round.clubName.contains("일반 사진") ||
                         round.clubName.contains("필드 골프장") ||
                         (round.clubName == "아난티 코드 GC" && round.memo?.contains("주말 친목 라운딩") == true) ||
-                        isAdBannerRound
+                        isAdBannerRound ||
+                        isMedicalOrReceiptFakeRound
                 if (isDummyOrInvalid) {
                     golfRepository.deleteGolfRound(round.id)
                     // 해당 날짜 다이어리에서도 가짜 골프 스텝 즉시 제거 및 제목 복구

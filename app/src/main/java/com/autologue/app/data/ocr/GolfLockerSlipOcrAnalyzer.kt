@@ -119,6 +119,20 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
 
     companion object {
         fun parse(raw: String, fallbackDate: LocalDate? = null): GolfLockerSlipResult {
+            if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(raw)) {
+                runCatching { android.util.Log.d("GolfLockerSlipOcr", "의료/영수증 감지로 전표 분석 즉시 중단") }
+                return GolfLockerSlipResult(
+                    isLockerSlip = false,
+                    clubName = "일반 사진",
+                    lockerNumber = null,
+                    teeOffTime = null,
+                    courseName = null,
+                    date = fallbackDate ?: LocalDate.now(),
+                    playerName = null,
+                    gender = null,
+                    rawText = raw
+                )
+            }
             val lines = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
             val upperRaw = raw.uppercase()
             runCatching {

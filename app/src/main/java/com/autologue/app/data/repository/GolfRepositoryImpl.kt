@@ -20,6 +20,10 @@ class GolfRepositoryImpl @Inject constructor(
         return golfRoundDao.getAllGolfRounds().map { it.map { e -> e.toDomain() } }
     }
 
+    override suspend fun getAllGolfRoundsList(): List<GolfRound> = withContext(Dispatchers.IO) {
+        golfRoundDao.getAllGolfRoundsList().map { it.toDomain() }
+    }
+
     override suspend fun getGolfRoundById(id: Long): GolfRound? = withContext(Dispatchers.IO) {
         golfRoundDao.getGolfRoundById(id)?.toDomain()
     }

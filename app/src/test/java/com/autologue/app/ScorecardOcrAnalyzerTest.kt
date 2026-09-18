@@ -604,4 +604,33 @@ class ScorecardOcrAnalyzerTest {
         assertEquals(5, stats.doublePlusCount)  // 더블+ 5개 (2, 6, 8, 14, 17)
         assertEquals(3, stats.penaltyCount)     // 벌타 3타
     }
+
+    @Test
+    fun parse_medicalReceipt_rejectedAsGolfScorecard() {
+        val medicalReceiptText = """
+            외래 진료비 계산서 영수증
+            항목별 설명 일반사항 안내
+            환자성명: 홍길동
+            진료과: 내과
+            급여 본인부담금: 15,000원
+            비급여: 24,000원
+            합계금액: 39,000원
+            수납금액: 39,000원
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(medicalReceiptText)
+
+        // 의료 영수증은 네거티브 필터로 인해 골프 점수로 파싱되지 않고 null/empty 반환되어야 함
+        org.junit.Assert.assertNull(result.totalScore)
+        org.junit.Assert.assertTrue(result.holeScores.isEmpty())
+        org.junit.Assert.assertNull(result.courseName)
+    }
+
+    @Test
+    fun hasMedicalOrReceiptNegative_detectsMedicalKeywords() {
+        org.junit.Assert.assertTrue(ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative("외래 진료비 계산서 영수증"))
+        org.junit.Assert.assertTrue(ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative("약국 처방전 조제료"))
+        org.junit.Assert.assertTrue(ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative("병원 수납 영수증"))
+        org.junit.Assert.assertFalse(ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative("오크밸리 CC 2026.09.11 Pine / Cherry SCORE 92"))
+    }
 }

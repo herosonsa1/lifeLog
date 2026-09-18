@@ -6,6 +6,7 @@ import java.time.LocalDate
 
 interface GolfRepository {
     fun getAllGolfRoundsFlow(): Flow<List<GolfRound>>
+    suspend fun getAllGolfRoundsList(): List<GolfRound>
     suspend fun getGolfRoundById(id: Long): GolfRound?
     suspend fun insertGolfRound(round: GolfRound): Long
     suspend fun updateGolfRound(round: GolfRound)

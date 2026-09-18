@@ -29,16 +29,24 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
         try {
             // 1. 단 1회의 ML Kit OCR 분석 수행
             val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
+            // 1. 의료 및 일반 영수증 네거티브 가드레일 (외래 진료비, 약제비, 처방전 등 즉시 배제)
+            if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(scorecardResult.recognizedRawText)) {
+                android.util.Log.d("AutoProcessGolfMedia", "processSinglePhoto: 의료/영수증 감지로 골프 등록 거부 ($uri)")
+                return@withContext null
+            }
+
             val rawText = scorecardResult.recognizedRawText
             val rawUpper = rawText.uppercase()
 
-            // 2. 스코어카드 유효성 점검
-            val golfFingerprints = listOf("SCORE", "스코어", "PAR", "HOLE", "PUTT", "퍼트", "GIR", "PENALTY", "페널티", "벌타", "PINE", "CHERRY", "OAK", "파인", "체리", "오크")
-            val matchedKeywords = golfFingerprints.count { rawUpper.contains(it) }
-            val isValidScorecard = matchedKeywords >= 1 && (
-                    (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..144) ||
-                    scorecardResult.holeScores.isNotEmpty()
+            // 2. 스코어카드 유효성 점검 (찐 골프 핵심 키워드 필수 및 유효 타수 범위 검증)
+            val matchedCoreKeywords = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
+            val hasValidGolfKeywords = matchedCoreKeywords.isNotEmpty()
+            val hasValidHoles = scorecardResult.holeScores.size >= 8
+            val hasValidTotalScore = scorecardResult.totalScore != null && (
+                (hasValidHoles && scorecardResult.totalScore in 27..144) ||
+                scorecardResult.totalScore in 54..144
             )
+            val isValidScorecard = hasValidGolfKeywords && (hasValidTotalScore || hasValidHoles)
 
             // 3. 라커룸 전표 유효성 점검 (기존 추출 텍스트 재활용 — 중복 OCR 0회)
             val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
@@ -64,16 +72,21 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
     }
 
     companion object {
-        private val GOLF_FINGERPRINTS = listOf(
+        val GOLF_CORE_KEYWORDS = listOf(
             "SCORE", "스코어", "PAR", "HOLE", "PUTT", "퍼트", "퍼팅", "GIR", "PENALTY", "페널티", "벌타",
+            "골프", "골프장", "라운드", "라운딩", "ROUND", "클럽하우스", "그린피", "카트비", "캐디피", "티오프", "TEE OFF",
+            "라커", "락커", "LOCKER", "SMARTSCORE", "스마트스코어", "KAKAOGOLF", "카카오골프", "GOLFZON", "골프존",
+            "나의 스코어", "나의스코어", "SCORECARD"
+        )
+
+        val GOLF_AUXILIARY_KEYWORDS = listOf(
             "타수", "핸디", "핸디캡", "HANDICAP", "버디", "보기", "이글", "전반", "후반", "OUT", "IN",
-            "CC", "GC", "C.C", "G.C", "골프", "골프장", "라운드", "라운딩", "ROUND", "클럽하우스",
-            "그린피", "카트비", "캐디피", "코스", "COURSE", "SCORECARD", "TOTAL", "합계",
-            "라커", "락커", "정산", "정산서", "안내서", "LOCKER", "TEE OFF", "티오프",
-            "SMARTSCORE", "스마트스코어", "KAKAOGOLF", "카카오골프", "GOLFZON", "골프존", "나의 스코어", "나의스코어",
+            "CC", "GC", "C.C", "G.C", "코스", "COURSE",
             "PINE", "CHERRY", "OAK", "파인", "체리", "오크",
             "오크밸리", "필로스", "킹스데일", "남촌", "가평", "아난티", "레이크사이드", "골드", "태광", "안성", "용인"
         )
+
+        val GOLF_FINGERPRINTS = GOLF_CORE_KEYWORDS + GOLF_AUXILIARY_KEYWORDS
     }
 
     /**
@@ -108,8 +121,12 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
                 // [Stage 1: Fast Fingerprint Probe - ~80ms]
                 // 폰트가 뭉개지지 않도록 maxDimension=2048로 선명하게 ML Kit 텍스트만 신속 추출하여 골프 지문 1차 검사
                 val probeText = scorecardOcrAnalyzer.quickProbeText(uri, maxDimension = 2048)
-                if (probeText.isBlank()) {
-                    android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 텍스트 없음/디코딩 실패 건너뜀 ($uri)")
+                if (probeText.isBlank() || ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(probeText)) {
+                    if (probeText.isNotBlank()) {
+                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 의료/영수증 지문 감지로 즉시 제외 ($uri)")
+                    } else {
+                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 텍스트 없음/디코딩 실패 건너뜀 ($uri)")
+                    }
                     continue
                 }
 
@@ -127,14 +144,21 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
                 // 2560px 2D 공간 그리드 복원 및 18홀 정밀 파싱
                 val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
                 val rawText = scorecardResult.recognizedRawText.ifBlank { probeText }
+                if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(rawText)) {
+                    android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] Deep Analysis 중 의료/영수증 지문 감지로 배제 ($uri)")
+                    continue
+                }
                 val rawUpper = rawText.uppercase()
 
-                // A. 스코어카드 검증
-                val matchedKeywords = GOLF_FINGERPRINTS.count { rawUpper.contains(it) }
-                val isValidScorecard = matchedKeywords >= 1 && (
-                        (scorecardResult.totalScore != null && scorecardResult.totalScore in 50..144) ||
-                        scorecardResult.holeScores.isNotEmpty()
+                // A. 스코어카드 검증 (찐 골프 핵심 키워드 필수 및 유효 타수/홀수 검증)
+                val matchedCore = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
+                val hasValidGolfKeywords = matchedCore.isNotEmpty()
+                val hasValidHoles = scorecardResult.holeScores.size >= 8
+                val hasValidTotalScore = scorecardResult.totalScore != null && (
+                    (hasValidHoles && scorecardResult.totalScore in 27..144) ||
+                    scorecardResult.totalScore in 54..144
                 )
+                val isValidScorecard = hasValidGolfKeywords && (hasValidTotalScore || hasValidHoles)
 
                 // B. 라커룸 안내지 검증
                 val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)

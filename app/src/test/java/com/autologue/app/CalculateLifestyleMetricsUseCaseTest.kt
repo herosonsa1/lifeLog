@@ -56,6 +56,7 @@ class CalculateLifestyleMetricsUseCaseTest {
 
     private class FakeGolfRepo(private val rounds: List<GolfRound>) : GolfRepository {
         override fun getAllGolfRoundsFlow(): Flow<List<GolfRound>> = flowOf(rounds)
+        override suspend fun getAllGolfRoundsList(): List<GolfRound> = rounds
         override suspend fun getGolfRoundById(id: Long) = null
         override suspend fun insertGolfRound(round: GolfRound) = 1L
         override suspend fun updateGolfRound(round: GolfRound) {}

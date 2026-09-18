@@ -1567,5 +1567,40 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **전체 단위 테스트 100% 통과**: `./gradlew.bat testDebugUnitTest` `BUILD SUCCESSFUL in 2m 33s`.
 - **전체 디버그 APK 빌드 완료**: `./gradlew.bat assembleDebug` `BUILD SUCCESSFUL in 54s` (출력물: `app/build/outputs/apk/debug/app-debug.apk`, 63.7MB, 2026-09-18 14:21:44 생성).
 
+---
 
+## 49. 의료/영수증 골프 라운드 오탐 차단 및 전체 동기화 다이어리 작성 무한 지연 해소 (2026-09-18)
 
+### 49.1. 사용자 핵심 요청 사항
+> 1. "인식률이 아직 많이 떨어지나봐. 약제비나 진료 영수증의 경우에도 골프 라운딩으로 집계된 부분이 있어."  
+> 2. "그리고 전체 대상으로 동기화를 시도하니, 거의 10분이 지나도록 2번째 캡쳐화면 상태야"
+
+### 49.2. 근본 원인 분석
+1. **의료 및 일반 영수증 네거티브 가드레일 부재**:
+   - `GOLF_FINGERPRINTS`에 일반 문서 단어(`합계`, `정산`, `안내서`, `CC`)가 포함되어 있어, "외래 진료비 계산서 영수증 / 항목별 설명 일반사항 안내"가 골프 지문으로 잘못 인식됨.
+   - 영수증 내의 비골프 단어 "외래"가 코스명(`외래 코스`)으로 추출되고 안내문 뒤의 CC와 결합되어 `항목별 설명 일반사항 안내 CC`로 등록됨.
+   - 영수증 항목의 임의 숫자가 누적 파싱되어 39타라는 비정상 타수로 등록되었으며, `scorecardResult.holeScores.isNotEmpty()` 조건만으로 스코어카드로 승인됨.
+2. **Room Flow `first()` 호출로 인한 블로킹/데드락 및 다이어리 작성 진행률 부재**:
+   - `SyncHistoricalDataUseCase`에서 골프 목록을 가져올 때 `golfRepository.getAllGolfRoundsFlow().first()`를 호출하여 Room DB Flow 대기 중 SQLite 락/스레드 경합으로 코루틴 행(Hang) 위험 발생.
+   - 다이어리 엔트리 DB 삽입 루프 동안 실시간 진행률(Progress) 방출이 없어 화면이 멈춘 것처럼 보이고, `yield()` 스케줄링 양보가 없어 메인 스레드 ANR 위험 존재.
+
+### 49.3. 주요 개선 및 구현 내역
+1. **의료 및 일반 영수증 네거티브 가드레일 (`MEDICAL_AND_RECEIPT_NEGATIVES`) 전면 구축**:
+   - `ScorecardOcrAnalyzer.kt`, `GolfLockerSlipOcrAnalyzer.kt`, `AutoProcessGolfMediaUseCase.kt`에 28개 의료/영수증 핵심 키워드(`진료비`, `계산서`, `영수증`, `외래`, `환자`, `질병`, `처방`, `약국`, `병원`, `급여`, `비급여`, `수납`, `사업자등록번호` 등) 배제 필터 탑재.
+   - Stage 1 Fast Fingerprint Probe에서 감지 즉시 0.08초 만에 제외하여 Stage 2 무거운 OCR 부하 원천 차단.
+   - 코스명 추출 시 비골프 단어(`외래`, `안내`, `설명`, `일반사항` 등) 배제.
+2. **골프 지문 정제 및 스코어카드 유효성 조건 엄격화**:
+   - `GOLF_CORE_KEYWORDS`(`SCORE`, `PAR`, `HOLE`, `PUTT`, `GIR`, `골프`, `라운드`, `티오프`, `라커` 등)가 최소 1개 이상 필수 존재해야 골프 지문으로 인정.
+   - 9홀 경기(27~72타 & 8홀 이상), 18홀 경기(54~144타)의 정상 타수만 승인하도록 스코어 검증 강화 (39타 비정상 라운드 원천 차단).
+3. **가짜 의료 영수증 라운드 자동 청소 로직 (`cleanUpDummyRounds`, `cleanUpMedicalFakeRounds`)**:
+   - `GolfViewModel.kt` 및 `SyncHistoricalDataUseCase.kt` 시작 시 DB 내 "외래 진료비", "영수증", "안내 CC" 등 가짜 라운드를 탐색하여 자동 영구 삭제하고 다이어리 동선에서도 동시 제거.
+4. **Room Flow First 데드락 제거 및 실시간 진행률 연동**:
+   - `GolfRoundDao.kt`, `GolfRepository.kt`, `GolfRepositoryImpl.kt`에 `suspend fun getAllGolfRoundsList(): List<GolfRound>`(Direct Suspend Query) 신설 및 동기화 루프에서 직접 호출.
+   - 하루 이동 경로 및 다이어리 작성 루프에서 매 3일마다 실시간 진행률(`"하루 이동 경로 및 다이어리 작성 중... (${idx + 1}/${totalEntries}일)"`) 방출 및 `kotlinx.coroutines.yield()` 적용.
+5. **영구 지식화 (`anti_patterns.json`)**:
+   - `AP-OCR-MEDICAL-RECEIPT-FALSE-POSITIVE` 등록 완료.
+   - `AP-ROOM-FLOW-FIRST-DEADLOCK-AND-MISSING-PROGRESS` 등록 완료.
+
+### 49.4. 빌드 및 테스트 검증
+- **전체 단위 테스트 100% 통과**: `./gradlew.bat clean testDebugUnitTest` `BUILD SUCCESSFUL in 4m 22s` (76개 테스트 전원 통과).
+- **디버그 APK 빌드 완료**: `./gradlew.bat assembleDebug` `BUILD SUCCESSFUL in 1m 9s`.

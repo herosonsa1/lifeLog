@@ -193,6 +193,7 @@ class AutoProcessGolfMediaUseCaseTest {
         val rounds = mutableListOf<GolfRound>()
 
         override fun getAllGolfRoundsFlow(): Flow<List<GolfRound>> = flowOf(rounds)
+        override suspend fun getAllGolfRoundsList(): List<GolfRound> = rounds
         override suspend fun getGolfRoundById(id: Long): GolfRound? = rounds.find { it.id == id }
         override suspend fun getGolfRoundByDate(date: LocalDate): GolfRound? =
             rounds.find { (it.startTime ?: it.roundDate).toLocalDate() == date }

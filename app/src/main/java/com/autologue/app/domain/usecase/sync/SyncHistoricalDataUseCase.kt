@@ -35,10 +35,11 @@ class SyncHistoricalDataUseCase @Inject constructor(
         try {
             send(SyncProgress(isRunning = true, stage = "기존 중복 데이터 검사 및 정리 중...", syncedTxCount = 0, syncedPhotoCount = 0, syncedGolfCount = 0))
 
-            // Clean any existing duplicate rows across all tables
+            // 기존 중복 데이터 검사 및 의료/영수증 가짜 골프 라운드 선제 청소
             runCatching { transactionRepository.cleanDuplicates() }
             runCatching { diaryRepository.cleanDuplicates() }
             runCatching { vehicleRepository.cleanDuplicates() }
+            cleanUpMedicalFakeRounds()
 
             val periodDesc = if (daysBack != null) "최근 ${daysBack}일" else "과거 전체"
             send(SyncProgress(isRunning = true, stage = "$periodDesc 결제 문자 스캔 중...", syncedTxCount = 0, syncedPhotoCount = 0, syncedGolfCount = 0))
@@ -94,10 +95,9 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 }
             }
 
-            send(SyncProgress(isRunning = true, stage = "결제·사진 기반 하루 이동 경로 및 다이어리 작성 중...", syncedTxCount = txCount, syncedPhotoCount = photoCount, syncedGolfCount = golfSyncedCount))
-
+            // [Room Flow First Deadlock 원천 차단 - Direct Suspend Function 호출]
             val allGolfRounds = runCatching {
-                golfRepository.getAllGolfRoundsFlow().first()
+                golfRepository.getAllGolfRoundsList()
             }.getOrDefault(emptyList())
 
             val diaryEntries = importer.generateIntegratedDiaries(
@@ -106,12 +106,37 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 golfRounds = allGolfRounds
             )
 
+            val totalEntries = diaryEntries.size
             var insertedEntriesCount = 0
-            for (entry in diaryEntries) {
+
+            send(
+                SyncProgress(
+                    isRunning = true,
+                    stage = if (totalEntries > 0) "하루 이동 경로 및 다이어리 작성 중... (1/${totalEntries}일)" else "다이어리 데이터 정제 중...",
+                    syncedTxCount = txCount,
+                    syncedPhotoCount = photoCount,
+                    syncedGolfCount = golfSyncedCount
+                )
+            )
+
+            for ((idx, entry) in diaryEntries.withIndex()) {
                 runCatching {
                     diaryRepository.insertDiaryEntry(entry)
                     insertedEntriesCount++
                 }
+
+                if ((idx + 1) % 3 == 0 || (idx + 1) == totalEntries) {
+                    send(
+                        SyncProgress(
+                            isRunning = true,
+                            stage = "하루 이동 경로 및 다이어리 작성 중... (${idx + 1}/${totalEntries}일)",
+                            syncedTxCount = txCount,
+                            syncedPhotoCount = photoCount,
+                            syncedGolfCount = golfSyncedCount
+                        )
+                    )
+                }
+                kotlinx.coroutines.yield()
             }
 
             val golfSummary = if (golfSyncedCount > 0) " / ⛳ 골프 ${golfSyncedCount}건 등록" else ""
@@ -138,4 +163,28 @@ class SyncHistoricalDataUseCase @Inject constructor(
             )
         }
     }.flowOn(Dispatchers.IO)
+
+    private suspend fun cleanUpMedicalFakeRounds() {
+        runCatching {
+            val rounds = golfRepository.getAllGolfRoundsList()
+            for (r in rounds) {
+                val isMedical = r.clubName.contains("외래") ||
+                        r.clubName.contains("진료비") ||
+                        r.clubName.contains("계산서") ||
+                        r.clubName.contains("영수증") ||
+                        r.clubName.contains("일반사항") ||
+                        r.clubName.contains("안내 CC") ||
+                        r.clubName.contains("처방") ||
+                        r.clubName.contains("환자") ||
+                        r.clubName.contains("약국") ||
+                        r.clubName.contains("병원") ||
+                        r.memo?.contains("외래 코스") == true ||
+                        r.memo?.contains("진료비") == true ||
+                        (r.totalScore != null && r.totalScore < 50 && r.holeScores.size < 8)
+                if (isMedical) {
+                    golfRepository.deleteGolfRound(r.id)
+                }
+            }
+        }
+    }
 }

@@ -9,6 +9,9 @@ interface GolfRoundDao {
     @Query("SELECT * FROM golf_rounds ORDER BY roundDate DESC")
     fun getAllGolfRounds(): Flow<List<GolfRoundEntity>>
 
+    @Query("SELECT * FROM golf_rounds ORDER BY roundDate DESC")
+    suspend fun getAllGolfRoundsList(): List<GolfRoundEntity>
+
     @Query("SELECT * FROM golf_rounds WHERE id = :id")
     suspend fun getGolfRoundById(id: Long): GolfRoundEntity?
 

@@ -337,6 +337,10 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
             val visionText = recognizer.process(image).await()
             val text = visionText.text
+            if (hasMedicalOrReceiptNegative(text)) {
+                android.util.Log.d("ScorecardOcrAnalyzer", "quickProbeText 의료/영수증 네거티브 감지로 차단 ($imageUri)")
+                return@withContext ""
+            }
             if (text.isNotBlank()) {
                 android.util.Log.d("ScorecardOcrAnalyzer", "quickProbeText 성공 ($imageUri): ${text.take(40).replace('\n', ' ')}...")
             }
@@ -360,6 +364,10 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
             val visionText = recognizer.process(image).await()
             val raw = visionText.text
+            if (hasMedicalOrReceiptNegative(raw)) {
+                android.util.Log.d("ScorecardOcrAnalyzer", "analyzeScorecard 의료/영수증 감지로 즉시 차단 ($imageUri)")
+                return@withContext createEmptyResult(raw)
+            }
             val spatialRaw = reconstructSpatialGrid(visionText)
 
             runCatching {
@@ -404,10 +412,44 @@ class ScorecardOcrAnalyzer @Inject constructor(
     }
 
     companion object {
+        val MEDICAL_AND_RECEIPT_NEGATIVES = listOf(
+            "진료비", "계산서", "영수증", "외래", "입원", "환자", "질병", "처방", "처방전", "조제",
+            "약국", "의원", "병원", "급여", "비급여", "본인부담금", "공단부담금", "수납", "의료기관",
+            "진료과", "원외처방", "사업자등록번호", "가맹점", "부가세", "부가가치세", "품명", "수량", "단가", "면세"
+        )
+
+        fun hasMedicalOrReceiptNegative(text: String): Boolean {
+            val upper = text.uppercase()
+            return MEDICAL_AND_RECEIPT_NEGATIVES.any { upper.contains(it) }
+        }
+
+        fun createEmptyResult(raw: String): ScorecardOcrResult = ScorecardOcrResult(
+            totalScore = null,
+            totalPutts = null,
+            holeScores = emptyList(),
+            holePars = emptyList(),
+            courseName = null,
+            girPercentage = null,
+            steps = null,
+            penaltyCount = null,
+            averageDriveDistance = null,
+            adjustedDriveDistance = null,
+            averageTempo = null,
+            driveDistances = emptyList(),
+            tempos = emptyList(),
+            clubName = null,
+            playDate = null,
+            recognizedRawText = raw
+        )
+
         /**
          * 스마트스코어/모바일 앱 스코어카드(다크 테마 포함) 및 지류 스코어카드 OCR 정밀 파싱
          */
         fun parse(raw: String): ScorecardOcrResult {
+            if (hasMedicalOrReceiptNegative(raw)) {
+                runCatching { android.util.Log.d("ScorecardOcrAnalyzer", "parse: 의료/영수증 감지로 골프 파싱 중단") }
+                return createEmptyResult(raw)
+            }
             val lines = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
             runCatching {
                 android.util.Log.d("SCORECARD_RAW", "--- OCR RAW START ---\n$raw\n--- OCR RAW END ---")
@@ -443,7 +485,8 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 val m = clubRegex.find(targetLine) ?: clubRegex.find(line)
                 if (m != null) {
                     val rawClub = m.groupValues[1].trim()
-                    if (rawClub.isNotBlank() && !rawClub.contains("스코어") && !rawClub.contains("라커")) {
+                    val invalidClubWords = listOf("스코어", "라커", "안내", "영수증", "계산서", "진료", "처방", "외래", "병원", "약국")
+                    if (rawClub.isNotBlank() && invalidClubWords.none { rawClub.contains(it) }) {
                         detectedClubName = rawClub
                         break
                     }
@@ -837,18 +880,18 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
 
             // 12. 최종 확정 (전/후반 9홀 Total 합산 또는 18홀 합산이 있으면 실제 경기 점수로 최우선 확정)
-            val subTotalSum = if (subTotals.size == 2 && subTotals.sum() in 58..144) subTotals.sum() else null
-            val holeScoreSum = if (allHoleScores.size == 18 && allHoleScores.sum() in 58..144) allHoleScores.sum() else null
-            val is18HolesRound = detectedCourses.size >= 2 || backSplitIdx > 0 || allHoleScores.size >= 10 || (summaryScore != null && summaryScore >= 58)
+            val subTotalSum = if (subTotals.size == 2 && subTotals.sum() in 54..144) subTotals.sum() else null
+            val holeScoreSum = if (allHoleScores.size == 18 && allHoleScores.sum() in 54..144) allHoleScores.sum() else null
+            val is18HolesRound = detectedCourses.size >= 2 || backSplitIdx > 0 || allHoleScores.size >= 10 || (summaryScore != null && summaryScore >= 54)
 
             val finalTotalScore: Int? = when {
                 subTotalSum != null -> subTotalSum
                 holeScoreSum != null -> holeScoreSum
-                summaryScore != null && summaryScore in 58..144 -> summaryScore
-                subTotals.isNotEmpty() && subTotals.sum() in 58..144 -> subTotals.sum()
-                !is18HolesRound && allHoleScores.size == 9 && allHoleScores.sum() in 28..70 -> allHoleScores.sum()
-                fallbackTotalScore != null && fallbackTotalScore in 58..144 -> fallbackTotalScore
-                else -> summaryScore ?: if (allHoleScores.isNotEmpty() && allHoleScores.sum() >= 58) allHoleScores.sum() else null
+                summaryScore != null && summaryScore in 54..144 -> summaryScore
+                subTotals.isNotEmpty() && subTotals.sum() in 54..144 -> subTotals.sum()
+                !is18HolesRound && allHoleScores.size in 8..9 && allHoleScores.sum() in 27..72 -> allHoleScores.sum()
+                fallbackTotalScore != null && fallbackTotalScore in 54..144 -> fallbackTotalScore
+                else -> summaryScore?.takeIf { it in 54..144 } ?: if (allHoleScores.size >= 14 && allHoleScores.sum() in 54..144) allHoleScores.sum() else null
             }
 
             // 퍼트 서브토탈 중 10~30 범위(9홀 정상 퍼트 범위)의 유효한 값만 필터링 (36 등 Par 총합 오탐 배제)
@@ -1079,6 +1122,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
 
             if (detectedCourse == null) {
+                val nonCourseWords = listOf("외래", "입원", "진료", "병원", "약국", "안내", "설명", "일반사항", "영수증", "계산서", "항목별", "환자", "수납", "내역", "금액", "항목", "합계", "전표", "명세")
                 for (line in courseSearchLines) {
                     val trimmed = line.trim()
                     val upper = trimmed.uppercase()
@@ -1087,6 +1131,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         !upper.contains("PUTT") && !upper.contains("퍼트") && !upper.contains("HOLE") && !upper.contains("홀") &&
                         !upper.contains("GIR") && !upper.contains("걸음") && !upper.contains("TOTAL") && !upper.contains("합계") &&
                         !upper.contains("스코어") && !upper.contains("PENALTY") && !upper.contains("벌타") &&
+                        nonCourseWords.none { trimmed.contains(it) } &&
                         !Regex("""\d""").containsMatchIn(trimmed)) {
                         detectedCourse = trimmed.replace(Regex("""\s*코스$"""), "").trim()
                         break
