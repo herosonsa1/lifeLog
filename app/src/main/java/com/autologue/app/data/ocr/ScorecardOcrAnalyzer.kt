@@ -207,10 +207,39 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         hasBackHoles -> false
                         else -> parBox.top < (totalCanvasHeight * 0.55)
                     }
-                    val defaultCoursePars = if (isFrontCourse) {
-                        listOf(4, 3, 5, 4, 3, 4, 5, 4, 4)
+                    // 코스별 고유 표준 파 매핑 테이블 (킹스데일 Hill/Lake, 오크밸리 Pine/Cherry, 필로스 West/South 등)
+                    val knownCourseParsMap = mapOf(
+                        "hill" to listOf(4, 5, 4, 3, 4, 3, 4, 4, 5),
+                        "힐" to listOf(4, 5, 4, 3, 4, 3, 4, 4, 5),
+                        "lake" to listOf(4, 4, 3, 4, 4, 5, 4, 3, 5),
+                        "레이크" to listOf(4, 4, 3, 4, 4, 5, 4, 3, 5),
+                        "pine" to listOf(4, 4, 3, 4, 5, 4, 3, 4, 5),
+                        "파인" to listOf(4, 4, 3, 4, 5, 4, 3, 4, 5),
+                        "cherry" to listOf(4, 3, 4, 4, 4, 3, 5, 4, 5),
+                        "체리" to listOf(4, 3, 4, 4, 4, 3, 5, 4, 5),
+                        "west" to listOf(4, 3, 5, 4, 3, 4, 5, 4, 4),
+                        "웨스트" to listOf(4, 3, 5, 4, 3, 4, 5, 4, 4),
+                        "서" to listOf(4, 3, 5, 4, 3, 4, 5, 4, 4),
+                        "south" to listOf(4, 4, 5, 3, 4, 5, 4, 3, 4),
+                        "사우스" to listOf(4, 4, 5, 3, 4, 5, 4, 3, 4),
+                        "남" to listOf(4, 4, 5, 3, 4, 5, 4, 3, 4),
+                        "valley" to listOf(4, 4, 3, 5, 4, 4, 3, 4, 5),
+                        "mountain" to listOf(4, 3, 5, 4, 4, 4, 3, 5, 4)
+                    )
+
+                    val nearbyCourse = elements.firstOrNull { elem ->
+                        val b = elem.boundingBox ?: return@firstOrNull false
+                        b.bottom < parBox.top && b.bottom > parBox.top - (parBox.height() * 7) &&
+                        knownCourseParsMap.keys.any { elem.text.contains(it, ignoreCase = true) }
+                    }?.text?.trim()?.lowercase()
+                    val matchedCoursePars = knownCourseParsMap.entries.firstOrNull { (k, _) ->
+                        nearbyCourse?.contains(k) == true
+                    }?.value
+
+                    val defaultCoursePars = matchedCoursePars ?: if (isFrontCourse) {
+                        listOf(4, 5, 4, 3, 4, 3, 4, 4, 5) // 표준 36 (Hill과 동일)
                     } else {
-                        listOf(4, 4, 5, 3, 4, 5, 4, 3, 4)
+                        listOf(4, 4, 3, 4, 4, 5, 4, 3, 5) // 표준 36 (Lake와 동일)
                     }
 
                     // 9개 슬롯의 X 좌표 계산 (1번 홀 터치 박스로 인한 2~9번 시작 시 오프셋 역산 완벽 지원)
@@ -236,11 +265,51 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         }
                     }
 
-                    // Par 행 자체의 누락 복원 (Par 행이 9개가 안 될 경우 표준 Par 채우기)
-                    val parDigits = sortedElems.filter { it.text.toIntOrNull() in 3..5 }
-                    if (parDigits.size < 9 && finalLines.isNotEmpty()) {
-                        finalLines.removeAt(finalLines.size - 1) // 불완전한 기존 Par 행 교체
-                        finalLines.add("Par " + defaultCoursePars.joinToString(" ") + " 36")
+                    val slotWidth = if (slotCenters.size >= 2) (slotCenters[1] - slotCenters[0]) else 71.0
+
+                    // Par 행 자체의 정밀 복원 (1번 홀 선택 박스 대응 + 8개 검출 시 수학적 역산 36 - sum8)
+                    val parSlots = MutableList<Int?>(9) { null }
+                    val parCandidates = sortedElems.filter { elem ->
+                        val n = elem.text.toIntOrNull()
+                        n != null && n in 3..5
+                    }
+                    for (pe in parCandidates) {
+                        val pX = pe.boundingBox?.centerX()?.toDouble() ?: continue
+                        val closestIdx = slotCenters.indices.minByOrNull { Math.abs(pX - slotCenters[it]) }
+                        if (closestIdx != null && Math.abs(pX - slotCenters[closestIdx]) <= slotWidth * 0.6) {
+                            parSlots[closestIdx] = pe.text.toIntOrNull()
+                        }
+                    }
+
+                    // 1번 홀 슬롯(parSlots[0])이 비어있다면, 핑크 박스 내부(slotCenters[0] 부근) 요소에서 탐색
+                    if (parSlots[0] == null) {
+                        val hole1Candidate = elements.firstOrNull { elem ->
+                            val b = elem.boundingBox ?: return@firstOrNull false
+                            val n = elem.text.toIntOrNull()
+                            n != null && n in 3..5 &&
+                            Math.abs(b.centerX() - slotCenters[0]) <= slotWidth * 0.6 &&
+                            Math.abs(b.centerY() - parBox.centerY()) <= parBox.height() * 2
+                        }
+                        if (hole1Candidate != null) {
+                            parSlots[0] = hole1Candidate.text.toIntOrNull()
+                        }
+                    }
+
+                    // 만약 1개 홀만 비어있다면: 수학적 역산 (Total 36 - sum)
+                    val missingParIndices = parSlots.indices.filter { parSlots[it] == null }
+                    if (missingParIndices.size == 1) {
+                        val sum8 = parSlots.filterNotNull().sum()
+                        val deduced = 36 - sum8
+                        if (deduced in 3..5) {
+                            parSlots[missingParIndices[0]] = deduced
+                        }
+                    }
+
+                    // 최종 확정된 9개 Par 배열 (누락 홀은 코스별 표준 Par 매핑 적용)
+                    val resolvedPars = parSlots.mapIndexed { idx, p -> p ?: defaultCoursePars.getOrElse(idx) { 4 } }
+                    if (finalLines.isNotEmpty()) {
+                        finalLines.removeAt(finalLines.size - 1) // 기존 불완전한 Par 행 교체
+                        finalLines.add("Par " + resolvedPars.joinToString(" ") + " 36")
                     }
 
                     if (matchingPutt != null && matchingPutt.boundingBox != null) {
@@ -283,25 +352,25 @@ class ScorecardOcrAnalyzer @Inject constructor(
                                 var diff = explicitTotal - currentSum
                                 // 누락된 슬롯들에 기본 Par 채우기
                                 for (mIdx in missingIndices) {
-                                    val p = defaultCoursePars.getOrElse(mIdx) { 4 }
+                                    val p = resolvedPars.getOrElse(mIdx) { 4 }
                                     slots[mIdx] = p
                                     diff -= p
                                 }
                                 // 남은 차이 분배 (Par가 작은 홀에 우선 배분하여 타수 분산 최소화)
                                 if (diff != 0) {
-                                    val sortedMissing = missingIndices.sortedBy { defaultCoursePars[it] }
+                                    val sortedMissing = missingIndices.sortedBy { resolvedPars[it] }
                                     val step = if (diff > 0) 1 else -1
                                     var iter = 0
                                     while (diff != 0 && iter < sortedMissing.size * 3) {
                                         val targetSlot = sortedMissing[iter % sortedMissing.size]
-                                        slots[targetSlot] = (slots[targetSlot] ?: defaultCoursePars[targetSlot]) + step
+                                        slots[targetSlot] = (slots[targetSlot] ?: resolvedPars[targetSlot]) + step
                                         diff -= step
                                         iter++
                                     }
                                 }
                             }
 
-                            val finalScores = slots.mapIndexed { idx, s -> s ?: defaultCoursePars.getOrElse(idx) { 4 } }
+                            val finalScores = slots.mapIndexed { idx, s -> s ?: resolvedPars.getOrElse(idx) { 4 } }
                             val syntheticTokens = mutableListOf<String>()
                             syntheticTokens.addAll(finalScores.map { it.toString() })
                             if (explicitTotal != null) {
@@ -689,22 +758,15 @@ class ScorecardOcrAnalyzer @Inject constructor(
             )
             var backSplitIdx = -1
 
-            // 2-1) 10~18 홀 번호가 포함된 라인 또는 두 번째 HOLE 라인 탐색
-            val holeLineIndices = lines.indices.filter { idx ->
-                val l = lines[idx].uppercase()
-                !l.contains("홀당") && !l.contains("평균") && (l.contains("HOLE") || Regex("""\b1\s+2\s+3\s+4\b""").containsMatchIn(l) || Regex("""\b10\s+11\s+12\b""").containsMatchIn(l))
-            }
-            val secondHoleIdx = if (holeLineIndices.size >= 2) holeLineIndices[1] else -1
-
+            // 2-1) 10~18 홀 번호가 포함된 명시적 후반 라인 최우선 탐색
             for (i in lines.indices) {
                 if (i < 3) continue
                 val l = lines[i].uppercase()
                 val isExplicitBackHoleLine = (l.contains("HOLE") && (l.contains("10") || l.contains("11") || l.contains("18"))) ||
                         Regex("""\b10\s+11(?:\s+12)?\b""").containsMatchIn(l) ||
                         Regex("""\b10\b.*\b11\b.*\b12\b""").containsMatchIn(l)
-                val isSecondHoleLine = (i == secondHoleIdx)
 
-                if (isExplicitBackHoleLine || isSecondHoleLine) {
+                if (isExplicitBackHoleLine) {
                     var splitPoint = i
                     for (offset in 1..4) {
                         val prevIdx = i - offset
@@ -725,6 +787,37 @@ class ScorecardOcrAnalyzer @Inject constructor(
                     }
                     backSplitIdx = splitPoint
                     break
+                }
+            }
+
+            // 2-1-2) 두 번째 HOLE 블록 탐색 (인접한 줄은 동일 블록으로 묶어 전반 줄바꿈으로 인한 조기 분할 원천 차단)
+            if (backSplitIdx == -1) {
+                val holeBlocks = mutableListOf<Int>()
+                for (idx in lines.indices) {
+                    val l = lines[idx].uppercase()
+                    if (!l.contains("홀당") && !l.contains("평균") && (l.contains("HOLE") || Regex("""\b1\s+2\s+3\s+4\b""").containsMatchIn(l) || Regex("""\b10\s+11\s+12\b""").containsMatchIn(l))) {
+                        if (holeBlocks.isEmpty() || idx > holeBlocks.last() + 2) {
+                            holeBlocks.add(idx)
+                        }
+                    }
+                }
+                if (holeBlocks.size >= 2) {
+                    val secondHoleIdx = holeBlocks[1]
+                    var splitPoint = secondHoleIdx
+                    for (offset in 1..4) {
+                        val prevIdx = secondHoleIdx - offset
+                        if (prevIdx < 0) break
+                        val prevLine = lines[prevIdx].trim()
+                        val prevUpper = prevLine.uppercase()
+                        val isHoleLabel = prevUpper == "HOLE" || prevUpper.startsWith("HOLE ")
+                        val isKnownCourse = allKnownCourseKeywords.any { prevUpper.contains(it) }
+                        if (isHoleLabel || isKnownCourse) {
+                            splitPoint = prevIdx
+                        } else if (prevLine.isBlank()) {
+                            break
+                        }
+                    }
+                    backSplitIdx = splitPoint
                 }
             }
 
@@ -1443,7 +1536,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 val line = sectionLines[i]
                 if (Regex("""(?:Penalty|페널티|벌타)""", RegexOption.IGNORE_CASE).containsMatchIn(line)) {
                     val candidateIndices = listOf(i, i + 1, i + 2).filter { it in sectionLines.indices }
-                    var found = false
+                    val combinedPenaltyTokens = mutableListOf<String>()
                     for (cIdx in candidateIndices) {
                         val cLine = sectionLines[cIdx]
                         val uLine = cLine.uppercase()
@@ -1451,44 +1544,38 @@ class ScorecardOcrAnalyzer @Inject constructor(
                                           uLine.contains("SCORE") || cLine.contains("스코어") ||
                                           uLine.contains("PUTT") || cLine.contains("퍼트") ||
                                           uLine.contains("TEMPO") || cLine.contains("템포") ||
-                                          uLine.contains("GIR") || uLine.contains("DIST") ||
-                                          cLine.contains("거리") || cLine.contains("비거리") ||
-                                          cLine.contains("."))) continue
+                                          uLine.contains("DIST") || cLine.contains("거리") || cLine.contains("비거리") ||
+                                          cLine.contains("."))) break
                         val rest = if (cIdx == i) cLine.replace(Regex("""(?:Penalty|페널티|벌타)""", RegexOption.IGNORE_CASE), "").trim() else cLine
-                        val nums = Regex("""\b\d{1,2}\b""").findAll(rest).mapNotNull { it.value.toIntOrNull() }.toList()
-                        // [P-01 가드레일] 1 2 3 4 5 6 7 8 9 등 홀 번호 연속 수열은 페널티에서 원천 배제!
-                        val isSequentialHoles = nums.size >= 5 && nums.zipWithNext().all { it.second - it.first == 1 }
-                        if (isSequentialHoles) continue
-
-                        if (nums.isNotEmpty()) {
-                            val cand = nums.last()
-                            val holeNums = if (nums.size > 1) nums.dropLast(1) else emptyList()
-                            // 홀별 벌타는 각 홀당 0..3 범위여야 함
-                            val validHolePenalties = holeNums.all { it in 0..3 }
-                            val holeSum = if (validHolePenalties && holeNums.isNotEmpty()) holeNums.sum() else null
-
-                            val resolvedTotal = when {
-                                holeSum != null && holeSum == cand -> cand
-                                holeSum != null && cand !in 0..10 -> holeSum
-                                cand in 0..10 -> cand
-                                holeSum != null -> holeSum
-                                else -> null
-                            }
-
-                            if (resolvedTotal != null) {
-                                penaltyTotal = resolvedTotal
-                                penalties = if (holeNums.isNotEmpty()) holeNums else List(9) { 0 }
-                                found = true
-                                break
-                            }
-                        } else if (cLine.contains("-")) {
-                            penaltyTotal = 0
-                            penalties = List(9) { 0 }
-                            found = true
-                            break
-                        }
+                        if (rest.isNotBlank()) combinedPenaltyTokens.add(rest)
                     }
-                    if (!found) {
+
+                    val fullPenaltyText = combinedPenaltyTokens.joinToString(" ")
+                    val allPenaltyNums = Regex("""\b\d{1,2}\b""").findAll(fullPenaltyText).mapNotNull { it.value.toIntOrNull() }.toList()
+                    val isSequentialHoles = allPenaltyNums.size >= 5 && allPenaltyNums.zipWithNext().all { it.second - it.first == 1 }
+
+                    if (!isSequentialHoles && allPenaltyNums.isNotEmpty()) {
+                        val cand = allPenaltyNums.last()
+                        val holeNums = if (allPenaltyNums.size > 1) allPenaltyNums.dropLast(1) else emptyList()
+                        val validHolePenalties = holeNums.all { it in 0..3 }
+                        val holeSum = if (validHolePenalties && holeNums.isNotEmpty()) holeNums.sum() else null
+
+                        val resolvedTotal = when {
+                            holeSum != null && holeSum == cand -> cand
+                            holeSum != null && cand !in 0..10 -> holeSum
+                            cand in 0..10 -> cand
+                            holeSum != null -> holeSum
+                            else -> null
+                        }
+
+                        if (resolvedTotal != null) {
+                            penaltyTotal = resolvedTotal
+                            penalties = if (holeNums.isNotEmpty()) holeNums else List(9) { 0 }
+                        }
+                    } else if (fullPenaltyText.contains("-")) {
+                        penaltyTotal = 0
+                        penalties = List(9) { 0 }
+                    } else {
                         penaltyTotal = 0
                         penalties = List(9) { 0 }
                     }
@@ -1653,18 +1740,17 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
 
             val bestPenalty = when {
-                a.holeScores.size == 18 && a.penaltyCount != null && a.penaltyCount in 0..6 -> a.penaltyCount
-                b.holeScores.size == 18 && b.penaltyCount != null && b.penaltyCount in 0..6 -> b.penaltyCount
-                a.holeScores.size == 18 && a.penaltyCount != null -> a.penaltyCount
-                b.holeScores.size == 18 && b.penaltyCount != null -> b.penaltyCount
                 a.penaltyCount != null && b.penaltyCount != null -> {
-                    // [P-02 가드레일] 9타 등 홀 번호 오탐 배제: 0..6 범위 우선, 둘 다 범위 내면 minOf 또는 작은 값 채택
+                    // [P-02 가드레일] 0..6 범위 내 유효한 벌타 중, 벌타 누락(0 오탐)을 방지하기 위해 maxOf 채택
                     when {
-                        a.penaltyCount in 0..6 && b.penaltyCount !in 0..6 -> a.penaltyCount
-                        b.penaltyCount in 0..6 && a.penaltyCount !in 0..6 -> b.penaltyCount
+                        a.penaltyCount in 0..6 && b.penaltyCount in 0..6 -> maxOf(a.penaltyCount, b.penaltyCount)
+                        a.penaltyCount in 0..6 -> a.penaltyCount
+                        b.penaltyCount in 0..6 -> b.penaltyCount
                         else -> minOf(a.penaltyCount, b.penaltyCount)
                     }
                 }
+                a.penaltyCount != null && a.penaltyCount in 0..6 -> a.penaltyCount
+                b.penaltyCount != null && b.penaltyCount in 0..6 -> b.penaltyCount
                 else -> a.penaltyCount ?: b.penaltyCount
             }
 

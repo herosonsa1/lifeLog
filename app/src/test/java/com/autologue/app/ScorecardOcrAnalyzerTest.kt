@@ -57,6 +57,26 @@ class ScorecardOcrAnalyzerTest {
         assertNotNull(result.girPercentage)
         assertEquals(38.9, result.girPercentage!!, 0.01)
         assertEquals(6066, result.steps)
+
+        // 6. 벌타 검증 (Hill 1 + Lake 2 = 총 3벌타)
+        assertEquals(3, result.penaltyCount)
+
+        // 7. 18홀 성적 집계 검증 (버디 0개, 파 8개, 보기 5개, 더블+ 5개 100% 일치)
+        val round = com.autologue.app.domain.model.GolfRound(
+            clubName = "킹스데일 GC",
+            roundDate = java.time.LocalDateTime.now(),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            holeScores = result.holeScores,
+            holePars = result.holePars,
+            penaltyCount = result.penaltyCount
+        )
+        val stats = round.getScorecardStats()
+        assertNotNull(stats)
+        assertEquals(0, stats!!.birdieCount)
+        assertEquals(8, stats.parCount)
+        assertEquals(5, stats.bogeyCount)
+        assertEquals(5, stats.doublePlusCount)
+        assertEquals(3, stats.penaltyCount)
     }
 
     @Test
@@ -632,5 +652,64 @@ class ScorecardOcrAnalyzerTest {
         org.junit.Assert.assertTrue(ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative("약국 처방전 조제료"))
         org.junit.Assert.assertTrue(ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative("병원 수납 영수증"))
         org.junit.Assert.assertFalse(ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative("오크밸리 CC 2026.09.11 Pine / Cherry SCORE 92"))
+    }
+
+    @Test
+    fun parseKingsdaleScorecard_withSplitPenaltyAndPars_extracts3PenaltiesAnd0Birdies() {
+        val splitText = """
+            스코어카드
+            킹스데일 GC 2026.09.07
+            91(+19) 38.9%
+            SCORE GIR
+            2.2 6066
+            홀당 평균 퍼트 수 전체 걸음수
+            
+            Hill
+            HOLE
+            1 2 3 4 5 6 7 8 9 Total
+            Par
+            4 5 4 3 4 3 4 4 5 36
+            Score
+            4 9 5 3 6 4 4 7 6 48
+            Putt
+            2 5 3 2 3 1 1 2 3 22
+            Penalty
+            -
+            - - - - 1 - - - 1
+            
+            Lake
+            HOLE
+            10 11 12 13 14 15 16 17 18 Total
+            Par
+            4 4 3 4 4 5 4 3 5 36
+            Score
+            4 4 6 4 6 5 4 4 6 43
+            Putt
+            2 2 3 2 3 1 1 2 2 18
+            Penalty
+            - - 1 - 1 - - - - 2
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(splitText)
+
+        assertEquals(91, result.totalScore)
+        assertEquals(40, result.totalPutts)
+        assertEquals(3, result.penaltyCount) // Hill 1 + Lake 2 = 3벌타
+
+        val round = com.autologue.app.domain.model.GolfRound(
+            clubName = "킹스데일 GC",
+            roundDate = java.time.LocalDateTime.now(),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            holeScores = result.holeScores,
+            holePars = result.holePars,
+            penaltyCount = result.penaltyCount
+        )
+        val stats = round.getScorecardStats()
+        assertNotNull(stats)
+        assertEquals(0, stats!!.birdieCount)
+        assertEquals(8, stats.parCount)
+        assertEquals(5, stats.bogeyCount)
+        assertEquals(5, stats.doublePlusCount)
+        assertEquals(3, stats.penaltyCount)
     }
 }

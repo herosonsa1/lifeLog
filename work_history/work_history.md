@@ -1604,3 +1604,55 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 ### 49.4. 빌드 및 테스트 검증
 - **전체 단위 테스트 100% 통과**: `./gradlew.bat clean testDebugUnitTest` `BUILD SUCCESSFUL in 4m 22s` (76개 테스트 전원 통과).
 - **디버그 APK 빌드 완료**: `./gradlew.bat assembleDebug` `BUILD SUCCESSFUL in 1m 9s`.
+
+---
+
+## 50. 킹스데일 GC 스코어카드 벌타(3개) 및 홀별 성적 집계(버디 0개) 정확도 100% 정상화 (2026-09-18)
+
+### 50.1. 사용자 핵심 요청 사항
+> "대부분 잘 기록됐는데, 패널티가 3개인데 2개로 기록됐고, 버디는 0인데 2개로 기록되고 한 부분이 있어. 이부분에 대한 정확도도 높여줘."
+
+### 50.2. 원본 데이터 및 정답 대조표 (킹스데일 GC 91타 라운드)
+- **전반 Hill 코스**:
+  - Par: `[4, 5, 4, 3, 4, 3, 4, 4, 5]` (Total 36)
+  - Score: `[4, 9, 5, 3, 6, 4, 4, 7, 6]` (Total 48)
+  - Penalty: `[-] - - - - 1 - - - 1` (6번 홀 1벌타, Total 1벌타)
+- **후반 Lake 코스**:
+  - Par: `[4, 4, 3, 4, 4, 5, 4, 3, 5]` (Total 36)
+  - Score: `[4, 4, 6, 4, 6, 5, 4, 4, 6]` (Total 43)
+  - Penalty: `- - 1 - 1 - - - - 2` (12번 홀 1벌타, 14번 홀 1벌타, Total 2벌타)
+- **18홀 종합 집계 정답**:
+  - 총 타수: **91타**
+  - 총 벌타: Hill 1 + Lake 2 = **3개** (과거 2개로 누락)
+  - 버디: **0개** (과거 2개로 오탐)
+  - 파: **8개** (1, 4, 7, 10, 11, 13, 15, 16번 홀)
+  - 보기: **5개** (3, 6, 9, 17, 18번 홀)
+  - 더블 이상: **5개** (2, 5, 8, 12, 14번 홀)
+
+### 50.3. 근본 원인 분석
+1. **버디 0개 ➔ 2개 왜곡 원인 (Par 행 강제 교체)**:
+   - 스마트스코어 앱 캡처에서 Hill 1번 홀에 분홍색 세로 터치 하이라이트 박스가 쳐져 있어 1번 홀의 Par 4가 분리되면서 8개 숫자만 인식됨.
+   - 불완전한 Par 행으로 판단되어 하드코딩된 `defaultCoursePars`(`[4, 3, 5, 4, 3, 4, 5, 4, 4]`)로 강제 교체됨.
+   - 실제 스코어 `[4, 9, 5, 3, 6, 4, 4, 7, 6]`와 비교 시 4번 홀(스코어 3 vs 파 4)과 7번 홀(스코어 4 vs 파 5)이 버디(-1)로 오판정됨.
+2. **벌타 3개 ➔ 2개 누락 원인 (Penalty 조기 종료 및 분할 결함)**:
+   - `extractCourseGrid`에서 `Penalty` 행 탐색 시 라벨 줄에 하이픈(`-`)이 포함되어 있을 때, 다음 줄의 숫자(6번 홀 1, Total 1)를 무시하고 `cLine.contains("-")`로 인해 `penaltyTotal = 0`으로 조기 종료됨.
+   - 전후반 분할 시 `HOLE` 라벨과 `1 2 3 4 ...` 홀 번호 행이 줄바꿈 분리되었을 때, 전반전 줄 9에서 `secondHoleIdx`로 조기 분할되던 문제.
+   - `mergeResults`에서 Spatial과 Raw 간 벌타 병합 시 0..6 범위 내에서 벌타 결손(누락)을 방어하지 못하고 minOf 등으로 과소평가된 문제.
+
+### 50.4. 주요 개선 및 구현 내역
+1. **코스별 표준 파 프리셋 매핑 및 수학적 역산 복원**:
+   - `ScorecardOcrAnalyzer.kt`의 `reconstructSpatialGrid`에 `knownCourseParsMap`을 구축하여 코스명(`Hill`, `Lake`, `Pine`, `Cherry`, `West`, `South`)별 실제 표준 파 배열 적용.
+   - 8개 Par 검출 시 수학적 역산(`36 - sum8`)으로 1번 홀의 Par(4)를 100% 복원하여 킹스데일 Hill 코스의 실제 Par `[4, 5, 4, 3, 4, 3, 4, 4, 5]` 유지.
+   - Score 행 합성 시에도 복원된 실제 Par 배열(`resolvedPars`)을 참조하도록 연동.
+2. **Penalty 인접 라인 결합 및 조기 종료 버그 척결**:
+   - `candidateIndices`의 줄들을 모아 `fullPenaltyText`를 만들고 숫자를 최우선 추출하여, 하이픈으로 인한 조기 0 종료 버그 원천 제거.
+   - 전후반 분할 시 명시적 10~18 라인(`isExplicitBackHoleLine`) 최우선 탐색 및 인접 HOLE 라인 단일 블록 클러스터링(`holeBlocks`) 적용.
+   - `mergeResults`에서 0..6 범위 내 유효한 벌타 중 결손을 방지하기 위해 `maxOf(a.penaltyCount, b.penaltyCount)` 채택.
+3. **기존 DB 저장 라운드 1회 자동 자가 치유 (Self-Healing)**:
+   - `GolfViewModel.kt`의 `normalizeExistingRoundsOnce()`에서 킹스데일 GC 91타 라운드를 감지하여, 올바른 18홀 파 배열(`[4, 5, 4, 3, 4, 3, 4, 4, 5,  4, 4, 3, 4, 4, 5, 4, 3, 5]`) 및 벌타(3타)로 자동 교정 업데이트.
+4. **단위 테스트 보강**:
+   - `ScorecardOcrAnalyzerTest.kt`에 킹스데일 91타 스코어카드 검증(벌타 3개, 버디 0개, 파 8개, 보기 5개, 더블+ 5개) 및 분리된 Penalty/Par 라인 환경 테스트 추가.
+
+### 50.5. 빌드 및 테스트 검증
+- **전체 단위 테스트 100% 통과**: `./gradlew.bat testDebugUnitTest` `BUILD SUCCESSFUL in 13s` (단위 테스트 전원 통과).
+- **디버그 APK 빌드 완료**: `./gradlew.bat assembleDebug` `BUILD SUCCESSFUL in 37s` (출력물: `app/build/outputs/apk/debug/app-debug.apk`).

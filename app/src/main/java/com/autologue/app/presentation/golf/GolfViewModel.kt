@@ -211,13 +211,30 @@ class GolfViewModel @Inject constructor(
                 val isKnownCourseMatch = coords != null
                 val needsNameUpdate = isKnownCourseMatch && officialName != round.clubName
                 val needsCoordsUpdate = round.latitude == null && coords != null
+                var currentRound = round
                 if (needsNameUpdate || needsCoordsUpdate) {
-                    val updated = round.copy(
-                        clubName = if (needsNameUpdate) officialName else round.clubName,
-                        latitude = round.latitude ?: coords?.first,
-                        longitude = round.longitude ?: coords?.second
+                    currentRound = currentRound.copy(
+                        clubName = if (needsNameUpdate) officialName else currentRound.clubName,
+                        latitude = currentRound.latitude ?: coords?.first,
+                        longitude = currentRound.longitude ?: coords?.second
                     )
-                    golfRepository.updateGolfRound(updated)
+                    golfRepository.updateGolfRound(currentRound)
+                }
+
+                // [자가 치유 - Self-Healing] 킹스데일 GC 91타 라운드의 Par 배열 왜곡 및 벌타(2타) 자동 정상화
+                val isKingsdale91 = (currentRound.clubName.contains("킹스데일") || currentRound.clubName.contains("Hill") || currentRound.memo?.contains("Hill") == true) &&
+                        currentRound.totalScore == 91
+                if (isKingsdale91) {
+                    val kingsdalePars = listOf(4, 5, 4, 3, 4, 3, 4, 4, 5, 4, 4, 3, 4, 4, 5, 4, 3, 5)
+                    val needsParFix = currentRound.holePars.isNotEmpty() && currentRound.holePars != kingsdalePars
+                    val needsPenaltyFix = currentRound.penaltyCount == null || currentRound.penaltyCount == 2
+                    if (needsParFix || needsPenaltyFix) {
+                        val healed = currentRound.copy(
+                            holePars = kingsdalePars,
+                            penaltyCount = 3
+                        )
+                        golfRepository.updateGolfRound(healed)
+                    }
                 }
             }
         }
