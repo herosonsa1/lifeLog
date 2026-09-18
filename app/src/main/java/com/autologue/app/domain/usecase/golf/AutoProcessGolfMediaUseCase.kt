@@ -66,9 +66,11 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
     companion object {
         private val GOLF_FINGERPRINTS = listOf(
             "SCORE", "스코어", "PAR", "HOLE", "PUTT", "퍼트", "퍼팅", "GIR", "PENALTY", "페널티", "벌타",
-            "타수", "핸디", "버디", "보기", "이글", "전반", "후반", "OUT", "IN",
-            "CC", "GC", "C.C", "G.C", "골프", "라운드", "라운딩", "클럽하우스", "그린피", "카트비", "캐디피", "코스", "COURSE",
-            "라커", "락커", "정산", "안내서", "LOCKER", "TEE OFF", "티오프",
+            "타수", "핸디", "핸디캡", "HANDICAP", "버디", "보기", "이글", "전반", "후반", "OUT", "IN",
+            "CC", "GC", "C.C", "G.C", "골프", "골프장", "라운드", "라운딩", "ROUND", "클럽하우스",
+            "그린피", "카트비", "캐디피", "코스", "COURSE", "SCORECARD", "TOTAL", "합계",
+            "라커", "락커", "정산", "정산서", "안내서", "LOCKER", "TEE OFF", "티오프",
+            "SMARTSCORE", "스마트스코어", "KAKAOGOLF", "카카오골프", "GOLFZON", "골프존", "나의 스코어", "나의스코어",
             "PINE", "CHERRY", "OAK", "파인", "체리", "오크",
             "오크밸리", "필로스", "킹스데일", "남촌", "가평", "아난티", "레이크사이드", "골드", "태광", "안성", "용인"
         )
@@ -76,7 +78,7 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
 
     /**
      * 후보 사진 목록(스크린샷 및 갤러리 사진)을 2단계 고속 지문 OCR 엔진(Two-Stage Fast Fingerprint OCR Pipeline)으로 처리합니다.
-     * Stage 1: 경량 비트맵(1024px)으로 ML Kit 텍스트 인식만 수행하여 골프 지문이 없는 비-골프 사진은 0.05초 만에 즉시 패스.
+     * Stage 1: 2048px 가독 비트맵으로 ML Kit 텍스트 인식만 수행하여 골프 지문이 없는 비-골프 사진은 0.08초 만에 즉시 패스.
      * Stage 2: 골프 지문이 확인된 사진만 2560px 고정밀 2D 공간 복원 및 18홀 파싱과 라커룸 전표 분석을 수행하여 DB에 라운드로 등록.
      * @param photos 대상 사진 목록
      * @param onProgress 진행률 콜백 (현재 처리 장수, 전체 장수, 등록된 골프 건수)
@@ -96,25 +98,30 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
 
         for ((idx, photo) in targetPhotos.withIndex()) {
             val currentIdx = idx + 1
-            onProgress?.invoke(currentIdx, targetPhotos.size, processedRounds.size)
+            runCatching { onProgress?.invoke(currentIdx, targetPhotos.size, processedRounds.size) }
 
             if (photo.uri.isBlank()) continue
             val uri = runCatching { Uri.parse(photo.uri) }.getOrNull() ?: continue
             val photoDate = photo.time.toLocalDate()
 
             try {
-                // [Stage 1: Fast Fingerprint Probe - ~50ms]
-                // 경량 비트맵으로 ML Kit 텍스트만 신속 추출하여 골프 지문 존재 여부 1차 검사
-                val probeText = scorecardOcrAnalyzer.quickProbeText(uri, maxDimension = 1024)
-                if (probeText.isBlank()) continue
-
-                val probeUpper = probeText.uppercase()
-                val hasFingerprint = GOLF_FINGERPRINTS.any { probeUpper.contains(it) }
-
-                // 골프 지문이 단 1개도 없는 일반 사진은 0.05초 만에 즉시 패스 (전체 시간 90% 절약)
-                if (!hasFingerprint) {
+                // [Stage 1: Fast Fingerprint Probe - ~80ms]
+                // 폰트가 뭉개지지 않도록 maxDimension=2048로 선명하게 ML Kit 텍스트만 신속 추출하여 골프 지문 1차 검사
+                val probeText = scorecardOcrAnalyzer.quickProbeText(uri, maxDimension = 2048)
+                if (probeText.isBlank()) {
+                    android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 텍스트 없음/디코딩 실패 건너뜀 ($uri)")
                     continue
                 }
+
+                val probeUpper = probeText.uppercase()
+                val matchedProbeKeywords = GOLF_FINGERPRINTS.filter { probeUpper.contains(it) }
+
+                // 골프 지문이 단 1개도 없는 일반 사진은 즉시 패스 (전체 시간 90% 절약)
+                if (matchedProbeKeywords.isEmpty()) {
+                    continue
+                }
+
+                android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] ⛳ 골프 지문 감지: $matchedProbeKeywords ($uri)")
 
                 // [Stage 2: Deep Analysis - 골프 지문 감지된 사진만 정밀 분석]
                 // 2560px 2D 공간 그리드 복원 및 18홀 정밀 파싱

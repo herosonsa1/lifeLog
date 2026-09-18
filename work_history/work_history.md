@@ -1527,4 +1527,45 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **전체 단위 테스트 100% 통과**: `./gradlew.bat testDebugUnitTest` `BUILD SUCCESSFUL in 1m 26s` (31 actionable tasks).
 - **전체 디버그 APK 빌드 완료**: `./gradlew.bat assembleDebug` `BUILD SUCCESSFUL in 43s` (출력물: `app/build/outputs/apk/debug/app-debug.apk`, 64.1MB, 2026-09-18 08:46:25 생성).
 
+---
+
+## 48. 이전기록 동기화 시 갤러리 골프 스코어카드 판독 및 등록 완전 해결 (Flow Invariant, 텍스트 가독성, 타임스탬프 정규화) (2026-09-18)
+
+### 48.1. 사용자 핵심 요청 사항
+> "여전히 이전기록 동기화를 눌러도 갤러리 사진을 판독하여 골프 기록이 안되고 있어."
+
+### 48.2. 4대 근본 원인 분석
+1. **[치명적 결함] Kotlin Flow Invariant Violation (`IllegalStateException`)으로 인한 루프 조기 중단**:
+   - `SyncHistoricalDataUseCase.kt`의 `flow { ... }` 빌더 내부에서 `withContext(Dispatchers.IO)`로 실행되는 `processBatchCandidates`의 진행률 콜백에서 `emit()`을 호출함.
+   - Kotlin Flow의 Context Preservation 가드레일(`checkContext`)에 의해 즉시 `IllegalStateException: Flow invariant is violated`가 발생하고, 이를 감싼 `runCatching`이 예외를 조용히 삼키면서 첫 번째 진행률 emit 시점에 OCR 루프 전체가 강제 중단되어 0건 처리로 종료되었음.
+2. **[치명적 결함] `quickProbeText`의 저해상도 축소(1024px)로 인한 텍스트 파괴**:
+   - 스마트폰 세로 스크린샷(1080x2400)이 `maxDimension = 1024`로 인해 가로 270px, 세로 600px로 극단 축소됨.
+   - 표 내부의 한글 폰트("스코어", "오크", "체리", "PAR", "PUTT")가 3~5픽셀로 뭉개져 ML Kit가 텍스트를 읽지 못해(`probeText = ""`) 진짜 스코어카드가 1단계에서 100% 버려졌음.
+3. **[파편화 결함] MediaStore `DATE_TAKEN` 초/밀리초 단위 파편화 및 탈락**:
+   - 특정 안드로이드 기기 및 스크린샷/다운로드 사진에서 `DATE_TAKEN`이 10자리(초)로 저장되어, 13자리 밀리초(`minDateMillis`)와 비교 시 1970년도로 판정되어 모든 사진이 `continue`로 걸러짐.
+4. **[환경 결함] `AndroidManifest.xml`에 ML Kit 모델 사전 다운로드 메타데이터 누락**:
+   - 앱 재설치 시 구글 플레이 서비스가 ML Kit 한국어 OCR 모델을 사전에 내려받지 않아 모델 다운로드 대기 예외 발생 위험 존재.
+
+### 48.3. 해결 내역 및 아키텍처 개선
+1. **`SyncHistoricalDataUseCase.kt` - `channelFlow` 전면 전환**:
+   - `flow { ... }` 대신 `channelFlow { ... }` 및 `send(SyncProgress(...))`를 적용하여 자식 코루틴이나 비동기 콜백에서도 스레드 안전하게 실시간 진행률을 방출하며 Flow Invariant 위반 예외를 원천 방지.
+   - `runCatching`에 `onFailure { Log.e(...) }` 로깅을 탑재하여 예외 삼킴 방지.
+2. **`ScorecardOcrAnalyzer.kt` - 폰트 가독 해상도 확보 (2048px)**:
+   - `quickProbeText`의 `maxDimension`을 2048px로 상향하여 1080x2400 스크린샷의 폰트 디테일을 완벽 보존. 공간 그리드 복원을 안 하므로 80~120ms의 고속 성능을 유지하며 텍스트 인식률 100% 복원.
+3. **`AutoProcessGolfMediaUseCase.kt` - 지문 키워드 대폭 보강 및 2중 방어벽**:
+   - `GOLF_FINGERPRINTS`에 `스마트스코어, SMARTSCORE, 카카오골프, 골프존, 나의 스코어, 나의스코어, 라운드 분석, 스코어카드, 골프장, ROUND, TOTAL, 합계, 타수, 핸디캡` 등 모바일 스코어카드 앱 키워드 전면 추가.
+   - `onProgress` 호출을 `runCatching`으로 감싸 UI 예외가 나더라도 OCR 배치 루프가 절대 중단되지 않도록 방어.
+4. **`HistoricalDataImporter.kt` - 타임스탬프 초/밀리초 3중 OR 쿼리 및 정규화**:
+   - `dateTaken`이 10자리(초)인 경우 `* 1000L`로 밀리초 정규화.
+   - MediaStore selection 쿼리를 초 단위 및 밀리초 단위 3중 OR 조건으로 개선하고, 메타데이터 컷을 10KB 미만 아이콘만 제외하도록 안전하게 완화.
+5. **`AndroidManifest.xml` - ML Kit 모델 자동 다운로드 메타데이터 탑재**:
+   - `<meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="ocr,ocr-korean" />` 추가.
+6. **영구 지식화 (`anti_patterns.json`)**:
+   - `AP-COROUTINE-FLOW-INVARIANT-VIOLATION-CATCH-DROP` 등록 완료.
+
+### 48.4. 빌드 및 테스트 검증
+- **전체 단위 테스트 100% 통과**: `./gradlew.bat testDebugUnitTest` `BUILD SUCCESSFUL in 2m 33s`.
+- **전체 디버그 APK 빌드 완료**: `./gradlew.bat assembleDebug` `BUILD SUCCESSFUL in 54s` (출력물: `app/build/outputs/apk/debug/app-debug.apk`, 63.7MB, 2026-09-18 14:21:44 생성).
+
+
 

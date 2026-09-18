@@ -231,7 +231,7 @@ class HistoricalDataImporter @Inject constructor(
             val minDateSec = minDateMillis / 1000L
 
             val selection = if (daysBack != null) {
-                "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
+                "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateSec) OR (${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
             } else null
 
             context.contentResolver.query(uri, projection, selection, null, sortOrder)?.use { cursor ->
@@ -259,8 +259,8 @@ class HistoricalDataImporter @Inject constructor(
                     val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
                     val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
 
-                    // 0ms 메타데이터 컷: 가로/세로 400px 미만 또는 20KB 미만 극소형 아이콘/썸네일 배제
-                    if ((width > 0 && width < 400) || (height > 0 && height < 400) || (size in 1..19999)) {
+                    // 0ms 메타데이터 컷: 가로/세로 300px 미만 극소형 아이콘 또는 10KB 미만 캐시 이미지 배제
+                    if ((width in 1..299) || (height in 1..299) || (size in 1..9999)) {
                         continue
                     }
 
@@ -270,9 +270,12 @@ class HistoricalDataImporter @Inject constructor(
                         continue
                     }
 
+                    // 안드로이드 기기 파편화 대응: 10자리(초) vs 13자리(밀리초) 타임스탬프 정밀 정규화
                     val timestampMillis = when {
-                        dateTaken > 0 -> dateTaken
-                        dateAdded > 0 -> dateAdded * 1000L
+                        dateTaken > 100_000_000_000L -> dateTaken
+                        dateTaken > 0L -> dateTaken * 1000L
+                        dateAdded > 100_000_000_000L -> dateAdded
+                        dateAdded > 0L -> dateAdded * 1000L
                         else -> System.currentTimeMillis()
                     }
                     if (minDateMillis > 0L && timestampMillis < minDateMillis) continue
