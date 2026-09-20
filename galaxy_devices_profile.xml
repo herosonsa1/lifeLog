@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="utf-8"?>
+<d:devices
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:d="http://schemas.android.com/sdk/devices/7">
+
+    <!-- 1. Samsung Galaxy S24+ -->
+    <d:device>
+        <d:name>Galaxy S24+</d:name>
+        <d:id>galaxy_s24_plus</d:id>
+        <d:manufacturer>Samsung</d:manufacturer>
+        <d:playstore-enabled>true</d:playstore-enabled>
+        <d:hardware>
+            <d:screen>
+                <d:screen-size>normal</d:screen-size>
+                <d:diagonal-length>6.7</d:diagonal-length>
+                <d:pixel-density>560dpi</d:pixel-density>
+                <d:screen-ratio>long</d:screen-ratio>
+                <d:dimensions>
+                    <d:x-dimension>1440</d:x-dimension>
+                    <d:y-dimension>3120</d:y-dimension>
+                </d:dimensions>
+                <d:xdpi>513</d:xdpi>
+                <d:ydpi>513</d:ydpi>
+                <d:touch>
+                    <d:multitouch>jazz-hands</d:multitouch>
+                    <d:mechanism>finger</d:mechanism>
+                    <d:screen-type>capacitive</d:screen-type>
+                </d:touch>
+            </d:screen>
+            <d:networking>
+                Bluetooth
+                Wifi
+                NFC
+            </d:networking>
+            <d:sensors>
+                Accelerometer
+                Barometer
+                Gyroscope
+                Compass
+                GPS
+                LightSensor
+                ProximitySensor
+                StepCounter
+                StepDetector
+            </d:sensors>
+            <d:mic>true</d:mic>
+            <d:camera>
+                <d:location>front</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>false</d:flash>
+            </d:camera>
+            <d:camera>
+                <d:location>back</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>true</d:flash>
+            </d:camera>
+            <d:keyboard>nokeys</d:keyboard>
+            <d:nav>nonav</d:nav>
+            <d:ram unit="GiB">12</d:ram>
+            <d:buttons>soft</d:buttons>
+            <d:internal-storage unit="GiB">256</d:internal-storage>
+            <d:removable-storage unit="KiB"></d:removable-storage>
+            <d:cpu>Generic CPU</d:cpu>
+            <d:gpu>Generic GPU</d:gpu>
+            <d:abi>
+                arm64-v8a
+                x86_64
+            </d:abi>
+            <d:dock></d:dock>
+            <d:power-type>battery</d:power-type>
+        </d:hardware>
+        <d:software>
+            <d:api-level>34-</d:api-level>
+            <d:live-wallpaper-support>true</d:live-wallpaper-support>
+            <d:bluetooth-profiles>
+                HSP HFP SPP A2DP AVRCP OPP PBAP GAVDP AVDTP HID HDP PAN
+            </d:bluetooth-profiles>
+            <d:gl-version>3.2</d:gl-version>
+            <d:gl-extensions></d:gl-extensions>
+            <d:status-bar>true</d:status-bar>
+        </d:software>
+        <d:state name="Portrait" default="true">
+            <d:description>The phone in portrait view</d:description>
+            <d:screen-orientation>port</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+        <d:state name="Landscape">
+            <d:description>The phone in landscape view</d:description>
+            <d:screen-orientation>land</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+    </d:device>
+
+    <!-- 2. Samsung Galaxy S24 Ultra -->
+    <d:device>
+        <d:name>Galaxy S24 Ultra</d:name>
+        <d:id>galaxy_s24_ultra</d:id>
+        <d:manufacturer>Samsung</d:manufacturer>
+        <d:playstore-enabled>true</d:playstore-enabled>
+        <d:hardware>
+            <d:screen>
+                <d:screen-size>normal</d:screen-size>
+                <d:diagonal-length>6.8</d:diagonal-length>
+                <d:pixel-density>560dpi</d:pixel-density>
+                <d:screen-ratio>long</d:screen-ratio>
+                <d:dimensions>
+                    <d:x-dimension>1440</d:x-dimension>
+                    <d:y-dimension>3120</d:y-dimension>
+                </d:dimensions>
+                <d:xdpi>505</d:xdpi>
+                <d:ydpi>505</d:ydpi>
+                <d:touch>
+                    <d:multitouch>jazz-hands</d:multitouch>
+                    <d:mechanism>finger</d:mechanism>
+                    <d:screen-type>capacitive</d:screen-type>
+                </d:touch>
+            </d:screen>
+            <d:networking>
+                Bluetooth
+                Wifi
+                NFC
+            </d:networking>
+            <d:sensors>
+                Accelerometer
+                Barometer
+                Gyroscope
+                Compass
+                GPS
+                LightSensor
+                ProximitySensor
+                StepCounter
+                StepDetector
+            </d:sensors>
+            <d:mic>true</d:mic>
+            <d:camera>
+                <d:location>front</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>false</d:flash>
+            </d:camera>
+            <d:camera>
+                <d:location>back</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>true</d:flash>
+            </d:camera>
+            <d:keyboard>nokeys</d:keyboard>
+            <d:nav>nonav</d:nav>
+            <d:ram unit="GiB">12</d:ram>
+            <d:buttons>soft</d:buttons>
+            <d:internal-storage unit="GiB">256</d:internal-storage>
+            <d:removable-storage unit="KiB"></d:removable-storage>
+            <d:cpu>Generic CPU</d:cpu>
+            <d:gpu>Generic GPU</d:gpu>
+            <d:abi>
+                arm64-v8a
+                x86_64
+            </d:abi>
+            <d:dock></d:dock>
+            <d:power-type>battery</d:power-type>
+        </d:hardware>
+        <d:software>
+            <d:api-level>34-</d:api-level>
+            <d:live-wallpaper-support>true</d:live-wallpaper-support>
+            <d:bluetooth-profiles>
+                HSP HFP SPP A2DP AVRCP OPP PBAP GAVDP AVDTP HID HDP PAN
+            </d:bluetooth-profiles>
+            <d:gl-version>3.2</d:gl-version>
+            <d:gl-extensions></d:gl-extensions>
+            <d:status-bar>true</d:status-bar>
+        </d:software>
+        <d:state name="Portrait" default="true">
+            <d:description>The phone in portrait view</d:description>
+            <d:screen-orientation>port</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+        <d:state name="Landscape">
+            <d:description>The phone in landscape view</d:description>
+            <d:screen-orientation>land</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+    </d:device>
+
+    <!-- 3. Samsung Galaxy S24 -->
+    <d:device>
+        <d:name>Galaxy S24</d:name>
+        <d:id>galaxy_s24</d:id>
+        <d:manufacturer>Samsung</d:manufacturer>
+        <d:playstore-enabled>true</d:playstore-enabled>
+        <d:hardware>
+            <d:screen>
+                <d:screen-size>normal</d:screen-size>
+                <d:diagonal-length>6.2</d:diagonal-length>
+                <d:pixel-density>420dpi</d:pixel-density>
+                <d:screen-ratio>long</d:screen-ratio>
+                <d:dimensions>
+                    <d:x-dimension>1080</d:x-dimension>
+                    <d:y-dimension>2340</d:y-dimension>
+                </d:dimensions>
+                <d:xdpi>416</d:xdpi>
+                <d:ydpi>416</d:ydpi>
+                <d:touch>
+                    <d:multitouch>jazz-hands</d:multitouch>
+                    <d:mechanism>finger</d:mechanism>
+                    <d:screen-type>capacitive</d:screen-type>
+                </d:touch>
+            </d:screen>
+            <d:networking>
+                Bluetooth
+                Wifi
+                NFC
+            </d:networking>
+            <d:sensors>
+                Accelerometer
+                Barometer
+                Gyroscope
+                Compass
+                GPS
+                LightSensor
+                ProximitySensor
+                StepCounter
+                StepDetector
+            </d:sensors>
+            <d:mic>true</d:mic>
+            <d:camera>
+                <d:location>front</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>false</d:flash>
+            </d:camera>
+            <d:camera>
+                <d:location>back</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>true</d:flash>
+            </d:camera>
+            <d:keyboard>nokeys</d:keyboard>
+            <d:nav>nonav</d:nav>
+            <d:ram unit="GiB">8</d:ram>
+            <d:buttons>soft</d:buttons>
+            <d:internal-storage unit="GiB">128</d:internal-storage>
+            <d:removable-storage unit="KiB"></d:removable-storage>
+            <d:cpu>Generic CPU</d:cpu>
+            <d:gpu>Generic GPU</d:gpu>
+            <d:abi>
+                arm64-v8a
+                x86_64
+            </d:abi>
+            <d:dock></d:dock>
+            <d:power-type>battery</d:power-type>
+        </d:hardware>
+        <d:software>
+            <d:api-level>34-</d:api-level>
+            <d:live-wallpaper-support>true</d:live-wallpaper-support>
+            <d:bluetooth-profiles>
+                HSP HFP SPP A2DP AVRCP OPP PBAP GAVDP AVDTP HID HDP PAN
+            </d:bluetooth-profiles>
+            <d:gl-version>3.2</d:gl-version>
+            <d:gl-extensions></d:gl-extensions>
+            <d:status-bar>true</d:status-bar>
+        </d:software>
+        <d:state name="Portrait" default="true">
+            <d:description>The phone in portrait view</d:description>
+            <d:screen-orientation>port</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+        <d:state name="Landscape">
+            <d:description>The phone in landscape view</d:description>
+            <d:screen-orientation>land</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+    </d:device>
+
+    <!-- 4. Samsung Galaxy Z Fold 6 (펼침 화면 메인 디스플레이) -->
+    <d:device>
+        <d:name>Galaxy Z Fold 6 (Unfolded)</d:name>
+        <d:id>galaxy_z_fold_6</d:id>
+        <d:manufacturer>Samsung</d:manufacturer>
+        <d:playstore-enabled>true</d:playstore-enabled>
+        <d:hardware>
+            <d:screen>
+                <d:screen-size>large</d:screen-size>
+                <d:diagonal-length>7.6</d:diagonal-length>
+                <d:pixel-density>420dpi</d:pixel-density>
+                <d:screen-ratio>notlong</d:screen-ratio>
+                <d:dimensions>
+                    <d:x-dimension>1856</d:x-dimension>
+                    <d:y-dimension>2160</d:y-dimension>
+                </d:dimensions>
+                <d:xdpi>374</d:xdpi>
+                <d:ydpi>374</d:ydpi>
+                <d:touch>
+                    <d:multitouch>jazz-hands</d:multitouch>
+                    <d:mechanism>finger</d:mechanism>
+                    <d:screen-type>capacitive</d:screen-type>
+                </d:touch>
+            </d:screen>
+            <d:networking>
+                Bluetooth
+                Wifi
+                NFC
+            </d:networking>
+            <d:sensors>
+                Accelerometer
+                Barometer
+                Gyroscope
+                Compass
+                GPS
+                LightSensor
+                ProximitySensor
+                StepCounter
+                StepDetector
+            </d:sensors>
+            <d:mic>true</d:mic>
+            <d:camera>
+                <d:location>front</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>false</d:flash>
+            </d:camera>
+            <d:camera>
+                <d:location>back</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>true</d:flash>
+            </d:camera>
+            <d:keyboard>nokeys</d:keyboard>
+            <d:nav>nonav</d:nav>
+            <d:ram unit="GiB">12</d:ram>
+            <d:buttons>soft</d:buttons>
+            <d:internal-storage unit="GiB">256</d:internal-storage>
+            <d:removable-storage unit="KiB"></d:removable-storage>
+            <d:cpu>Generic CPU</d:cpu>
+            <d:gpu>Generic GPU</d:gpu>
+            <d:abi>
+                arm64-v8a
+                x86_64
+            </d:abi>
+            <d:dock></d:dock>
+            <d:power-type>battery</d:power-type>
+        </d:hardware>
+        <d:software>
+            <d:api-level>34-</d:api-level>
+            <d:live-wallpaper-support>true</d:live-wallpaper-support>
+            <d:bluetooth-profiles>
+                HSP HFP SPP A2DP AVRCP OPP PBAP GAVDP AVDTP HID HDP PAN
+            </d:bluetooth-profiles>
+            <d:gl-version>3.2</d:gl-version>
+            <d:gl-extensions></d:gl-extensions>
+            <d:status-bar>true</d:status-bar>
+        </d:software>
+        <d:state name="Portrait" default="true">
+            <d:description>The phone in portrait view</d:description>
+            <d:screen-orientation>port</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+        <d:state name="Landscape">
+            <d:description>The phone in landscape view</d:description>
+            <d:screen-orientation>land</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+    </d:device>
+
+    <!-- 5. Samsung Galaxy Z Flip 6 (펼침 화면 메인 디스플레이) -->
+    <d:device>
+        <d:name>Galaxy Z Flip 6</d:name>
+        <d:id>galaxy_z_flip_6</d:id>
+        <d:manufacturer>Samsung</d:manufacturer>
+        <d:playstore-enabled>true</d:playstore-enabled>
+        <d:hardware>
+            <d:screen>
+                <d:screen-size>normal</d:screen-size>
+                <d:diagonal-length>6.7</d:diagonal-length>
+                <d:pixel-density>420dpi</d:pixel-density>
+                <d:screen-ratio>long</d:screen-ratio>
+                <d:dimensions>
+                    <d:x-dimension>1080</d:x-dimension>
+                    <d:y-dimension>2640</d:y-dimension>
+                </d:dimensions>
+                <d:xdpi>426</d:xdpi>
+                <d:ydpi>426</d:ydpi>
+                <d:touch>
+                    <d:multitouch>jazz-hands</d:multitouch>
+                    <d:mechanism>finger</d:mechanism>
+                    <d:screen-type>capacitive</d:screen-type>
+                </d:touch>
+            </d:screen>
+            <d:networking>
+                Bluetooth
+                Wifi
+                NFC
+            </d:networking>
+            <d:sensors>
+                Accelerometer
+                Barometer
+                Gyroscope
+                Compass
+                GPS
+                LightSensor
+                ProximitySensor
+                StepCounter
+                StepDetector
+            </d:sensors>
+            <d:mic>true</d:mic>
+            <d:camera>
+                <d:location>front</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>false</d:flash>
+            </d:camera>
+            <d:camera>
+                <d:location>back</d:location>
+                <d:autofocus>true</d:autofocus>
+                <d:flash>true</d:flash>
+            </d:camera>
+            <d:keyboard>nokeys</d:keyboard>
+            <d:nav>nonav</d:nav>
+            <d:ram unit="GiB">12</d:ram>
+            <d:buttons>soft</d:buttons>
+            <d:internal-storage unit="GiB">256</d:internal-storage>
+            <d:removable-storage unit="KiB"></d:removable-storage>
+            <d:cpu>Generic CPU</d:cpu>
+            <d:gpu>Generic GPU</d:gpu>
+            <d:abi>
+                arm64-v8a
+                x86_64
+            </d:abi>
+            <d:dock></d:dock>
+            <d:power-type>battery</d:power-type>
+        </d:hardware>
+        <d:software>
+            <d:api-level>34-</d:api-level>
+            <d:live-wallpaper-support>true</d:live-wallpaper-support>
+            <d:bluetooth-profiles>
+                HSP HFP SPP A2DP AVRCP OPP PBAP GAVDP AVDTP HID HDP PAN
+            </d:bluetooth-profiles>
+            <d:gl-version>3.2</d:gl-version>
+            <d:gl-extensions></d:gl-extensions>
+            <d:status-bar>true</d:status-bar>
+        </d:software>
+        <d:state name="Portrait" default="true">
+            <d:description>The phone in portrait view</d:description>
+            <d:screen-orientation>port</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+        <d:state name="Landscape">
+            <d:description>The phone in landscape view</d:description>
+            <d:screen-orientation>land</d:screen-orientation>
+            <d:keyboard-state>keyssoft</d:keyboard-state>
+            <d:nav-state>nonav</d:nav-state>
+        </d:state>
+    </d:device>
+
+</d:devices>

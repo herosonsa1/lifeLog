@@ -188,6 +188,32 @@ class AutoProcessGolfMediaUseCaseTest {
         assertTrue(round.totalScore in 50..144)
     }
 
+    @Test
+    fun processScorecardResult_rejectsIncomplete9HoleScorecard() = runBlocking {
+        val testDate = LocalDate.of(2026, 9, 17)
+        // 9홀 불완전 조각 스코어카드 (42타, 9개 홀만 존재)
+        val incomplete9HoleResult = ScorecardOcrResult(
+            totalScore = 42,
+            totalPutts = 17,
+            holeScores = listOf(5, 3, 5, 4, 6, 4, 5, 6, 4),
+            clubName = "오크밸리 CC",
+            courseName = "Cherry",
+            playDate = testDate,
+            recognizedRawText = "오크밸리 CC SCORE 42"
+        )
+
+        val round = extractScorecardOcrUseCase.processScorecardResult(
+            result = incomplete9HoleResult,
+            scorecardUri = "content://media/cherry_9hole.png",
+            targetDate = testDate
+        )
+
+        // [사용자 핵심 지침] 18홀 완전 스코어카드가 아니므로 신규 라운드로 등록되지 않고 거부되어야 함
+        assertNull("9홀 불완전 조각은 신규 라운드로 등록되지 않아야 합니다", round)
+        assertEquals(0, fakeGolfRepository.rounds.size)
+    }
+
+
     // Fake Repositories for testing
     class FakeGolfRepository : GolfRepository {
         val rounds = mutableListOf<GolfRound>()

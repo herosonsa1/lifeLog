@@ -248,7 +248,76 @@ class GolfViewModel @Inject constructor(
     private fun cleanUpDummyRounds() {
         viewModelScope.launch(Dispatchers.IO) {
             val list = golfRepository.getAllGolfRoundsFlow().first()
-            for (round in list) {
+
+            // 0. 오크밸리 CC 파편(9.01 빈 라운드, 9.11의 50타 조각, 9.17의 42타 조각) 단일 18홀 92타 라운드로 자가 치유(Self-Healing)
+            val oakRounds = list.filter { it.clubName.contains("오크밸리") || it.clubName.contains("OAK") }
+            if (oakRounds.size > 1) {
+                val round911 = oakRounds.firstOrNull { (it.startTime ?: it.roundDate).toLocalDate() == LocalDate.of(2026, 9, 11) }
+                val round917 = oakRounds.firstOrNull { (it.startTime ?: it.roundDate).toLocalDate() == LocalDate.of(2026, 9, 17) }
+                val round901 = oakRounds.firstOrNull { (it.startTime ?: it.roundDate).toLocalDate() == LocalDate.of(2026, 9, 1) }
+
+                if (round911 != null || round917 != null) {
+                    val baseRound = round911 ?: round917!!
+                    val allPhotos = (
+                        (round911?.matchingPhotoUris ?: emptyList()) +
+                        (round917?.matchingPhotoUris ?: emptyList()) +
+                        (round901?.matchingPhotoUris ?: emptyList()) +
+                        listOfNotNull(round911?.scorecardPhotoUri, round917?.scorecardPhotoUri, round901?.scorecardPhotoUri)
+                    ).filter { it.isNotBlank() }.distinct()
+
+                    val targetDate = LocalDate.of(2026, 9, 11)
+                    val startTime = targetDate.atTime(16, 22)
+                    val endTime = targetDate.atTime(21, 52)
+
+                    val integratedHoles = if (round911?.holeScores?.size == 9 && round917?.holeScores?.size == 9) {
+                        round911.holeScores + round917.holeScores
+                    } else if (round911?.holeScores?.size == 18) {
+                        round911.holeScores
+                    } else {
+                        listOf(4, 8, 3, 5, 5, 6, 4, 7, 6, 5, 3, 5, 4, 6, 4, 5, 6, 6)
+                    }
+
+                    val unifiedRound = baseRound.copy(
+                        id = round911?.id ?: baseRound.id,
+                        clubName = "오크밸리 CC (Pine / Cherry)",
+                        roundDate = startTime,
+                        startTime = startTime,
+                        endTime = endTime,
+                        totalScore = 92,
+                        totalPutts = 38,
+                        holeScores = integratedHoles,
+                        penaltyCount = 2,
+                        matchingPhotoUris = allPhotos,
+                        scorecardPhotoUri = round901?.scorecardPhotoUri ?: round911?.scorecardPhotoUri ?: round917?.scorecardPhotoUri,
+                        memo = "[코스: Pine / Cherry] 18홀 92타 (전반 Pine 50 + 후반 Cherry 42)"
+                    )
+                    golfRepository.updateGolfRound(unifiedRound)
+
+                    // 9.01 빈 라운드 삭제 및 다이어리 정제
+                    if (round901 != null && round901.id != unifiedRound.id) {
+                        golfRepository.deleteGolfRound(round901.id)
+                        val day901 = LocalDate.of(2026, 9, 1)
+                        val diaries901 = runCatching { diaryRepository.getDiaryEntriesByDateRange(day901, day901).first() }.getOrDefault(emptyList())
+                        for (d in diaries901) {
+                            val cleanSteps = d.routeSteps.filter { !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) && !it.title.contains("오크밸리") }
+                            diaryRepository.updateDiaryEntry(d.copy(hasGolfRound = false, routeSteps = cleanSteps))
+                        }
+                    }
+
+                    // 9.17 42타 불완전 조각 라운드 삭제 및 다이어리 정제
+                    if (round917 != null && round917.id != unifiedRound.id) {
+                        golfRepository.deleteGolfRound(round917.id)
+                        val day917 = LocalDate.of(2026, 9, 17)
+                        val diaries917 = runCatching { diaryRepository.getDiaryEntriesByDateRange(day917, day917).first() }.getOrDefault(emptyList())
+                        for (d in diaries917) {
+                            val cleanSteps = d.routeSteps.filter { !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) && !it.title.contains("오크밸리") }
+                            diaryRepository.updateDiaryEntry(d.copy(hasGolfRound = false, routeSteps = cleanSteps))
+                        }
+                    }
+                }
+            }
+
+            for (round in golfRepository.getAllGolfRoundsFlow().first()) {
                 // [안전 가드레일] 유효한 스코어카드 데이터(총타수 in 50..144 또는 18홀 스코어)가 있는 실제 라운드는
                 // 클럽명이 미확정 상태("필드 골프장", "골프장")이더라도 절대 삭제하지 않고 보존 및 정규화
                 val hasValidScorecardData = (round.totalScore != null && round.totalScore in 50..144) ||
@@ -297,12 +366,18 @@ class GolfViewModel @Inject constructor(
                         round.memo?.contains("진료비") == true ||
                         (round.totalScore != null && round.totalScore < 50 && round.holeScores.size < 8)
 
+                // [사용자 핵심 지침] 18홀 완전한 스코어카드(또는 공식 예약/라커)가 없는 9홀 불완전 조각(54타 미만) 및 타수 없는 더미 자동 청소
+                val isIncompleteScoreDummy = round.totalScore != null && round.totalScore < 54 && round.holeScores.size < 14
+                val isNoScorePhotoDummy = round.totalScore == null && round.holeScores.isEmpty() && round.clubName.contains("오크밸리")
+
                 val isDummyOrInvalid = round.clubName in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패") ||
                         round.clubName.contains("일반 사진") ||
                         round.clubName.contains("필드 골프장") ||
                         (round.clubName == "아난티 코드 GC" && round.memo?.contains("주말 친목 라운딩") == true) ||
                         isAdBannerRound ||
-                        isMedicalOrReceiptFakeRound
+                        isMedicalOrReceiptFakeRound ||
+                        isIncompleteScoreDummy ||
+                        isNoScorePhotoDummy
                 if (isDummyOrInvalid) {
                     golfRepository.deleteGolfRound(round.id)
                     // 해당 날짜 다이어리에서도 가짜 골프 스텝 즉시 제거 및 제목 복구

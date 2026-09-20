@@ -1,4 +1,4 @@
-﻿package com.autologue.app.domain.usecase.golf
+package com.autologue.app.domain.usecase.golf
 
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.RouteStep
@@ -178,6 +178,13 @@ class ExtractScorecardOcrUseCase @Inject constructor(
         val totalScore = result.totalScore ?: (if (result.holeScores.isNotEmpty()) result.holeScores.sum() else null) ?: return null
         val effectiveDate = result.playDate ?: targetDate
         val existingRound = golfRepository.getGolfRoundByDate(effectiveDate)
+
+        // [사용자 핵심 지침] 18홀 완전한 스코어카드가 아니면 신규 등록에서 제외
+        val is18HoleComplete = totalScore in 54..144 || result.holeScores.size >= 14
+        if (existingRound == null && !is18HoleComplete) {
+            runCatching { android.util.Log.d("ExtractScorecardOcr", "18홀 미완주 불완전 스코어카드 신규 등록 제외: score=$totalScore, holes=${result.holeScores.size} ($effectiveDate)") }
+            return null
+        }
 
         val finalRound = if (existingRound != null) {
             val candidateClub = result.clubName ?: (if (!result.courseName.isNullOrBlank()) "${result.courseName} CC" else null)

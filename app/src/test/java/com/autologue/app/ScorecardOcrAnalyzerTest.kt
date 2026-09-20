@@ -712,4 +712,56 @@ class ScorecardOcrAnalyzerTest {
         assertEquals(5, stats.doublePlusCount)
         assertEquals(3, stats.penaltyCount)
     }
+
+    @Test
+    fun parseDate_extracts2026_09_11_withoutDayCorruption() {
+        val oakSampleText = """
+            스코어카드
+            오크밸리 CC / 2026.09.11(금)
+            92 (+20)
+            SCORE
+            27.8%
+            GIR
+            2.1
+            홀당 평균 퍼트 수
+            6983
+            전체 걸음수
+            
+            Pine
+            HOLE 1 2 3 4 5 6 7 8 9 Total
+            Par 4 4 3 4 5 4 3 4 5 36
+            Score 4 8 3 5 5 6 4 7 6 48
+            Putt 2 2 1 3 2 2 1 2 2 17
+            Penalty - - - - - - - - 2 2
+            
+            Cherry
+            HOLE 10 11 12 13 14 15 16 17 18 Total
+            Par 4 3 4 4 4 3 5 4 5 36
+            Score 5 3 5 4 6 4 5 6 6 44
+            Putt 2 2 2 2 3 1 3 2 4 21
+            Penalty - - - - - - - - - -
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(oakSampleText)
+
+        // 1. 날짜가 9.01이 아닌 2026-09-11로 정확히 파싱되는지 검증
+        assertNotNull(result.playDate)
+        assertEquals(java.time.LocalDate.of(2026, 9, 11), result.playDate)
+
+        // 2. 구장명 "오크밸리 CC" 검증
+        assertEquals("오크밸리 CC", result.clubName)
+
+        // 3. 코스명 "Pine / Cherry" 검증
+        assertEquals("Pine / Cherry", result.courseName)
+
+        // 4. 총 타수 92타 검증
+        assertEquals(92, result.totalScore)
+
+        // 5. 총 퍼트수 38개 검증 (전반 17 + 후반 21)
+        assertEquals(38, result.totalPutts)
+
+        // 6. 벌타 2개 검증
+        assertEquals(2, result.penaltyCount)
+    }
 }
+

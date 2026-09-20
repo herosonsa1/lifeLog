@@ -597,7 +597,7 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
 
         // 5. Date Extraction (구분자 포함 YYYY-MM-DD 및 8자리 YYYYMMDD 지원)
         var parsedDate: LocalDate? = null
-        val dateRegex = Regex("""(20\d{2})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})""")
+        val dateRegex = Regex("""\b(20\d{2})[-./년\s]+(0[1-9]|1[0-2]|[1-9])[-./월\s]+(0[1-9]|[12]\d|3[01]|[1-9])(?=[^\d]|일|$)""")
         for (line in lines) {
             val m = dateRegex.find(line)
             if (m != null) {

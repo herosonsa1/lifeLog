@@ -27,8 +27,8 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
      */
     suspend fun processSinglePhoto(uri: Uri, photoDate: LocalDate = LocalDate.now()): GolfRound? = withContext(Dispatchers.IO) {
         try {
-            // 1. 단 1회의 ML Kit OCR 분석 수행
-            val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
+            // 1. 단 1회의 ML Kit OCR 분석 수행 (사진 촬영일/EXIF 교차 검증 연동)
+            val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri, photoDate)
             // 1. 의료 및 일반 영수증 네거티브 가드레일 (외래 진료비, 약제비, 처방전 등 즉시 배제)
             if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(scorecardResult.recognizedRawText)) {
                 android.util.Log.d("AutoProcessGolfMedia", "processSinglePhoto: 의료/영수증 감지로 골프 등록 거부 ($uri)")
@@ -38,19 +38,19 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
             val rawText = scorecardResult.recognizedRawText
             val rawUpper = rawText.uppercase()
 
-            // 2. 스코어카드 유효성 점검 (찐 골프 핵심 키워드 필수 및 유효 타수 범위 검증)
+            // 2. 스코어카드 유효성 점검 (18홀 완전 스코어카드 필수 가드레일)
+            // 9홀 불완전 조각(42타, 50타 등)이나 타수 없는 단순 사진의 단독 라운드 자동 등록 원천 차단
             val matchedCoreKeywords = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
             val hasValidGolfKeywords = matchedCoreKeywords.isNotEmpty()
-            val hasValidHoles = scorecardResult.holeScores.size >= 8
-            val hasValidTotalScore = scorecardResult.totalScore != null && (
-                (hasValidHoles && scorecardResult.totalScore in 27..144) ||
-                scorecardResult.totalScore in 54..144
-            )
-            val isValidScorecard = hasValidGolfKeywords && (hasValidTotalScore || hasValidHoles)
+            val hasValid18Holes = scorecardResult.holeScores.size >= 14
+            val hasValid18TotalScore = scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144
+            val isValidScorecard = hasValidGolfKeywords && (hasValid18TotalScore || hasValid18Holes)
 
             // 3. 라커룸 전표 유효성 점검 (기존 추출 텍스트 재활용 — 중복 OCR 0회)
+            // 스코어카드 사진이 스코어 파싱 미흡으로 인해 라커룸 전표로 둔갑하여 빈 라운드로 등록되는 부작용 방지
+            val isScorecardLike = rawUpper.contains("SCORE") || rawUpper.contains("스코어") || (rawUpper.contains("PAR") && rawUpper.contains("HOLE"))
             val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
-            val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진"
+            val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진" && !isScorecardLike
 
             // 4. 판별 및 안전 등록
             when {
@@ -142,7 +142,7 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
 
                 // [Stage 2: Deep Analysis - 골프 지문 감지된 사진만 정밀 분석]
                 // 2560px 2D 공간 그리드 복원 및 18홀 정밀 파싱
-                val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri)
+                val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri, photoDate)
                 val rawText = scorecardResult.recognizedRawText.ifBlank { probeText }
                 if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(rawText)) {
                     android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] Deep Analysis 중 의료/영수증 지문 감지로 배제 ($uri)")
@@ -150,19 +150,18 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
                 }
                 val rawUpper = rawText.uppercase()
 
-                // A. 스코어카드 검증 (찐 골프 핵심 키워드 필수 및 유효 타수/홀수 검증)
+                // A. 스코어카드 검증 (18홀 완전 스코어카드 필수 가드레일)
+                // 9홀 불완전 조각(42타, 50타 등) 및 타수 없는 사진의 단독 등록 원천 차단
                 val matchedCore = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
                 val hasValidGolfKeywords = matchedCore.isNotEmpty()
-                val hasValidHoles = scorecardResult.holeScores.size >= 8
-                val hasValidTotalScore = scorecardResult.totalScore != null && (
-                    (hasValidHoles && scorecardResult.totalScore in 27..144) ||
-                    scorecardResult.totalScore in 54..144
-                )
-                val isValidScorecard = hasValidGolfKeywords && (hasValidTotalScore || hasValidHoles)
+                val hasValid18Holes = scorecardResult.holeScores.size >= 14
+                val hasValid18TotalScore = scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144
+                val isValidScorecard = hasValidGolfKeywords && (hasValid18TotalScore || hasValid18Holes)
 
-                // B. 라커룸 안내지 검증
+                // B. 라커룸 안내지 검증 (스코어카드 사진이 전표로 둔갑하여 빈 라운드로 등록되는 부작용 방지)
+                val isScorecardLike = rawUpper.contains("SCORE") || rawUpper.contains("스코어") || (rawUpper.contains("PAR") && rawUpper.contains("HOLE"))
                 val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
-                val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진"
+                val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진" && !isScorecardLike
 
                 if (isValidScorecard) {
                     if (isValidSlip) {
