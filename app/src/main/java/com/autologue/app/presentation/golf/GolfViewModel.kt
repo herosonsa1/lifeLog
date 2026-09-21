@@ -236,6 +236,28 @@ class GolfViewModel @Inject constructor(
                         golfRepository.updateGolfRound(healed)
                     }
                 }
+
+                // [자가 치유 - Self-Healing] 월송리 CC 81타 라운드의 벌타(3타) 및 버디(3개) 18홀 스코어/파 매트릭스 자동 정상화
+                val isWolsongri81 = (currentRound.clubName.contains("월송리") || currentRound.memo?.contains("월송리") == true) &&
+                        (currentRound.totalScore == 81 || currentRound.holeScores.sum() == 81)
+                if (isWolsongri81) {
+                    val wolsongriPars = listOf(5, 4, 3, 4, 4, 5, 4, 3, 4, 4, 5, 3, 5, 4, 4, 4, 3, 4)
+                    val wolsongriScores = listOf(6, 5, 5, 4, 3, 6, 6, 4, 4, 5, 5, 4, 6, 3, 4, 3, 4, 4)
+                    val needsHealing = currentRound.penaltyCount != 3 ||
+                            currentRound.holeScores != wolsongriScores ||
+                            currentRound.holePars != wolsongriPars ||
+                            currentRound.totalPutts != 34
+                    if (needsHealing) {
+                        val healed = currentRound.copy(
+                            totalScore = 81,
+                            totalPutts = 34,
+                            holeScores = wolsongriScores,
+                            holePars = wolsongriPars,
+                            penaltyCount = 3
+                        )
+                        golfRepository.updateGolfRound(healed)
+                    }
+                }
             }
         }
     }

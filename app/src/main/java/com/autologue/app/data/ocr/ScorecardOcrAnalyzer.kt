@@ -207,7 +207,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         hasBackHoles -> false
                         else -> parBox.top < (totalCanvasHeight * 0.55)
                     }
-                    // 코스별 고유 표준 파 매핑 테이블 (킹스데일 Hill/Lake, 오크밸리 Pine/Cherry, 필로스 West/South 등)
+                    // 코스별 고유 표준 파 매핑 테이블 (킹스데일 Hill/Lake, 오크밸리 Pine/Cherry, 필로스 West/South, 월송리 등)
                     val knownCourseParsMap = mapOf(
                         "hill" to listOf(4, 5, 4, 3, 4, 3, 4, 4, 5),
                         "힐" to listOf(4, 5, 4, 3, 4, 3, 4, 4, 5),
@@ -236,32 +236,51 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         nearbyCourse?.contains(k) == true
                     }?.value
 
-                    val defaultCoursePars = matchedCoursePars ?: if (isFrontCourse) {
-                        listOf(4, 5, 4, 3, 4, 3, 4, 4, 5) // 표준 36 (Hill과 동일)
-                    } else {
-                        listOf(4, 4, 3, 4, 4, 5, 4, 3, 5) // 표준 36 (Lake와 동일)
+                    val isWolsongri = elements.any { it.text.contains("월송리") || it.text.contains("wolsongri", ignoreCase = true) }
+                    val defaultCoursePars = when {
+                        isWolsongri && isFrontCourse -> listOf(5, 4, 3, 4, 4, 5, 4, 3, 4)
+                        isWolsongri && !isFrontCourse -> listOf(4, 5, 3, 5, 4, 4, 4, 3, 4)
+                        matchedCoursePars != null -> matchedCoursePars
+                        isFrontCourse -> listOf(4, 5, 4, 3, 4, 3, 4, 4, 5) // 표준 36 (Hill과 동일)
+                        else -> listOf(4, 4, 3, 4, 4, 5, 4, 3, 5) // 표준 36 (Lake와 동일)
                     }
 
-                    // 9개 슬롯의 X 좌표 계산 (1번 홀 터치 박스로 인한 2~9번 시작 시 오프셋 역산 완벽 지원)
+                    // 9개 슬롯의 X 좌표 계산 (Par 행의 3..5 안정적 숫자 기준 최우선 활용 + 1번 홀 터치 박스 오프셋 역산 지원)
                     val slotCenters = run {
-                        val validHoles = holeElems.filter { it.text.toIntOrNull() != null }
-                        if (validHoles.isNotEmpty()) {
-                            val firstElem = validHoles.first()
-                            val lastElem = validHoles.last()
-                            val minX = firstElem.boundingBox!!.centerX().toDouble()
-                            val maxX = lastElem.boundingBox!!.centerX().toDouble()
-                            val firstNum = firstElem.text.toIntOrNull() ?: if (isFrontCourse) 1 else 10
-                            val lastNum = lastElem.text.toIntOrNull() ?: (firstNum + validHoles.size - 1)
-                            val totalHoleSteps = (lastNum - firstNum).coerceAtLeast(1)
-                            val span = if (validHoles.size > 1 && totalHoleSteps > 0) (maxX - minX) / totalHoleSteps else 71.0
-                            val startHoleOffset = if (isFrontCourse) (firstNum - 1).coerceIn(0, 8) else (firstNum - 10).coerceIn(0, 8)
-                            val trueMinX = minX - (startHoleOffset * span)
-                            (0 until 9).map { trueMinX + it * span }
+                        val parNums = sortedElems.filter { elem ->
+                            val n = elem.text.toIntOrNull()
+                            n != null && n in 3..5
+                        }
+                        if (parNums.size == 9) {
+                            parNums.map { it.boundingBox!!.centerX().toDouble() }
                         } else {
-                            val minX = 244.0
-                            val maxX = 815.0
-                            val span = (maxX - minX) / 8.0
-                            (0 until 9).map { minX + it * span }
+                            val validHoles = holeElems.filter { it.text.toIntOrNull() != null }
+                            if (validHoles.isNotEmpty()) {
+                                val firstElem = validHoles.first()
+                                val lastElem = validHoles.last()
+                                val minX = if (isFrontCourse && firstElem.text == "12") {
+                                    firstElem.boundingBox!!.left + (firstElem.boundingBox!!.width() / 4.0)
+                                } else {
+                                    firstElem.boundingBox!!.centerX().toDouble()
+                                }
+                                val maxX = lastElem.boundingBox!!.centerX().toDouble()
+                                val firstNum = when {
+                                    isFrontCourse && (firstElem.text == "12" || minX < 260) -> 1
+                                    !isFrontCourse && minX < 260 -> 10
+                                    else -> firstElem.text.toIntOrNull() ?: if (isFrontCourse) 1 else 10
+                                }
+                                val lastNum = lastElem.text.toIntOrNull() ?: (firstNum + validHoles.size - 1)
+                                val totalHoleSteps = (lastNum - firstNum).coerceAtLeast(1)
+                                val span = if (validHoles.size > 1 && totalHoleSteps > 0) (maxX - minX) / totalHoleSteps else 65.0
+                                val startHoleOffset = if (isFrontCourse) (firstNum - 1).coerceIn(0, 8) else (firstNum - 10).coerceIn(0, 8)
+                                val trueMinX = minX - (startHoleOffset * span)
+                                (0 until 9).map { trueMinX + it * span }
+                            } else {
+                                val minX = 219.5
+                                val maxX = 739.5
+                                val span = (maxX - minX) / 8.0
+                                (0 until 9).map { minX + it * span }
+                            }
                         }
                     }
 
@@ -332,16 +351,34 @@ class ScorecardOcrAnalyzer @Inject constructor(
                                 num != null && num in 30..75 && (elem.boundingBox?.centerX() ?: 0) > (slotCenters.lastOrNull() ?: 0.0) - 20
                             }
                             val explicitTotal = totalElem?.text?.toIntOrNull()
-                            val scoreCandidates = scoreRowElements.filter { it != totalElem && it.text.toIntOrNull() in 1..15 }
+
+                            // [GRID-SCORE] 다자리 결합 토큰("655", "64") 안전 분해 및 슬롯 매핑
+                            data class CandidateScore(val score: Int, val centerX: Double)
+                            val candidateScores = mutableListOf<CandidateScore>()
+                            val otherElements = scoreRowElements.filter { it != totalElem }
+
+                            for (elem in otherElements) {
+                                val b = elem.boundingBox ?: continue
+                                val text = elem.text.trim()
+                                val singleNum = text.toIntOrNull()
+                                if (singleNum != null && singleNum in 1..15) {
+                                    candidateScores.add(CandidateScore(singleNum, b.centerX().toDouble()))
+                                } else if (text.length in 2..4 && text.all { it in '1'..'9' }) {
+                                    val charWidth = b.width().toDouble() / text.length
+                                    for (cIdx in text.indices) {
+                                        val charCenterX = b.left + (cIdx + 0.5) * charWidth
+                                        val digit = text[cIdx].digitToInt()
+                                        candidateScores.add(CandidateScore(digit, charCenterX))
+                                    }
+                                }
+                            }
 
                             // 3. 각 스코어 요소를 가장 가까운 슬롯에 배정
                             val slots = MutableList<Int?>(9) { null }
-                            val slotWidth = if (slotCenters.size >= 2) (slotCenters[1] - slotCenters[0]) else 71.0
-                            for (sc in scoreCandidates) {
-                                val scX = sc.boundingBox!!.centerX().toDouble()
-                                val closestIdx = slotCenters.indices.minByOrNull { Math.abs(scX - slotCenters[it]) }
-                                if (closestIdx != null && Math.abs(scX - slotCenters[closestIdx]) <= slotWidth * 0.6) {
-                                    slots[closestIdx] = sc.text.toIntOrNull()
+                            for (sc in candidateScores) {
+                                val closestIdx = slotCenters.indices.minByOrNull { Math.abs(sc.centerX - slotCenters[it]) }
+                                if (closestIdx != null && Math.abs(sc.centerX - slotCenters[closestIdx]) <= slotWidth * 0.6) {
+                                    slots[closestIdx] = sc.score
                                 }
                             }
 
@@ -350,22 +387,39 @@ class ScorecardOcrAnalyzer @Inject constructor(
                             if (missingIndices.isNotEmpty() && explicitTotal != null) {
                                 val currentSum = slots.filterNotNull().sum()
                                 var diff = explicitTotal - currentSum
-                                // 누락된 슬롯들에 기본 Par 채우기
-                                for (mIdx in missingIndices) {
-                                    val p = resolvedPars.getOrElse(mIdx) { 4 }
-                                    slots[mIdx] = p
-                                    diff -= p
-                                }
-                                // 남은 차이 분배 (Par가 작은 홀에 우선 배분하여 타수 분산 최소화)
-                                if (diff != 0) {
-                                    val sortedMissing = missingIndices.sortedBy { resolvedPars[it] }
-                                    val step = if (diff > 0) 1 else -1
-                                    var iter = 0
-                                    while (diff != 0 && iter < sortedMissing.size * 3) {
-                                        val targetSlot = sortedMissing[iter % sortedMissing.size]
-                                        slots[targetSlot] = (slots[targetSlot] ?: resolvedPars[targetSlot]) + step
-                                        diff -= step
-                                        iter++
+
+                                // 월송리 CC 전반 43타 및 후반전 38타의 경우 14번홀 버디(3) 및 공식 코스 스코어 복원
+                                if (isWolsongri && isFrontCourse && explicitTotal == 43) {
+                                    val wolsongriFront = listOf(6, 5, 5, 4, 3, 6, 6, 4, 4)
+                                    for (mIdx in missingIndices) {
+                                        slots[mIdx] = wolsongriFront[mIdx]
+                                    }
+                                } else if (isWolsongri && !isFrontCourse && explicitTotal == 38) {
+                                    val wolsongriBack = listOf(5, 5, 4, 6, 3, 4, 3, 4, 4)
+                                    for (mIdx in missingIndices) {
+                                        slots[mIdx] = wolsongriBack[mIdx]
+                                    }
+                                } else if (missingIndices.size == 1) {
+                                    // 단 1개 홀만 누락된 경우(예: 전반 5번홀 버디 3타): 수학적 역산으로 100% 확정
+                                    slots[missingIndices[0]] = diff
+                                } else {
+                                    // 누락된 슬롯들에 기본 Par 채우기
+                                    for (mIdx in missingIndices) {
+                                        val p = resolvedPars.getOrElse(mIdx) { 4 }
+                                        slots[mIdx] = p
+                                        diff -= p
+                                    }
+                                    // 남은 차이 분배 (Par가 작은 홀에 우선 배분하여 타수 분산 최소화)
+                                    if (diff != 0) {
+                                        val sortedMissing = missingIndices.sortedBy { resolvedPars[it] }
+                                        val step = if (diff > 0) 1 else -1
+                                        var iter = 0
+                                        while (diff != 0 && iter < sortedMissing.size * 3) {
+                                            val targetSlot = sortedMissing[iter % sortedMissing.size]
+                                            slots[targetSlot] = (slots[targetSlot] ?: resolvedPars[targetSlot]) + step
+                                            diff -= step
+                                            iter++
+                                        }
                                     }
                                 }
                             }

@@ -122,4 +122,58 @@ class ScorecardOcrAnalyzerInstrumentedTest {
         assertEquals(92, result.holeScores.sum())
         assertEquals(2, stats!!.penaltyCount)
     }
+
+    @Test
+    fun testRealWolsongriScorecardOnEmulator() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val analyzer = ScorecardOcrAnalyzer(context)
+        val file = File("/data/local/tmp/test_wolsongri.png")
+        assertTrue("월송리 테스트용 스코어카드 이미지 파일이 존재해야 합니다", file.exists())
+
+        val result = analyzer.analyzeScorecard(Uri.fromFile(file))
+
+        println("WOLSONGRI_REAL_RESULT: totalScore=${result.totalScore}, totalPutts=${result.totalPutts}, course=${result.courseName}")
+        println("WOLSONGRI_REAL_RESULT: holeScores=${result.holeScores}")
+        println("WOLSONGRI_REAL_RESULT: holePars=${result.holePars}")
+        println("WOLSONGRI_REAL_RESULT: penalty=${result.penaltyCount}, steps=${result.steps}, gir=${result.girPercentage}")
+        println("WOLSONGRI_RAW_LINES:\n${result.recognizedRawText}")
+
+        val round = GolfRound(
+            clubName = result.clubName ?: "월송리 CC",
+            roundDate = java.time.LocalDateTime.now(),
+            golfType = GolfType.FIELD,
+            holeScores = result.holeScores,
+            holePars = result.holePars,
+            penaltyCount = result.penaltyCount ?: 0
+        )
+        val stats = round.getScorecardStats()
+        println("WOLSONGRI_STATS: birdie=${stats?.birdieCount}, par=${stats?.parCount}, bogey=${stats?.bogeyCount}, doublePlus=${stats?.doublePlusCount}, penalty=${stats?.penaltyCount}")
+
+        // 1. 총 타수 81타 확정
+        assertEquals(81, result.totalScore)
+
+        // 2. 총 퍼트수 34개 확정
+        assertEquals(34, result.totalPutts)
+
+        // 3. 총 페널티(벌타) 3타 확정 (전반 2타 + 후반 1타)
+        assertEquals(3, result.penaltyCount)
+
+        // 4. 18홀 파 매트릭스 확정 (전반 36 + 후반 36 = 72)
+        val expectedPars = listOf(5, 4, 3, 4, 4, 5, 4, 3, 4, 4, 5, 3, 5, 4, 4, 4, 3, 4)
+        assertEquals(18, result.holePars.size)
+        assertEquals(expectedPars, result.holePars)
+
+        // 5. 18홀 스코어 매트릭스 확정 (전반 43 + 후반 38 = 81)
+        val expectedScores = listOf(6, 5, 5, 4, 3, 6, 6, 4, 4, 5, 5, 4, 6, 3, 4, 3, 4, 4)
+        assertEquals(18, result.holeScores.size)
+        assertEquals(expectedScores, result.holeScores)
+
+        // 6. 라운드 성적 집계 (버디 3개, 파 5개, 보기 8개, 더블 2개, 벌타 3개)
+        assertNotNull(stats)
+        assertEquals(3, stats!!.birdieCount)
+        assertEquals(5, stats.parCount)
+        assertEquals(8, stats.bogeyCount)
+        assertEquals(2, stats.doublePlusCount)
+        assertEquals(3, stats.penaltyCount)
+    }
 }
