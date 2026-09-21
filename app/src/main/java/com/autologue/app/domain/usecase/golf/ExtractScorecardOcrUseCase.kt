@@ -192,11 +192,9 @@ class ExtractScorecardOcrUseCase @Inject constructor(
         }
 
         val finalRound = if (existingRound != null) {
-            val candidateClub = result.clubName ?: (if (!result.courseName.isNullOrBlank()) "${result.courseName} CC" else null)
-            val updatedClub = if ((existingRound.clubName == "필드 골프장" || existingRound.clubName.contains("일반 사진") || existingRound.clubName.isBlank()) && candidateClub != null) {
+            val candidateClub = sanitizeClubName(result.clubName, result.courseName)
+            val updatedClub = if ((existingRound.clubName == "필드 골프장" || existingRound.clubName.contains("일반 사진") || existingRound.clubName.isBlank()) && candidateClub != "필드 골프장") {
                 candidateClub
-            } else if (!result.clubName.isNullOrBlank() && (existingRound.clubName == "필드 골프장" || existingRound.clubName.contains("일반 사진") || existingRound.clubName.isBlank())) {
-                result.clubName
             } else existingRound.clubName
 
             val updatedWithPhoto = existingRound.copy(
@@ -207,10 +205,9 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             golfRepository.updateGolfRound(updatedWithPhoto)
             updatedWithPhoto
         } else {
-            val club = result.clubName ?: (if (!result.courseName.isNullOrBlank()) "${result.courseName} CC" else "필드 골프장")
-            val startTime = effectiveDate.atTime(8, 0)
-            val endTime = effectiveDate.atTime(13, 30)
-            val memo = if (!result.courseName.isNullOrBlank()) "코스: ${result.courseName}" else "스코어카드 자동 분석"
+            val club = sanitizeClubName(result.clubName, result.courseName)
+            val (startTime, endTime) = extractTeeOffTime(result.recognizedRawText, effectiveDate)
+            val memo = if (!result.courseName.isNullOrBlank() && !containsInvalidKeyword(result.courseName)) "코스: ${result.courseName}" else "스코어카드 자동 분석"
             val newRound = GolfRound(
                 clubName = club,
                 roundDate = startTime,
@@ -268,5 +265,60 @@ class ExtractScorecardOcrUseCase @Inject constructor(
         }
 
         return golfRepository.getGolfRoundById(finalRound.id) ?: finalRound
+    }
+
+    private fun containsInvalidKeyword(text: String?): Boolean {
+        if (text.isNullOrBlank()) return true
+        val invalidKeywords = listOf(
+            "라운드", "상세", "기록", "FIELD", "Field", "field", "삭제", "취소", "저장하기", "저장",
+            "공유", "수정", "뒤로", "닫기", "메뉴", "홈", "선택", "등록", "버튼", "관리", "설정",
+            "동반자", "캐디", "예약", "조회", "알림", "마이페이지", "앱", "스코어", "플레이어", "사진",
+            "일정", "방문", "안내", "영수증", "진료", "병원", "약국", "전표", "명세", "통계", "분석"
+        )
+        return invalidKeywords.any { text.contains(it, ignoreCase = true) }
+    }
+
+    private fun sanitizeClubName(detectedClub: String?, detectedCourse: String?): String {
+        fun isValid(name: String?): Boolean {
+            if (name.isNullOrBlank()) return false
+            val t = name.trim()
+            if (t.length > 20) return false
+            if (containsInvalidKeyword(t)) return false
+            return true
+        }
+
+        if (isValid(detectedClub)) {
+            return detectedClub!!.trim()
+        }
+
+        if (isValid(detectedCourse)) {
+            val course = detectedCourse!!.trim()
+            val known = when {
+                course.contains("Pine", ignoreCase = true) && course.contains("Cherry", ignoreCase = true) -> "오크밸리 CC"
+                course.contains("West", ignoreCase = true) && course.contains("South", ignoreCase = true) -> "필로스 GC"
+                course.contains("Hill", ignoreCase = true) && course.contains("Lake", ignoreCase = true) -> "킹스데일 GC"
+                else -> null
+            }
+            if (known != null) return known
+        }
+
+        return "필드 골프장"
+    }
+
+    private fun extractTeeOffTime(raw: String?, defaultDate: java.time.LocalDate): Pair<java.time.LocalDateTime, java.time.LocalDateTime> {
+        if (!raw.isNullOrBlank()) {
+            val teeOffRegex = Regex("""(?:티오프|티타임|티\s*시간|START|TIME|Tee\s*Off)\s*[:：]?\s*([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)""", RegexOption.IGNORE_CASE)
+            val m = teeOffRegex.find(raw)
+            if (m != null) {
+                val hour = m.groupValues[1].toIntOrNull() ?: 7
+                val min = m.groupValues[2].toIntOrNull() ?: 0
+                val start = defaultDate.atTime(hour, min)
+                val end = start.plusHours(4).plusMinutes(30)
+                return Pair(start, end)
+            }
+        }
+        val start = defaultDate.atTime(7, 30)
+        val end = start.plusHours(4).plusMinutes(30)
+        return Pair(start, end)
     }
 }

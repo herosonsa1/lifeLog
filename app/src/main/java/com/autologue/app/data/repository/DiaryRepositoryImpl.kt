@@ -157,11 +157,22 @@ class DiaryRepositoryImpl @Inject constructor(
                     }
                 }
 
-                // 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동' 등 보정
+                // 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동', 비정상 UI 단어 타이틀 자가치유 보정
                 var newTitle = entry.title
-                if (newTitle == "서울 방이동 일정" || newTitle == "서울 방이동" || newTitle.contains("사진 촬영")) {
-                    val repPlace = cleanSteps.firstOrNull { it.latitude != null }?.locationName
-                    newTitle = if (repPlace != null) "${repPlace} 일정" else "${d.monthValue}월 ${d.dayOfMonth}일의 다이어리"
+                val isCorruptedTitle = newTitle.contains("기록 삭제") || newTitle.contains("저장하기") ||
+                        newTitle.contains("상세 기록") || newTitle.contains("FIELD") ||
+                        newTitle == "서울 방이동 일정" || newTitle == "서울 방이동" || newTitle.contains("사진 촬영") || newTitle == "사진 기록 일정"
+                if (isCorruptedTitle) {
+                    val validPlace = cleanSteps.firstOrNull { it.latitude != null && !it.locationName.isNullOrBlank() }?.locationName
+                    val golfStep = cleanSteps.firstOrNull { it.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.locationName ?: it.title) }
+                    val cleanGolf = golfStep?.let { (it.locationName ?: it.title).replace(" 라운드", "").replace(" 라운딩", "") }
+                    newTitle = when {
+                        cleanGolf != null && validPlace != null -> "$cleanGolf 라운딩 & $validPlace"
+                        cleanGolf != null -> "$cleanGolf 라운딩"
+                        validPlace != null -> "${validPlace} 일정"
+                        cleanPhotos.isNotEmpty() -> "오늘의 사진 기록"
+                        else -> "${d.monthValue}월 ${d.dayOfMonth}일의 다이어리"
+                    }
                 }
 
                 if (cleanSteps.size != entry.routeSteps.size ||

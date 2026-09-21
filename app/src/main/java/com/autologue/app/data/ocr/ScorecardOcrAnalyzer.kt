@@ -551,9 +551,21 @@ class ScorecardOcrAnalyzer @Inject constructor(
             "진료과", "원외처방", "사업자등록번호", "가맹점", "부가세", "부가가치세", "품명", "수량", "단가", "면세"
         )
 
+        val MOBILE_APP_UI_KEYWORDS = listOf(
+            "라운드", "상세", "기록", "FIELD", "Field", "field", "삭제", "취소", "저장하기", "저장",
+            "공유", "수정", "뒤로", "닫기", "메뉴", "홈", "선택", "등록", "버튼", "관리", "설정",
+            "동반자", "캐디", "예약", "조회", "알림", "마이페이지", "앱", "스코어", "플레이어", "사진",
+            "안내", "영수증", "진료", "병원", "약국", "전표", "명세", "통계", "분석", "결과", "목록"
+        )
+
         fun hasMedicalOrReceiptNegative(text: String): Boolean {
             val upper = text.uppercase()
             return MEDICAL_AND_RECEIPT_NEGATIVES.any { upper.contains(it) }
+        }
+
+        fun containsMobileAppUiKeyword(text: String): Boolean {
+            val upper = text.uppercase()
+            return MOBILE_APP_UI_KEYWORDS.any { upper.contains(it.uppercase()) }
         }
 
         fun createEmptyResult(raw: String): ScorecardOcrResult = ScorecardOcrResult(
@@ -634,7 +646,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 if (m != null) {
                     val rawClub = m.groupValues[1].trim()
                     val invalidClubWords = listOf("스코어", "라커", "안내", "영수증", "계산서", "진료", "처방", "외래", "병원", "약국")
-                    if (rawClub.isNotBlank() && invalidClubWords.none { rawClub.contains(it) }) {
+                    if (rawClub.isNotBlank() && invalidClubWords.none { rawClub.contains(it) } && !containsMobileAppUiKeyword(rawClub)) {
                         detectedClubName = rawClub
                         break
                     }
@@ -1098,22 +1110,23 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 ((frontGrid.tempoTotal + backGrid.tempoTotal) / 2.0 * 10).toInt() / 10.0
             } else frontGrid.tempoTotal ?: backGrid.tempoTotal
 
-            val finalCourseName = when {
+            val rawCourseName = when {
                 detectedCourses.size >= 2 -> "${detectedCourses[0]} / ${detectedCourses[1]}"
                 detectedCourses.size == 1 -> detectedCourses[0]
                 else -> null
             }
 
-            // 골프장명 폴백: 코스명이 Pine/Cherry 등 유명 코스인 경우 해당 골프장명 보강
-            val isKnownCourseKeyword = allKnownCourseKeywords.any { kw ->
-                finalCourseName?.contains(kw, ignoreCase = true) == true
+            // 코스명에 모바일 앱 UI 단어가 포함되어 있거나 비정상적으로 길면 무효화
+            val finalCourseName = rawCourseName?.takeIf { name ->
+                !containsMobileAppUiKeyword(name) && name.length <= 15
             }
+
+            // 골프장명 폴백: 코스명이 Pine/Cherry 등 유명 코스인 경우 해당 골프장명 보강
             val resolvedClubName = when {
-                !detectedClubName.isNullOrBlank() -> detectedClubName
+                !detectedClubName.isNullOrBlank() && !containsMobileAppUiKeyword(detectedClubName) -> detectedClubName
                 finalCourseName?.contains("Pine", ignoreCase = true) == true && finalCourseName.contains("Cherry", ignoreCase = true) -> "오크밸리 CC"
                 finalCourseName?.contains("West", ignoreCase = true) == true && finalCourseName.contains("South", ignoreCase = true) -> "필로스 GC"
                 finalCourseName?.contains("Hill", ignoreCase = true) == true && finalCourseName.contains("Lake", ignoreCase = true) -> "킹스데일 GC"
-                isKnownCourseKeyword && !finalCourseName.isNullOrBlank() -> "$finalCourseName CC"
                 else -> null
             }
 
@@ -1298,13 +1311,19 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 for (line in courseSearchLines) {
                     val trimmed = line.trim()
                     val upper = trimmed.uppercase()
-                    if (trimmed.length in 2..15 &&
+                    // [가드레일] UI 버튼/라벨 텍스트("라운드 상세 기록 FIELD", "기록 삭제 취소 저장하기" 등) 오탐 원천 차단
+                    if (containsMobileAppUiKeyword(trimmed)) continue
+                    if (nonCourseWords.any { trimmed.contains(it) }) continue
+
+                    // 순수 코스명("OO코스" 또는 짧은 명칭)만 허용 (최대 8자 이내)
+                    val isExplicitCourse = trimmed.endsWith("코스") || upper.endsWith("COURSE")
+                    if (trimmed.length in 2..8 &&
                         !upper.contains("SCORE") && !upper.contains("PAR") && !upper.contains("파") &&
                         !upper.contains("PUTT") && !upper.contains("퍼트") && !upper.contains("HOLE") && !upper.contains("홀") &&
                         !upper.contains("GIR") && !upper.contains("걸음") && !upper.contains("TOTAL") && !upper.contains("합계") &&
                         !upper.contains("스코어") && !upper.contains("PENALTY") && !upper.contains("벌타") &&
-                        nonCourseWords.none { trimmed.contains(it) } &&
-                        !Regex("""\d""").containsMatchIn(trimmed)) {
+                        !Regex("""\d""").containsMatchIn(trimmed) &&
+                        (isExplicitCourse || trimmed.length <= 4)) {
                         detectedCourse = trimmed.replace(Regex("""\s*코스$"""), "").trim()
                         break
                     }

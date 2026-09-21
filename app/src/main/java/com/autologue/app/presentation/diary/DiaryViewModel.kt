@@ -21,6 +21,7 @@ import com.autologue.app.domain.usecase.export.ExportResult
 import com.autologue.app.domain.usecase.sync.SyncHistoricalDataUseCase
 import com.autologue.app.domain.usecase.sync.SyncProgress
 import com.autologue.app.util.LocationDistanceUtils
+import com.autologue.app.util.GolfCourseDistanceUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -101,12 +102,25 @@ class DiaryViewModel @Inject constructor(
         viewModelScope.launch {
             diaryRepository.getDiaryEntriesFlow().collectLatest { list ->
                 rawEntries = list.map { entry ->
-                    if (entry.drivingDistanceKm <= 0.0) {
-                        val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
-                        if (calculated > 0.0) entry.copy(drivingDistanceKm = calculated) else entry
-                    } else {
-                        entry
+                    var current = entry
+                    if (current.drivingDistanceKm <= 0.0) {
+                        val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
+                        val finalDist = if (calculated > 0.0) calculated else if (current.hasGolfRound) {
+                            GolfCourseDistanceUtils.getEstimatedRoundTripKm(current.placeName ?: "")
+                        } else 0.0
+                        if (finalDist > 0.0) current = current.copy(drivingDistanceKm = finalDist)
                     }
+                    val moveSummary = current.movementSummary
+                    if (moveSummary != null && moveSummary.contains("사진 기록")) {
+                        val cleanSummary = moveSummary
+                            .split("➔", "->")
+                            .map { it.trim() }
+                            .filter { it.isNotBlank() && !it.contains("사진 기록") && !it.contains("사진 촬영") }
+                            .distinct()
+                            .joinToString(" ➔ ")
+                        current = current.copy(movementSummary = cleanSummary.ifBlank { null })
+                    }
+                    current
                 }
                 // Room DB 업데이트 후 무한 재귀 호출 루프를 원천 차단하기 위해 세션 당 최초 1회만 레거시 점검
                 if (!hasUpgradedLegacyEntries && list.isNotEmpty()) {
@@ -212,7 +226,10 @@ class DiaryViewModel @Inject constructor(
                     }
                     val hasZeroDistanceWithValidSteps = entry.drivingDistanceKm <= 0.0 &&
                         entry.routeSteps.count { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 } >= 2
-                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps
+                    val hasCorruptedGolfTitle = entry.title.contains("기록 삭제") || entry.title.contains("FIELD") || entry.title.contains("저장하기") || entry.title.contains("사진 기록 일정") || (entry.hasGolfRound && entry.title.contains("CC 일정") && dayGolf.any { !it.clubName.contains("FIELD") })
+                    val hasCorruptedMovement = entry.movementSummary?.contains("사진 기록") == true
+                    val hasGolfZeroDistance = entry.hasGolfRound && entry.drivingDistanceKm <= 0.0
+                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps || hasCorruptedGolfTitle || hasCorruptedMovement || hasGolfZeroDistance
 
                     if (needsUpgrade) {
                         val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }
@@ -278,7 +295,7 @@ class DiaryViewModel @Inject constructor(
                         ).copy(
                             id = entry.id,
                             hasGolfRound = dayGolf.isNotEmpty(),
-                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장")) "" else entry.summary
+                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장") || hasCorruptedGolfTitle) "" else entry.summary
                         )
 
                         val finalUpgraded = if (upgraded.summary.isBlank()) {

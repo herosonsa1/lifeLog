@@ -763,5 +763,49 @@ class ScorecardOcrAnalyzerTest {
         // 6. 벌타 2개 검증
         assertEquals(2, result.penaltyCount)
     }
+
+    @Test
+    fun parseMobileUiText_doesNotCorruptCourseOrClubName() {
+        // 사용자가 업로드한 모바일 앱 화면의 UI 텍스트가 섞인 스코어카드 시뮬레이션
+        val corruptedSampleText = """
+            라운드 상세 기록
+            FIELD
+            88
+            SCORE
+            44.4%
+            GIR
+            2.1
+            홀당 평균 퍼트 수
+            5500
+            전체 걸음수
+            
+            HOLE 1 2 3 4 5 6 7 8 9 Total
+            Par 4 4 3 4 5 4 3 4 5 36
+            Score 5 5 4 5 6 5 4 5 5 44
+            Putt 2 2 2 2 2 2 2 2 3 19
+            
+            기록 삭제 취소 저장하기
+            HOLE 10 11 12 13 14 15 16 17 18 Total
+            Par 4 4 5 3 4 4 3 5 4 36
+            Score 5 5 6 4 5 5 4 5 5 44
+            Putt 2 2 2 2 2 2 2 2 3 19
+        """.trimIndent()
+
+        val result = ScorecardOcrAnalyzer.parse(corruptedSampleText)
+
+        // 1. 총 타수 88타 정상 인식 검증
+        assertEquals(88, result.totalScore)
+
+        // 2. UI 버튼/라벨 텍스트("라운드 상세 기록 FIELD", "기록 삭제 취소 저장하기")가 코스명으로 채택되지 않고 null/정상 처리되는지 검증
+        org.junit.Assert.assertNotEquals("라운드 상세 기록 FIELD / 기록 삭제 취소 저장하기", result.courseName)
+        org.junit.Assert.assertTrue(
+            result.courseName == null || !ScorecardOcrAnalyzer.containsMobileAppUiKeyword(result.courseName!!)
+        )
+
+        // 3. 골프장명도 비정상 UI 텍스트가 채택되지 않았는지 검증
+        org.junit.Assert.assertTrue(
+            result.clubName == null || !ScorecardOcrAnalyzer.containsMobileAppUiKeyword(result.clubName!!)
+        )
+    }
 }
 

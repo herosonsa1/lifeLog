@@ -189,10 +189,16 @@ class DailyRouteAggregator @Inject constructor(
         val uniqueSteps = deduplicateRouteSteps(validSteps)
 
         // Extract Distinct Place Names for Itinerary Chain (결제 정보는 지도 이동 경로에서 제외하고 실제 방문 장소만 추출)
+        val invalidPlaceKeywords = listOf("촬영", "일반 사진", "필드 골프장", "사진 기록", "사진", "기록", "더미", "OCR", "일상 기록")
         val distinctPlaces = uniqueSteps
             .filter { it.stepType != RouteStepType.TRANSACTION }
             .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
-            .filter { !it.contains("촬영") && !it.contains("일반 사진") && !it.contains("필드 골프장") }
+            .map { it.trim() }
+            .filter { place ->
+                place.isNotBlank() &&
+                invalidPlaceKeywords.none { place.contains(it) } &&
+                !INVALID_GOLF_UI_WORDS.any { place.contains(it, ignoreCase = true) }
+            }
             .distinct()
 
         val movementSummary = if (distinctPlaces.isNotEmpty()) {
@@ -211,8 +217,9 @@ class DailyRouteAggregator @Inject constructor(
             hasGolf -> {
                 val golfPlace = realGolfSteps.firstOrNull()?.locationName ?: realGolfSteps.firstOrNull()?.title ?: validGolfRounds.firstOrNull()?.clubName ?: "골프"
                 val cleanGolfTitle = if (golfPlace.endsWith("라운드") || golfPlace.endsWith("라운딩")) golfPlace else "$golfPlace 라운딩"
-                val other = distinctPlaces.firstOrNull { !it.contains("CC") && !it.contains("골프") && isRealGolfClub(it) }
-                if (other != null) "$cleanGolfTitle & $other" else cleanGolfTitle
+                // 골프장 외의 실제 방문 장소(예: 서울 문정동)가 존재하면 함께 결합
+                val otherPlace = distinctPlaces.firstOrNull { it != golfPlace && !it.contains("CC") && !it.contains("골프") && !it.contains("GC") }
+                if (otherPlace != null) "$cleanGolfTitle & $otherPlace" else cleanGolfTitle
             }
             distinctPlaces.size >= 2 -> "${distinctPlaces.first()} & ${distinctPlaces[1]}"
             distinctPlaces.size == 1 -> "${distinctPlaces.first()} 일정"
@@ -220,12 +227,23 @@ class DailyRouteAggregator @Inject constructor(
             else -> "${date.monthValue}월 ${date.dayOfMonth}일의 다이어리"
         }
 
-        // Extract All Photos, Companions, Tags
-        val allPhotoUris = cleanPhotos.map { it.uri }.distinct()
+        // Extract All Photos, Companions, Tags (시간순 정렬 사진 보장)
+        val allPhotoUris = sortedPhotos.map { it.uri }.distinct()
         val totalExpense = validExpenseTxs.sumOf { it.amount }
         val vehicleLogDistance = vehicleLogs.sumOf { it.tripDistanceKm }
         val estimatedRouteDistance = LocationDistanceUtils.calculateRouteDrivingDistanceKm(uniqueSteps)
-        val totalDistance = if (vehicleLogDistance > 0) vehicleLogDistance else estimatedRouteDistance
+        var totalDistance = if (vehicleLogDistance > 0) vehicleLogDistance else estimatedRouteDistance
+
+        // [골프장 주행거리 지능형 폴백 연동]
+        // 골프 라운드가 확정되었는데 차계부나 GPS 주행거리가 0.0km인 경우,
+        // 골프장 표준 왕복 주행거리(120~160km)를 자동 연동하여 0.0km 괴리 방지
+        if (totalDistance <= 0.0 && hasGolf) {
+            val golfClubForDist = realGolfSteps.firstOrNull()?.locationName
+                ?: validGolfRounds.firstOrNull()?.clubName
+            if (!golfClubForDist.isNullOrBlank() && isRealGolfClub(golfClubForDist)) {
+                totalDistance = com.autologue.app.util.GolfCourseDistanceUtils.getEstimatedRoundTripKm(golfClubForDist)
+            }
+        }
 
         // Generate Smart Summary Paragraph
         val summary = buildSummaryNarrative(date, uniqueSteps, distinctPlaces, cleanPhotos.size, totalExpense)
@@ -368,6 +386,13 @@ class DailyRouteAggregator @Inject constructor(
                     !isRealGolfClub(loc.ifBlank { title.replace(" 라운드", "").replace(" 라운딩", "") })
         }
 
+        val INVALID_GOLF_UI_WORDS = listOf(
+            "라운드", "상세", "기록", "FIELD", "Field", "field", "삭제", "취소", "저장하기", "저장",
+            "공유", "수정", "뒤로", "닫기", "메뉴", "홈", "선택", "등록", "버튼", "관리", "설정",
+            "동반자", "캐디", "예약", "조회", "알림", "마이페이지", "앱", "스코어", "플레이어", "사진",
+            "일정", "방문", "안내", "영수증", "진료", "병원", "약국", "전표", "명세"
+        )
+
         /**
          * 유효한 실제 골프장명인지 판별 (가짜/더미 골프장명 차단)
          */
@@ -375,7 +400,8 @@ class DailyRouteAggregator @Inject constructor(
             if (clubName.isNullOrBlank()) return false
             val norm = clubName.trim()
             if (norm in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패", "클럽하우스")) return false
-            if (norm.contains("일반 사진") || norm.contains("필드 골프장") || norm.contains("OCR") || norm.length > 30) return false
+            if (norm.contains("일반 사진") || norm.contains("필드 골프장") || norm.contains("OCR") || norm.length > 25) return false
+            if (INVALID_GOLF_UI_WORDS.any { norm.contains(it, ignoreCase = true) }) return false
             return true
         }
 
