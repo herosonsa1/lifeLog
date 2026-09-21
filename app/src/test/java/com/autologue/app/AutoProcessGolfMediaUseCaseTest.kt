@@ -18,15 +18,18 @@ class AutoProcessGolfMediaUseCaseTest {
 
     private lateinit var fakeGolfRepository: FakeGolfRepository
     private lateinit var fakeDiaryRepository: FakeDiaryRepository
+    private lateinit var fakeVehicleRepository: FakeVehicleRepository
     private lateinit var extractScorecardOcrUseCase: ExtractScorecardOcrUseCase
 
     @Before
     fun setUp() {
         fakeGolfRepository = FakeGolfRepository()
         fakeDiaryRepository = FakeDiaryRepository()
+        fakeVehicleRepository = FakeVehicleRepository()
         extractScorecardOcrUseCase = ExtractScorecardOcrUseCase(
             golfRepository = fakeGolfRepository,
-            diaryRepository = fakeDiaryRepository
+            diaryRepository = fakeDiaryRepository,
+            vehicleRepository = fakeVehicleRepository
         )
     }
 
@@ -213,6 +216,43 @@ class AutoProcessGolfMediaUseCaseTest {
         assertEquals(0, fakeGolfRepository.rounds.size)
     }
 
+    @Test
+    fun processScorecardResult_createsVehicleDrivingLogForComplete18HoleRound() = runBlocking {
+        val testDate = LocalDate.of(2026, 9, 19)
+        // 18홀 완주 월송리 CC 스코어카드
+        val wolsongriResult = ScorecardOcrResult(
+            totalScore = 81,
+            totalPutts = 34,
+            holeScores = listOf(6, 5, 5, 4, 3, 6, 6, 4, 4, 5, 5, 4, 6, 3, 4, 3, 4, 4),
+            holePars = listOf(5, 4, 3, 4, 4, 5, 4, 3, 4, 4, 5, 3, 5, 4, 4, 4, 3, 4),
+            clubName = "월송리 CC",
+            courseName = "Out / In",
+            playDate = testDate,
+            penaltyCount = 3,
+            recognizedRawText = "월송리 CC SCORE 81"
+        )
+
+        val round = extractScorecardOcrUseCase.processScorecardResult(
+            result = wolsongriResult,
+            scorecardUri = "content://media/wolsongri_scorecard.png",
+            targetDate = testDate
+        )
+
+        assertNotNull(round)
+        assertEquals(81, round!!.totalScore)
+        assertEquals("월송리 CC", round.clubName)
+
+        // [핵심 검증] 18홀 스코어카드 분석 시 차계부 주행 기록이 130.0 km 왕복으로 자동 생성되어야 함!
+        val drivingLogs = fakeVehicleRepository.logs
+        assertEquals(1, drivingLogs.size)
+        val drivingLog = drivingLogs[0]
+        assertEquals(VehicleLogType.TRIP_DRIVING, drivingLog.logType)
+        assertEquals(130.0, drivingLog.tripDistanceKm, 0.01)
+        assertEquals("월송리 CC 라운딩 왕복 주행", drivingLog.note)
+        assertEquals(testDate, drivingLog.timestamp.toLocalDate())
+        assertEquals("월송리 CC 왕복 주행 (130.0 km)", drivingLog.getDrivingRouteTitle())
+    }
+
 
     // Fake Repositories for testing
     class FakeGolfRepository : GolfRepository {
@@ -267,6 +307,37 @@ class AutoProcessGolfMediaUseCaseTest {
 
         override suspend fun cleanDuplicates(): Int = 0
         override suspend fun generateClustersForDate(date: LocalDate): List<PlaceCluster> = emptyList()
+    }
+
+    class FakeVehicleRepository : com.autologue.app.domain.repository.VehicleRepository {
+        val logs = mutableListOf<VehicleLog>()
+
+        override fun getAllVehicleLogsFlow(): Flow<List<VehicleLog>> = flowOf(logs)
+        override fun getRefuelingLogsFlow(): Flow<List<VehicleLog>> = flowOf(logs.filter { it.logType == VehicleLogType.REFUELING })
+        override suspend fun insertVehicleLog(log: VehicleLog): Long {
+            val id = if (log.id != 0L) log.id else (logs.size + 1).toLong()
+            logs.add(log.copy(id = id))
+            return id
+        }
+        override suspend fun getVehicleLogById(id: Long): VehicleLog? = logs.find { it.id == id }
+        override suspend fun updateVehicleLog(log: VehicleLog) {
+            val idx = logs.indexOfFirst { it.id == log.id }
+            if (idx >= 0) logs[idx] = log else logs.add(log)
+        }
+        override suspend fun getLatestRefuelingLog(): VehicleLog? = logs.filter { it.logType == VehicleLogType.REFUELING }.maxByOrNull { it.timestamp }
+        override suspend fun getDrivingDistanceBetween(start: LocalDate, end: LocalDate): Double =
+            logs.filter { it.timestamp.toLocalDate() in start..end && it.logType == VehicleLogType.TRIP_DRIVING }.sumOf { it.tripDistanceKm }
+        override suspend fun cleanDuplicates(): Int = 0
+        override suspend fun cleanDuplicatesAndCorruptedLogs(homeName: String, companyName: String, commuteDistanceKm: Double): Int = 0
+        override suspend fun syncRefuelingFromTransactions(transactions: List<Transaction>): Int = 0
+        override suspend fun syncDrivingLogsFromDiary(diaryEntries: List<DiaryEntry>): Int = 0
+        override suspend fun clearTripDrivingLogs(): Int {
+            val count = logs.count { it.logType == VehicleLogType.TRIP_DRIVING }
+            logs.removeAll { it.logType == VehicleLogType.TRIP_DRIVING }
+            return count
+        }
+        override suspend fun recordCommuteTrip(isToWork: Boolean, homeName: String, companyName: String, distanceKm: Double): Long = -1L
+        override suspend fun syncAndCleanWithGolfRounds(validRounds: List<GolfRound>): Int = 0
     }
 }
 

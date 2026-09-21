@@ -105,6 +105,15 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
         return if (tripDistanceKm > 0.0) "퇴근 주행 (%.1f km)".format(tripDistanceKm) else "퇴근 주행"
     }
 
+    // 3-1. 골프장 라운딩 왕복 주행 패턴 (예: "월송리 CC 라운딩 왕복 주행", "오크밸리 CC 라운딩 왕복 주행")
+    if (n.contains("골프") || n.contains("라운딩") || n.contains("CC") || n.contains("GC") || n.contains("C.C") || n.contains("G.C")) {
+        val clubMatch = Regex("([가-힣A-Za-z0-9]+(?:\\s*(?:CC|GC|C\\.C|G\\.C|골프장|클럽)))").find(n)
+        val clubName = clubMatch?.value?.trim() ?: run {
+            n.substringBefore("라운딩").substringBefore("골프").trim().ifBlank { null }
+        } ?: "골프장"
+        return if (tripDistanceKm > 0.0) "$clubName 왕복 주행 (%.1f km)".format(tripDistanceKm) else "$clubName 왕복 주행"
+    }
+
     // 4. 레거시 포맷 폴백
     if (tripDistanceKm > 0.0) {
         return "자동 주행 (%.1f km)".format(tripDistanceKm)

@@ -236,6 +236,71 @@ class VehicleRepositoryImpl @Inject constructor(
         vehicleLogDao.insertVehicleLog(log.toEntity())
     }
 
+    override suspend fun syncAndCleanWithGolfRounds(
+        validRounds: List<com.autologue.app.domain.model.GolfRound>
+    ): Int = withContext(Dispatchers.IO) {
+        val allLogs = vehicleLogDao.getAllVehicleLogsSync()
+        var changeCount = 0
+
+        // 1. 유효한 18홀 라운드만 필터링 (54~144타 또는 14홀 이상, 유효한 골프장명)
+        val completeRounds = validRounds.filter { r ->
+            (r.totalScore in 54..144 || r.holeScores.size >= 14) &&
+                    r.clubName.isNotBlank() &&
+                    r.clubName != "필드 골프장" &&
+                    !r.clubName.contains("일반 사진")
+        }
+        val validRoundDates = completeRounds.map { it.roundDate.toLocalDate() }.toSet()
+
+        // 2. [유령 골프 주행 레코드 및 미래 오류 레코드 삭제]
+        val now = java.time.LocalDateTime.now()
+        for (log in allLogs) {
+            val note = log.note ?: ""
+            val isGolfLog = log.logType == VehicleLogType.TRIP_DRIVING &&
+                    (note.contains("골프") || note.contains("라운딩") || note.contains("CC") || note.contains("GC") || note.contains("C.C") || note.contains("G.C"))
+
+            // 미래 시각 오류 레코드 삭제 (예: 비정상 파싱으로 미래 연도로 등록된 8.8 등)
+            if (log.timestamp.isAfter(now.plusHours(2))) {
+                android.util.Log.d("VehicleRepository", "미래 오류 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}")
+                vehicleLogDao.deleteVehicleLogById(log.id)
+                changeCount++
+                continue
+            }
+
+            // 실제 골프 라운드 DB에 없는 날짜의 가짜/오탐 골프 주행 기록(8.8, 9.1, 9.9, 8.28, 8.21 등) 영구 삭제
+            if (isGolfLog && log.timestamp.toLocalDate() !in validRoundDates) {
+                android.util.Log.d("VehicleRepository", "유령 골프 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}, note=$note")
+                vehicleLogDao.deleteVehicleLogById(log.id)
+                changeCount++
+            }
+        }
+
+        // 3. [누락된 실제 골프 라운드 주행 기록 복원/생성]
+        val updatedLogs = vehicleLogDao.getAllVehicleLogsSync()
+        for (round in completeRounds) {
+            val rDate = round.roundDate.toLocalDate()
+            val hasDrivingOnDate = updatedLogs.any {
+                it.logType == VehicleLogType.TRIP_DRIVING && it.timestamp.toLocalDate() == rDate
+            }
+
+            if (!hasDrivingOnDate) {
+                val distanceKm = com.autologue.app.util.GolfCourseDistanceUtils.getEstimatedRoundTripKm(round.clubName)
+                val startTime = round.startTime ?: round.roundDate
+                val drivingTime = startTime.minusHours(2)
+                val newLog = VehicleLog(
+                    timestamp = drivingTime,
+                    logType = VehicleLogType.TRIP_DRIVING,
+                    tripDistanceKm = distanceKm,
+                    note = "${round.clubName} 라운딩 왕복 주행"
+                )
+                android.util.Log.d("VehicleRepository", "골프 라운드 주행 기록 자동 복원: date=$rDate, club=${round.clubName}, km=$distanceKm")
+                vehicleLogDao.insertVehicleLog(newLog.toEntity())
+                changeCount++
+            }
+        }
+
+        changeCount
+    }
+
     private fun VehicleLogEntity.toDomain() = VehicleLog(
         id = id, timestamp = timestamp, logType = logType, fuelCost = fuelCost,
         fuelAmountLiters = fuelAmountLiters, daysSinceLastFuel = daysSinceLastFuel,

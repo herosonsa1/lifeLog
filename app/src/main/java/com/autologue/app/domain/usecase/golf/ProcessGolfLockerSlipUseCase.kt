@@ -148,18 +148,7 @@ class ProcessGolfLockerSlipUseCase @Inject constructor(
                 result.clubName.length > 25
 
         if (result.isLockerSlip && !isCorruptedClubName) {
-            val estimatedDistance = when {
-                result.clubName.contains("아리지") || result.clubName.contains("스카이밸리") -> 160.0
-                result.clubName.contains("필로스") -> 120.0
-                result.clubName.contains("라데나") -> 190.0
-                result.clubName.contains("동강시스타") -> 280.0
-                result.clubName.contains("남촌") -> 110.0
-                result.clubName.contains("해슬리") -> 140.0
-                result.clubName.contains("베어크리크") -> 150.0
-                result.clubName.contains("라비에벨") -> 170.0
-                result.clubName.contains("아난티") -> 110.0
-                else -> 130.0
-            }
+            val estimatedDistance = com.autologue.app.util.GolfCourseDistanceUtils.getEstimatedRoundTripKm(result.clubName)
 
             val existingDriving = runCatching {
                 vehicleRepository.getAllVehicleLogsFlow().first()

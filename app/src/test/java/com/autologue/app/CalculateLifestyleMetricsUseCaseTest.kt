@@ -52,6 +52,7 @@ class CalculateLifestyleMetricsUseCaseTest {
         override suspend fun syncDrivingLogsFromDiary(diaryEntries: List<DiaryEntry>) = 0
         override suspend fun clearTripDrivingLogs() = 0
         override suspend fun recordCommuteTrip(isToWork: Boolean, homeName: String, companyName: String, distanceKm: Double) = 1L
+        override suspend fun syncAndCleanWithGolfRounds(validRounds: List<GolfRound>) = 0
     }
 
     private class FakeGolfRepo(private val rounds: List<GolfRound>) : GolfRepository {

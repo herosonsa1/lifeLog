@@ -56,6 +56,7 @@ class CarLedgerViewModel @Inject constructor(
     private val vehicleRepository: VehicleRepository,
     private val transactionRepository: TransactionRepository,
     private val diaryRepository: DiaryRepository,
+    private val golfRepository: com.autologue.app.domain.repository.GolfRepository,
     private val locationPreferences: UserLocationPreferences,
     private val maintenancePreferences: VehicleMaintenancePreferences,
     private val multiVehiclePreferences: MultiVehiclePreferences
@@ -276,15 +277,20 @@ class CarLedgerViewModel @Inject constructor(
             val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
             val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
 
-            // 1. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
+            // 1. 실제 골프 라운드 DB(18홀 유효)와 대조하여 누락된 주행기록 자동 복원 및 유령 레코드(8.8, 9.1 등) 영구 삭제
+            val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
+            vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
+
+            // 2. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
 
-            // 2. 주유 결제 내역 동기화
+            // 3. 주유 결제 내역 동기화
             val txs = transactionRepository.getAllTransactionsFlow().first()
             vehicleRepository.syncRefuelingFromTransactions(txs)
 
-            // 3. 재정제 보장
+            // 4. 재정제 및 골프 정합성 확정
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
+            vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
             _uiState.value = _uiState.value.copy(isSyncing = false)
         }
     }
@@ -350,6 +356,9 @@ class CarLedgerViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isSyncing = true)
             vehicleRepository.clearTripDrivingLogs()
             locationPreferences.resetConfig()
+            // 유효한 18홀 라운드에 대한 정상 주행기록만 복원
+            val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
+            vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
             _uiState.value = _uiState.value.copy(isSyncing = false)
         }
     }

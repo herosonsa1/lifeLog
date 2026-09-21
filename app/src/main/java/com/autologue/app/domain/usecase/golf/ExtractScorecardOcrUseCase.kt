@@ -4,14 +4,19 @@ import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
 import com.autologue.app.domain.model.DiaryEntry
+import com.autologue.app.domain.model.VehicleLog
+import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.GolfRepository
+import com.autologue.app.domain.repository.VehicleRepository
+import com.autologue.app.util.GolfCourseDistanceUtils
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
 class ExtractScorecardOcrUseCase @Inject constructor(
     private val golfRepository: GolfRepository,
-    private val diaryRepository: DiaryRepository
+    private val diaryRepository: DiaryRepository,
+    private val vehicleRepository: VehicleRepository
 ) {
     suspend fun saveOcrResult(
         roundId: Long,
@@ -238,6 +243,29 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             holePars = result.holePars,
             clubName = finalRound.clubName
         )
+
+        // [골프장 주행기록 차계부 자동 연동] 18홀 라운드 확정 시 해당 날짜의 골프 주행기록 1회 자동 생성
+        val targetClub = finalRound.clubName.ifBlank { result.clubName ?: "골프장" }
+        if (targetClub != "필드 골프장" && !targetClub.contains("일반 사진")) {
+            val estimatedDist = GolfCourseDistanceUtils.getEstimatedRoundTripKm(targetClub)
+            val startTime = finalRound.startTime ?: effectiveDate.atTime(8, 0)
+            val drivingTime = startTime.minusHours(2)
+
+            val existingDriving = runCatching {
+                vehicleRepository.getAllVehicleLogsFlow().first()
+                    .any { it.logType == VehicleLogType.TRIP_DRIVING && it.timestamp.toLocalDate() == effectiveDate }
+            }.getOrDefault(false)
+
+            if (!existingDriving) {
+                val vehicleLog = VehicleLog(
+                    timestamp = drivingTime,
+                    logType = VehicleLogType.TRIP_DRIVING,
+                    tripDistanceKm = estimatedDist,
+                    note = "$targetClub 라운딩 왕복 주행"
+                )
+                vehicleRepository.insertVehicleLog(vehicleLog)
+            }
+        }
 
         return golfRepository.getGolfRoundById(finalRound.id) ?: finalRound
     }
