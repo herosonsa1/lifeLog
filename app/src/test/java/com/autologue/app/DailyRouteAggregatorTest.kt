@@ -47,13 +47,13 @@ class DailyRouteAggregatorTest {
             longitude = null,
             placeName = "사진 기록"
         )
-        // 19:36 문정동 사진 (위치 있음 -> "서울 문정동")
+        // 19:36 하남시 사진 (위치 메타데이터 기반 -> "경기 하남시")
         val photo2 = ScannedPhoto(
             uri = "content://media/2",
             time = targetDate.atTime(19, 36),
-            latitude = 37.4858,
-            longitude = 127.1225,
-            placeName = "서울 문정동"
+            latitude = 37.4912,
+            longitude = 127.1512,
+            placeName = "경기 하남시"
         )
 
         val diary = aggregator.aggregateForDate(
@@ -64,10 +64,10 @@ class DailyRouteAggregatorTest {
             vehicleLogs = emptyList()
         )
 
-        // "사진 기록"이 동선 체인에서 제외되고 유효 장소인 "서울 문정동"만 표출되는지 검증
+        // "사진 기록"이 동선 체인에서 제외되고 유효 장소인 "경기 하남시"만 표출되는지 검증
         assertFalse(diary.movementSummary?.contains("사진 기록") == true)
-        assertEquals("서울 문정동", diary.movementSummary)
-        assertEquals("서울 문정동 일정", diary.title)
+        assertEquals("경기 하남시", diary.movementSummary)
+        assertEquals("경기 하남시 일정", diary.title)
     }
 
     @Test
@@ -108,9 +108,9 @@ class DailyRouteAggregatorTest {
         val familyPhoto = ScannedPhoto(
             uri = "content://media/family",
             time = targetDate.atTime(19, 36),
-            latitude = 37.4858,
-            longitude = 127.1225,
-            placeName = "서울 문정동"
+            latitude = 37.4912,
+            longitude = 127.1512,
+            placeName = "경기 하남시"
         )
 
         val diary = aggregator.aggregateForDate(
@@ -121,9 +121,9 @@ class DailyRouteAggregatorTest {
             vehicleLogs = emptyList()
         )
 
-        // 골프 일정과 문정동 일상이 조화롭게 결합된 타이틀 검증
-        assertEquals("킹스데일 GC 라운딩 & 서울 문정동", diary.title)
+        // 골프 일정과 하남시 일상이 조화롭게 결합된 타이틀 검증
+        assertEquals("킹스데일 GC 라운딩 & 경기 하남시", diary.title)
         assertFalse(diary.movementSummary?.contains("사진 기록") == true)
-        assertEquals("킹스데일 GC ➔ 서울 문정동", diary.movementSummary)
+        assertEquals("킹스데일 GC ➔ 경기 하남시", diary.movementSummary)
     }
 }

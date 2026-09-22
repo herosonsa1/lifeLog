@@ -4,11 +4,20 @@ import android.content.Context
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import java.io.InputStream
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class PlaceResolver @Inject constructor() {
+class PlaceResolver internal constructor(
+    private val context: Context?,
+    @Suppress("UNUSED_PARAMETER") dummy: Unit
+) {
+    @Inject
+    constructor(@ApplicationContext context: Context) : this(context, Unit)
+
+    /** 단위 테스트(JVM) 전용 무인자 생성자 */
+    constructor() : this(null, Unit)
 
     /**
      * [M-01] geoCache 크기 제한 적용 — 무제한 ConcurrentHashMap 대신 LruCache 래퍼 사용.
@@ -95,110 +104,121 @@ class PlaceResolver @Inject constructor() {
         return fromExif
     }
 
+    private fun shortenAdminArea(admin: String?): String {
+        if (admin.isNullOrBlank()) return ""
+        val trimmed = admin.trim()
+        return when {
+            trimmed.contains("서울") -> "서울"
+            trimmed.contains("경기") -> "경기"
+            trimmed.contains("충청북") || trimmed.contains("충북") -> "충북"
+            trimmed.contains("충청남") || trimmed.contains("충남") -> "충남"
+            trimmed.contains("전라북") || trimmed.contains("전북") -> "전북"
+            trimmed.contains("전라남") || trimmed.contains("전남") -> "전남"
+            trimmed.contains("경상북") || trimmed.contains("경북") -> "경북"
+            trimmed.contains("경상남") || trimmed.contains("경남") -> "경남"
+            trimmed.contains("강원") -> "강원"
+            trimmed.contains("제주") -> "제주"
+            trimmed.contains("세종") -> "세종"
+            trimmed.contains("인천") -> "인천"
+            trimmed.contains("부산") -> "부산"
+            trimmed.contains("대구") -> "대구"
+            trimmed.contains("광주") -> "광주"
+            trimmed.contains("대전") -> "대전"
+            trimmed.contains("울산") -> "울산"
+            else -> trimmed.replace("특별시", "").replace("광역시", "").replace("특별자치시", "").replace("도", "")
+        }
+    }
+
     private fun extractDong(addr: android.location.Address): String? {
-        val candidates = listOfNotNull(addr.subLocality, addr.thoroughfare)
+        val candidates = listOfNotNull(addr.thoroughfare, addr.subLocality, addr.featureName)
         for (c in candidates) {
             val trimmed = c.trim()
-            if (trimmed.endsWith("동") || trimmed.endsWith("읍") || trimmed.endsWith("면") || trimmed.endsWith("리") || trimmed.endsWith("가")) {
+            if ((trimmed.endsWith("동") || trimmed.endsWith("읍") || trimmed.endsWith("면") || trimmed.endsWith("리") || trimmed.endsWith("가")) &&
+                !trimmed.endsWith("동로") && !trimmed.endsWith("동길") && !trimmed.endsWith("운동장")
+            ) {
                 return trimmed
             }
         }
         val fullLine = addr.getAddressLine(0) ?: ""
         val regex = Regex("([가-힣0-9]+(?:동|읍|면|리|가))(?=\\s|\\d|$)")
         val matches = regex.findAll(fullLine).map { it.groupValues[1] }.toList()
-        return matches.lastOrNull { !it.endsWith("동로") && !it.endsWith("동길") }
+        return matches.lastOrNull { !it.endsWith("동로") && !it.endsWith("동길") && !it.endsWith("운동장") }
+    }
+
+    internal fun parseAddressToDisplayName(addr: android.location.Address): String {
+        val admin = shortenAdminArea(addr.adminArea)
+        val fullLine = addr.getAddressLine(0) ?: ""
+
+        // fullLine(예: "대한민국 경기도 하남시 학암동 위례순환로 123")에서 시/군/구 토큰 추출
+        val tokens = fullLine.split(" ", ",").map { it.trim() }.filter { it.isNotBlank() && it != "대한민국" }
+        
+        var siGunGu: String? = null
+        for (t in tokens) {
+            if (t.endsWith("시") || t.endsWith("군") || t.endsWith("구")) {
+                if (siGunGu == null) {
+                    siGunGu = t
+                } else if (siGunGu.endsWith("시") && t.endsWith("구")) {
+                    siGunGu = "$siGunGu $t" // 예: 성남시 수정구
+                }
+            }
+        }
+
+        // fallback: Address 객체의 subLocality, locality, subAdminArea에서 구/시 탐색
+        if (siGunGu == null) {
+            val candidateGu = listOfNotNull(addr.subLocality, addr.locality, addr.subAdminArea)
+                .map { it.trim() }
+                .firstOrNull { it.endsWith("시") || it.endsWith("군") || it.endsWith("구") }
+            if (candidateGu != null) {
+                siGunGu = candidateGu
+            }
+        }
+
+        val dong = extractDong(addr)
+
+        return when {
+            admin == "서울" -> {
+                when {
+                    !dong.isNullOrBlank() -> "서울 $dong"
+                    !siGunGu.isNullOrBlank() -> "서울 $siGunGu"
+                    else -> "서울"
+                }
+            }
+            admin.isNotBlank() -> {
+                when {
+                    !dong.isNullOrBlank() && !siGunGu.isNullOrBlank() -> "$admin $siGunGu $dong"
+                    !dong.isNullOrBlank() -> "$admin $dong"
+                    !siGunGu.isNullOrBlank() -> "$admin $siGunGu"
+                    else -> admin
+                }
+            }
+            !siGunGu.isNullOrBlank() -> {
+                if (!dong.isNullOrBlank()) "$siGunGu $dong" else siGunGu
+            }
+            !dong.isNullOrBlank() -> dong
+            fullLine.isNotBlank() -> fullLine
+            else -> "기록된 장소"
+        }
     }
 
     fun resolveGeoLocation(context: Context? = null, lat: Double, lng: Double): ResolvedLocation {
         val cacheKey = "%.3f,%.3f".format(java.util.Locale.US, lat, lng)
         geoCache[cacheKey]?.let { return it }
 
-        // 1. Check known specific bounds for precise Korean Dong / Eup / Myeon name
-        // 마포구 상암동
-        if (lat in 37.550..37.585 && lng in 126.880..126.915) {
-            val res = ResolvedLocation("서울 상암동", "서울특별시 마포구 상암동 하늘공원로 95", lat, lng)
-            geoCache[cacheKey] = res
-            return res
-        }
-        // 송파구 (잠실동 vs 방이동 vs 문정동)
-        if (lat in 37.480..37.535 && lng in 127.080..127.160) {
-            val dong = when {
-                lng < 127.105 -> "잠실동"
-                lat < 37.500 -> "문정동"
-                else -> "방이동"
-            }
-            val res = ResolvedLocation("서울 $dong", "서울특별시 송파구 $dong", lat, lng)
-            geoCache[cacheKey] = res
-            return res
-        }
-        // 영등포구 (여의도동 vs 영등포동)
-        if (lat in 37.505..37.545 && lng in 126.885..126.945) {
-            val dong = if (lng >= 126.918) "여의도동" else "영등포동"
-            val res = ResolvedLocation("서울 $dong", "서울특별시 영등포구 $dong", lat, lng)
-            geoCache[cacheKey] = res
-            return res
-        }
-        // 강남구 (역삼동 vs 삼성동 vs 신사동)
-        if (lat in 37.480..37.535 && lng in 127.020..127.079) {
-            val dong = when {
-                lat >= 37.515 -> "신사동"
-                lng >= 127.045 -> "삼성동"
-                else -> "역삼동"
-            }
-            val res = ResolvedLocation("서울 $dong", "서울특별시 강남구 $dong", lat, lng)
-            geoCache[cacheKey] = res
-            return res
-        }
-        // 위례동
-        if (lat in 37.470..37.485 && lng in 127.135..127.155) {
-            val res = ResolvedLocation("경기 위례동", "경기도 성남시 수정구 위례동", lat, lng)
-            geoCache[cacheKey] = res
-            return res
-        }
-        // 분당/판교 삼평동/백현동
-        if (lat in 37.380..37.410 && lng in 127.100..127.125) {
-            val dong = if (lat >= 37.395) "삼평동" else "백현동"
-            val res = ResolvedLocation("경기 $dong", "경기도 성남시 분당구 $dong", lat, lng)
-            geoCache[cacheKey] = res
-            return res
-        }
-        // 광주 곤지암읍
-        if (lat in 37.320..37.350 && lng in 127.340..127.370) {
-            val res = ResolvedLocation("경기 곤지암읍", "경기도 광주시 곤지암읍", lat, lng)
-            geoCache[cacheKey] = res
-            return res
-        }
+        val activeContext = context ?: this.context
 
-        // 2. Android Geocoder reverse-lookup with Dong prioritisation
-        if (context != null) {
+        // 1. Android Geocoder (구글 맵 공식 역지오코딩) 최우선 실행
+        if (activeContext != null) {
             runCatching {
                 if (android.location.Geocoder.isPresent()) {
-                    val geocoder = android.location.Geocoder(context, java.util.Locale.KOREAN)
+                    val geocoder = android.location.Geocoder(activeContext, java.util.Locale.KOREAN)
                     @Suppress("DEPRECATION")
                     val addresses = geocoder.getFromLocation(lat, lng, 1)
                     if (!addresses.isNullOrEmpty()) {
                         val addr = addresses[0]
-                        val admin = (addr.adminArea ?: "")
-                            .replace("서울특별시", "서울")
-                            .replace("광역시", "")
-                            .replace("특별자치시", "")
-                            .replace("도", "")
-                            .trim()
-                        val locality = (addr.locality ?: addr.subAdminArea ?: "")
-                            .replace("시", "")
-                            .replace("구", "")
-                            .trim()
-                        val dong = extractDong(addr)
-
-                        val shortName = if (!dong.isNullOrBlank()) {
-                            if (admin.isNotBlank()) "$admin $dong" else dong
-                        } else {
-                            listOf(admin, locality).filter { it.isNotBlank() }.distinct().joinToString(" ")
-                        }
-
-                        val fullAddress = addr.getAddressLine(0) ?: "$admin $locality ${dong ?: ""}".trim()
+                        val shortName = parseAddressToDisplayName(addr)
+                        val fullAddress = addr.getAddressLine(0) ?: shortName
                         val res = ResolvedLocation(
-                            placeName = if (shortName.isNotBlank()) shortName else if (fullAddress.isNotBlank()) fullAddress else "기록된 장소",
+                            placeName = if (shortName.isNotBlank()) shortName else fullAddress,
                             address = fullAddress.ifBlank { "위치 정보" },
                             latitude = lat,
                             longitude = lng
@@ -210,6 +230,7 @@ class PlaceResolver @Inject constructor() {
             }
         }
 
+        // 2. Geocoder 실패 또는 오프라인 환경일 때 안전 폴백
         val fallbackPlace = "위도 %.3f, 경도 %.3f".format(java.util.Locale.US, lat, lng)
         val fallback = ResolvedLocation(fallbackPlace, "위치 정보 ($fallbackPlace)", lat, lng)
         geoCache[cacheKey] = fallback

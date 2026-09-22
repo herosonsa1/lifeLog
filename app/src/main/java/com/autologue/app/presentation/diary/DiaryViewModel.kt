@@ -229,7 +229,9 @@ class DiaryViewModel @Inject constructor(
                     val hasCorruptedGolfTitle = entry.title.contains("기록 삭제") || entry.title.contains("FIELD") || entry.title.contains("저장하기") || entry.title.contains("사진 기록 일정") || (entry.hasGolfRound && entry.title.contains("CC 일정") && dayGolf.any { !it.clubName.contains("FIELD") })
                     val hasCorruptedMovement = entry.movementSummary?.contains("사진 기록") == true
                     val hasGolfZeroDistance = entry.hasGolfRound && entry.drivingDistanceKm <= 0.0
-                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps || hasCorruptedGolfTitle || hasCorruptedMovement || hasGolfZeroDistance
+                    val hasCorruptedMunjeong = (entry.title.contains("문정동") || entry.placeName?.contains("문정동") == true || entry.summary.contains("문정동") || entry.movementSummary?.contains("문정동") == true || entry.routeSteps.any { it.locationName?.contains("문정동") == true }) &&
+                        entry.routeSteps.any { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 }
+                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps || hasCorruptedGolfTitle || hasCorruptedMovement || hasGolfZeroDistance || hasCorruptedMunjeong
 
                     if (needsUpgrade) {
                         val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }
@@ -237,11 +239,11 @@ class DiaryViewModel @Inject constructor(
                         val existingPhotos = entry.routeSteps
                             .filter { it.stepType == RouteStepType.PHOTO }
                             .flatMap { step ->
-                                val isLegacyGu = step.locationName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
+                                val isLegacyGu = step.locationName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암", "서울 문정동", "문정동")
                                 val cleanPlace = if (step.locationName?.contains("사진 촬영") == true || isLegacyGu) null else step.locationName
                                 val lat = step.latitude
                                 val lng = step.longitude
-                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(null, lat, lng) else null
+                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(appContext, lat, lng) else null
                                 val targetPlace = cleanPlace ?: resolved?.placeName ?: "사진 기록"
                                 val targetAddr = if (cleanPlace == null) resolved?.address ?: "" else step.address
 
@@ -258,11 +260,11 @@ class DiaryViewModel @Inject constructor(
                                     )
                                 }
                             }.ifEmpty {
-                                val isLegacyGu = entry.placeName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암")
+                                val isLegacyGu = entry.placeName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암", "서울 문정동", "문정동")
                                 val cleanPlace = if (entry.placeName?.contains("사진 촬영") == true || isLegacyGu) null else entry.placeName
                                 val lat = entry.latitude
                                 val lng = entry.longitude
-                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(null, lat, lng) else null
+                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(appContext, lat, lng) else null
                                 val targetPlace = cleanPlace ?: resolved?.placeName ?: "사진 기록"
                                 val targetAddr = if (cleanPlace == null) resolved?.address ?: "" else entry.address
 
@@ -295,7 +297,7 @@ class DiaryViewModel @Inject constructor(
                         ).copy(
                             id = entry.id,
                             hasGolfRound = dayGolf.isNotEmpty(),
-                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장") || hasCorruptedGolfTitle) "" else entry.summary
+                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장") || hasCorruptedGolfTitle || hasCorruptedMunjeong) "" else entry.summary
                         )
 
                         val finalUpgraded = if (upgraded.summary.isBlank()) {

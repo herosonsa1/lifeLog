@@ -14,6 +14,7 @@ import java.time.ZoneId
 import com.autologue.app.data.preferences.ExcludedPhotoPreferences
 import com.autologue.app.data.sync.HistoricalDataImporter
 import com.autologue.app.domain.model.RouteStepType
+import com.autologue.app.data.sync.PlaceResolver
 import dagger.hilt.android.qualifiers.ApplicationContext
 import android.content.Context
 import javax.inject.Inject
@@ -21,7 +22,8 @@ import javax.inject.Inject
 class DiaryRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val diaryDao: DiaryDao,
-    private val excludedPhotoPreferences: ExcludedPhotoPreferences
+    private val excludedPhotoPreferences: ExcludedPhotoPreferences,
+    private val placeResolver: PlaceResolver
 ) : DiaryRepository {
 
     override fun getDiaryEntriesFlow(): Flow<List<DiaryEntry>> {
@@ -144,11 +146,23 @@ class DiaryRepositoryImpl @Inject constructor(
                     if (step.stepType == RouteStepType.PHOTO && stepPhotos.isEmpty()) {
                         null
                     } else {
-                        val newTitle = if (step.title == "서울 방이동" && step.stepType == RouteStepType.PHOTO) {
-                            step.locationName ?: "사진 기록"
-                        } else step.title
+                        val lat = step.latitude
+                        val lng = step.longitude
+                        val needsGeoRefresh = (step.locationName?.contains("문정동") == true || step.title.contains("문정동")) &&
+                                lat != null && lng != null && lat != 0.0 && lng != 0.0
+                        val resolved = if (needsGeoRefresh) placeResolver.resolveGeoLocation(context, lat!!, lng!!) else null
+                        val targetLocationName = resolved?.placeName ?: step.locationName
+                        val targetAddress = resolved?.address ?: step.address
+
+                        val newTitle = when {
+                            needsGeoRefresh && resolved != null -> resolved.placeName
+                            step.title == "서울 방이동" && step.stepType == RouteStepType.PHOTO -> targetLocationName ?: "사진 기록"
+                            else -> step.title
+                        }
                         step.copy(
                             title = newTitle,
+                            locationName = targetLocationName,
+                            address = targetAddress,
                             photoUris = stepPhotos,
                             description = if (step.stepType == RouteStepType.PHOTO) {
                                 "사진 ${stepPhotos.size}장 촬영"
@@ -157,13 +171,14 @@ class DiaryRepositoryImpl @Inject constructor(
                     }
                 }
 
-                // 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동', 비정상 UI 단어 타이틀 자가치유 보정
+                // 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동', 비정상 UI 단어 및 문정동 타이틀 자가치유 보정
                 var newTitle = entry.title
                 val isCorruptedTitle = newTitle.contains("기록 삭제") || newTitle.contains("저장하기") ||
                         newTitle.contains("상세 기록") || newTitle.contains("FIELD") ||
-                        newTitle == "서울 방이동 일정" || newTitle == "서울 방이동" || newTitle.contains("사진 촬영") || newTitle == "사진 기록 일정"
+                        newTitle == "서울 방이동 일정" || newTitle == "서울 방이동" || newTitle.contains("사진 촬영") || newTitle == "사진 기록 일정" ||
+                        (newTitle.contains("문정동") && cleanSteps.any { it.locationName?.contains("문정동") == false && !it.locationName.isNullOrBlank() })
                 if (isCorruptedTitle) {
-                    val validPlace = cleanSteps.firstOrNull { it.latitude != null && !it.locationName.isNullOrBlank() }?.locationName
+                    val validPlace = cleanSteps.firstOrNull { it.latitude != null && !it.locationName.isNullOrBlank() && !it.locationName.contains("사진") }?.locationName
                     val golfStep = cleanSteps.firstOrNull { it.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.locationName ?: it.title) }
                     val cleanGolf = golfStep?.let { (it.locationName ?: it.title).replace(" 라운드", "").replace(" 라운딩", "") }
                     newTitle = when {
