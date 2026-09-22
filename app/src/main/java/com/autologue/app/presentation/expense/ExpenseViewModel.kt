@@ -78,6 +78,7 @@ data class ExpenseUiState(
 @HiltViewModel
 class ExpenseViewModel @Inject constructor(
     private val transactionRepository: TransactionRepository,
+    private val vehicleRepository: com.autologue.app.domain.repository.VehicleRepository,
     private val manageTransactionRulesUseCase: ManageTransactionRulesUseCase,
     private val userAccountPreferences: UserAccountPreferences
 ) : ViewModel() {
@@ -329,18 +330,40 @@ class ExpenseViewModel @Inject constructor(
         memo: String?
     ) {
         viewModelScope.launch {
+            val isFuel = category == ExpenseCategory.FUEL ||
+                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(merchantName)
+            val finalCategory = if (isFuel) ExpenseCategory.FUEL else category
+
             val tx = Transaction(
                 amount = amount,
                 merchantName = merchantName,
                 originalText = "[직접 입력] $merchantName %,d원".format(amount),
                 timestamp = LocalDateTime.now(),
                 paymentMethod = if (cardOrBankName.contains("체크")) PaymentMethod.CHECK_CARD else PaymentMethod.CREDIT_CARD,
-                category = category,
+                category = finalCategory,
                 cardOrBankName = cardOrBankName.ifBlank { "직접 입력" },
                 transferMemo = memo?.ifBlank { null },
                 isAutoCategorized = false
             )
             transactionRepository.insertTransaction(tx)
+
+            if (isFuel && amount > 0) {
+                val lastFuel = vehicleRepository.getLatestRefuelingLog()
+                val daysSince = if (lastFuel != null) {
+                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), tx.timestamp.toLocalDate()).toInt()
+                } else null
+
+                val vehicleLog = com.autologue.app.domain.model.VehicleLog(
+                    timestamp = tx.timestamp,
+                    logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
+                    fuelCost = tx.amount,
+                    fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", tx.amount / 1650.0).toDouble(),
+                    daysSinceLastFuel = daysSince,
+                    gasStationName = tx.merchantName,
+                    note = "가계부 직접 입력 연동"
+                )
+                vehicleRepository.insertVehicleLog(vehicleLog)
+            }
             closeAddDialog()
         }
     }
@@ -354,11 +377,40 @@ class ExpenseViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             val currentTx = _uiState.value.allTransactions.find { it.id == transactionId } ?: return@launch
+            val wasFuel = currentTx.category == ExpenseCategory.FUEL ||
+                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName)
+            val isNowFuel = category == ExpenseCategory.FUEL ||
+                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName)
+
             val updatedTx = currentTx.copy(
-                category = category,
+                category = if (isNowFuel) ExpenseCategory.FUEL else category,
                 transferMemo = memo?.ifBlank { null }
             )
             transactionRepository.updateTransaction(updatedTx)
+
+            if (!wasFuel && isNowFuel && updatedTx.amount > 0) {
+                val lastFuel = vehicleRepository.getLatestRefuelingLog()
+                val daysSince = if (lastFuel != null) {
+                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), updatedTx.timestamp.toLocalDate()).toInt()
+                } else null
+
+                val vehicleLog = com.autologue.app.domain.model.VehicleLog(
+                    timestamp = updatedTx.timestamp,
+                    logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
+                    fuelCost = updatedTx.amount,
+                    fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", updatedTx.amount / 1650.0).toDouble(),
+                    daysSinceLastFuel = daysSince,
+                    gasStationName = updatedTx.merchantName,
+                    note = "가계부 지출 카테고리 변경 연동"
+                )
+                vehicleRepository.insertVehicleLog(vehicleLog)
+            } else if (wasFuel && !isNowFuel) {
+                vehicleRepository.deleteRefuelingLogByTransaction(
+                    amount = currentTx.amount,
+                    date = currentTx.timestamp.toLocalDate(),
+                    merchantName = currentTx.merchantName
+                )
+            }
 
             if (makeGlobalRule && !merchantKeyword.isNullOrBlank()) {
                 manageTransactionRulesUseCase.addRule(
@@ -374,6 +426,18 @@ class ExpenseViewModel @Inject constructor(
 
     fun deleteTransaction(transactionId: Long) {
         viewModelScope.launch {
+            val currentTx = _uiState.value.allTransactions.find { it.id == transactionId }
+            if (currentTx != null) {
+                val isFuel = currentTx.category == ExpenseCategory.FUEL ||
+                    com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName)
+                if (isFuel) {
+                    vehicleRepository.deleteRefuelingLogByTransaction(
+                        amount = currentTx.amount,
+                        date = currentTx.timestamp.toLocalDate(),
+                        merchantName = currentTx.merchantName
+                    )
+                }
+            }
             transactionRepository.deleteTransaction(transactionId)
             closeEditDialog()
         }

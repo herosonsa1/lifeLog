@@ -330,6 +330,7 @@ class AutoProcessGolfMediaUseCaseTest {
         override suspend fun cleanDuplicates(): Int = 0
         override suspend fun cleanDuplicatesAndCorruptedLogs(homeName: String, companyName: String, commuteDistanceKm: Double): Int = 0
         override suspend fun syncRefuelingFromTransactions(transactions: List<Transaction>): Int = 0
+        override suspend fun deleteRefuelingLogByTransaction(amount: Long, date: LocalDate, merchantName: String): Int = 0
         override suspend fun syncDrivingLogsFromDiary(diaryEntries: List<DiaryEntry>): Int = 0
         override suspend fun clearTripDrivingLogs(): Int {
             val count = logs.count { it.logType == VehicleLogType.TRIP_DRIVING }

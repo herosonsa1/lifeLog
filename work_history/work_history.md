@@ -3,7 +3,7 @@
 - **프로젝트명**: LifeLog (스마트 라이프로그 & 통합 가계·차계·골프 플랫폼)
 - **프로젝트 위치**: `C:\myWork\workspace\scratch\lifeLog`
 - **GitHub 저장소**: [https://github.com/herosonsa1/lifeLog.git](https://github.com/herosonsa1/lifeLog.git)
-- **문서 최종 갱신일**: 2026-09-21
+- **문서 최종 갱신일**: 2026-09-22
 
 ---
 
@@ -1950,5 +1950,71 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
   - 전체화면 확대 팝업(`PhotoPreviewDialog`) 정상 렌더링 확인 (`screen_photo_preview.png`).
   - 앱 강제 종료(`am force-stop`) 후 재시작 시에도 사진 영구 보존 확인.
   - 레거시 만료 사진의 경우 빈 박스 대신 명확한 에러 안내 카드가 정상 표시됨을 확인 (`screen_golf_persistent3.png`).
+
+---
+
+## 58. 차계부 주유 기록 가계부 ↔ 차계부 양방향 실시간 완벽 연동 및 직접 등록·세그먼트 필터링 고도화
+
+- **일시**: 2026-09-22
+- **사용자 제보 및 배경**:
+  - "차계부에 주유기록이 안남는것 같아"
+  - 사용자 문제 의식:
+    1. 차계부 화면에서 기존 주유 기록이 출퇴근 및 골프장 왕복 등 다수의 주행 기록에 묻혀 식별하기 어려움 (목록 필터 부재).
+    2. 차계부 화면에서 주유 내역을 직접 입력할 수 있는 경로 부재.
+    3. 가계부에서 주유 지출을 수동으로 등록하거나 수정/삭제해도 차계부에는 반영되지 않던 단방향 단절 구조.
+    4. 실시간 SMS/알림 수신 시 주유소 상호명 키워드 누락으로 인한 미식별 가능성.
+
+### 58.1. 결함 근본 원인 분석
+1. **주행 기록에 의한 주유 기록 시각적 매몰 (필터 탭 부재)**:
+   - 데이터베이스에는 주유 2건이 정상 적재되어 있었으나, 출퇴근 및 골프장 왕복 주행 기록 4건에 밀려 단일 스크롤 목록에서 주유 내역만 따로 모아볼 수 있는 뷰가 없었음.
+2. **차계부 ↔ 가계부 간의 양방향 연동 결여**:
+   - 기존 차계부는 가계부 DB로부터 '주유 동기화' 버튼을 눌러 일괄 긁어오는 단방향 풀(Pull) 방식에 의존함.
+   - 가계부(`ExpenseViewModel`)에서 주유 내역을 추가/수정/삭제해도 차계부(`VehicleRepository`)에 즉각 반영되지 않았고, 차계부 화면에는 직접 주유를 입력하는 UI가 없었음.
+3. **주유/충전소 상호명 식별 키워드 커버리지 부족**:
+   - `RuleMatcherEngine.kt`의 주유 키워드가 주요 4대 정유사 일부에만 국한되어, HD현대, SK엔크린, 지에스칼텍스, 에스오일, 알뜰주유소, LPG충전소, 전기차 충전(차지비, 채비 등)의 다양한 표기 변종 수신 시 카테고리가 누락될 위험이 있었음.
+4. **동기화 결과 피드백 부재**:
+   - `[주유 동기화]` 버튼을 눌렀을 때 신규 반영 건수나 최신 상태 여부를 알려주는 사용자 피드백(스낵바)이 없었음.
+
+### 58.2. 주요 개선 및 구현 내역
+1. **주유/충전소 키워드 대폭 확장 (`RuleMatcherEngine.kt`, `VehicleRepositoryImpl.kt`)**:
+   - `HD현대오일뱅크`, `현대오일뱅크`, `SK에너지`, `SK엔크린`, `GS칼텍스`, `지에스칼텍스`, `S-OIL`, `에스오일`, `알뜰주유소`, `셀프주유소`, `LPG충전소`, `차지비`, `채비`, `파워큐브`, `환경부전기차`, `전기차충전` 등 40여 개 이상의 주유/충전 키워드 완비.
+   - `VehicleRepository.isFuelMerchant(merchantName)` 정적 유틸 메서드를 제공하여 시스템 전반에서 일관된 주유 상호 판별 보장.
+2. **가계부 ↔ 차계부 양방향 실시간 동기화 파이프라인 구축**:
+   - **`VehicleRepository.kt` & `VehicleRepositoryImpl.kt`**:
+     - `deleteRefuelingLogByTransaction(transactionId)` 신설: 가계부 지출 삭제 시 연동된 차계부 주유 로그 즉시 자동 삭제.
+     - `syncRefuelingFromTransactions(...)` 고도화: 최신 거래 내역과의 실시간 누적, 직전 주유 대비 주행거리 및 간격일(N일 만에 주유), 실연비(km/L) 자동 계산 및 중복 방어.
+   - **`ProcessTransactionUseCase.kt`**:
+     - 카드 승인 SMS/알림 수신 시 `isFuelMerchant` 교차 검증을 통해 주유 카테고리 보정 및 `VehicleLogType.REFUELING` 생성 이중 안전망 구축.
+   - **`ExpenseViewModel.kt`**:
+     - 가계부에서 지출 등록(`addManualTransaction`), 수정(`updateTransactionDetails`), 삭제(`deleteTransaction`) 시 주유 카테고리인 경우 차계부(`VehicleRepository`)에 즉각 실시간 동기화.
+3. **차계부 ViewModel 및 UI 전면 개편 (`CarLedgerViewModel.kt`, `CarLedgerScreen.kt`)**:
+   - **세그먼트 필터 탭 바 도입**:
+     - `LogFilterMode` (ALL, REFUEL_ONLY, DRIVING_ONLY) 및 `filteredLogs` 구현.
+     - `[전체 (N) | ⛽ 주유 (N) | 🚗 주행 (N)]` 탭 바로 원터치 모아보기 지원.
+   - **직접 주유 등록 다이얼로그 (`AddRefuelLogDialog`) 구현**:
+     - 차량 선택 (메인/서브), 주유소 상호명, 결제 금액, L당 단가, 주유량 입력 지원.
+     - `기본(1,650원) 기준 채움` 원클릭 계산 도우미 탑재.
+     - 등록 시 차계부 주유 로그 생성과 동시에 가계부 지출(`ExpenseCategory.FUEL`, "차계부 주유 등록 연동") 동시 적재.
+   - **원터치 등록 UI 배치**:
+     - 상단 TopAppBar에 `+ 주유 등록` 아웃라인 버튼 배치.
+     - 화면 우측 하단에 오렌지색 `ExtendedFloatingActionButton` ("+ 주유 기록 추가") 배치.
+   - **스낵바 피드백**:
+     - 주유 동기화 시 "N건의 신규 주유 기록이 동기화되었습니다." 또는 "모든 주유 결제 내역이 이미 최신 상태로 동기화되어 있습니다." 안내.
+
+### 58.3. 단위 테스트 및 실기기 검증 결과
+- **단위 테스트 100% 통과**:
+  - `RuleEngineTest.kt`에 확장된 정유사 및 전기차 충전소 키워드 검증 테스트 추가.
+  - `AutoProcessGolfMediaUseCaseTest`, `CalculateLifestyleMetricsUseCaseTest` Fake 리포지토리 메서드 갱신.
+  - `.\gradlew.bat testDebugUnitTest` 31개 태스크 100% 성공 (`BUILD SUCCESSFUL in 20s`).
+- **에뮬레이터(`Galaxy S24+`, `emulator-5554`) 실기기 검증 완료**:
+  - `[⛽ 주유 (2)]` 필터 탭 선택 시 주행 기록 배제 및 주유 내역 2건만 모아보기 완벽 동작 확인 (`screen_refuel_tab.png`).
+  - 상단 `+ 주유 등록` 또는 FAB 터치 시 모던한 `AddRefuelLogDialog` 팝업 렌더링 확인 (`screen_add_refuel_dialog.png`).
+  - 신규 주유 내역 등록 테스트:
+    - 상호명: `HD_Hyundai_OilBank`, 금액: `50,000원`, 기본 단가(1,650원) 채움 -> 30.3L 자동 계산.
+    - 등록 즉시 차계부 총 주유비 `135,000원` -> `185,000원`, 차량 기록 `6건` -> `7건`, 주유 탭 `[⛽ 주유 (3)]` 갱신 (`screen_refuel_added.png`).
+    - 실연비(4.3 km/L) 및 간격일(2일 만에 주유) 정상 계산 표출 (`screen_refuel_tab_scrolled.png`).
+  - 가계부 탭 이동 검증:
+    - 가계부 9월 총 지출 `185,000원` 반영 및 9.22 `HD_Hyundai_OilBank 50,000원 (차계부 직접 입력)` 동시 적재 완벽 확인 (`screen_expense_synced.png`).
+
 
 

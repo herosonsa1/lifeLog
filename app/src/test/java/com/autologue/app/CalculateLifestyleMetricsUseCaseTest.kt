@@ -49,6 +49,7 @@ class CalculateLifestyleMetricsUseCaseTest {
         override suspend fun cleanDuplicates() = 0
         override suspend fun cleanDuplicatesAndCorruptedLogs(homeName: String, companyName: String, commuteDistanceKm: Double) = 0
         override suspend fun syncRefuelingFromTransactions(transactions: List<Transaction>) = 0
+        override suspend fun deleteRefuelingLogByTransaction(amount: Long, date: LocalDate, merchantName: String) = 0
         override suspend fun syncDrivingLogsFromDiary(diaryEntries: List<DiaryEntry>) = 0
         override suspend fun clearTripDrivingLogs() = 0
         override suspend fun recordCommuteTrip(isToWork: Boolean, homeName: String, companyName: String, distanceKm: Double) = 1L

@@ -41,7 +41,14 @@ class ProcessTransactionUseCase @Inject constructor(
 
         val txId = transactionRepository.insertTransaction(enrichedTx)
 
-        if (finalCategory == ExpenseCategory.FUEL) {
+        val isFuel = finalCategory == ExpenseCategory.FUEL ||
+            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(enrichedTx.merchantName)
+
+        if (isFuel) {
+            if (enrichedTx.category != ExpenseCategory.FUEL) {
+                transactionRepository.updateTransaction(enrichedTx.copy(id = txId, category = ExpenseCategory.FUEL))
+            }
+
             val lastFuel = vehicleRepository.getLatestRefuelingLog()
             val daysSince = if (lastFuel != null) {
                 java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), enrichedTx.timestamp.toLocalDate()).toInt()
@@ -51,7 +58,7 @@ class ProcessTransactionUseCase @Inject constructor(
                 timestamp = enrichedTx.timestamp,
                 logType = VehicleLogType.REFUELING,
                 fuelCost = enrichedTx.amount,
-                fuelAmountLiters = if (enrichedTx.amount > 0) enrichedTx.amount / 1650.0 else 0.0,
+                fuelAmountLiters = if (enrichedTx.amount > 0) String.format(java.util.Locale.US, "%.1f", enrichedTx.amount / 1650.0).toDouble() else 0.0,
                 daysSinceLastFuel = daysSince,
                 gasStationName = enrichedTx.merchantName,
                 note = "가계부 결제 연동 자동 기록"

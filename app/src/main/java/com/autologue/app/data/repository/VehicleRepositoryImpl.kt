@@ -54,29 +54,40 @@ class VehicleRepositoryImpl @Inject constructor(
         vehicleLogDao.getDrivingDistanceBetween(startMilli, endMilli)
     }
 
-    override suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int = withContext(Dispatchers.IO) {
-        val fuelKeywords = listOf(
-            "주유", "주유소", "충전", "충전소", "GS칼텍스", "GS주유", "지에스칼텍스",
-            "SK에너지", "SK주유", "SK엔크린", "에스케이", "에쓰오일", "S-OIL", "SOIL", "에스오일",
-            "현대오일뱅크", "오일뱅크", "HD현대", "알뜰주유", "E1", "LPG", "슈퍼차저"
+    companion object {
+        val FUEL_KEYWORDS = listOf(
+            "주유", "주유소", "충전", "충전소", "셀프주유",
+            "GS칼텍스", "지에스칼텍스", "GS주유", "GS셀프",
+            "SK에너지", "SK주유", "SK엔크린", "엔크린", "에스케이", "SK가스",
+            "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일",
+            "현대오일뱅크", "HD현대", "오일뱅크", "현대오일",
+            "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소",
+            "E1", "LPG", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전"
         )
 
+        fun isFuelMerchant(merchantName: String): Boolean {
+            val upper = merchantName.uppercase()
+            return FUEL_KEYWORDS.any { upper.contains(it.uppercase()) }
+        }
+    }
+
+    override suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int = withContext(Dispatchers.IO) {
         var addedCount = 0
-        val existingLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }
+        val currentLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }.toMutableList()
 
         for (tx in transactions) {
             val isFuel = tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
-                fuelKeywords.any { tx.merchantName.contains(it, ignoreCase = true) }
+                isFuelMerchant(tx.merchantName)
 
             if (isFuel && tx.amount > 0) {
-                val alreadyExists = existingLogs.any {
+                val alreadyExists = currentLogs.any {
                     it.logType == VehicleLogType.REFUELING &&
                     it.timestamp.toLocalDate() == tx.timestamp.toLocalDate() &&
                     it.fuelCost == tx.amount
                 }
 
                 if (!alreadyExists) {
-                    val lastFuel = existingLogs.filter { it.logType == VehicleLogType.REFUELING }
+                    val lastFuel = currentLogs.filter { it.logType == VehicleLogType.REFUELING }
                         .filter { it.timestamp.isBefore(tx.timestamp) }
                         .maxByOrNull { it.timestamp }
 
@@ -93,12 +104,29 @@ class VehicleRepositoryImpl @Inject constructor(
                         gasStationName = tx.merchantName,
                         note = "가계부 결제 내역 자동 분석"
                     )
-                    vehicleLogDao.insertVehicleLog(log.toEntity())
+                    val insertedId = vehicleLogDao.insertVehicleLog(log.toEntity())
+                    currentLogs.add(log.copy(id = insertedId))
                     addedCount++
                 }
             }
         }
         addedCount
+    }
+
+    override suspend fun deleteRefuelingLogByTransaction(amount: Long, date: LocalDate, merchantName: String): Int = withContext(Dispatchers.IO) {
+        val logs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }
+        val matched = logs.filter {
+            it.logType == VehicleLogType.REFUELING &&
+            it.timestamp.toLocalDate() == date &&
+            it.fuelCost == amount &&
+            (it.gasStationName == merchantName || it.gasStationName == null || merchantName.contains(it.gasStationName ?: ""))
+        }
+        var deletedCount = 0
+        for (log in matched) {
+            vehicleLogDao.deleteVehicleLogById(log.id)
+            deletedCount++
+        }
+        deletedCount
     }
 
     override suspend fun syncDrivingLogsFromDiary(
