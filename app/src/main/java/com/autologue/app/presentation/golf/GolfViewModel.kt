@@ -24,6 +24,7 @@ import com.autologue.app.domain.repository.GolfWeatherRepository
 import com.autologue.app.domain.usecase.golf.ExtractScorecardOcrUseCase
 import com.autologue.app.domain.usecase.golf.MatchGolfRoundPhotosUseCase
 import com.autologue.app.domain.usecase.golf.ProcessGolfLockerSlipUseCase
+import com.autologue.app.util.PhotoStorageManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -626,9 +627,16 @@ class GolfViewModel @Inject constructor(
     }
 
     fun addPhotosToRound(roundId: Long, photoUris: List<String>) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val round = golfRepository.getGolfRoundById(roundId) ?: return@launch
-            val updatedPhotos = (round.matchingPhotoUris + photoUris).distinct()
+            // 외부 임시 URI를 앱 내부 영구 저장소로 안전 복사하여 영구 보존
+            val permanentPhotoUris = PhotoStorageManager.saveUriStringsToInternalStorage(
+                context = appContext,
+                uriStrings = photoUris,
+                subDir = "golf_photos",
+                prefix = "field"
+            )
+            val updatedPhotos = (round.matchingPhotoUris + permanentPhotoUris).distinct()
             val updated = round.copy(matchingPhotoUris = updatedPhotos)
             golfRepository.updateGolfRound(updated)
             _uiState.value = _uiState.value.copy(selectedRound = updated)
@@ -647,9 +655,16 @@ class GolfViewModel @Inject constructor(
     }
 
     fun setScorecardPhoto(roundId: Long, scorecardUri: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val round = golfRepository.getGolfRoundById(roundId) ?: return@launch
-            val updated = round.copy(scorecardPhotoUri = scorecardUri)
+            // 외부 임시 URI를 앱 내부 영구 저장소로 안전 복사
+            val permanentUri = PhotoStorageManager.saveUriToInternalStorage(
+                context = appContext,
+                uri = Uri.parse(scorecardUri),
+                subDir = "scorecards",
+                prefix = "scorecard"
+            ).toString()
+            val updated = round.copy(scorecardPhotoUri = permanentUri)
             golfRepository.updateGolfRound(updated)
             _uiState.value = _uiState.value.copy(selectedRound = updated)
         }
@@ -659,7 +674,14 @@ class GolfViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isOcrScanning = true)
             try {
-                val result = scorecardOcrAnalyzer.analyzeScorecard(imageUri)
+                // 스코어카드 사진을 앱 내부 영구 저장소로 즉시 복사하여 영구 보존
+                val permanentUri = PhotoStorageManager.saveUriToInternalStorage(
+                    context = appContext,
+                    uri = imageUri,
+                    subDir = "scorecards",
+                    prefix = "scorecard"
+                )
+                val result = scorecardOcrAnalyzer.analyzeScorecard(permanentUri)
                 val target = if (roundId != null) golfRepository.getGolfRoundById(roundId) else null
                 val updatedRound = if (roundId != null && target != null) {
                     val finalScore = result.totalScore ?: target.totalScore ?: (if (result.holeScores.isNotEmpty()) result.holeScores.sum() else 86)
@@ -668,7 +690,7 @@ class GolfViewModel @Inject constructor(
                         totalScore = finalScore,
                         totalPutts = result.totalPutts,
                         holeScores = result.holeScores,
-                        scorecardUri = imageUri.toString(),
+                        scorecardUri = permanentUri.toString(),
                         courseName = result.courseName,
                         penaltyCount = result.penaltyCount,
                         girPercentage = result.girPercentage,
@@ -685,7 +707,7 @@ class GolfViewModel @Inject constructor(
                 } else {
                     // targetRound가 없더라도 새 라운드를 자동 생성하여 스코어카드 반영
                     val targetDate = result.playDate ?: LocalDate.now()
-                    extractScorecardOcrUseCase.processScorecardResult(result, imageUri.toString(), targetDate)
+                    extractScorecardOcrUseCase.processScorecardResult(result, permanentUri.toString(), targetDate)
                 }
                 _uiState.value = _uiState.value.copy(
                     isOcrScanning = false,

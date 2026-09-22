@@ -1902,3 +1902,53 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **실기기(에뮬레이터) 검증 완료**:
   - 에뮬레이터 DB에 레거시 문정동 케이스 주입 후 자가 치유 및 Geocoder 역지오코딩 정상 작동 검증.
 
+---
+
+## 57. 골프 스코어카드 및 현장 사진 섬네일/미리보기 미표시 결함 수정 및 영구 보존 파이프라인 구축
+
+- **일시**: 2026-09-22
+- **사용자 제보 및 배경**:
+  - "캡쳐된 이미지의 섬네일이 아얘안보이고, 실제 열어봐도 보이지 않는 항목이 있네?"
+  - 사용자 실기기(Galaxy S24+)의 스마트 골프 라운드 상세 화면에서:
+    1. 스코어카드 원본 이미지가 짙은 남색 박스(`Color(0xFF0F172A)`)로만 표시되고 이미지가 보이지 않음.
+    2. 라운딩 현장 사진(1장)이 80dp 작은 회색(`Slate100`) 빈 박스와 X 버튼으로만 표시됨.
+    3. `🔍 크게 보기` 및 섬네일 탭으로 열리는 전체화면 팝업(`PhotoPreviewDialog`)에서도 이미지가 보이지 않음.
+
+### 57.1. 결함 근본 원인 분석
+1. **Android PhotoPicker(`PickVisualMedia`, `PickMultipleVisualMedia`)의 임시 권한 자동 소멸**:
+   - `GolfScreen.kt`에서 PhotoPicker로 사진을 선택할 때 `content://media/picker/...` 형태의 URI가 발급됨.
+   - 기존 코드에서는 `context.contentResolver.takePersistableUriPermission(...)`을 호출하고 있었으나, **PhotoPicker URI는 DocumentsProvider가 아니므로 영구 권한 획득을 지원하지 않음(`SecurityException` 발생)**.
+   - 따라서 일시적인 읽기 권한(Temporary URI Permission)만 유지되다가 **앱 프로세스가 종료되거나 백그라운드 재생성, 기기 재부팅 시 권한이 즉시 만료**됨.
+   - Room DB에는 만료된 `content://media/picker/...` 문자열이 그대로 남아있어, 재실행 후 Coil `AsyncImage`가 해당 URI를 읽으려고 하면 `SecurityException: Permission Denial`이 발생하여 이미지가 렌더링되지 않음.
+2. **Coil `AsyncImage`의 에러/플레이스홀더 시각 피드백 부재 (안티패턴 AP-AND-02)**:
+   - 기존 구현에서는 `AsyncImage`가 로딩 실패 시 아무런 시각 피드백(placeholder/error/fallback)을 주지 않고 부모 `Box`의 배경색(`Color(0xFF0F172A)`, `Slate100`)만 남겨두어 사용자에게 "어둡거나 회색 빈 박스"로만 보임.
+3. **Android 14(API 34) 미디어 부분 선택 권한 누락**:
+   - `AndroidManifest.xml`에 `android.permission.READ_MEDIA_VISUAL_USER_SELECTED`가 누락되어 부분 사진 권한 환경에서 미디어 접근이 거부될 수 있었음.
+
+### 57.2. 주요 개선 및 구현 내역
+1. **앱 전용 내부 영구 보관소 구축 (`PhotoStorageManager.kt`)**:
+   - `com.autologue.app.util.PhotoStorageManager` 신규 구현.
+   - 외부 `Uri`(`content://`)를 앱 내부 영구 디렉토리(`context.filesDir/scorecards/`, `context.filesDir/golf_photos/`, `context.filesDir/locker_slips/`)로 스트림 복사하여 영구적인 `file://` URI로 변환/보관.
+   - 앱 프로세스 종료, 재부팅, 갤러리 원본 사진 이동/삭제와 무관하게 100% 영구 보존 보장.
+   - 이미 앱 내부 저장소 경로인 경우 중복 복사 방지 및 예외 안전 Fallback 처리.
+2. **골프 사진 등록 파이프라인 전면 개편 (`GolfScreen.kt`, `GolfViewModel.kt`)**:
+   - `GolfScreen.kt`의 `globalScorecardPicker`, `globalLockerSlipPicker`, `scorecardPhotoPicker`, `roundPhotosPicker`에서 선택된 사진을 즉시 `PhotoStorageManager`로 내부 복사 후 영구 URI 전달.
+   - `GolfViewModel.kt`의 `scanScorecard`, `setScorecardPhoto`, `addPhotosToRound`에서도 2중 방어(Defense in Depth)로 내부 저장소 복사 보장.
+3. **Coil `SubcomposeAsyncImage` 도입 및 에러/로딩 UI 강화 (`GolfScreen.kt`)**:
+   - **스코어카드 사진**: 로딩 중 스피너 표시, 에러 시 경고 아이콘 + "사진 임시 권한이 만료되어 표시할 수 없습니다 (여기를 터치하여 스코어카드 사진을 다시 선택해주세요)" 안내 카드 및 상단 "📷 사진 재등록" 버튼 제공.
+   - **라운딩 현장 사진 (80dp 섬네일)**: 로딩 스피너 및 에러 경고 아이콘 표출로 회색 빈 박스 방치 원천 차단.
+   - **전체화면 사진 팝업 (`PhotoPreviewDialog`)**: 확대 미리보기에서 로딩 스피너 및 로드 실패 안내 문구 표출.
+4. **Android 14 미디어 권한 선언 (`AndroidManifest.xml`)**:
+   - `<uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />` 선언 추가.
+
+### 57.3. 단위 테스트 및 실기기 검증 결과
+- **단위 테스트 100% 통과**:
+  - `.\gradlew.bat testDebugUnitTest` 31개 태스크 100% 성공 (`BUILD SUCCESSFUL in 29s`).
+- **에뮬레이터(`Galaxy S24+`, `emulator-5554`) 실기기 검증 완료**:
+  - `.\gradlew.bat installDebug` 배포 완료 (`BUILD SUCCESSFUL in 44s`).
+  - 스코어카드 원본 및 현장 사진 섬네일 선명한 렌더링 확인 (`screen_dialog_scrolled2.png`, `screen_dialog_scrolled4.png`).
+  - 전체화면 확대 팝업(`PhotoPreviewDialog`) 정상 렌더링 확인 (`screen_photo_preview.png`).
+  - 앱 강제 종료(`am force-stop`) 후 재시작 시에도 사진 영구 보존 확인.
+  - 레거시 만료 사진의 경우 빈 박스 대신 명확한 에러 안내 카드가 정상 표시됨을 확인 (`screen_golf_persistent3.png`).
+
+

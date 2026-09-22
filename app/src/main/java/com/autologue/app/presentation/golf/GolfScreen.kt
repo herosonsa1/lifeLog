@@ -42,6 +42,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import com.autologue.app.util.PhotoStorageManager
 import com.autologue.app.domain.model.GolfPlayWeather
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.GolfType
@@ -97,13 +99,14 @@ fun GolfScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            // [U-01] 앱 재시작 후에도 URI 접근이 유지되도록 영구 읽기 권한 취득
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            }
-            viewModel.scanGolfLockerSlip(uri)
+            // [U-01] 외부 임시 URI를 앱 내부 영구 저장소로 복사하여 앱 재시작 후에도 유지 보장
+            val permanentUri = PhotoStorageManager.saveUriToInternalStorage(
+                context = context,
+                uri = uri,
+                subDir = "locker_slips",
+                prefix = "locker"
+            )
+            viewModel.scanGolfLockerSlip(permanentUri)
         }
     }
 
@@ -112,14 +115,15 @@ fun GolfScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            // [U-01] 앱 재시작 후에도 URI 접근이 유지되도록 영구 읽기 권한 취득
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            }
+            // [U-01] 외부 임시 URI를 앱 내부 영구 저장소로 복사하여 앱 재시작 후에도 유지 보장
+            val permanentUri = PhotoStorageManager.saveUriToInternalStorage(
+                context = context,
+                uri = uri,
+                subDir = "scorecards",
+                prefix = "scorecard"
+            )
             // 상단 액션 바 스캔은 스코어카드 사진을 분석하여 날짜/골프장 기준 신규 라운드 생성(또는 자동 매칭)하도록 null 전달
-            viewModel.scanScorecard(null, uri)
+            viewModel.scanScorecard(null, permanentUri)
         }
     }
 
@@ -852,13 +856,14 @@ fun GolfRoundDetailDialog(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            // [U-01] 앱 재시작 후에도 URI 접근이 유지되도록 영구 읽기 권한 취득
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            }
-            onScanScorecard(uri)
+            // [U-01] 외부 임시 URI를 앱 내부 영구 저장소로 복사하여 영구 보존
+            val permanentUri = PhotoStorageManager.saveUriToInternalStorage(
+                context = context,
+                uri = uri,
+                subDir = "scorecards",
+                prefix = "scorecard"
+            )
+            onScanScorecard(permanentUri)
         }
     }
 
@@ -866,15 +871,16 @@ fun GolfRoundDetailDialog(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            // [U-01] 복수 선택 사진 모두에 영구 읽기 권한 취득
-            uris.forEach { uri ->
-                runCatching {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                }
+            // [U-01] 복수 선택 사진 모두 내부 영구 저장소로 안전 복사
+            val permanentUris = uris.map { uri ->
+                PhotoStorageManager.saveUriToInternalStorage(
+                    context = context,
+                    uri = uri,
+                    subDir = "golf_photos",
+                    prefix = "field"
+                ).toString()
             }
-            onAddPhotos(uris.map { it.toString() })
+            onAddPhotos(permanentUris)
         }
     }
 
@@ -1470,7 +1476,25 @@ fun GolfRoundDetailDialog(
                             // Scorecard Photo Thumbnail (if attached)
                             if (round.scorecardPhotoUri != null) {
                                 Spacer(modifier = Modifier.height(Spacing.sm))
-                                Text("스코어카드 원본 이미지 (터치하여 확대)", style = AppTypography.captionMuted)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("스코어카드 원본 이미지 (터치하여 확대)", style = AppTypography.captionMuted)
+                                    Text(
+                                        text = "📷 사진 재등록",
+                                        style = AppTypography.caption.copy(color = Emerald600, fontWeight = FontWeight.Bold),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .clickable {
+                                                scorecardPhotoPicker.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                )
+                                            }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Box(
                                     modifier = Modifier
@@ -1481,13 +1505,54 @@ fun GolfRoundDetailDialog(
                                         .clickable { onPhotoClick(round.scorecardPhotoUri) },
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    AsyncImage(
+                                    SubcomposeAsyncImage(
                                         model = round.scorecardPhotoUri,
                                         contentDescription = "스코어카드 사진",
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .heightIn(min = 200.dp, max = 340.dp)
+                                            .heightIn(min = 200.dp, max = 340.dp),
+                                        loading = {
+                                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(32.dp),
+                                                    color = Emerald600,
+                                                    strokeWidth = 3.dp
+                                                )
+                                            }
+                                        },
+                                        error = {
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(Spacing.md)
+                                                    .clickable {
+                                                        scorecardPhotoPicker.launch(
+                                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                        )
+                                                    },
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Warning,
+                                                    contentDescription = "오류",
+                                                    tint = Amber600,
+                                                    modifier = Modifier.size(32.dp)
+                                                )
+                                                Spacer(modifier = Modifier.height(Spacing.xs))
+                                                Text(
+                                                    text = "사진 임시 권한이 만료되어 표시할 수 없습니다",
+                                                    style = AppTypography.body.copy(color = PureWhite),
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(
+                                                    text = "여기를 터치하여 스코어카드 사진을 다시 선택해주세요",
+                                                    style = AppTypography.caption.copy(color = Emerald600)
+                                                )
+                                            }
+                                        }
                                     )
                                     Surface(
                                         modifier = Modifier
@@ -1555,11 +1620,35 @@ fun GolfRoundDetailDialog(
                                                 .background(Slate100)
                                                 .clickable { onPhotoClick(uri) }
                                         ) {
-                                            AsyncImage(
+                                            SubcomposeAsyncImage(
                                                 model = uri,
                                                 contentDescription = "라운딩 사진",
                                                 contentScale = ContentScale.Crop,
-                                                modifier = Modifier.fillMaxSize()
+                                                modifier = Modifier.fillMaxSize(),
+                                                loading = {
+                                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                        CircularProgressIndicator(
+                                                            modifier = Modifier.size(16.dp),
+                                                            color = Emerald600,
+                                                            strokeWidth = 2.dp
+                                                        )
+                                                    }
+                                                },
+                                                error = {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .background(Slate200),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Warning,
+                                                            contentDescription = "로드 실패",
+                                                            tint = Slate400,
+                                                            modifier = Modifier.size(20.dp)
+                                                        )
+                                                    }
+                                                }
                                             )
                                             IconButton(
                                                 onClick = { onRemovePhoto(uri) },
@@ -1870,13 +1959,47 @@ fun PhotoPreviewDialog(
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center
         ) {
-            AsyncImage(
+            SubcomposeAsyncImage(
                 model = photoUrl,
                 contentDescription = "확대 사진",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(Spacing.md)
+                    .padding(Spacing.md),
+                loading = {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            color = PureWhite,
+                            strokeWidth = 3.dp
+                        )
+                    }
+                },
+                error = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(Spacing.xl),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "오류",
+                            tint = Amber600,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(Spacing.md))
+                        Text(
+                            text = "사진을 불러올 수 없습니다",
+                            style = AppTypography.h3.copy(color = PureWhite)
+                        )
+                        Spacer(modifier = Modifier.height(Spacing.xs))
+                        Text(
+                            text = "일시적 권한이 만료되었거나 원본 사진이 삭제되었습니다.",
+                            style = AppTypography.caption.copy(color = Slate400)
+                        )
+                    }
+                }
             )
 
             IconButton(
