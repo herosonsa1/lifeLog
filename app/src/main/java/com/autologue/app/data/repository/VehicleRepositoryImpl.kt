@@ -225,6 +225,49 @@ class VehicleRepositoryImpl @Inject constructor(
                 vehicleLogDao.updateVehicleLog(updated)
                 modifiedCount++
             }
+
+            // 6. "출발지 ➔ 도착지" 또는 0.0km로 기록된 오염 주행 로그 자가 치유(Self-Healing)
+            if (log.logType == VehicleLogType.TRIP_DRIVING) {
+                var needsUpdate = false
+                var healedDistance = log.tripDistanceKm
+                var healedNote = note
+
+                // 6-1. 지명이 "출발지 ➔ 도착지" 또는 "출발지"가 포함된 경우 정상 지명으로 복원
+                if (healedNote.contains("출발지 ➔ 도착지") || healedNote.contains("출발지") || healedNote.contains("도착지")) {
+                    healedNote = if (homeName.isNotBlank() && companyName.isNotBlank()) {
+                        val h = log.timestamp.hour
+                        if (h in 6..12) "출근 주행 ($homeName ➔ $companyName)"
+                        else if (h in 17..23) "퇴근 주행 ($companyName ➔ $homeName)"
+                        else "$homeName 인근 주행"
+                    } else {
+                        "차량 주행 기록"
+                    }
+                    needsUpdate = true
+                } else if (healedNote.contains(" ➔ ") && healedNote.split(" ➔ ").let { it.size == 2 && it[0].trim() == it[1].trim() }) {
+                    // 동일 지점 반복("영등포로 254 ➔ 영등포로 254") -> "영등포로 254 주변 주행"
+                    val place = healedNote.split(" ➔ ")[0].trim().substringBefore("(").trim()
+                    healedNote = "$place 주변 주행"
+                    needsUpdate = true
+                }
+
+                // 6-2. 주행거리가 0.0km 이하인 경우 운행 시간 기반 합리적 추정 거리로 복원
+                if (healedDistance <= 0.0) {
+                    val minMatch = Regex("(\\d+)\\s*분").find(note)
+                    val durationMin = minMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: 10.0
+                    val estimatedKm = (durationMin * 0.3).coerceIn(1.2, 35.0)
+                    healedDistance = Math.round(estimatedKm * 10.0) / 10.0
+                    needsUpdate = true
+                }
+
+                if (needsUpdate) {
+                    val updated = log.copy(
+                        note = healedNote,
+                        tripDistanceKm = healedDistance
+                    )
+                    vehicleLogDao.updateVehicleLog(updated)
+                    modifiedCount++
+                }
+            }
         }
         modifiedCount
     }

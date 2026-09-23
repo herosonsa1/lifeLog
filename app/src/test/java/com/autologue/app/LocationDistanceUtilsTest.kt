@@ -171,4 +171,52 @@ class LocationDistanceUtilsTest {
         assertEquals("GS칼텍스 삼평주유소", log.displayTitle())
         assertEquals("car_1", log.getAssignedVehicleId())
     }
+
+    @Test
+    fun testIsValidCoordinate() {
+        // (0.0, 0.0)은 명백한 미초기화 더미 좌표
+        org.junit.Assert.assertFalse(LocationDistanceUtils.isValidCoordinate(0.0, 0.0))
+        org.junit.Assert.assertFalse(LocationDistanceUtils.isValidCoordinate(0.0000001, -0.0000001))
+        org.junit.Assert.assertFalse(LocationDistanceUtils.isValidCoordinate(91.0, 127.0)) // 범위 초과
+        org.junit.Assert.assertFalse(LocationDistanceUtils.isValidCoordinate(37.5, 181.0))
+
+        // 정상 대한민국 좌표
+        assertTrue(LocationDistanceUtils.isValidCoordinate(37.5665, 126.9780)) // 서울시청
+        assertTrue(LocationDistanceUtils.isValidCoordinate(37.5145, 127.1058)) // 방이동
+        assertTrue(LocationDistanceUtils.isValidCoordinate(37.3948, 127.1112)) // 판교
+    }
+
+    @Test
+    fun testWaypointsFilteringInvalidCoordinates() {
+        // 0.0 더미 좌표가 섞인 웨이포인트 목록
+        val waypoints = listOf(
+            com.autologue.app.util.DrivingWaypoint(timestamp = 1000L, latitude = 0.0, longitude = 0.0, isDeparture = true),
+            com.autologue.app.util.DrivingWaypoint(timestamp = 2000L, latitude = 0.0, longitude = 0.0),
+            com.autologue.app.util.DrivingWaypoint(timestamp = 3000L, latitude = 37.5133, longitude = 127.1001), // 실제 최초 유효 출발지
+            com.autologue.app.util.DrivingWaypoint(timestamp = 603000L, latitude = 37.3948, longitude = 127.1112),
+            com.autologue.app.util.DrivingWaypoint(timestamp = 1203000L, latitude = 37.3236, longitude = 127.0987, isDestination = true)
+        )
+
+        val totalDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints)
+        // 0.0 좌표는 배제되고 실제 유효 좌표 간 거리만 합산되어야 함
+        assertTrue("0.0 좌표가 제외되어 정상적인 주행거리(20~35km)가 계산되어야 함 (실제: $totalDist)", totalDist in 20.0..35.0)
+    }
+
+    @Test
+    fun testSlowMovingTrafficDistanceAccumulation() {
+        // 15m 이상 50m 미만의 서행 정체 구간 (예: 25m씩 4회 이동 = 총 100m 이동)
+        // 기준점: 37.500000, 127.000000
+        // 위도 1초 ≈ 30.8m, 0.00022도 ≈ 24.5m
+        val waypoints = listOf(
+            com.autologue.app.util.DrivingWaypoint(timestamp = 1000L, latitude = 37.50000, longitude = 127.00000, isDeparture = true),
+            com.autologue.app.util.DrivingWaypoint(timestamp = 60000L, latitude = 37.50022, longitude = 127.00000), // ~24.5m 이동
+            com.autologue.app.util.DrivingWaypoint(timestamp = 120000L, latitude = 37.50044, longitude = 127.00000), // ~24.5m 이동
+            com.autologue.app.util.DrivingWaypoint(timestamp = 180000L, latitude = 37.50066, longitude = 127.00000), // ~24.5m 이동
+            com.autologue.app.util.DrivingWaypoint(timestamp = 240000L, latitude = 37.50088, longitude = 127.00000, isDestination = true) // ~24.5m 이동
+        )
+
+        val totalDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints)
+        // 약 98m * 1.25(곡률) = 약 122m ≈ 0.12km > 0.0km
+        assertTrue("서행 정체 구간도 15m 이상이면 거리가 0이 아니어야 함 (실제: $totalDist)", totalDist > 0.05)
+    }
 }

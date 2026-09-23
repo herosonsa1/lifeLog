@@ -79,16 +79,14 @@ object LocationDistanceUtils {
 
     /**
      * 연속된 DrivingWaypoint 목록 간의 누적 도로 주행거리(km) 계산
-     * - 10분 단위 GPS 수신 위치들을 순차 연결
-     * - 50m 미만의 제자리 정차/신호대기 오차는 중복 합산 방지
+     * - 15m 단위 이상의 이동을 정밀 누적하여 도심 서행 및 신호대기 후 주행거리 보존
+     * - GPS 수신 튐(순간 속도 비현실적) 방어
      */
     fun calculateWaypointsDistanceKm(
         waypoints: List<DrivingWaypoint>,
         roadCurveFactor: Double = DEFAULT_ROAD_CURVE_FACTOR
     ): Double {
-        val validPoints = waypoints.filter {
-            it.latitude != 0.0 && it.longitude != 0.0
-        }
+        val validPoints = waypoints.filter { isValidCoordinate(it.latitude, it.longitude) }
         if (validPoints.size < 2) return 0.0
 
         var totalDistanceKm = 0.0
@@ -101,12 +99,23 @@ object LocationDistanceUtils {
                 curr.latitude, curr.longitude,
                 roadCurveFactor
             )
-            if (dist >= 0.05) {
+            // 15m(0.015km) 이상 이동 시 거리 누적 (제자리 미세 노이즈는 방어하고 실제 주행은 보존)
+            if (dist >= 0.015) {
                 totalDistanceKm += dist
                 prev = curr
             }
         }
-        return Math.round(totalDistanceKm * 10.0) / 10.0
+        val rounded = Math.round(totalDistanceKm * 10.0) / 10.0
+        // 0.05km 이상 실제 이동했으나 반올림으로 0.0이 되는 경우 0.1km로 최소 보장
+        return if (rounded == 0.0 && totalDistanceKm >= 0.05) 0.1 else rounded
+    }
+
+    /**
+     * 유효한 위경도 좌표인지 검증 (0.0 부근 Null Island 더미 및 비정상 범위 배제)
+     */
+    fun isValidCoordinate(lat: Double, lon: Double): Boolean {
+        if (abs(lat) < 0.0001 && abs(lon) < 0.0001) return false
+        return lat in -90.0..90.0 && lon in -180.0..180.0
     }
 }
 

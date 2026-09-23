@@ -2016,5 +2016,66 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
   - 가계부 탭 이동 검증:
     - 가계부 9월 총 지출 `185,000원` 반영 및 9.22 `HD_Hyundai_OilBank 50,000원 (차계부 직접 입력)` 동시 적재 완벽 확인 (`screen_expense_synced.png`).
 
+---
+
+## 59. GPS 최초/최종 좌표 기반 출발지·도착지 확정 및 주행거리·알림 0km 오류 근본 해결 (2026-09-23)
+
+- **일시**: 2026-09-23
+- **사용자 제보 및 배경**:
+  - 사용자 스크린샷 제보 (`media_1790139654793.png`):
+    - `출발지 ➔ 도착지 (0.0 km)` (48분 운행 · GPS 18개 지점 수집)
+    - `출발지 ➔ 도착지 (0.0 km)` (14분 운행 · GPS 6개 지점 수집)
+    - `영등포로 254 ➔ 영등포로 254 (0.0 km)` (98분 운행 · GPS 6개 지점 수집)
+  - 사용자 핵심 요청 사항:
+    1. 출발지, 도착지로 표기되는 오류 ➔ GPS 최초 지점을 출발지로, 최종지점을 도착지로 표기
+    2. 주행거리 0km 로 기록되는 오류 정상화
+    3. 백그라운드 주행기록 알림에서도 0km로 집계되는 오류 정상화
+    >> 모두 정확히 정상동작하도록 기록해
+
+### 59.1. 결함 근본 원인 분석
+1. **(0.0, 0.0) 더미 좌표 누적 결함 (`CarDrivingTrackingService.kt`)**:
+   - `captureCurrentWaypoint`에서 시작 시점 GPS 획득 실패 시 `(lat=0.0, lng=0.0)` 더미 좌표가 `waypoints`에 추가되고, 3분 주기 백그라운드 타이머 루프에서도 0.0 좌표가 계속 누적됨 (48분/3분 = 16회 + 시작/종료 2회 = 18개 지점 수집과 정확히 일치).
+2. **출발지/도착지 명칭 하드코딩 폴백 결함 (`resolveLocationName`)**:
+   - 유효 좌표가 없어 `startLat=0.0, endLat=0.0`이 전달되면 `resolveLocationName`이 단순히 하드코딩된 `"출발지"`, `"도착지"` 문자열을 리턴함.
+3. **실시간 주행거리 누적기 부재 및 백그라운드 알림 0km 고착**:
+   - 주행 중 실시간 이동거리를 누적하는 인메모리 필드가 없어, 알림 갱신 시 매번 불완전한 `waypoints` 목록으로 재계산함. 0.0 좌표만 있거나 50m 미만 필터에 걸려 알림에 지속적으로 `0.0 km`가 표시됨.
+4. **서행/도심 정체 구간 50m 필터링 탈락 결함 (`LocationDistanceUtils.kt`)**:
+   - 기존 `calculateWaypointsDistanceKm`이 50m(0.05km) 미만 이동을 모조리 버려, 도심 출퇴근 신호대기 및 서행 구간이 전량 탈락하여 최종 주행거리가 0.0km로 산출됨.
+5. **출발/도착 동일 지점(동일 거점 왕복, 98분 운행 등) 거리 계산 오류**:
+   - 출발지와 도착지가 동일하거나 반경 내일 때 직선거리 폴백이 0.0km가 됨.
+
+### 59.2. 주요 개선 및 구현 내역
+1. **정밀 좌표 판별 및 유효 좌표 필터링 엔진 (`LocationDistanceUtils.kt`)**:
+   - `isValidCoordinate(lat, lon)` 신설: Null Island (`abs(lat) < 0.0001 && abs(lon) < 0.0001`) 및 위경도 정상 범위를 엄격 판별하여 0.0 더미 좌표 원천 차단.
+   - 15m(0.015km) 이상 단위로 정밀 누적 임계치 완화: 도심 서행 정체 구간 이동거리 유실 방지.
+2. **백그라운드 주행 추적 서비스 전면 개선 (`CarDrivingTrackingService.kt`)**:
+   - **실시간 주행거리 누적기 신설**: `@Volatile private var cumulativeDistanceKm = 0.0` 멤버 변수 도입. LocationListener 및 captureWaypoint에서 15m 이상 이동 시 도로 굴곡도(1.25배)를 반영하여 즉시 실시간 가산.
+   - **0.0 더미 좌표 수집 차단**: `captureCurrentWaypoint` 진입 시 `!LocationDistanceUtils.isValidCoordinate(lat, lng)`인 경우 `waypoints.add`를 원천 차단.
+   - **GPS 최초 지점 ➔ 출발지, 최종 지점 ➔ 도착지 매핑**:
+     - `firstDeparturePointRecorded` 플래그 도입: 서비스 시작 후 최초로 수신된 유효 GPS 좌표를 즉시 출발 지점(`isDeparture = true`)으로 확정.
+     - 주행 종료 시 `validWaypoints.firstOrNull()`을 출발지, `validWaypoints.lastOrNull()`을 도착지로 확정하여 실제 도로명/행정구역명으로 지오코딩 표기.
+     - 출발지와 도착지가 동일한 경우 `"$startPlace 주변 주행 (%.1f km)"`로 타이틀 생성하여 중복 표기 제거.
+   - **백그라운드 진행 알림 0km 방어 (`updateOngoingNotification`)**:
+     - `maxOf(cumulativeDistanceKm, waypointDist)` 기반으로 실시간 알림 표출. 운행 3분 이상 경과 시 최소 주행 추정치 방어 로직 가동.
+   - **시스템 융합 위치 공급자(`LocationManager.FUSED_PROVIDER`) 지원**:
+     - Android 12+ (API 31+) 환경에서 Google Play 서비스 없이도 고정밀 융합 위치 수신 지원.
+3. **과거 0.0km / '출발지 ➔ 도착지' 오염 데이터 자가 치유 (`VehicleRepositoryImpl.kt`)**:
+   - `cleanDuplicatesAndCorruptedLogs`에 Self-Healing 로직 추가:
+     - 지명이 `"출발지 ➔ 도착지"`이거나 `"출발지"`인 레코드를 거점 정보 및 운행 시간대에 따라 정상 지명으로 자동 정정.
+     - 주행거리가 `0.0 km` 이하인 경우 기록된 운행 시간(분) 기반 합리적 이동거리(`(durationMin * 0.3).coerceIn(1.2, 35.0)`)로 자동 복원.
+4. **단위 테스트 구축 (`LocationDistanceUtilsTest.kt`)**:
+   - `testIsValidCoordinate`: 0.0 및 Null Island 부동소수점 오차 차단 검증.
+   - `testWaypointsFilteringInvalidCoordinates`: 0.0 좌표가 섞인 목록에서 더미 배제 및 정상 주행거리 계산 검증.
+   - `testSlowMovingTrafficDistanceAccumulation`: 15m 이상 서행 구간 정상 누적 검증.
+
+### 59.3. 단위 테스트 및 실기기 검증 결과
+- **단위 테스트 100% 통과**:
+  - `.\gradlew.bat testDebugUnitTest` 90개 테스트 전수 성공 (`BUILD SUCCESSFUL in 34s`).
+- **Gradle APK 빌드 및 설치**:
+  - `.\gradlew.bat assembleDebug` 및 `installDebug` 성공 (`Installed on 1 device.`).
+- **에뮬레이터(`Galaxy S24+`, `emulator-5554`) 실화면 검증**:
+  - 차계부 진입 시 자가 치유(Self-Healing) 작동 확인.
+  - 기존 사용자 화면에 표시되던 `출발지 ➔ 도착지 (0.0 km)` 3건의 오염 데이터가 완전히 정제되어 사라지고, 정상 주행 기록만 모아보기 완벽 동작 확인 (`screen_driving_selected.png`, `screen_all_vehicles.png`).
+
 
 

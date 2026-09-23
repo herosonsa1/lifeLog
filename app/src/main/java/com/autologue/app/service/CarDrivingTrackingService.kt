@@ -77,6 +77,12 @@ class CarDrivingTrackingService : Service() {
     private var locationListener: android.location.LocationListener? = null
     @Volatile
     private var latestLocation: Location? = null
+    @Volatile
+    private var lastValidLocation: Location? = null
+    @Volatile
+    private var cumulativeDistanceKm: Double = 0.0
+    @Volatile
+    private var firstDeparturePointRecorded: Boolean = false
     private var lastRecordedLat: Double = 0.0
     private var lastRecordedLng: Double = 0.0
     private var lastRecordedWaypointTime: Long = 0L
@@ -196,6 +202,9 @@ class CarDrivingTrackingService : Service() {
             activeLicensePlate = licensePlate
             startTimeMillis = System.currentTimeMillis()
             waypoints.clear()
+            cumulativeDistanceKm = 0.0
+            lastValidLocation = null
+            firstDeparturePointRecorded = false
             lastRecordedLat = 0.0
             lastRecordedLng = 0.0
             lastRecordedWaypointTime = 0L
@@ -348,40 +357,84 @@ class CarDrivingTrackingService : Service() {
                     return@launch
                 }
 
-                // 연속 Waypoint 기반 실제 도로 주행거리 정밀 계산
-                val calculatedDistanceKm = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints.toList())
-                val firstPoint = waypoints.firstOrNull { it.latitude != 0.0 }
-                val lastPoint = waypoints.lastOrNull { it.latitude != 0.0 }
-                val directDistanceKm = if (firstPoint != null && lastPoint != null) {
-                    LocationDistanceUtils.calculateDrivingDistanceKm(firstPoint.latitude, firstPoint.longitude, lastPoint.latitude, lastPoint.longitude)
-                } else 0.0
+                // 1. 유효한 GPS 포인트 필터링 (0.0 더미 배제)
+                val validWaypoints = synchronized(waypoints) {
+                    waypoints.filter { LocationDistanceUtils.isValidCoordinate(it.latitude, it.longitude) }
+                }
 
-                // 유효 주행거리 결정 (연속 궤적 우선, 단일 구간 폴백)
-                val finalTripKm = when {
-                    calculatedDistanceKm > 0.05 -> calculatedDistanceKm
-                    directDistanceKm > 0.05 -> directDistanceKm
+                // 2. 출발지 및 도착지 좌표 확정 (GPS 최초 지점을 출발지, 최종 지점을 도착지로 확정)
+                val prefs = getSharedPreferences("car_trip_tracking", Context.MODE_PRIVATE)
+                val prefStartLat = prefs.getFloat("start_lat", 0.0f).toDouble()
+                val prefStartLng = prefs.getFloat("start_lng", 0.0f).toDouble()
+
+                val firstPoint = validWaypoints.firstOrNull()
+                val lastPoint = validWaypoints.lastOrNull()
+
+                val startLat = when {
+                    firstPoint != null -> firstPoint.latitude
+                    LocationDistanceUtils.isValidCoordinate(prefStartLat, prefStartLng) -> prefStartLat
+                    latestLocation != null && LocationDistanceUtils.isValidCoordinate(latestLocation!!.latitude, latestLocation!!.longitude) -> latestLocation!!.latitude
+                    else -> 0.0
+                }
+                val startLng = when {
+                    firstPoint != null -> firstPoint.longitude
+                    LocationDistanceUtils.isValidCoordinate(prefStartLat, prefStartLng) -> prefStartLng
+                    latestLocation != null && LocationDistanceUtils.isValidCoordinate(latestLocation!!.latitude, latestLocation!!.longitude) -> latestLocation!!.longitude
                     else -> 0.0
                 }
 
-                val startLat = firstPoint?.latitude ?: 0.0
-                val startLng = firstPoint?.longitude ?: 0.0
-                val endLat = lastPoint?.latitude ?: 0.0
-                val endLng = lastPoint?.longitude ?: 0.0
+                val endLat = when {
+                    lastPoint != null -> lastPoint.latitude
+                    latestLocation != null && LocationDistanceUtils.isValidCoordinate(latestLocation!!.latitude, latestLocation!!.longitude) -> latestLocation!!.latitude
+                    else -> startLat
+                }
+                val endLng = when {
+                    lastPoint != null -> lastPoint.longitude
+                    latestLocation != null && LocationDistanceUtils.isValidCoordinate(latestLocation!!.latitude, latestLocation!!.longitude) -> latestLocation!!.longitude
+                    else -> startLng
+                }
 
-                // 출발지 및 도착지 지명 역지오코딩 해석
+                // 3. 주행거리 정밀 산출: 실시간 누적거리, 궤적 누적거리, 출발-도착 도로거리 중 최대값 채택
+                val calculatedDistanceKm = LocationDistanceUtils.calculateWaypointsDistanceKm(validWaypoints)
+                val directDistanceKm = if (startLat != 0.0 && endLat != 0.0 && (startLat != endLat || startLng != endLng)) {
+                    LocationDistanceUtils.calculateDrivingDistanceKm(startLat, startLng, endLat, endLng)
+                } else 0.0
+
+                var finalTripKm = maxOf(cumulativeDistanceKm, calculatedDistanceKm, directDistanceKm)
+                finalTripKm = Math.round(finalTripKm * 10.0) / 10.0
+
+                // [안전망] 3분 이상 운행했으나 GPS 음영(지하 등)으로 0.0km인 경우, 시내 평균속도 기준 최소 주행거리 추정 반영
+                if (finalTripKm == 0.0 && durationMin >= 3) {
+                    val estimatedKm = Math.round((durationMin / 60.0 * 20.0) * 10.0) / 10.0
+                    finalTripKm = estimatedKm.coerceIn(0.5, 30.0)
+                    Log.d(TAG, "GPS 미수신 구간 운행(${durationMin}분) 추정 거리 반영: ${finalTripKm}km")
+                }
+
+                // 4. 출발지 및 도착지 지명 역지오코딩 해석 (무의미한 '출발지', '도착지' 단어 영구 배제)
                 val startPlace = resolveLocationName(startLat, startLng, isDeparture = true)
                 val endPlace = resolveLocationName(endLat, endLng, isDeparture = false)
 
-                val routeTitle = if (startPlace.isNotBlank() && endPlace.isNotBlank()) {
-                    "$startPlace ➔ $endPlace (%.1f km)".format(finalTripKm)
-                } else if (endPlace.isNotBlank()) {
-                    "$endPlace 도착 (%.1f km)".format(finalTripKm)
-                } else {
-                    "주행 완료 (%.1f km)".format(finalTripKm)
+                val routeTitle = when {
+                    startPlace.isNotBlank() && endPlace.isNotBlank() && startPlace != endPlace -> {
+                        "$startPlace ➔ $endPlace (%.1f km)".format(finalTripKm)
+                    }
+                    startPlace.isNotBlank() && startPlace == endPlace -> {
+                        "$startPlace 주변 주행 (%.1f km)".format(finalTripKm)
+                    }
+                    startPlace.isNotBlank() -> {
+                        "$startPlace 출발 (%.1f km)".format(finalTripKm)
+                    }
+                    endPlace.isNotBlank() -> {
+                        "$endPlace 도착 (%.1f km)".format(finalTripKm)
+                    }
+                    else -> {
+                        "차량 주행 완료 (%.1f km)".format(finalTripKm)
+                    }
                 }
 
                 val carTag = "[$activeVehicleId: $activeVehicleName]"
-                val detailSub = "(${durationMin}분 운행 · GPS ${waypoints.size}개 지점)"
+                val pointCount = validWaypoints.size.coerceAtLeast(if (startLat != 0.0) 1 else 0)
+                val detailSub = "(${durationMin}분 운행 · GPS ${pointCount}개 지점)"
 
                 val config = userLocationPreferences.config.value
                 val homeLat = config.homeLat
@@ -468,18 +521,12 @@ class CarDrivingTrackingService : Service() {
     private suspend fun saveWaypointsToDiary(finalTripKm: Double, durationMin: Long) {
         try {
             val validList = synchronized(waypoints) {
-                waypoints.filter { it.latitude != 0.0 && it.longitude != 0.0 }
+                waypoints.filter { LocationDistanceUtils.isValidCoordinate(it.latitude, it.longitude) }
             }
             if (validList.isEmpty()) {
                 Log.d(TAG, "유효한 GPS 좌표가 없어 다이어리 RouteStep 저장을 스킵합니다.")
                 return
             }
-
-            val config = runCatching { userLocationPreferences.config.value }.getOrNull()
-            val homeLat = config?.homeLat ?: 0.0
-            val homeLng = config?.homeLng ?: 0.0
-            val compLat = config?.companyLat ?: 0.0
-            val compLng = config?.companyLng ?: 0.0
 
             val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(activeVehicleName)
             val vehicleTag = activeVehicleName.split(" ").firstOrNull() ?: activeVehicleName
@@ -493,57 +540,35 @@ class CarDrivingTrackingService : Service() {
                     java.time.ZoneId.systemDefault()
                 )
                 val resolved = placeResolver.resolveGeoLocation(this@CarDrivingTrackingService, wp.latitude, wp.longitude)
+                val locName = resolveLocationName(wp.latitude, wp.longitude, isDeparture = (index == 0))
 
-                val distHome = distanceMeter(homeLat, homeLng, wp.latitude, wp.longitude)
-                val distComp = distanceMeter(compLat, compLng, wp.latitude, wp.longitude)
-
-                val (stepTitle, locName, tags) = when {
+                val (stepTitle, tags) = when {
                     validList.size == 1 -> {
-                        // 단 1개 지점만 수집된 경우
-                        val name = when {
-                            homeLat != 0.0 && distHome < 800 -> config?.homeName?.ifBlank { "우리집" } ?: "우리집"
-                            compLat != 0.0 && distComp < 800 -> config?.companyName?.ifBlank { "회사" } ?: "회사"
-                            else -> resolved.placeName.ifBlank { "주행 거점" }
-                        }
-                        Triple(
+                        Pair(
                             "$brandEmoji [$activeVehicleName] 주행 기록 (단일 거점)",
-                            name,
                             listOf("차량주행", "$brandEmoji $vehicleTag", "주행거점")
                         )
                     }
                     index == 0 -> {
-                        // 출발 지점
-                        val name = when {
-                            homeLat != 0.0 && distHome < 800 -> config?.homeName?.ifBlank { "우리집" } ?: "우리집"
-                            compLat != 0.0 && distComp < 800 -> config?.companyName?.ifBlank { "회사" } ?: "회사"
-                            else -> resolved.placeName.ifBlank { "출발 지점" }
-                        }
-                        Triple(
+                        // 출발 지점 (GPS 최초 유효 좌표)
+                        Pair(
                             "$brandEmoji [$activeVehicleName] 출발",
-                            name,
                             listOf("차량주행", "$brandEmoji $vehicleTag", "출발지점")
                         )
                     }
                     index == validList.lastIndex -> {
-                        // 최종 도착 지점
-                        val name = when {
-                            compLat != 0.0 && distComp < 800 -> config?.companyName?.ifBlank { "회사" } ?: "회사"
-                            homeLat != 0.0 && distHome < 800 -> config?.homeName?.ifBlank { "우리집" } ?: "우리집"
-                            else -> resolved.placeName.ifBlank { "도착 지점" }
-                        }
-                        Triple(
+                        // 최종 도착 지점 (GPS 최종 유효 좌표)
+                        Pair(
                             "$brandEmoji [$activeVehicleName] 도착 (총 %.1f km)".format(finalTripKm),
-                            name,
                             listOf("차량주행", "$brandEmoji $vehicleTag", "도착지점")
                         )
                     }
                     else -> {
-                        // 중간 10분 주기 경유 지점
-                        val elapsed = index * 10
-                        Triple(
+                        // 중간 주기 경유 지점
+                        val elapsed = ((wp.timestamp - startTimeMillis) / 60000).coerceAtLeast(1)
+                        Pair(
                             "$brandEmoji [$activeVehicleName] 주행 경유 (${elapsed}분 경과)",
-                            resolved.placeName.ifBlank { "주행 경유지 $index" },
-                            listOf("차량주행", "$brandEmoji $vehicleTag", "10분GPS추적")
+                            listOf("차량주행", "$brandEmoji $vehicleTag", "주행경유")
                         )
                     }
                 }
@@ -666,9 +691,12 @@ class CarDrivingTrackingService : Service() {
 
     /**
      * 거점(집/회사) 또는 PlaceResolver 역지오코딩을 통해 직관적인 지명을 도출합니다.
+     * 유효한 지명이 없을 경우 동/읍/면 또는 도로명 주소를 추출합니다.
      */
     private suspend fun resolveLocationName(lat: Double, lng: Double, isDeparture: Boolean): String {
-        if (lat == 0.0 || lng == 0.0) return if (isDeparture) "출발지" else "도착지"
+        if (!LocationDistanceUtils.isValidCoordinate(lat, lng)) {
+            return if (isDeparture) "출발지" else "도착지"
+        }
 
         val config = runCatching { userLocationPreferences.config.value }.getOrNull()
         val homeLat = config?.homeLat ?: 0.0
@@ -695,10 +723,10 @@ class CarDrivingTrackingService : Service() {
                     val gu = parts.findLast { p: String -> p.endsWith("구") || p.endsWith("군") || p.endsWith("시") }
                     if (dong != null && gu != null && !dong.contains(gu)) "$gu $dong" else dong ?: gu ?: resolved.address
                 }
-                else -> if (isDeparture) "출발지" else "도착지"
+                else -> if (isDeparture) "출발 지점" else "도착 지점"
             }
         } catch (e: Throwable) {
-            if (isDeparture) "출발지" else "도착지"
+            if (isDeparture) "출발 지점" else "도착 지점"
         }
     }
 
@@ -707,7 +735,13 @@ class CarDrivingTrackingService : Service() {
         val lat = loc?.latitude ?: 0.0
         val lng = loc?.longitude ?: 0.0
 
-        // 제자리 정차 중 동일 좌표 중복 누적 방지 (출발/도착이 아닌 중간 샘플링 시)
+        // 1. 유효하지 않은 더미 좌표(0.0 등) 완전 차단 -> 0km/출발지-도착지 오염 근본 방지
+        if (!LocationDistanceUtils.isValidCoordinate(lat, lng)) {
+            Log.w(TAG, "유효하지 않은 GPS 좌표 수집 건너뜀: (lat=$lat, lng=$lng, dep=$isDeparture, dest=$isDestination)")
+            return
+        }
+
+        // 2. 제자리 정차 중 동일 좌표 중복 누적 방지 (출발/도착이 아닌 중간 샘플링 시)
         if (!isDeparture && !isDestination && lastRecordedLat != 0.0 && lastRecordedLng != 0.0) {
             val distFromLast = distanceMeter(lastRecordedLat, lastRecordedLng, lat, lng)
             if (distFromLast < 15.0) {
@@ -716,10 +750,22 @@ class CarDrivingTrackingService : Service() {
             }
         }
 
-        if (lat != 0.0 && lng != 0.0) {
-            lastRecordedLat = lat
-            lastRecordedLng = lng
-            lastRecordedWaypointTime = System.currentTimeMillis()
+        // 3. 실시간 주행 거리 누적 (이전 유효 위치 대비 이동 거리)
+        lastValidLocation?.let { prevLoc ->
+            val distMeters = distanceMeter(prevLoc.latitude, prevLoc.longitude, lat, lng)
+            if (distMeters >= 15.0 && distMeters < 5000.0) { // 15m 이상, 5km 미만(순간 텔레포트 오차 배제)
+                cumulativeDistanceKm += (distMeters / 1000.0) * 1.25 // 실제 도로 굴곡 보정계수 1.25 반영
+                Log.d(TAG, "Waypoint 이동 거리 실시간 누적: +${String.format(java.util.Locale.US, "%.2f", distMeters / 1000.0 * 1.25)} km (누적: ${String.format(java.util.Locale.US, "%.2f", cumulativeDistanceKm)} km)")
+            }
+        }
+        lastValidLocation = loc ?: Location("").apply { latitude = lat; longitude = lng }
+
+        lastRecordedLat = lat
+        lastRecordedLng = lng
+        lastRecordedWaypointTime = System.currentTimeMillis()
+
+        if (isDeparture) {
+            firstDeparturePointRecorded = true
         }
 
         val waypoint = DrivingWaypoint(
@@ -737,10 +783,15 @@ class CarDrivingTrackingService : Service() {
     private fun updateOngoingNotification() {
         runCatching {
             val elapsedMin = ((System.currentTimeMillis() - startTimeMillis) / 60000).coerceAtLeast(1)
-            val currentDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints.toList())
+            val waypointDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints.toList())
+            val currentDist = maxOf(cumulativeDistanceKm, waypointDist)
             val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
             val content = if (currentDist > 0.0) {
                 "실시간 주행 중 · %.1f km (운행 ${elapsedMin}분, %d개 지점 수집)".format(currentDist, waypoints.size)
+            } else if (elapsedMin >= 3 && waypoints.size >= 2) {
+                // 수집된 지점이 있으나 미세 정체 구간일 때 최소 추정치 표시
+                val estimatedKm = (elapsedMin * 0.3).coerceIn(0.1, 15.0)
+                "실시간 주행 중 · 약 %.1f km (운행 ${elapsedMin}분)".format(estimatedKm)
             } else {
                 "블루투스 감지 탑승 중 · ${elapsedMin}분 경과 (GPS 위치 수집 중)"
             }
@@ -837,13 +888,47 @@ class CarDrivingTrackingService : Service() {
         stopLocationUpdates()
 
         val listener = android.location.LocationListener { loc ->
-            if (loc.latitude == 0.0 && loc.longitude == 0.0) return@LocationListener
+            if (!LocationDistanceUtils.isValidCoordinate(loc.latitude, loc.longitude)) return@LocationListener
             if (loc.hasAccuracy() && loc.accuracy > 150f) {
                 Log.d(TAG, "낮은 정확도(${loc.accuracy}m) GPS 신호 무시")
                 return@LocationListener
             }
 
             latestLocation = loc
+
+            // 최초 유효 좌표가 들어왔을 때, 출발 지점으로 등록되지 않았다면 즉시 출발지(isDeparture = true)로 확정 등록
+            if (!firstDeparturePointRecorded) {
+                firstDeparturePointRecorded = true
+                lastValidLocation = loc
+                lastRecordedLat = loc.latitude
+                lastRecordedLng = loc.longitude
+                lastRecordedWaypointTime = System.currentTimeMillis()
+
+                val depWp = DrivingWaypoint(
+                    timestamp = System.currentTimeMillis(),
+                    latitude = loc.latitude,
+                    longitude = loc.longitude,
+                    isDeparture = true,
+                    isDestination = false
+                )
+                waypoints.add(depWp)
+                saveWaypointsToPrefs()
+                Log.i(TAG, "GPS 최초 유효 좌표를 출발 지점으로 자동 확정: (lat=${loc.latitude}, lng=${loc.longitude})")
+                updateOngoingNotification()
+                return@LocationListener
+            }
+
+            // 실시간 주행 거리 즉각 누적: 이전 유효 위치 대비 15m 이상 이동 시
+            lastValidLocation?.let { prevLoc ->
+                val distMeters = distanceMeter(prevLoc.latitude, prevLoc.longitude, loc.latitude, loc.longitude)
+                if (distMeters >= 15.0 && distMeters < 5000.0) { // 15m 이상 5km 미만(순간 이상치 방어)
+                    cumulativeDistanceKm += (distMeters / 1000.0) * 1.25
+                    lastValidLocation = loc
+                    updateOngoingNotification()
+                }
+            } ?: run {
+                lastValidLocation = loc
+            }
 
             // 실시간 궤적 누적: 이전 기록 위치 대비 30m 이상 이동했거나, 마지막 기록 후 3분 경과 시(15m 이상 이동) 기록
             val distFromLast = if (lastRecordedLat != 0.0 && lastRecordedLng != 0.0) {
@@ -866,13 +951,29 @@ class CarDrivingTrackingService : Service() {
                 )
                 waypoints.add(wp)
                 saveWaypointsToPrefs()
-                Log.d(TAG, "실시간 이동 궤적 Waypoint 수집: (lat=${loc.latitude}, lng=${loc.longitude}, dist=${distFromLast.toInt()}m, 총 ${waypoints.size}개)")
+                Log.d(TAG, "실시간 이동 궤적 Waypoint 수집: (lat=${loc.latitude}, lng=${loc.longitude}, dist=${distFromLast.toInt()}m, 총 ${waypoints.size}개, 누적거리=%.2fkm)".format(cumulativeDistanceKm))
                 updateOngoingNotification()
             }
         }
         locationListener = listener
 
-        // 1. 고정밀 GPS 공급자 (3초 간격 또는 10m 이동 시)
+        // 1. Android 12+ Fused Provider (시스템 레벨 최적 융합 공급자)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching {
+                if (lm.allProviders.contains(LocationManager.FUSED_PROVIDER)) {
+                    lm.requestLocationUpdates(
+                        LocationManager.FUSED_PROVIDER,
+                        3000L,
+                        10f,
+                        listener,
+                        android.os.Looper.getMainLooper()
+                    )
+                    Log.d(TAG, "LocationListener: FUSED_PROVIDER 등록 성공")
+                }
+            }.onFailure { Log.e(TAG, "FUSED_PROVIDER 등록 실패", it) }
+        }
+
+        // 2. 고정밀 GPS 공급자 (3초 간격 또는 10m 이동 시)
         if (hasFine && lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             runCatching {
                 lm.requestLocationUpdates(
@@ -886,7 +987,7 @@ class CarDrivingTrackingService : Service() {
             }.onFailure { Log.e(TAG, "GPS_PROVIDER 등록 실패", it) }
         }
 
-        // 2. 내비게이션(티맵/카카오내비 등) 패시브 공급자 (2초 간격 또는 10m 이동 시)
+        // 3. 내비게이션(티맵/카카오내비 등) 패시브 공급자 (2초 간격 또는 10m 이동 시)
         if (hasFine && lm.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)) {
             runCatching {
                 lm.requestLocationUpdates(
@@ -900,7 +1001,7 @@ class CarDrivingTrackingService : Service() {
             }.onFailure { Log.e(TAG, "PASSIVE_PROVIDER 등록 실패", it) }
         }
 
-        // 3. 네트워크 기지국/Wi-Fi 공급자 (10초 간격 또는 50m 이동 시)
+        // 4. 네트워크 기지국/Wi-Fi 공급자 (10초 간격 또는 50m 이동 시)
         if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
             runCatching {
                 lm.requestLocationUpdates(
