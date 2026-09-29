@@ -2077,5 +2077,47 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
   - 차계부 진입 시 자가 치유(Self-Healing) 작동 확인.
   - 기존 사용자 화면에 표시되던 `출발지 ➔ 도착지 (0.0 km)` 3건의 오염 데이터가 완전히 정제되어 사라지고, 정상 주행 기록만 모아보기 완벽 동작 확인 (`screen_driving_selected.png`, `screen_all_vehicles.png`).
 
+---
+
+## 60. Toast/Snackbar 메시지 고대비 가독성 개선 (배경/글꼴 색상 분리 및 M3 테마 정상화) (2026-09-30)
+
+- **일시**: 2026-09-30
+- **사용자 제보 및 배경**:
+  - 사용자 제보: "toast 메세지의 배경이 어두운색에 글꼴도 어두워서 무슨 메세지인지 확인이 안돼"
+  - 스크린샷 4건(`media_1790722326223.png` ~ `media_1790722339235.png`) 분석:
+    - 차계부 주유 동기화 및 각종 작업 완료 시 노출되는 스낵바/토스트 메시지가 어두운 배경(다크 차콜)에 글꼴 색상까지 어두운 색상(`Slate900`)으로 렌더링되어 사용자가 텍스트를 거의 알아볼 수 없는 시인성 결함 발생.
+
+### 60.1. 결함 근본 원인 분석
+1. **Material 3 `Typography` 전역 텍스트 색상 하드코딩 안티패턴 (`Type.kt`)**:
+   - `Type.kt` 내의 모든 `TextStyle`(`bodyLarge`, `bodyMedium`, `bodySmall`, `titleMedium`, `labelLarge` 등)에 `color = Slate900/800/600`이 직접 하드코딩되어 정의되어 있었음.
+   - Material 3 컴포저블(`Snackbar` 등)은 컴포넌트 내부에서 `CompositionLocalProvider(LocalContentColor provides inverseOnSurface)`를 통해 자식 텍스트에 순백색(`PureWhite`)을 전달하려 하지만, 하위 `TextStyle`에 명시적인 `color`가 세팅되어 있으면 컴포넌트 컨텐츠 색상 상속이 강제로 차단되고 하드코딩된 어두운 색상이 덮어씌워짐.
+2. **Material 3 `Theme.kt` 색상 롤 누락 및 `ProvideTextStyle` 강제 오버라이드 결함**:
+   - `LightColorScheme` 및 `DarkColorScheme`에 스낵바 표준 색상인 `inverseSurface`와 `inverseOnSurface`가 명시되지 않아 기본 팔레트 불일치 가능성 존재.
+   - 테마 최상단의 `ProvideTextStyle(value = MaterialTheme.typography.bodyMedium.copy(color = colorScheme.onBackground))` 구문이 하위 트리의 모든 컴포저블에 어두운 `onBackground`(`Slate900`)를 강제 전파하여 스낵바 내부 글꼴까지 어둡게 오염시킴.
+
+### 60.2. 주요 개선 및 구현 내역
+1. **`Type.kt` Material 3 타이포그래피 정규화**:
+   - `Typography` 내 모든 스타일에 정의되어 있던 하드코딩된 `color = ...` 속성을 전면 제거.
+   - 폰트 패밀리, 크기, 행간, 자간, 두께만 정의하고 색상은 비워둠으로써 상위 컴포넌트가 지정한 `LocalContentColor.current`를 자연스럽게 따르도록 정규화.
+2. **`Theme.kt` M3 색상 롤 완비 및 `ProvideTextStyle` 정상화**:
+   - `LightColorScheme`에 `inverseSurface = Slate900`, `inverseOnSurface = PureWhite` 명시.
+   - `DarkColorScheme`에 `inverseSurface = Slate100`, `inverseOnSurface = Slate950` 명시.
+   - `ProvideTextStyle`의 `color`를 `Color.Unspecified`로 변경하여 자식 컴포넌트의 컨텐츠 색상 상속 계약을 훼손하지 않도록 보호.
+3. **고대비 전용 공통 스낵바 컴포넌트 신설 (`AppSnackbarHost.kt`)**:
+   - `com.autologue.app.presentation.common.AppSnackbarHost.kt` 신설.
+   - 다크 차콜 컨테이너(`Slate900`), 1dp 테두리(`Slate700`), 둥근 모서리(`12.dp`), 선명한 순백색 글꼴(`PureWhite`, SemiBold, 14.sp)을 적용하여 어떤 밝기/배경 화면에서도 100% 뚜렷한 대비감 제공.
+   - 텍스트 외 버튼(Action)이 포함된 경우 생생한 라이트 블루(`SkyBlue`, Bold)로 고대비 가독성 부여.
+4. **`CarLedgerScreen.kt` 연동**:
+   - `snackbarHost = { AppSnackbarHost(snackbarHostState) }` 연동을 통해 주유 동기화 및 작업 피드백 메시지 시인성 즉각 개선.
+
+### 60.3. 단위 테스트 및 실기기 검증 결과
+- **단위 테스트 100% 통과**:
+  - `.\gradlew.bat testDebugUnitTest` 90개 테스트 전수 성공 (`BUILD SUCCESSFUL in 2m 17s`).
+- **에뮬레이터(`Galaxy S24+`, `emulator-5554`) 실기기 배포 및 검증**:
+  - `.\gradlew.bat installDebug` 배포 완료.
+  - 차계부 화면에서 상단 `[주유 동기화]` 버튼 터치 시 하단에 `"모든 주유 결제 내역이 이미 최신 상태로 동기화되어 있습니다."` 스낵바 메시지 팝업 실화면 캡처 검증 완료 (`screen_snackbar_verified.png`).
+  - 깊은 다크 차콜 배경과 순백색 텍스트가 극적인 대비를 이루어 어떤 상황에서도 명확하고 또렷하게 식별됨을 확인.
+
+
 
 

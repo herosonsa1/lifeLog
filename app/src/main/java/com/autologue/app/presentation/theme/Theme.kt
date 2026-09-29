@@ -30,6 +30,8 @@ private val LightColorScheme = lightColorScheme(
     onSurface = Slate900,
     surfaceVariant = Slate50,
     onSurfaceVariant = Slate600,
+    inverseSurface = Slate900,
+    inverseOnSurface = PureWhite,
     outline = Slate200,
     outlineVariant = Slate300
 )
@@ -51,6 +53,8 @@ private val DarkColorScheme = darkColorScheme(
     onSurface = Slate50,
     surfaceVariant = Slate800,
     onSurfaceVariant = Slate400,
+    inverseSurface = Slate100,
+    inverseOnSurface = Slate950,
     outline = Slate700,
     outlineVariant = Slate600
 )
@@ -77,7 +81,7 @@ fun AutoLogueTheme(
         ProvideTextStyle(
             value = TextStyle(
                 fontFamily = NanumSquareNeo,
-                color = colorScheme.onBackground
+                color = androidx.compose.ui.graphics.Color.Unspecified
             ),
             content = content
         )

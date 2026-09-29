@@ -125,7 +125,7 @@ fun CarLedgerScreen(
 
     Scaffold(
         containerColor = AppColors.background,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { AppSnackbarHost(snackbarHostState) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { viewModel.openAddRefuelDialog() },
