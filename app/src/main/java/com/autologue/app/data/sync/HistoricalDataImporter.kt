@@ -29,7 +29,7 @@ class HistoricalDataImporter @Inject constructor(
     private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) {
 
-    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 7, limit: Int = 300): List<Transaction> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 60, limit: Int = 500): List<Transaction> = withContext(Dispatchers.IO) {
         // [L-01] READ_SMS 권한 사전 체크 — SecurityException 원천 방지
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             android.util.Log.w("HistoricalDataImporter", "READ_SMS 권한 없음 — SMS 스캔 건너뜀")
@@ -47,11 +47,12 @@ class HistoricalDataImporter @Inject constructor(
             val uri = Uri.parse("content://sms")
             val sortOrder = "${Telephony.Sms.DATE} DESC"
 
-            val actualDays = daysBack ?: 7
-            val minDateMillis = System.currentTimeMillis() - (actualDays.toLong() * 24 * 60 * 60 * 1000L)
-
-            val selection = "${Telephony.Sms.DATE} >= ?"
-            val selectionArgs = arrayOf(minDateMillis.toString())
+            val (selection, selectionArgs) = if (daysBack != null && daysBack > 0) {
+                val minDateMillis = System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+                Pair("${Telephony.Sms.DATE} >= ?", arrayOf(minDateMillis.toString()))
+            } else {
+                Pair(null, null)
+            }
 
             context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
                 val addressCol = cursor.getColumnIndex(Telephony.Sms.ADDRESS)

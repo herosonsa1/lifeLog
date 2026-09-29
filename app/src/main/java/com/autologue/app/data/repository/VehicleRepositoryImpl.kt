@@ -62,52 +62,85 @@ class VehicleRepositoryImpl @Inject constructor(
             "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일",
             "현대오일뱅크", "HD현대", "오일뱅크", "현대오일",
             "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소",
+            "한국도로공사", "한국도로공사하", "한국도로공사상", "도로공사주유", "도로공사충전",
+            "ex-oil", "EX-OIL", "EX주유소", "ex주유소", "휴게소주유", "휴게소충전",
             "E1", "LPG", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전"
         )
 
         fun isFuelMerchant(merchantName: String): Boolean {
-            val upper = merchantName.uppercase()
-            return FUEL_KEYWORDS.any { upper.contains(it.uppercase()) }
+            val upper = merchantName.uppercase().replace(" ", "")
+            return FUEL_KEYWORDS.any { upper.contains(it.uppercase().replace(" ", "")) }
         }
     }
 
     override suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int = withContext(Dispatchers.IO) {
         var addedCount = 0
+
+        // 1. 승인취소(amount < 0 또는 [승인취소] 태그) 거래가 있는 경우 차계부에서 해당 가승인 로그 즉시 선제 삭제
+        val cancelledItems = transactions.filter { it.amount < 0 || it.transferMemo?.contains("승인취소") == true }
+        for (c in cancelledItems) {
+            val cancelAmt = Math.abs(c.amount)
+            deleteRefuelingLogByTransaction(cancelAmt, c.timestamp.toLocalDate(), c.merchantName)
+        }
+
         val currentLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }.toMutableList()
 
-        for (tx in transactions) {
+        // 2. 주유 관련 거래 필터링
+        val fuelTransactions = transactions.filter { tx ->
             val isFuel = tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
                 isFuelMerchant(tx.merchantName)
+            isFuel && tx.amount > 0
+        }
 
-            if (isFuel && tx.amount > 0) {
-                val alreadyExists = currentLogs.any {
-                    it.logType == VehicleLogType.REFUELING &&
-                    it.timestamp.toLocalDate() == tx.timestamp.toLocalDate() &&
-                    it.fuelCost == tx.amount
-                }
+        // 날짜 및 상호별 그룹화하여 셀프주유소 가승인(15만원/10만원) 판별
+        for (tx in fuelTransactions) {
+            val txDate = tx.timestamp.toLocalDate()
+            val sameDayMerchantTxs = fuelTransactions.filter {
+                it.timestamp.toLocalDate() == txDate &&
+                (it.merchantName == tx.merchantName || isFuelMerchant(it.merchantName))
+            }
 
-                if (!alreadyExists) {
-                    val lastFuel = currentLogs.filter { it.logType == VehicleLogType.REFUELING }
-                        .filter { it.timestamp.isBefore(tx.timestamp) }
-                        .maxByOrNull { it.timestamp }
+            // 셀프 주유소 가승인 금액(150,000원 또는 100,000원)인데,
+            // 같은 날 같은 주유소에 다른 실제 주유 금액(예: 75,449원, 61,000원 등)이 있거나 취소 내역이 있으면 가승인 건은 차계부 등록 제외
+            val isCommonPreAuthAmount = tx.amount == 150000L || tx.amount == 100000L
+            val hasOtherRealFuelTx = sameDayMerchantTxs.any { it.amount != tx.amount }
+            val hasCancellationForThis = cancelledItems.any {
+                it.timestamp.toLocalDate() == txDate && Math.abs(it.amount) == tx.amount
+            }
 
-                    val daysSince = if (lastFuel != null) {
-                        java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), tx.timestamp.toLocalDate()).toInt()
-                    } else null
+            if (isCommonPreAuthAmount && (hasOtherRealFuelTx || hasCancellationForThis)) {
+                // 이미 DB에 가승인 로그가 들어있다면 정리
+                deleteRefuelingLogByTransaction(tx.amount, txDate, tx.merchantName)
+                continue
+            }
 
-                    val log = VehicleLog(
-                        timestamp = tx.timestamp,
-                        logType = VehicleLogType.REFUELING,
-                        fuelCost = tx.amount,
-                        fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", tx.amount / 1650.0).toDouble(),
-                        daysSinceLastFuel = daysSince,
-                        gasStationName = tx.merchantName,
-                        note = "가계부 결제 내역 자동 분석"
-                    )
-                    val insertedId = vehicleLogDao.insertVehicleLog(log.toEntity())
-                    currentLogs.add(log.copy(id = insertedId))
-                    addedCount++
-                }
+            val alreadyExists = currentLogs.any {
+                it.logType == VehicleLogType.REFUELING &&
+                it.timestamp.toLocalDate() == txDate &&
+                it.fuelCost == tx.amount
+            }
+
+            if (!alreadyExists) {
+                val lastFuel = currentLogs.filter { it.logType == VehicleLogType.REFUELING }
+                    .filter { it.timestamp.isBefore(tx.timestamp) }
+                    .maxByOrNull { it.timestamp }
+
+                val daysSince = if (lastFuel != null) {
+                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), tx.timestamp.toLocalDate()).toInt()
+                } else null
+
+                val log = VehicleLog(
+                    timestamp = tx.timestamp,
+                    logType = VehicleLogType.REFUELING,
+                    fuelCost = tx.amount,
+                    fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", tx.amount / 1650.0).toDouble(),
+                    daysSinceLastFuel = daysSince,
+                    gasStationName = tx.merchantName,
+                    note = "가계부 결제 내역 자동 분석"
+                )
+                val insertedId = vehicleLogDao.insertVehicleLog(log.toEntity())
+                currentLogs.add(log.copy(id = insertedId))
+                addedCount++
             }
         }
         addedCount

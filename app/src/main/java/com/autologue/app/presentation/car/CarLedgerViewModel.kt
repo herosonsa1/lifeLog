@@ -71,13 +71,16 @@ data class CarLedgerUiState(
 
 @HiltViewModel
 class CarLedgerViewModel @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
     private val vehicleRepository: VehicleRepository,
     private val transactionRepository: TransactionRepository,
     private val diaryRepository: DiaryRepository,
     private val golfRepository: com.autologue.app.domain.repository.GolfRepository,
     private val locationPreferences: UserLocationPreferences,
     private val maintenancePreferences: VehicleMaintenancePreferences,
-    private val multiVehiclePreferences: MultiVehiclePreferences
+    private val multiVehiclePreferences: MultiVehiclePreferences,
+    private val importer: com.autologue.app.data.sync.HistoricalDataImporter,
+    private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CarLedgerUiState())
@@ -378,23 +381,31 @@ class CarLedgerViewModel @Inject constructor(
             val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
             val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
 
-            // 1. 실제 골프 라운드 DB(18홀 유효)와 대조하여 누락된 주행기록 자동 복원 및 유령 레코드(8.8, 9.1 등) 영구 삭제
+            // 1. 기기 결제 문자(SMS) 최근 60일 전수 스캔 및 가계부/차계부 자동 적재 (권한 허용 시)
+            runCatching {
+                val scannedTxs = importer.scanHistoricalSms(context, daysBack = 60)
+                for (tx in scannedTxs) {
+                    processTransactionUseCase(tx)
+                }
+            }
+
+            // 2. 실제 골프 라운드 DB(18홀 유효)와 대조하여 누락된 주행기록 자동 복원 및 유령 레코드(8.8, 9.1 등) 영구 삭제
             val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
             vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
 
-            // 2. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
+            // 3. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
 
-            // 3. 주유 결제 내역 동기화
+            // 4. 주유 결제 내역 동기화 (셀프주유소 가승인 15만원 자동 선별 및 실주유액 등록)
             val txs = transactionRepository.getAllTransactionsFlow().first()
             val addedCount = vehicleRepository.syncRefuelingFromTransactions(txs)
 
-            // 4. 재정제 및 골프 정합성 확정
+            // 5. 재정제 및 골프 정합성 확정
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
             vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
 
             val msg = if (addedCount > 0) {
-                "가계부 결제 내역에서 주유 기록 ${addedCount}건을 새로 동기화했습니다."
+                "결제 문자 및 가계부에서 주유 기록 ${addedCount}건을 새로 동기화했습니다."
             } else {
                 "모든 주유 결제 내역이 이미 최신 상태로 동기화되어 있습니다."
             }

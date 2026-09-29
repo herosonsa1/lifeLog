@@ -39,6 +39,7 @@ class ProcessTransactionUseCase @Inject constructor(
             isAutoCategorized = matchedRuleId != null || finalCategory != ExpenseCategory.ETC
         )
 
+        val isCancellation = enrichedTx.amount < 0 || enrichedTx.transferMemo?.contains("승인취소") == true
         val txId = transactionRepository.insertTransaction(enrichedTx)
 
         val isFuel = finalCategory == ExpenseCategory.FUEL ||
@@ -49,21 +50,27 @@ class ProcessTransactionUseCase @Inject constructor(
                 transactionRepository.updateTransaction(enrichedTx.copy(id = txId, category = ExpenseCategory.FUEL))
             }
 
-            val lastFuel = vehicleRepository.getLatestRefuelingLog()
-            val daysSince = if (lastFuel != null) {
-                java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), enrichedTx.timestamp.toLocalDate()).toInt()
-            } else null
+            if (isCancellation) {
+                // 승인취소 시 해당 금액의 차계부 가승인 주유 로그 즉시 삭제
+                val cancelAmt = Math.abs(enrichedTx.amount)
+                vehicleRepository.deleteRefuelingLogByTransaction(cancelAmt, enrichedTx.timestamp.toLocalDate(), enrichedTx.merchantName)
+            } else if (enrichedTx.amount > 0) {
+                val lastFuel = vehicleRepository.getLatestRefuelingLog()
+                val daysSince = if (lastFuel != null) {
+                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), enrichedTx.timestamp.toLocalDate()).toInt()
+                } else null
 
-            val vehicleLog = VehicleLog(
-                timestamp = enrichedTx.timestamp,
-                logType = VehicleLogType.REFUELING,
-                fuelCost = enrichedTx.amount,
-                fuelAmountLiters = if (enrichedTx.amount > 0) String.format(java.util.Locale.US, "%.1f", enrichedTx.amount / 1650.0).toDouble() else 0.0,
-                daysSinceLastFuel = daysSince,
-                gasStationName = enrichedTx.merchantName,
-                note = "가계부 결제 연동 자동 기록"
-            )
-            vehicleRepository.insertVehicleLog(vehicleLog)
+                val vehicleLog = VehicleLog(
+                    timestamp = enrichedTx.timestamp,
+                    logType = VehicleLogType.REFUELING,
+                    fuelCost = enrichedTx.amount,
+                    fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", enrichedTx.amount / 1650.0).toDouble(),
+                    daysSinceLastFuel = daysSince,
+                    gasStationName = enrichedTx.merchantName,
+                    note = "가계부 결제 연동 자동 기록"
+                )
+                vehicleRepository.insertVehicleLog(vehicleLog)
+            }
         }
 
         if (finalCategory == ExpenseCategory.GOLF_FIELD || finalCategory == ExpenseCategory.GOLF_SCREEN) {
