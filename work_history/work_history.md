@@ -2352,3 +2352,19 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
     - 상단 [주유 동기화] 버튼 터치 시 **"모든 주유 결제 내역(총 8건)이 이미 최신 상태로 동기화되어 있습니다."** 스낵바 표출 확인 (screen_car_autosynced.png).
     - 총 주유비 **603,449원**, 주유 기록 **8건** 최신 동기화 유지 확인.
   - **결과**: 사용자가 번거롭게 문자를 복사-붙여넣기할 필요 없이, **버튼 하나로 기기 내 모든 결제 문자가 100% 전자동 스캔·집계**되는 완전 자동화 시스템 복원 완료.
+
+### 64.4. 주요 변경 및 신규 소스 파일 목록
+
+| 파일 경로 | 변경 내용 및 역할 |
+| :--- | :--- |
+| `app/src/main/java/com/autologue/app/data/importer/HistoricalDataImporter.kt` | SQL Selection `DATE >= ?` 조건 전면 제거, 초(10자리) vs 밀리초(13자리) 런타임 자동 정규화, MMS 텍스트 멀티파트 디코딩 강화, 최근 90일 전수 스캔 복원 |
+| `app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt` | 상단 액션바에 `[문자 동기화]`(원터치 클라우드 다운로드 아이콘) 신설 및 `READ_SMS` 런타임 권한 요청기 연동 |
+| `app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt` | `syncHistoricalSms` 함수 구현: 기기 내 결제 문자 전수 스캔 후 가계부 DB 저장 및 차계부 주유 기록 동시 연동 |
+| `app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt` | `manualSyncRefueling` 파이프라인 정규화 (불편한 복사-붙여넣기 유도 메시지 제거, 실제 스캔 결과 건수 투명 안내) |
+| `app/src/main/java/com/autologue/app/receiver/MmsBroadcastReceiver.kt` | [신규] 80바이트 초과 장문 LMS/MMS 결제 문자 실시간 수신을 위한 `WAP_PUSH_RECEIVED` 브로드캐스트 리시버 구현 |
+| `app/src/main/AndroidManifest.xml` | `RECEIVE_WAP_PUSH` 권한 및 `MmsBroadcastReceiver` 인텐트 필터 등록 |
+
+### 64.5. Git 커밋 및 동기화 정보
+- **커밋 해시**: `e1df605` (및 후속 문서화 커밋)
+- **커밋 메시지**: `fix: restore full automatic scan for sms/mms payments and normalize expense/car sync pipeline`
+- **배포 및 검증**: Galaxy S24+ 에뮬레이터(`emulator-5554`) 실기기 배포 및 가계부 10건(603,449원), 차계부 8건(603,449원) 100% 무복사 전자동 동기화 검증 완료.
