@@ -432,17 +432,20 @@ class CarLedgerViewModel @Inject constructor(
 
             val totalFuelLogs = vehicleRepository.getRefuelingLogsFlow().first().size
 
+            val totalScanned = scanResult.totalMessagesScanned
             val msg = when {
                 !scanResult.isPermissionGranted ->
                     "문자(SMS) 읽기 권한이 허용되지 않았습니다. 앱 설정에서 권한을 허용해주세요."
                 addedCount > 0 ->
                     "기기 결제 문자(SMS/MMS)에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다."
+                scanResult.transactions.isNotEmpty() && totalFuelLogs > 0 ->
+                    "기기 문자 총 ${totalScanned}건(SMS ${scanResult.smsCount}, MMS ${scanResult.mmsCount}) 스캔 완료: 모든 주유 내역(총 ${totalFuelLogs}건)이 이미 최신 상태입니다."
+                totalScanned > 0 ->
+                    "기기 문자 총 ${totalScanned}건(SMS ${scanResult.smsCount}, MMS ${scanResult.mmsCount})을 분석했으나 신규 주유 내역을 찾지 못했습니다."
                 totalFuelLogs > 0 ->
-                    "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 이미 최신 상태로 동기화되어 있습니다."
-                scanResult.totalMessagesScanned > 0 ->
-                    "문자 ${scanResult.totalMessagesScanned}건을 자동 분석했으나 주유 내역을 찾지 못했습니다."
+                    "기기 문자 수신함이 비어있습니다 (0건 스캔). 기존 주유 기록 ${totalFuelLogs}건을 표시 중입니다. (삼성 갤럭시 채팅+(RCS)는 [문자 붙여넣기] 지원)"
                 else ->
-                    "기기에서 수신된 결제 문자를 찾지 못했습니다 (최근 90일 스캔 완료)."
+                    "기기 문자 수신함에서 문자를 찾지 못했습니다 (0건 스캔). 삼성 갤럭시 채팅+(RCS)는 OS 보안상 [문자 붙여넣기]를 이용해주세요."
             }
             _uiState.value = _uiState.value.copy(isSyncing = false, syncResultMessage = msg)
         }

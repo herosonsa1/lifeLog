@@ -25,7 +25,10 @@ import javax.inject.Singleton
 data class SmsScanResult(
     val transactions: List<Transaction>,
     val isPermissionGranted: Boolean,
-    val totalMessagesScanned: Int
+    val totalMessagesScanned: Int,
+    val smsCount: Int = 0,
+    val mmsCount: Int = 0,
+    val rawSampleText: String? = null
 )
 
 @Singleton
@@ -35,14 +38,14 @@ class HistoricalDataImporter @Inject constructor(
     private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) {
 
-    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 90, limit: Int = 2000): List<Transaction> {
+    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 180, limit: Int = 3000): List<Transaction> {
         return scanHistoricalSmsDetailed(context, daysBack, limit).transactions
     }
 
     suspend fun scanHistoricalSmsDetailed(
         context: Context,
-        daysBack: Int? = 90,
-        limit: Int = 2000
+        daysBack: Int? = 180,
+        limit: Int = 3000
     ): SmsScanResult = withContext(Dispatchers.IO) {
         // [L-01] READ_SMS 권한 사전 체크 — SecurityException 원천 방지
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
@@ -82,9 +85,17 @@ class HistoricalDataImporter @Inject constructor(
         SmsScanResult(
             transactions = distinctTxs,
             isPermissionGranted = true,
-            totalMessagesScanned = totalScanned
+            totalMessagesScanned = totalScanned,
+            smsCount = smsCount,
+            mmsCount = mmsCount
         )
     }
+
+    private data class RawSmsItem(
+        val address: String?,
+        val body: String,
+        val dateMillis: Long
+    )
 
     private fun scanSmsMessages(
         context: Context,
@@ -101,64 +112,60 @@ class HistoricalDataImporter @Inject constructor(
                 Telephony.Sms.DATE
             )
 
-            // [L-02] 기기 제조사(삼성 One UI)의 DATE 컬럼 단위(초 vs 밀리초) 불일치 및 SQLite 타입 바인딩 결함 방어:
-            // SQL selection에 DATE 조건을 걸지 않고 전체 최신순으로 가져와 Kotlin 코드에서 초/밀리초 듀얼 판별
-            val sortOrder = "${Telephony.Sms.DATE} DESC"
-
+            // 제조사 파편화(10자리 초 vs 13자리 밀리초)로 인한 SQL 정렬 누락 버그 방어:
+            // SQL sortOrder에 의존하지 않고 가져온 뒤 Kotlin 런타임에서 밀리초로 통일 후 정렬
             val urisToTry = listOf(
                 Uri.parse("content://sms"),
                 Telephony.Sms.Inbox.CONTENT_URI,
                 Uri.parse("content://sms/inbox")
             )
 
-            var cursor: android.database.Cursor? = null
+            val rawList = mutableListOf<RawSmsItem>()
             for (uri in urisToTry) {
-                val candidate = runCatching {
-                    context.contentResolver.query(uri, projection, null, null, sortOrder)
+                val candidateList = mutableListOf<RawSmsItem>()
+                val cursor = runCatching {
+                    context.contentResolver.query(uri, projection, null, null, null)
                 }.getOrNull()
-                if (candidate != null) {
-                    if (candidate.count > 0) {
-                        cursor?.close()
-                        cursor = candidate
-                        break
-                    } else if (cursor == null) {
-                        cursor = candidate
-                    } else {
-                        candidate.close()
+
+                cursor?.use { c ->
+                    val addressCol = c.getColumnIndex(Telephony.Sms.ADDRESS)
+                    val bodyCol = c.getColumnIndex(Telephony.Sms.BODY)
+                    val dateCol = c.getColumnIndex(Telephony.Sms.DATE)
+
+                    while (c.moveToNext() && candidateList.size < limit) {
+                        val address = if (addressCol >= 0) c.getString(addressCol) else null
+                        val body = if (bodyCol >= 0) c.getString(bodyCol) else ""
+                        val rawDate = if (dateCol >= 0) c.getLong(dateCol) else System.currentTimeMillis()
+
+                        // 10자리(초) vs 13자리(밀리초) 자동 감지 및 통일
+                        val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
+
+                        if (minDateMillis == null || minDateMillis <= 0 || dateMillis >= minDateMillis) {
+                            if (body.isNotBlank()) {
+                                candidateList.add(RawSmsItem(address, body, dateMillis))
+                            }
+                        }
                     }
+                }
+
+                if (candidateList.isNotEmpty()) {
+                    rawList.addAll(candidateList)
+                    break
                 }
             }
 
-            cursor?.use { c ->
-                val addressCol = c.getColumnIndex(Telephony.Sms.ADDRESS)
-                val bodyCol = c.getColumnIndex(Telephony.Sms.BODY)
-                val dateCol = c.getColumnIndex(Telephony.Sms.DATE)
+            count = rawList.size
+            // 최신순 정렬
+            val sortedList = rawList.sortedByDescending { it.dateMillis }
+            for (item in sortedList) {
+                val fallbackTime = Instant.ofEpochMilli(item.dateMillis)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDateTime()
 
-                while (c.moveToNext() && count < limit) {
-                    val address = if (addressCol >= 0) c.getString(addressCol) else null
-                    val body = if (bodyCol >= 0) c.getString(bodyCol) else ""
-                    val rawDate = if (dateCol >= 0) c.getLong(dateCol) else System.currentTimeMillis()
-
-                    // [초 vs 밀리초 자동 판별] 10자리(초)인 경우 1000배, 13자리(밀리초)인 경우 그대로 유지
-                    val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
-
-                    // 스캔 날짜 범위 체크 (Kotlin 런타임 필터링)
-                    if (minDateMillis != null && minDateMillis > 0 && dateMillis < minDateMillis) {
-                        continue
-                    }
-
-                    if (body.isNotBlank()) {
-                        val fallbackTime = Instant.ofEpochMilli(dateMillis)
-                            .atZone(ZoneId.systemDefault())
-                            .toLocalDateTime()
-
-                        val parsed = SmsParser.parse(address, body, fallbackTime)
-                            ?: SmsParser.parse(null, body, fallbackTime)
-                        if (parsed != null) {
-                            result.add(parsed)
-                        }
-                    }
-                    count++
+                val parsed = SmsParser.parse(item.address, item.body, fallbackTime)
+                    ?: SmsParser.parse(null, item.body, fallbackTime)
+                if (parsed != null) {
+                    result.add(parsed)
                 }
             }
         } catch (t: Throwable) {
@@ -166,6 +173,11 @@ class HistoricalDataImporter @Inject constructor(
         }
         return Pair(result, count)
     }
+
+    private data class RawMmsItem(
+        val mmsId: String,
+        val dateMillis: Long
+    )
 
     private fun scanMmsMessages(
         context: Context,
@@ -180,67 +192,60 @@ class HistoricalDataImporter @Inject constructor(
                 Telephony.Mms.DATE
             )
 
-            // [L-03] MMS DATE 컬럼 SQL selection 바인딩 결함 방어:
-            // SQL selection 제거 후 Kotlin 런타임에서 초/밀리초 듀얼 감지
-            val sortOrder = "${Telephony.Mms.DATE} DESC"
-
             val urisToTry = listOf(
                 Uri.parse("content://mms"),
                 Telephony.Mms.Inbox.CONTENT_URI,
                 Uri.parse("content://mms/inbox")
             )
 
-            var cursor: android.database.Cursor? = null
+            val rawList = mutableListOf<RawMmsItem>()
             for (uri in urisToTry) {
-                val candidate = runCatching {
-                    context.contentResolver.query(uri, projection, null, null, sortOrder)
+                val candidateList = mutableListOf<RawMmsItem>()
+                val cursor = runCatching {
+                    context.contentResolver.query(uri, projection, null, null, null)
                 }.getOrNull()
-                if (candidate != null) {
-                    if (candidate.count > 0) {
-                        cursor?.close()
-                        cursor = candidate
-                        break
-                    } else if (cursor == null) {
-                        cursor = candidate
-                    } else {
-                        candidate.close()
-                    }
-                }
-            }
 
-            cursor?.use { c ->
-                val idCol = c.getColumnIndex(Telephony.Mms._ID)
-                val dateCol = c.getColumnIndex(Telephony.Mms.DATE)
+                cursor?.use { c ->
+                    val idCol = c.getColumnIndex(Telephony.Mms._ID)
+                    val dateCol = c.getColumnIndex(Telephony.Mms.DATE)
 
-                while (c.moveToNext() && count < limit) {
-                    val mmsId = if (idCol >= 0) c.getString(idCol) else null
-                    val rawDate = if (dateCol >= 0) c.getLong(dateCol) else (System.currentTimeMillis() / 1000L)
+                    while (c.moveToNext() && candidateList.size < limit) {
+                        val mmsId = if (idCol >= 0) c.getString(idCol) else null
+                        val rawDate = if (dateCol >= 0) c.getLong(dateCol) else (System.currentTimeMillis() / 1000L)
 
-                    // [초 vs 밀리초 자동 판별] MMS의 date 컬럼이 초 단위(10자리)인지 밀리초(13자리)인지 동적 감지
-                    val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
+                        // MMS의 date 컬럼은 일반적으로 10자리(초) 단위 -> 13자리 밀리초 통일
+                        val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
 
-                    // 스캔 날짜 범위 체크 (Kotlin 런타임 필터링)
-                    if (minDateMillis != null && minDateMillis > 0 && dateMillis < minDateMillis) {
-                        continue
-                    }
-
-                    if (mmsId != null) {
-                        val body = getMmsBody(context, mmsId)
-                        val address = getMmsSender(context, mmsId)
-
-                        if (body.isNotBlank()) {
-                            val fallbackTime = Instant.ofEpochMilli(dateMillis)
-                                .atZone(ZoneId.systemDefault())
-                                .toLocalDateTime()
-
-                            val parsed = SmsParser.parse(address, body, fallbackTime)
-                                ?: SmsParser.parse(null, body, fallbackTime)
-                            if (parsed != null) {
-                                result.add(parsed)
+                        if (minDateMillis == null || minDateMillis <= 0 || dateMillis >= minDateMillis) {
+                            if (!mmsId.isNullOrBlank()) {
+                                candidateList.add(RawMmsItem(mmsId, dateMillis))
                             }
                         }
                     }
-                    count++
+                }
+
+                if (candidateList.isNotEmpty()) {
+                    rawList.addAll(candidateList)
+                    break
+                }
+            }
+
+            count = rawList.size
+            val sortedList = rawList.sortedByDescending { it.dateMillis }
+            for (item in sortedList) {
+                val body = getMmsBody(context, item.mmsId)
+                val address = getMmsSender(context, item.mmsId)
+
+                if (body.isNotBlank()) {
+                    val fallbackTime = Instant.ofEpochMilli(item.dateMillis)
+                        .atZone(ZoneId.systemDefault())
+                        .toLocalDateTime()
+
+                    val parsed = SmsParser.parse(address, body, fallbackTime)
+                        ?: SmsParser.parse(null, body, fallbackTime)
+                    if (parsed != null) {
+                        result.add(parsed)
+                    }
                 }
             }
         } catch (t: Throwable) {

@@ -574,12 +574,18 @@ class ExpenseViewModel @Inject constructor(
             loadData()
 
             val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
-            val msg = if (newCount > 0) {
-                "기기 결제 문자 ${newCount}건을 가계부에 자동 동기화했습니다.$fuelMsg"
-            } else if (allTxs.isNotEmpty()) {
-                "모든 결제 문자가 이미 최신 상태로 동기화되어 있습니다 (총 ${allTxs.size}건)."
-            } else {
-                "기기에서 결제 문자를 찾지 못했습니다 (최근 90일 스캔 완료)."
+            val totalScanned = scanResult.totalMessagesScanned
+            val msg = when {
+                !scanResult.isPermissionGranted ->
+                    "문자(SMS) 읽기 권한이 없습니다. 스마트폰 [설정 > 애플리케이션 > LifeLog > 권한]에서 'SMS'를 허용해주세요."
+                newCount > 0 ->
+                    "기기 결제 문자 ${newCount}건을 가계부에 자동 동기화했습니다.$fuelMsg"
+                allTxs.isNotEmpty() && totalScanned > 0 ->
+                    "기기 문자 총 ${totalScanned}건(SMS ${scanResult.smsCount}, MMS ${scanResult.mmsCount}) 스캔 완료: 이미 최신 상태입니다 (총 ${allTxs.size}건)."
+                totalScanned > 0 ->
+                    "기기 문자 총 ${totalScanned}건을 스캔했으나, 카드 결제 문자로 인식된 내역이 없습니다."
+                else ->
+                    "기기 문자 수신함이 비어있습니다 (0건 스캔). 삼성 갤럭시 채팅+(RCS) 메시지는 OS 보안상 [문자 붙여넣기]를 이용하시거나, 삼성 메시지 설정에서 '채팅+'를 끄시면 자동 스캔됩니다."
             }
             _uiState.value = _uiState.value.copy(syncResultMessage = msg)
         }
