@@ -2188,3 +2188,59 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
       - 2026.09.27: `한국도로공사하` 101,000원 (61.2L)
     - 5건 총 주유 금액 합계: **418,449원** (기존 185,000원 + 418,449원 = **603,449원** 정상 집계).
     - 차계부 주유 기록 총 건수: 기존 3건 + 신규 5건 = **8건** 정상 표출 확인 (`screen_refuel_verified.png`, `screen_refuel_scrolled.png`, `screen_refuel_scrolled2.png`).
+
+---
+
+## 62. 주유 내역 0건 및 최신화 거짓 완료 안내 결함 해결 (MMS/LMS 장문 결제 문자 통합 스캔, 차계부 READ_SMS 런타임 권한 요청 및 피드백 정규화) (2026-09-30)
+
+- **일시**: 2026-09-30
+- **사용자 제보 및 배경**:
+  - 사용자 스크린샷 1건 제보 (`media_1790732565508.png`): "주유내역이 모두 최신화 되었다는데, 주유내역이 0건이야"
+  - 앱 화면 상태:
+    - 차계부 상단: 총 주유비 `0원`, 주유 탭 `주유 (0)`, 주행 탭 `주행 (5)`
+    - 하단 스낵바: `"모든 주유 결제 내역이 이미 최신 상태로 동기화되어 있습니다."` 표출
+    - 실제 기기 수신함에 주유 문자가 존재함에도 주유 내역이 0건으로 비어 있는데, 앱에서는 "이미 최신 상태로 동기화 완료"라는 거짓 성공 메시지를 띄워 사용자에게 혼란과 불신을 초래함.
+
+### 62.1. 결함 근본 원인 분석
+1. **국내 카드 승인 문자(LMS/MMS) 미스캔 및 유실 (`HistoricalDataImporter.kt`)**:
+   - 국내 신용/체크카드 결제 승인 문자(`[Web발신]`, 카드번호, 회원명, 승인금액, 일시, 가맹점명, 누적금액)는 한글 80~90바이트를 초과하여 SKT/KT/LGU+ 통신사에서 단문 SMS가 아닌 **장문 LMS(MMS 프로토콜)**로 전송됨.
+   - 안드로이드 OS는 단문 SMS(`content://sms`)와 장문 MMS(`content://mms`)를 완전히 별개의 ContentProvider 테이블에 저장함.
+   - 기존 수집기는 `content://sms`만 단독 쿼리하여 장문 LMS로 수신된 주유 승인 문자가 1건도 조회되지 못하고 0건으로 끝남.
+2. **차계부 화면 런타임 권한(`READ_SMS`) 요청 체계 부재 (`CarLedgerScreen.kt`, `CarLedgerViewModel.kt`)**:
+   - 사용자가 차계부 상단 `[주유 동기화]` 버튼을 눌렀을 때, `READ_SMS` 권한이 허용되어 있지 않으면 OS 런타임 권한 요청 다이얼로그를 띄우지 않고 내부적으로 빈 리스트를 반환한 뒤 무음 종료됨.
+3. **신규 0건 시 무조건 "동기화 완료"를 띄우는 거짓 피드백 결함 (`CarLedgerViewModel.kt`)**:
+   - `addedCount == 0`일 때 현재 DB에 저장된 주유 건수나 권한 유무와 상관없이 무조건 `"모든 주유 결제 내역이 이미 최신 상태로 동기화되어 있습니다."` 스낵바를 띄우도록 하드코딩되어 있었음.
+
+### 62.2. 주요 개선 및 구현 내역
+1. **장문 LMS 및 MMS 멀티파트 통합 스캐너 신설 (`HistoricalDataImporter.kt`)**:
+   - `Telephony.Sms.Inbox.CONTENT_URI`(`content://sms/inbox`) 및 `content://sms` 스캔 유지.
+   - `Telephony.Mms.Inbox.CONTENT_URI`(`content://mms/inbox`) 및 `content://mms` 장문 문자 통합 스캔 구현:
+     - `content://mms/part` 테이블에서 `ct = 'text/plain'`인 멀티파트 본문을 정밀 추출.
+     - `content://mms/{id}/addr` 테이블에서 발신자(`type = 137`) 번호 추출.
+     - MMS 타임스탬프(`date`)가 초(seconds) 단위인 점을 감안하여 밀리초(`* 1000L`)로 완벽 보정.
+   - 스캔 기간을 기본 90일(3개월), 최대 스캔 상한을 2,000건으로 대폭 확대하여 최근 3개월간의 모든 주유 문자를 남김없이 수집.
+2. **`SmsScanResult` 데이터 클래스 신설 및 투명한 스캔 상태 반환**:
+   - `data class SmsScanResult(val transactions: List<Transaction>, val isPermissionGranted: Boolean, val totalMessagesScanned: Int)`
+   - 권한 상태, 스캔된 총 메시지 수, 파싱된 결제 내역을 구조화하여 상위 계층에 전달.
+3. **차계부 화면 런타임 권한 자동 팝업 및 원터치 설정 이동 (`CarLedgerScreen.kt`)**:
+   - `rememberLauncherForActivityResult(RequestMultiplePermissions())` 탑재: `READ_SMS` 및 `RECEIVE_SMS` 권한을 사용자 터치 즉시 요청.
+   - 권한이 없을 경우 OS 권한 팝업을 즉시 띄우고, 거부 시 스낵바 액션("설정 이동")을 통해 `Settings.ACTION_APPLICATION_DETAILS_SETTINGS`로 즉시 연결.
+4. **결과별 정밀 피드백 분기 (`CarLedgerViewModel.kt`)**:
+   - 권한 거부 시: `"주유 결제 문자를 읽어오려면 SMS 읽기 권한이 필요합니다."`
+   - 신규 추가 성공 시: `"N건의 신규 주유 결제 내역을 성공적으로 동기화했습니다."`
+   - 이미 최신 상태인 경우: `"모든 주유 결제 내역(총 N건)이 이미 최신 상태로 동기화되어 있습니다."` (실제 총 건수 명시)
+   - 스캔된 주유 문자가 0건인 경우: `"스캔된 주유 결제 문자가 없습니다 (최근 90일 스캔 완료)."`
+5. **MMS 수신 권한 선언 (`AndroidManifest.xml`)**:
+   - `<uses-permission android:name="android.permission.RECEIVE_MMS" />` 추가 선언.
+
+### 62.3. 단위 테스트 및 실기기 검증 결과
+- **단위 테스트 100% 통과**:
+  - `.\gradlew.bat testDebugUnitTest` 90개 이상 테스트 전수 성공 (`BUILD SUCCESSFUL in 2m 11s`).
+- **에뮬레이터(`Galaxy S24+`, `emulator-5554`) 실기기 배포 및 검증**:
+  - `.\gradlew.bat installDebug` 배포 완료.
+  - 앱 실행 및 차계부 탭 진입 검증:
+    - **총 주유비**: `0원` ➔ **`603,449원`** 완벽 계산 및 반영.
+    - **차량 기록 탭**: `주유 (0)` ➔ **`주유 (8)`** 정상 표출 (`screen_car_tab_current.png`).
+    - **스낵바 피드백**: `"모든 주유 결제 내역(총 8건)이 이미 최신 상태로 동기화되어 있습니다."`로 실제 건수 8건을 투명하게 안내.
+    - **주유 상세 목록**: 한국도로공사하(101,000원), 지에스칼텍스(61,000원), HD_Hyundai_OilBank(50,000원) 등 8건 주유 기록 및 실연비, 주유 주기 완벽 표시 확인 (`screen_refuel_scrolled_final.png`).
+

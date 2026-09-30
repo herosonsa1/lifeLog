@@ -373,20 +373,44 @@ class CarLedgerViewModel @Inject constructor(
         }
     }
 
+    fun showPermissionDeniedMessage() {
+        _uiState.value = _uiState.value.copy(
+            syncResultMessage = "문자(SMS) 읽기 권한이 허용되지 않았습니다. 앱 설정에서 권한을 허용해주세요."
+        )
+    }
+
     fun manualSyncRefueling() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSyncing = true)
+
+            // 0. 권한 체크
+            val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.READ_SMS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            if (!hasPerm) {
+                _uiState.value = _uiState.value.copy(
+                    isSyncing = false,
+                    syncResultMessage = "문자(SMS) 읽기 권한이 필요합니다. [주유 동기화]를 눌러 권한을 허용해주세요."
+                )
+                return@launch
+            }
+
             val cfg = locationPreferences.config.value
             val home = if (cfg.homeName.isNotBlank()) cfg.homeName else "우리집"
             val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
             val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
 
-            // 1. 기기 결제 문자(SMS) 최근 60일 전수 스캔 및 가계부/차계부 자동 적재 (권한 허용 시)
+            // 1. 기기 결제 문자(SMS/LMS) 최근 90일 전수 스캔 및 가계부/차계부 자동 적재
+            var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), true, 0)
             runCatching {
-                val scannedTxs = importer.scanHistoricalSms(context, daysBack = 60)
-                for (tx in scannedTxs) {
+                scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 90, limit = 2000)
+                for (tx in scanResult.transactions) {
                     processTransactionUseCase(tx)
                 }
+            }.onFailure {
+                android.util.Log.e("CarLedgerViewModel", "SMS/MMS 스캔 또는 처리 중 예외", it)
             }
 
             // 2. 실제 골프 라운드 DB(18홀 유효)와 대조하여 누락된 주행기록 자동 복원 및 유령 레코드(8.8, 9.1 등) 영구 삭제
@@ -404,10 +428,19 @@ class CarLedgerViewModel @Inject constructor(
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
             vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
 
-            val msg = if (addedCount > 0) {
-                "결제 문자 및 가계부에서 주유 기록 ${addedCount}건을 새로 동기화했습니다."
-            } else {
-                "모든 주유 결제 내역이 이미 최신 상태로 동기화되어 있습니다."
+            val totalFuelLogs = vehicleRepository.getRefuelingLogsFlow().first().size
+
+            val msg = when {
+                !scanResult.isPermissionGranted ->
+                    "문자(SMS) 읽기 권한이 허용되지 않았습니다. 앱 설정에서 권한을 허용해주세요."
+                addedCount > 0 ->
+                    "결제 문자(SMS/LMS) 및 가계부에서 주유 기록 ${addedCount}건을 새로 동기화했습니다."
+                totalFuelLogs > 0 ->
+                    "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 이미 최신 상태로 동기화되어 있습니다."
+                scanResult.totalMessagesScanned > 0 ->
+                    "문자 ${scanResult.totalMessagesScanned}건을 분석했으나 주유 내역을 찾지 못했습니다.\n수신 문자를 확인하거나 직접 등록해주세요."
+                else ->
+                    "기기에서 수신된 결제 문자를 찾지 못했습니다.\n문자 수신함 및 권한 상태를 확인해주세요."
             }
             _uiState.value = _uiState.value.copy(isSyncing = false, syncResultMessage = msg)
         }

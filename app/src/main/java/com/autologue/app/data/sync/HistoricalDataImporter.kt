@@ -22,6 +22,12 @@ import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class SmsScanResult(
+    val transactions: List<Transaction>,
+    val isPermissionGranted: Boolean,
+    val totalMessagesScanned: Int
+)
+
 @Singleton
 class HistoricalDataImporter @Inject constructor(
     private val placeResolver: PlaceResolver,
@@ -29,13 +35,64 @@ class HistoricalDataImporter @Inject constructor(
     private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) {
 
-    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 60, limit: Int = 500): List<Transaction> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 90, limit: Int = 2000): List<Transaction> {
+        return scanHistoricalSmsDetailed(context, daysBack, limit).transactions
+    }
+
+    suspend fun scanHistoricalSmsDetailed(
+        context: Context,
+        daysBack: Int? = 90,
+        limit: Int = 2000
+    ): SmsScanResult = withContext(Dispatchers.IO) {
         // [L-01] READ_SMS 권한 사전 체크 — SecurityException 원천 방지
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-            android.util.Log.w("HistoricalDataImporter", "READ_SMS 권한 없음 — SMS 스캔 건너뜀")
-            return@withContext emptyList()
+            android.util.Log.w("HistoricalDataImporter", "READ_SMS 권한 없음 — SMS/MMS 스캔 건너뜀")
+            return@withContext SmsScanResult(emptyList(), isPermissionGranted = false, totalMessagesScanned = 0)
         }
+
+        val minDateMillis = if (daysBack != null && daysBack > 0) {
+            System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+        } else {
+            null
+        }
+
+        val allTxs = mutableListOf<Transaction>()
+        var totalScanned = 0
+
+        // 1. 단문 SMS 수신함 스캔
+        val (smsTxs, smsCount) = scanSmsMessages(context, minDateMillis, limit)
+        allTxs.addAll(smsTxs)
+        totalScanned += smsCount
+
+        // 2. 장문 MMS / LMS 수신함 스캔 (80~90바이트 초과 카드 승인 문자 완벽 지원)
+        val (mmsTxs, mmsCount) = scanMmsMessages(context, minDateMillis, limit)
+        allTxs.addAll(mmsTxs)
+        totalScanned += mmsCount
+
+        // 3. 중복 제거 및 시간 역순 정렬
+        val distinctTxs = allTxs.distinctBy {
+            "${it.amount}_${it.timestamp}_${it.merchantName}"
+        }.sortedByDescending { it.timestamp }
+
+        android.util.Log.d(
+            "HistoricalDataImporter",
+            "문자 스캔 완료: 총 ${totalScanned}건 스캔(SMS: $smsCount, MMS: $mmsCount), 거래 ${distinctTxs.size}건 파싱"
+        )
+
+        SmsScanResult(
+            transactions = distinctTxs,
+            isPermissionGranted = true,
+            totalMessagesScanned = totalScanned
+        )
+    }
+
+    private fun scanSmsMessages(
+        context: Context,
+        minDateMillis: Long?,
+        limit: Int
+    ): Pair<List<Transaction>, Int> {
         val result = mutableListOf<Transaction>()
+        var count = 0
         try {
             val projection = arrayOf(
                 Telephony.Sms._ID,
@@ -44,26 +101,37 @@ class HistoricalDataImporter @Inject constructor(
                 Telephony.Sms.DATE
             )
 
-            val uri = Uri.parse("content://sms")
-            val sortOrder = "${Telephony.Sms.DATE} DESC"
-
-            val (selection, selectionArgs) = if (daysBack != null && daysBack > 0) {
-                val minDateMillis = System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+            val (selection, selectionArgs) = if (minDateMillis != null && minDateMillis > 0) {
                 Pair("${Telephony.Sms.DATE} >= ?", arrayOf(minDateMillis.toString()))
             } else {
                 Pair(null, null)
             }
 
-            context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
-                val addressCol = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
-                val bodyCol = cursor.getColumnIndex(Telephony.Sms.BODY)
-                val dateCol = cursor.getColumnIndex(Telephony.Sms.DATE)
+            val sortOrder = "${Telephony.Sms.DATE} DESC"
 
-                var count = 0
-                while (cursor.moveToNext() && count < limit) {
-                    val address = if (addressCol >= 0) cursor.getString(addressCol) else null
-                    val body = if (bodyCol >= 0) cursor.getString(bodyCol) else ""
-                    val dateMillis = if (dateCol >= 0) cursor.getLong(dateCol) else System.currentTimeMillis()
+            val urisToTry = listOf(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                Uri.parse("content://sms/inbox"),
+                Uri.parse("content://sms")
+            )
+
+            var cursor: android.database.Cursor? = null
+            for (uri in urisToTry) {
+                cursor = runCatching {
+                    context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
+                }.getOrNull()
+                if (cursor != null) break
+            }
+
+            cursor?.use { c ->
+                val addressCol = c.getColumnIndex(Telephony.Sms.ADDRESS)
+                val bodyCol = c.getColumnIndex(Telephony.Sms.BODY)
+                val dateCol = c.getColumnIndex(Telephony.Sms.DATE)
+
+                while (c.moveToNext() && count < limit) {
+                    val address = if (addressCol >= 0) c.getString(addressCol) else null
+                    val body = if (bodyCol >= 0) c.getString(bodyCol) else ""
+                    val dateMillis = if (dateCol >= 0) c.getLong(dateCol) else System.currentTimeMillis()
 
                     if (body.isNotBlank()) {
                         val fallbackTime = Instant.ofEpochMilli(dateMillis)
@@ -79,9 +147,159 @@ class HistoricalDataImporter @Inject constructor(
                 }
             }
         } catch (t: Throwable) {
-            t.printStackTrace()
+            android.util.Log.e("HistoricalDataImporter", "SMS 스캔 중 예외 안전 포획", t)
         }
-        result
+        return Pair(result, count)
+    }
+
+    private fun scanMmsMessages(
+        context: Context,
+        minDateMillis: Long?,
+        limit: Int
+    ): Pair<List<Transaction>, Int> {
+        val result = mutableListOf<Transaction>()
+        var count = 0
+        try {
+            val projection = arrayOf(
+                Telephony.Mms._ID,
+                Telephony.Mms.DATE
+            )
+
+            val (selection, selectionArgs) = if (minDateMillis != null && minDateMillis > 0) {
+                val minDateSec = minDateMillis / 1000L
+                Pair("${Telephony.Mms.DATE} >= ?", arrayOf(minDateSec.toString()))
+            } else {
+                Pair(null, null)
+            }
+
+            val sortOrder = "${Telephony.Mms.DATE} DESC"
+
+            val urisToTry = listOf(
+                Telephony.Mms.Inbox.CONTENT_URI,
+                Uri.parse("content://mms/inbox"),
+                Uri.parse("content://mms")
+            )
+
+            var cursor: android.database.Cursor? = null
+            for (uri in urisToTry) {
+                cursor = runCatching {
+                    context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
+                }.getOrNull()
+                if (cursor != null) break
+            }
+
+            cursor?.use { c ->
+                val idCol = c.getColumnIndex(Telephony.Mms._ID)
+                val dateCol = c.getColumnIndex(Telephony.Mms.DATE)
+
+                while (c.moveToNext() && count < limit) {
+                    val mmsId = if (idCol >= 0) c.getString(idCol) else null
+                    val dateSec = if (dateCol >= 0) c.getLong(dateCol) else (System.currentTimeMillis() / 1000L)
+                    val dateMillis = dateSec * 1000L
+
+                    if (mmsId != null) {
+                        val body = getMmsBody(context, mmsId)
+                        val address = getMmsSender(context, mmsId)
+
+                        if (body.isNotBlank()) {
+                            val fallbackTime = Instant.ofEpochMilli(dateMillis)
+                                .atZone(ZoneId.systemDefault())
+                                .toLocalDateTime()
+
+                            val parsed = SmsParser.parse(address, body, fallbackTime)
+                            if (parsed != null) {
+                                result.add(parsed)
+                            }
+                        }
+                    }
+                    count++
+                }
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("HistoricalDataImporter", "MMS/LMS 스캔 중 예외 안전 포획", t)
+        }
+        return Pair(result, count)
+    }
+
+    private fun getMmsBody(context: Context, mmsId: String): String {
+        val sb = StringBuilder()
+        try {
+            val partUris = listOf(
+                Pair(Uri.parse("content://mms/$mmsId/part"), Pair(null, null)),
+                Pair(Uri.parse("content://mms/part"), Pair("mid = ?", arrayOf(mmsId)))
+            )
+
+            var partCursor: android.database.Cursor? = null
+            for ((uri, querySpec) in partUris) {
+                partCursor = runCatching {
+                    context.contentResolver.query(
+                        uri,
+                        arrayOf("_id", "ct", "text", "_data"),
+                        querySpec.first,
+                        querySpec.second,
+                        null
+                    )
+                }.getOrNull()
+                if (partCursor != null) break
+            }
+
+            partCursor?.use { c ->
+                val ctCol = c.getColumnIndex("ct")
+                val textCol = c.getColumnIndex("text")
+                val idCol = c.getColumnIndex("_id")
+
+                while (c.moveToNext()) {
+                    val ct = if (ctCol >= 0) c.getString(ctCol) else ""
+                    if ("text/plain".equals(ct, ignoreCase = true)) {
+                        val text = if (textCol >= 0) c.getString(textCol) else null
+                        if (!text.isNullOrBlank()) {
+                            sb.append(text)
+                        } else if (idCol >= 0) {
+                            val partId = c.getString(idCol)
+                            val dataText = readMmsPartData(context, partId)
+                            if (dataText.isNotBlank()) {
+                                sb.append(dataText)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("HistoricalDataImporter", "MMS 본문 읽기 실패: mmsId=$mmsId", t)
+        }
+        return sb.toString().trim()
+    }
+
+    private fun readMmsPartData(context: Context, partId: String): String {
+        val uri = Uri.parse("content://mms/part/$partId")
+        return runCatching {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val bytes = stream.readBytes()
+                val utf8 = String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+                if (utf8.contains("\uFFFD") || utf8.none { it.code in 0xAC00..0xD7A3 }) {
+                    runCatching { String(bytes, java.nio.charset.Charset.forName("EUC-KR")) }.getOrDefault(utf8)
+                } else {
+                    utf8
+                }
+            } ?: ""
+        }.getOrDefault("")
+    }
+
+    private fun getMmsSender(context: Context, mmsId: String): String? {
+        val addrUri = Uri.parse("content://mms/$mmsId/addr")
+        try {
+            context.contentResolver.query(addrUri, arrayOf("address", "type"), "type = 137", null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val addrCol = c.getColumnIndex("address")
+                    if (addrCol >= 0) {
+                        return c.getString(addrCol)
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("HistoricalDataImporter", "MMS 발신자 조회 실패: mmsId=$mmsId", t)
+        }
+        return null
     }
 
     suspend fun scanHistoricalPhotos(context: Context, daysBack: Int? = 30, limit: Int = 100): List<ScannedPhoto> = withContext(Dispatchers.IO) {

@@ -28,6 +28,15 @@ import com.autologue.app.data.preferences.VehicleProfile
 import com.autologue.app.domain.model.*
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -38,6 +47,19 @@ fun CarLedgerScreen(
     viewModel: CarLedgerViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val granted = results[Manifest.permission.READ_SMS] == true ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            viewModel.manualSyncRefueling()
+        } else {
+            viewModel.showPermissionDeniedMessage()
+        }
+    }
 
     if (uiState.showLocationDialog) {
         CommuteMapPickerDialog(
@@ -118,7 +140,21 @@ fun CarLedgerScreen(
     LaunchedEffect(uiState.syncResultMessage) {
         val msg = uiState.syncResultMessage
         if (!msg.isNullOrBlank()) {
-            snackbarHostState.showSnackbar(msg)
+            if (msg.contains("권한")) {
+                val result = snackbarHostState.showSnackbar(
+                    message = msg,
+                    actionLabel = "설정 이동",
+                    duration = SnackbarDuration.Long
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                    }
+                    context.startActivity(intent)
+                }
+            } else {
+                snackbarHostState.showSnackbar(msg)
+            }
             viewModel.dismissSyncResultMessage()
         }
     }
@@ -178,7 +214,19 @@ fun CarLedgerScreen(
                         AutoLogueOutlinedButton(
                             text = "주유 동기화",
                             icon = Icons.Default.Sync,
-                            onClick = { viewModel.manualSyncRefueling() },
+                            onClick = {
+                                val hasPerm = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.READ_SMS
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (hasPerm) {
+                                    viewModel.manualSyncRefueling()
+                                } else {
+                                    smsPermissionLauncher.launch(
+                                        arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+                                    )
+                                }
+                            },
                             contentColor = MenuColors.carLedger,
                             containerColor = MenuColors.carLedgerBg,
                             borderColor = MenuColors.carLedgerBorder
