@@ -436,13 +436,13 @@ class CarLedgerViewModel @Inject constructor(
                 !scanResult.isPermissionGranted ->
                     "문자(SMS) 읽기 권한이 허용되지 않았습니다. 앱 설정에서 권한을 허용해주세요."
                 addedCount > 0 ->
-                    "결제 문자(SMS/LMS) 및 가계부에서 주유 기록 ${addedCount}건을 새로 동기화했습니다."
+                    "기기 결제 문자(SMS/MMS)에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다."
                 totalFuelLogs > 0 ->
                     "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 이미 최신 상태로 동기화되어 있습니다."
                 scanResult.totalMessagesScanned > 0 ->
-                    "문자 ${scanResult.totalMessagesScanned}건을 분석했으나 주유 내역을 찾지 못했습니다.\n갤럭시 '채팅+(RCS)' 문자는 [문자 붙여넣기]로 등록해주세요."
+                    "문자 ${scanResult.totalMessagesScanned}건을 자동 분석했으나 주유 내역을 찾지 못했습니다."
                 else ->
-                    "기기에서 수신된 결제 문자를 찾지 못했습니다.\n갤럭시 '채팅+(RCS)' 문자는 [문자 붙여넣기]를 이용해주세요."
+                    "기기에서 수신된 결제 문자를 찾지 못했습니다 (최근 90일 스캔 완료)."
             }
             _uiState.value = _uiState.value.copy(isSyncing = false, syncResultMessage = msg)
         }

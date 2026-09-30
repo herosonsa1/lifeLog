@@ -25,6 +25,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EditNote
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import com.autologue.app.data.preferences.UserAccount
 import androidx.compose.runtime.*
@@ -57,7 +64,16 @@ fun ExpenseScreen(
     viewModel: ExpenseViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val granted = perms[Manifest.permission.READ_SMS] == true
+        if (granted) {
+            viewModel.syncHistoricalSms(context)
+        }
+    }
 
     LaunchedEffect(uiState.syncResultMessage) {
         val msg = uiState.syncResultMessage
@@ -102,6 +118,27 @@ fun ExpenseScreen(
                     },
                     actions = {
                         AutoLogueOutlinedButton(
+                            text = "문자 동기화",
+                            icon = Icons.Default.Sync,
+                            onClick = {
+                                val hasPerm = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.READ_SMS
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (hasPerm) {
+                                    viewModel.syncHistoricalSms(context)
+                                } else {
+                                    smsPermissionLauncher.launch(
+                                        arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+                                    )
+                                }
+                            },
+                            contentColor = MenuColors.expense,
+                            containerColor = MenuColors.expenseBg,
+                            borderColor = MenuColors.expenseBorder
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        AutoLogueOutlinedButton(
                             text = "지출 추가",
                             icon = Icons.Default.Add,
                             onClick = { viewModel.openAddDialog() },
@@ -118,7 +155,7 @@ fun ExpenseScreen(
                             containerColor = MenuColors.expenseBg,
                             borderColor = MenuColors.expenseBorder
                         )
-                        Spacer(modifier = Modifier.width(Spacing.md))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
                 )

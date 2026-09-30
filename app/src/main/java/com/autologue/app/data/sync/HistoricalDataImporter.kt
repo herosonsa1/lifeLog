@@ -101,24 +101,20 @@ class HistoricalDataImporter @Inject constructor(
                 Telephony.Sms.DATE
             )
 
-            val (selection, selectionArgs) = if (minDateMillis != null && minDateMillis > 0) {
-                Pair("${Telephony.Sms.DATE} >= ?", arrayOf(minDateMillis.toString()))
-            } else {
-                Pair(null, null)
-            }
-
+            // [L-02] 기기 제조사(삼성 One UI)의 DATE 컬럼 단위(초 vs 밀리초) 불일치 및 SQLite 타입 바인딩 결함 방어:
+            // SQL selection에 DATE 조건을 걸지 않고 전체 최신순으로 가져와 Kotlin 코드에서 초/밀리초 듀얼 판별
             val sortOrder = "${Telephony.Sms.DATE} DESC"
 
             val urisToTry = listOf(
+                Uri.parse("content://sms"),
                 Telephony.Sms.Inbox.CONTENT_URI,
-                Uri.parse("content://sms/inbox"),
-                Uri.parse("content://sms")
+                Uri.parse("content://sms/inbox")
             )
 
             var cursor: android.database.Cursor? = null
             for (uri in urisToTry) {
                 val candidate = runCatching {
-                    context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
+                    context.contentResolver.query(uri, projection, null, null, sortOrder)
                 }.getOrNull()
                 if (candidate != null) {
                     if (candidate.count > 0) {
@@ -141,7 +137,15 @@ class HistoricalDataImporter @Inject constructor(
                 while (c.moveToNext() && count < limit) {
                     val address = if (addressCol >= 0) c.getString(addressCol) else null
                     val body = if (bodyCol >= 0) c.getString(bodyCol) else ""
-                    val dateMillis = if (dateCol >= 0) c.getLong(dateCol) else System.currentTimeMillis()
+                    val rawDate = if (dateCol >= 0) c.getLong(dateCol) else System.currentTimeMillis()
+
+                    // [초 vs 밀리초 자동 판별] 10자리(초)인 경우 1000배, 13자리(밀리초)인 경우 그대로 유지
+                    val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
+
+                    // 스캔 날짜 범위 체크 (Kotlin 런타임 필터링)
+                    if (minDateMillis != null && minDateMillis > 0 && dateMillis < minDateMillis) {
+                        continue
+                    }
 
                     if (body.isNotBlank()) {
                         val fallbackTime = Instant.ofEpochMilli(dateMillis)
@@ -149,6 +153,7 @@ class HistoricalDataImporter @Inject constructor(
                             .toLocalDateTime()
 
                         val parsed = SmsParser.parse(address, body, fallbackTime)
+                            ?: SmsParser.parse(null, body, fallbackTime)
                         if (parsed != null) {
                             result.add(parsed)
                         }
@@ -175,25 +180,20 @@ class HistoricalDataImporter @Inject constructor(
                 Telephony.Mms.DATE
             )
 
-            val (selection, selectionArgs) = if (minDateMillis != null && minDateMillis > 0) {
-                val minDateSec = minDateMillis / 1000L
-                Pair("${Telephony.Mms.DATE} >= ?", arrayOf(minDateSec.toString()))
-            } else {
-                Pair(null, null)
-            }
-
+            // [L-03] MMS DATE 컬럼 SQL selection 바인딩 결함 방어:
+            // SQL selection 제거 후 Kotlin 런타임에서 초/밀리초 듀얼 감지
             val sortOrder = "${Telephony.Mms.DATE} DESC"
 
             val urisToTry = listOf(
+                Uri.parse("content://mms"),
                 Telephony.Mms.Inbox.CONTENT_URI,
-                Uri.parse("content://mms/inbox"),
-                Uri.parse("content://mms")
+                Uri.parse("content://mms/inbox")
             )
 
             var cursor: android.database.Cursor? = null
             for (uri in urisToTry) {
                 val candidate = runCatching {
-                    context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
+                    context.contentResolver.query(uri, projection, null, null, sortOrder)
                 }.getOrNull()
                 if (candidate != null) {
                     if (candidate.count > 0) {
@@ -214,8 +214,15 @@ class HistoricalDataImporter @Inject constructor(
 
                 while (c.moveToNext() && count < limit) {
                     val mmsId = if (idCol >= 0) c.getString(idCol) else null
-                    val dateSec = if (dateCol >= 0) c.getLong(dateCol) else (System.currentTimeMillis() / 1000L)
-                    val dateMillis = dateSec * 1000L
+                    val rawDate = if (dateCol >= 0) c.getLong(dateCol) else (System.currentTimeMillis() / 1000L)
+
+                    // [초 vs 밀리초 자동 판별] MMS의 date 컬럼이 초 단위(10자리)인지 밀리초(13자리)인지 동적 감지
+                    val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
+
+                    // 스캔 날짜 범위 체크 (Kotlin 런타임 필터링)
+                    if (minDateMillis != null && minDateMillis > 0 && dateMillis < minDateMillis) {
+                        continue
+                    }
 
                     if (mmsId != null) {
                         val body = getMmsBody(context, mmsId)
@@ -227,6 +234,7 @@ class HistoricalDataImporter @Inject constructor(
                                 .toLocalDateTime()
 
                             val parsed = SmsParser.parse(address, body, fallbackTime)
+                                ?: SmsParser.parse(null, body, fallbackTime)
                             if (parsed != null) {
                                 result.add(parsed)
                             }
@@ -270,7 +278,10 @@ class HistoricalDataImporter @Inject constructor(
 
                 while (c.moveToNext()) {
                     val ct = if (ctCol >= 0) c.getString(ctCol) else ""
-                    if ("text/plain".equals(ct, ignoreCase = true)) {
+                    val isTextPart = "text/plain".equals(ct, ignoreCase = true) ||
+                        ct.startsWith("text/", ignoreCase = true) ||
+                        ct.isBlank()
+                    if (isTextPart) {
                         val text = if (textCol >= 0) c.getString(textCol) else null
                         if (!text.isNullOrBlank()) {
                             sb.append(text)

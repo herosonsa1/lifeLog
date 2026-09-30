@@ -2305,3 +2305,50 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
     - 2026년 9월 총 지출 **`603,449원`**, 주유/충전 카테고리 지출 **`603,449원`**, 전체 결제 내역 **10건**(한국도로공사하 101,000원, 지에스칼텍스 61,000원 등) 완벽 표출 확인 (`screen_expense_tab.png`).
 
 
+
+
+---
+
+## 64. 기기 내 결제 문자(SMS/LMS/MMS) 100% 무복사 전자동 스캔 복구 및 주유·가계부 자동 집계 완전 복원 (2026-09-30)
+
+- **일시**: 2026-09-30
+- **사용자 제보 및 배경**:
+  - "위 내용에 대해 전에는 집계가 되었었어. 아마도 한 2주전쯤에는 됐던 건데, 현재 안되는거야. 문자 내용 복사 붙여넣기 방식은 너무 불편해서 안돼."
+  - 사용자는 번거로운 복사-붙여넣기 없이, 2주 전처럼 앱 내에서 기기 결제 문자가 100% 전자동 스캔되어 가계부와 차계부에 자동 집계되길 원함.
+
+### 64.1. 결함 근본 원인 분석
+1. **결제 문자의 본질과 ContentResolver SQL Where절 결함**:
+   - 사용자가 수신한 문자 최상단에는 통신사 법적 헤더인 [Web발신]이 명시되어 있었으며, 이는 비공개 전용망이 아니라 실제 통신사 SMS/LMS/MMS 프로토콜로 수신된 정상 문자메시지임.
+   - 최근 추가된 ContentResolver SQL selection (Telephony.Sms.DATE >= ?, Telephony.Mms.DATE >= ?)에서, 안드로이드 기기(특히 삼성 갤럭시 One UI)마다 DATE 컬럼의 단위(초 vs 밀리초) 불일치 및 SQLite 바인딩 문제로 인해 단말기 ContentProvider가 조건을 만족하지 못한다고 판단하여 **0건(Empty Cursor)**을 반환하는 버그가 발생했음.
+   - 2주 전 초기 버전은 단순 content://sms 전체를 쿼리하여 코틀린에서 처리했기 때문에 정상 작동했던 것임.
+2. **URI 다중 시도(urisToTry)의 조기 중단 버그**:
+   - Telephony.Sms.Inbox.CONTENT_URI(content://sms/inbox)가 0건을 반환할 때 cursor = candidate로 할당된 채 다음 content://sms의 데이터를 제대로 소비하지 못하는 결함 존재.
+3. **장문 MMS/LMS 실시간 수신 리시버 누락**:
+   - SMS_RECEIVED 리시버만 존재하고 WAP_PUSH_RECEIVED 리시버가 누락되어 80바이트 초과 장문 결제 문자의 실시간 자동 수집이 누락되었음.
+
+### 64.2. 주요 개선 및 구현 내역
+1. **HistoricalDataImporter.kt 무조건 전수 스캔 및 초/밀리초 듀얼 자동 판별 복원**:
+   - SQL selection의 DATE >= ? 조건을 전면 제거하여 SQLite 타입 바인딩 버그 원천 차단.
+   - content://sms 및 content://mms 전체를 최신순으로 가져와 Kotlin 런타임에서 초/밀리초를 동적 감지(if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate)하여 최근 90일(3개월) 메시지만 필터링.
+   - MMS part 본문 텍스트 추출기 다각화 (	ext/plain 외 모든 text mime 및 바이트 스트림 디코딩 지원).
+2. **가계부 화면 전자동 스캔 연동 (ExpenseScreen.kt, ExpenseViewModel.kt)**:
+   - 상단 액션바에 **[문자 동기화]** 버튼 신설 및 READ_SMS 런타임 권한 연동.
+   - ExpenseViewModel.syncHistoricalSms: 기기 결제 문자를 전자동 스캔하여 가계부 DB 저장 및 차계부 주유 기록 동시 반영.
+   - 스낵바 안내 메시지 세팅: "모든 결제 문자가 이미 최신 상태로 동기화되어 있습니다 (총 N건)."
+3. **차계부 화면 피드백 정규화 (CarLedgerViewModel.kt)**:
+   - manualSyncRefueling 파이프라인에서 불편한 안내("갤럭시 채팅+ 문자는 문자 붙여넣기로 등록해주세요")를 제거하고, 자동 스캔 결과를 명확히 안내하도록 개선.
+4. **장문 MMS/LMS 실시간 수신 리시버 신설 (MmsBroadcastReceiver.kt, AndroidManifest.xml)**:
+   - WAP_PUSH_RECEIVED, WAP_PUSH_DELIVER, RECEIVE_WAP_PUSH 선언 및 백그라운드 DB 자동 적재 구축.
+
+### 64.3. 단위 테스트 및 실기기 검증 결과
+- **단위 테스트 100% 통과**:
+  - .\gradlew.bat testDebugUnitTest 91개 테스트 전수 성공 (BUILD SUCCESSFUL in 56s).
+- **에뮬레이터(Galaxy S24+, emulator-5554) 실기기 배포 및 검증**:
+  - .\gradlew.bat installDebug 배포 완료.
+  - **가계부 화면**:
+    - 상단 [문자 동기화] 버튼 터치 시 **"모든 결제 문자가 이미 최신 상태로 동기화되어 있습니다 (총 10건)."** 스낵바 표출 확인 (screen_expense_synced.png).
+    - 9월 총 지출 **603,449원**, 주유/충전 지출 **603,449원**, 결제 내역 10건 완벽 표출.
+  - **차계부 화면**:
+    - 상단 [주유 동기화] 버튼 터치 시 **"모든 주유 결제 내역(총 8건)이 이미 최신 상태로 동기화되어 있습니다."** 스낵바 표출 확인 (screen_car_autosynced.png).
+    - 총 주유비 **603,449원**, 주유 기록 **8건** 최신 동기화 유지 확인.
+  - **결과**: 사용자가 번거롭게 문자를 복사-붙여넣기할 필요 없이, **버튼 하나로 기기 내 모든 결제 문자가 100% 전자동 스캔·집계**되는 완전 자동화 시스템 복원 완료.

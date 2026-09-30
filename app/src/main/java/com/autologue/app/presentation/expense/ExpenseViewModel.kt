@@ -84,7 +84,8 @@ class ExpenseViewModel @Inject constructor(
     private val vehicleRepository: com.autologue.app.domain.repository.VehicleRepository,
     private val manageTransactionRulesUseCase: ManageTransactionRulesUseCase,
     private val userAccountPreferences: UserAccountPreferences,
-    private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
+    private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase,
+    private val importer: com.autologue.app.data.sync.HistoricalDataImporter
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ExpenseUiState())
@@ -541,6 +542,45 @@ class ExpenseViewModel @Inject constructor(
             loadData()
             val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
             val msg = "결제 내역 ${transactions.size}건을 가계부에 성공적으로 등록했습니다.$fuelMsg"
+            _uiState.value = _uiState.value.copy(syncResultMessage = msg)
+        }
+    }
+
+    fun syncHistoricalSms(context: android.content.Context) {
+        viewModelScope.launch {
+            val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.READ_SMS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            if (!hasPerm) {
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = "문자(SMS) 읽기 권한이 필요합니다. 설정에서 권한을 허용해주세요."
+                )
+                return@launch
+            }
+
+            val scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 90, limit = 2000)
+            var newCount = 0
+            for (tx in scanResult.transactions) {
+                runCatching {
+                    processTransactionUseCase(tx)
+                    newCount++
+                }
+            }
+
+            val allTxs = transactionRepository.getAllTransactionsFlow().first()
+            val addedFuel = vehicleRepository.syncRefuelingFromTransactions(allTxs)
+            loadData()
+
+            val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
+            val msg = if (newCount > 0) {
+                "기기 결제 문자 ${newCount}건을 가계부에 자동 동기화했습니다.$fuelMsg"
+            } else if (allTxs.isNotEmpty()) {
+                "모든 결제 문자가 이미 최신 상태로 동기화되어 있습니다 (총 ${allTxs.size}건)."
+            } else {
+                "기기에서 결제 문자를 찾지 못했습니다 (최근 90일 스캔 완료)."
+            }
             _uiState.value = _uiState.value.copy(syncResultMessage = msg)
         }
     }
