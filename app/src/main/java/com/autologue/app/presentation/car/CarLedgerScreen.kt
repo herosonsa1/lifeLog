@@ -135,6 +135,15 @@ fun CarLedgerScreen(
         )
     }
 
+    if (uiState.showPasteSmsDialog) {
+        PasteSmsDialog(
+            onDismiss = { viewModel.closePasteSmsDialog() },
+            onConfirm = { transactions ->
+                viewModel.importPastedTransactions(transactions)
+            }
+        )
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(uiState.syncResultMessage) {
@@ -151,6 +160,15 @@ fun CarLedgerScreen(
                         data = Uri.fromParts("package", context.packageName, null)
                     }
                     context.startActivity(intent)
+                }
+            } else if (msg.contains("문자 붙여넣기")) {
+                val result = snackbarHostState.showSnackbar(
+                    message = msg,
+                    actionLabel = "문자 붙여넣기",
+                    duration = SnackbarDuration.Long
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    viewModel.openPasteSmsDialog()
                 }
             } else {
                 snackbarHostState.showSnackbar(msg)
@@ -227,6 +245,15 @@ fun CarLedgerScreen(
                                     )
                                 }
                             },
+                            contentColor = MenuColors.carLedger,
+                            containerColor = MenuColors.carLedgerBg,
+                            borderColor = MenuColors.carLedgerBorder
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        AutoLogueOutlinedButton(
+                            text = "문자 붙여넣기",
+                            icon = Icons.Default.ContentPaste,
+                            onClick = { viewModel.openPasteSmsDialog() },
                             contentColor = MenuColors.carLedger,
                             containerColor = MenuColors.carLedgerBg,
                             borderColor = MenuColors.carLedgerBorder

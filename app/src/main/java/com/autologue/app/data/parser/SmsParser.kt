@@ -8,6 +8,73 @@ import java.util.regex.Pattern
 
 object SmsParser {
 
+    fun parseMultiple(rawText: String, fallbackDateTime: LocalDateTime = LocalDateTime.now()): List<Transaction> {
+        val clean = rawText.trim().replace("\r\n", "\n")
+        if (clean.isBlank()) return emptyList()
+
+        // 1. 공백 라인(\n\s*\n)으로 1차 분할 시도
+        var chunks = clean.split(Regex("""\n\s*\n""")).map { it.trim() }.filter { it.isNotBlank() }
+
+        // 2. 만약 공백 라인이 없거나 1개 덩어리인데 내용 내에 여러 결제 문자가 연속되어 있다면 라인 단위 스마트 분할
+        if (chunks.size <= 1) {
+            val lines = clean.split("\n")
+            val smartChunks = mutableListOf<String>()
+            val currentChunkLines = mutableListOf<String>()
+
+            val cardStartRegex = Regex("""^(?:NH|KB|신한|삼성|현대|롯데|우리|하나|BC)카드""")
+
+            for (line in lines) {
+                val trimmedLine = line.trim()
+                var isStart = false
+
+                if (trimmedLine == "알림" || trimmedLine.startsWith("[Web발신]")) {
+                    isStart = true
+                } else if (cardStartRegex.containsMatchIn(trimmedLine)) {
+                    val joinedSoFar = currentChunkLines.joinToString(" ")
+                    if (joinedSoFar.contains("카드") || joinedSoFar.contains("승인") || joinedSoFar.contains("원")) {
+                        isStart = true
+                    }
+                }
+
+                if (isStart && currentChunkLines.isNotEmpty()) {
+                    val joinedChunk = currentChunkLines.joinToString("\n").trim()
+                    if (joinedChunk.contains("원") || joinedChunk.contains("승인") || joinedChunk.contains("취소")) {
+                        smartChunks.add(joinedChunk)
+                        currentChunkLines.clear()
+                    }
+                }
+                currentChunkLines.add(line)
+            }
+            if (currentChunkLines.isNotEmpty()) {
+                smartChunks.add(currentChunkLines.joinToString("\n").trim())
+            }
+
+            if (smartChunks.size > 1) {
+                chunks = smartChunks
+            }
+        }
+
+        // 3. 만약 여전히 1개 덩어리면 단일 파싱
+        if (chunks.size <= 1) {
+            val single = parse(null, clean, fallbackDateTime)
+            return if (single != null) listOf(single) else emptyList()
+        }
+
+        // 4. 각 청크별 파싱 수행
+        val result = mutableListOf<Transaction>()
+        for (chunk in chunks) {
+            val tx = parse(null, chunk, fallbackDateTime)
+            if (tx != null) {
+                result.add(tx)
+            }
+        }
+
+        // 중복 제거 및 시간 역순 정렬
+        return result.distinctBy {
+            "${it.amount}_${it.timestamp}_${it.merchantName}"
+        }.sortedByDescending { it.timestamp }
+    }
+
     fun parse(sender: String?, body: String, fallbackDateTime: LocalDateTime = LocalDateTime.now()): Transaction? {
         val cleanBody = body.trim().replace("\r\n", "\n")
         val year = fallbackDateTime.year
@@ -141,7 +208,7 @@ object SmsParser {
     private fun parseNhCard(body: String, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
         val isCancel = body.contains("승인취소") || body.contains("취소")
         val pattern = Pattern.compile(
-            """NH카드(?<cardNo>[^\s\n\r]+)?\s*(?:승인취소|승인).*?\n(?:[^\n\r]+\n)?(?<amount>[\d,]+)원\s*(?:일시불|\d+개월)?.*?\n(?<month>\d{1,2})/(?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})\s*\n(?<merchant>[^\n\r]+)""",
+            """NH카드(?<cardNo>[^\s\n\r]+)?\s*(?:승인취소|승인).*?(?<amount>[\d,]+)원(?:\s*(?:일시불|\d+개월))?.*?(?<month>\d{1,2})/(?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})\s*\n?(?<merchant>[^\n\r]+)""",
             Pattern.DOTALL
         )
         val m = pattern.matcher(body)
@@ -272,7 +339,6 @@ object SmsParser {
         if (m.find()) {
             val amount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
             val txType = m.group("type") ?: "출금"
-            val memo = m.group("memo")?.trim() ?: "KB국민은행"
 
             val month = m.group("month")?.toIntOrNull() ?: fallbackDateTime.monthValue
             val day = m.group("day")?.toIntOrNull() ?: fallbackDateTime.dayOfMonth

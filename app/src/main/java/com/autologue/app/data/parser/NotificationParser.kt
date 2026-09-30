@@ -41,6 +41,19 @@ object NotificationParser {
     fun parse(packageName: String, title: String, text: String): ParsedNotificationResult? {
         val combined = "$title $text".trim()
 
+        // 0. 삼성 메시지 / 구글 메시지 / 문자 RCS 실시간 알림 파싱 (채팅+ 기업 메시지 포함)
+        val isMessagingApp = packageName.contains("messaging") ||
+            packageName.contains("mms") ||
+            packageName == "com.samsung.android.messaging" ||
+            packageName == "com.google.android.apps.messaging"
+
+        if (isMessagingApp || combined.contains("[Web발신]") || (combined.contains("승인") && combined.contains("원"))) {
+            val parsedTx = SmsParser.parse(title, text) ?: SmsParser.parse(null, combined)
+            if (parsedTx != null) {
+                return ParsedNotificationResult.TxResult(parsedTx)
+            }
+        }
+
         // 1. 카카오톡 / 카카오페이 푸시 알림
         if (packageName.contains("kakaopay") || packageName.contains("kakao.talk") || combined.contains("카카오페이")) {
             for (pattern in KAKAO_PAY_SEND_PATTERNS) {

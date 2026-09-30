@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material3.*
@@ -56,9 +57,28 @@ fun ExpenseScreen(
     viewModel: ExpenseViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.syncResultMessage) {
+        val msg = uiState.syncResultMessage
+        if (!msg.isNullOrBlank()) {
+            snackbarHostState.showSnackbar(msg)
+            viewModel.dismissResultMessage()
+        }
+    }
+
+    if (uiState.isPasteSmsDialogOpen) {
+        PasteSmsDialog(
+            onDismiss = { viewModel.closePasteSmsDialog() },
+            onConfirm = { transactions ->
+                viewModel.importPastedTransactions(transactions)
+            }
+        )
+    }
 
     Scaffold(
         containerColor = AppColors.background,
+        snackbarHost = { AppSnackbarHost(snackbarHostState) },
         topBar = {
             Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
                 TopMenuAccentBar(color = MenuColors.expense)
@@ -82,14 +102,23 @@ fun ExpenseScreen(
                     },
                     actions = {
                         AutoLogueOutlinedButton(
-                            text = "지출 직접 추가",
+                            text = "지출 추가",
                             icon = Icons.Default.Add,
                             onClick = { viewModel.openAddDialog() },
                             contentColor = MenuColors.expense,
                             containerColor = MenuColors.expenseBg,
                             borderColor = MenuColors.expenseBorder
                         )
-                        Spacer(modifier = Modifier.width(Spacing.lg))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        AutoLogueOutlinedButton(
+                            text = "문자 붙여넣기",
+                            icon = Icons.Default.ContentPaste,
+                            onClick = { viewModel.openPasteSmsDialog() },
+                            contentColor = MenuColors.expense,
+                            containerColor = MenuColors.expenseBg,
+                            borderColor = MenuColors.expenseBorder
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.md))
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
                 )

@@ -8,6 +8,7 @@ import com.autologue.app.data.preferences.UserLocationPreferences
 import com.autologue.app.data.preferences.VehicleMaintenanceConfig
 import com.autologue.app.data.preferences.VehicleMaintenancePreferences
 import com.autologue.app.data.preferences.VehicleProfile
+import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.domain.model.getAssignedVehicleId
@@ -57,6 +58,7 @@ data class CarLedgerUiState(
     val editingRefuelLog: VehicleLog? = null,
     val logFilterMode: LogFilterMode = LogFilterMode.ALL,
     val showAddRefuelDialog: Boolean = false,
+    val showPasteSmsDialog: Boolean = false,
     val syncResultMessage: String? = null,
     val totalRefuelCount: Int = 0,
     val totalDrivingCount: Int = 0
@@ -438,11 +440,51 @@ class CarLedgerViewModel @Inject constructor(
                 totalFuelLogs > 0 ->
                     "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 이미 최신 상태로 동기화되어 있습니다."
                 scanResult.totalMessagesScanned > 0 ->
-                    "문자 ${scanResult.totalMessagesScanned}건을 분석했으나 주유 내역을 찾지 못했습니다.\n수신 문자를 확인하거나 직접 등록해주세요."
+                    "문자 ${scanResult.totalMessagesScanned}건을 분석했으나 주유 내역을 찾지 못했습니다.\n갤럭시 '채팅+(RCS)' 문자는 [문자 붙여넣기]로 등록해주세요."
                 else ->
-                    "기기에서 수신된 결제 문자를 찾지 못했습니다.\n문자 수신함 및 권한 상태를 확인해주세요."
+                    "기기에서 수신된 결제 문자를 찾지 못했습니다.\n갤럭시 '채팅+(RCS)' 문자는 [문자 붙여넣기]를 이용해주세요."
             }
             _uiState.value = _uiState.value.copy(isSyncing = false, syncResultMessage = msg)
+        }
+    }
+
+    fun openPasteSmsDialog() {
+        _uiState.value = _uiState.value.copy(showPasteSmsDialog = true)
+    }
+
+    fun closePasteSmsDialog() {
+        _uiState.value = _uiState.value.copy(showPasteSmsDialog = false)
+    }
+
+    fun importPastedTransactions(transactions: List<Transaction>) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isSyncing = true, showPasteSmsDialog = false)
+            var addedTxCount = 0
+            for (tx in transactions) {
+                runCatching {
+                    processTransactionUseCase(tx)
+                    addedTxCount++
+                }
+            }
+            val cfg = locationPreferences.config.value
+            val home = if (cfg.homeName.isNotBlank()) cfg.homeName else "우리집"
+            val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
+            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
+
+            val txs = transactionRepository.getAllTransactionsFlow().first()
+            val addedFuelCount = vehicleRepository.syncRefuelingFromTransactions(txs)
+            vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
+
+            val totalFuel = vehicleRepository.getRefuelingLogsFlow().first().size
+            val msg = if (addedFuelCount > 0) {
+                "결제 내역 ${transactions.size}건을 등록했습니다. (가계부 ${addedTxCount}건, 차계부 주유 ${addedFuelCount}건 반영, 총 주유 ${totalFuel}건)"
+            } else {
+                "결제 내역 ${transactions.size}건을 가계부에 성공적으로 등록했습니다."
+            }
+            _uiState.value = _uiState.value.copy(
+                isSyncing = false,
+                syncResultMessage = msg
+            )
         }
     }
 

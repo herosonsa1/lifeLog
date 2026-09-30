@@ -187,4 +187,99 @@ class SmsParserTest {
         assertEquals("한국도로공사하", tx9?.merchantName)
         assertEquals(ExpenseCategory.FUEL, tx9?.category)
     }
+
+    @Test
+    fun parseMultiple_userPastedBlock_parsesAllMessagesSuccessfully() {
+        val giantPastedBlock = """
+            알림
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            150,000원 일시불
+            09/01 18:56
+            지에스칼텍스(주
+            총누적2,801,195원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            75,449원 일시불
+            09/01 18:59
+            지에스칼텍스(주
+            총누적2,876,644원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인취소
+            정*우
+            150,000원
+            09/01 18:59
+            지에스칼텍스(주)가
+            총누적2,726,644원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            103,000원 일시불
+            09/01 21:03
+            (주)유진주유소
+            총누적2,829,644원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            78,000원 일시불
+            09/18 21:06
+            (주)유진주유소
+            총누적4,036,159원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            150,000원 일시불
+            09/23 18:02
+            지에스칼텍스(주
+            총누적1,872,230원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            61,000원 일시불
+            09/23 18:05
+            지에스칼텍스(주
+            총누적1,933,230원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인취소
+            정*우
+            150,000원
+            09/23 18:05
+            지에스칼텍스(주)가
+            총누적1,783,230원
+
+            알림
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            101,000원 일시불
+            09/27 18:31
+            한국도로공사하
+            총누적2,033,130원
+        """.trimIndent()
+
+        val parsedList = SmsParser.parseMultiple(giantPastedBlock)
+        assertEquals(9, parsedList.size)
+
+        val fuelList = parsedList.filter { it.category == ExpenseCategory.FUEL }
+        assertEquals(9, fuelList.size)
+
+        val merchants = parsedList.map { it.merchantName }.toSet()
+        assertEquals(setOf("한국도로공사하", "지에스칼텍스", "유진주유소"), merchants)
+    }
 }

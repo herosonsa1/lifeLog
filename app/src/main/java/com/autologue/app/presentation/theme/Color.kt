@@ -43,8 +43,25 @@ val Rose50 = Color(0xFFFFF1F2)
 
 val Amber700 = Color(0xFFB45309)
 val Amber600 = Color(0xFFD97706)
+val Amber200 = Color(0xFFFDE68A)
 val Amber100 = Color(0xFFFEF3C7)
 val Amber50 = Color(0xFFFFFBEB)
+val Amber800 = Color(0xFF92400E)
+val Amber900 = Color(0xFF78350F)
+
+val Emerald800 = Color(0xFF065F46)
+val Emerald200 = Color(0xFFA7F3D0)
+
+val Blue700 = Color(0xFF1D4ED8)
+val Blue600 = Color(0xFF2563EB)
+val Blue500 = Color(0xFF3B82F6)
+val Blue100 = Color(0xFFDBEAFE)
+val Blue50 = Color(0xFFEFF6FF)
+
+val Red600 = Color(0xFFDC2626)
+val Red500 = Color(0xFFEF4444)
+val Red100 = Color(0xFFFEE2E2)
+val Red50 = Color(0xFFFEF2F2)
 
 // Legacy Aliases
 val EmeraldPrimary = Emerald700

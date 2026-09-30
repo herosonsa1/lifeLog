@@ -55,7 +55,10 @@ data class ExpenseUiState(
     // 정기지출 상태
     val recurringTransactionIds: Set<Long> = emptySet(),
     val isRecurringFilterOnly: Boolean = false,
-    val recurringExpenseTotal: Long = 0L
+    val recurringExpenseTotal: Long = 0L,
+    // 문자 간편 붙여넣기 다이얼로그 상태
+    val isPasteSmsDialogOpen: Boolean = false,
+    val syncResultMessage: String? = null
 ) {
     val filteredTransactions: List<Transaction>
         get() {
@@ -80,7 +83,8 @@ class ExpenseViewModel @Inject constructor(
     private val transactionRepository: TransactionRepository,
     private val vehicleRepository: com.autologue.app.domain.repository.VehicleRepository,
     private val manageTransactionRulesUseCase: ManageTransactionRulesUseCase,
-    private val userAccountPreferences: UserAccountPreferences
+    private val userAccountPreferences: UserAccountPreferences,
+    private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ExpenseUiState())
@@ -506,5 +510,38 @@ class ExpenseViewModel @Inject constructor(
             merchantName = tx.merchantName,
             cardOrBankName = tx.cardOrBankName
         )
+    }
+
+    fun openPasteSmsDialog() {
+        _uiState.value = _uiState.value.copy(isPasteSmsDialogOpen = true)
+    }
+
+    fun closePasteSmsDialog() {
+        _uiState.value = _uiState.value.copy(isPasteSmsDialogOpen = false)
+    }
+
+    fun dismissResultMessage() {
+        _uiState.value = _uiState.value.copy(syncResultMessage = null)
+    }
+
+    fun importPastedTransactions(transactions: List<Transaction>) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isPasteSmsDialogOpen = false)
+            var addedCount = 0
+            for (tx in transactions) {
+                runCatching {
+                    processTransactionUseCase(tx)
+                    addedCount++
+                }
+            }
+            // 주유 내역 동기화
+            val allTxs = transactionRepository.getAllTransactionsFlow().first()
+            val addedFuel = vehicleRepository.syncRefuelingFromTransactions(allTxs)
+
+            loadData()
+            val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
+            val msg = "결제 내역 ${transactions.size}건을 가계부에 성공적으로 등록했습니다.$fuelMsg"
+            _uiState.value = _uiState.value.copy(syncResultMessage = msg)
+        }
     }
 }

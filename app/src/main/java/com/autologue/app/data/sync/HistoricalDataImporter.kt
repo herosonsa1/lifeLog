@@ -117,10 +117,20 @@ class HistoricalDataImporter @Inject constructor(
 
             var cursor: android.database.Cursor? = null
             for (uri in urisToTry) {
-                cursor = runCatching {
+                val candidate = runCatching {
                     context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
                 }.getOrNull()
-                if (cursor != null) break
+                if (candidate != null) {
+                    if (candidate.count > 0) {
+                        cursor?.close()
+                        cursor = candidate
+                        break
+                    } else if (cursor == null) {
+                        cursor = candidate
+                    } else {
+                        candidate.close()
+                    }
+                }
             }
 
             cursor?.use { c ->
@@ -182,10 +192,20 @@ class HistoricalDataImporter @Inject constructor(
 
             var cursor: android.database.Cursor? = null
             for (uri in urisToTry) {
-                cursor = runCatching {
+                val candidate = runCatching {
                     context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
                 }.getOrNull()
-                if (cursor != null) break
+                if (candidate != null) {
+                    if (candidate.count > 0) {
+                        cursor?.close()
+                        cursor = candidate
+                        break
+                    } else if (cursor == null) {
+                        cursor = candidate
+                    } else {
+                        candidate.close()
+                    }
+                }
             }
 
             cursor?.use { c ->

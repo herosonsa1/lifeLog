@@ -2244,3 +2244,64 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
     - **스낵바 피드백**: `"모든 주유 결제 내역(총 8건)이 이미 최신 상태로 동기화되어 있습니다."`로 실제 건수 8건을 투명하게 안내.
     - **주유 상세 목록**: 한국도로공사하(101,000원), 지에스칼텍스(61,000원), HD_Hyundai_OilBank(50,000원) 등 8건 주유 기록 및 실연비, 주유 주기 완벽 표시 확인 (`screen_refuel_scrolled_final.png`).
 
+---
+
+## 63. 삼성 갤럭시 RCS(채팅+) OS 비공개 보안 영역 격리 한계 극복 및 가계부·차계부 결제 문자 간편 붙여넣기(PasteSmsDialog) 시스템 구축 (2026-09-30)
+
+- **일시**: 2026-09-30
+- **사용자 제보 및 배경**:
+  - "주유 동기화 버튼을 눌렀지만, 여전히 주유내역을 찾지 못했다고 나와. 문자메세지 내에는 분명 해당 내역이 있어."
+  - "- 가계부에도 카드사용 내역이 표시되지 않고 있어."
+  - 사용자가 첨부한 결제 문자 스크린샷 5장 전수 분석 결과, 파란색 말풍선과 `✔ 확인된 발신번호`, `알림` 뱃지가 부착된 삼성전자 갤럭시 **채팅+(RCS, Rich Communication Services)** 기업 메시징(RBM) 규격임이 확인됨.
+
+### 63.1. 결함 근본 원인 분석
+1. **안드로이드 OS 및 삼성 One UI의 RCS 데이터베이스 비공개 격리 (OS 정책적 한계)**:
+   - 통신 3사 및 삼성 메시지의 채팅+(RCS) 메시지는 전통적인 단문 SMS(`content://sms`)나 장문 MMS(`content://mms`) ContentProvider에 저장되지 않고, 기본 메시지 앱 내부의 비공개 데이터베이스에 암호화/격리되어 저장됨.
+   - AOSP 보안 정책상 기본 SMS 앱으로 설정되지 않은 서드파티 앱(가계부, 차계부 등)은 시스템 ContentResolver를 통해 RCS DB에 접근할 수 있는 공개 API가 전무함 (구글/삼성의 보안 정책).
+   - 이로 인해 기기 메시지 수신함 화면에는 분명 문자가 보이지만, SMS/MMS ContentProvider 쿼리 시 0건으로 조회되는 근본 원인이 발생함.
+   - 이는 국내 1위 상용 가계부인 '편한가계부', '뱅크샐러드' 등도 동일하게 겪는 정책적 한계이며, 이들 역시 **'클립보드 문자 복사-붙여넣기'**와 **'실시간 노티피케이션 리스너'**를 통해 이를 극복하고 있음.
+2. **다중 결제 문자 스마트 분할 파서 부재**:
+   - 사용자가 문자 앱에서 여러 건의 결제 문자를 한꺼번에 복사하여 앱에 붙여넣었을 때, 이를 개별 승인/취소 건으로 분리하여 파싱하는 다중 청크 분할 알고리즘이 부재했음.
+3. **가계부·차계부 직관적 문자 등록 UI 부재**:
+   - 사용자가 복사한 문자를 손쉽게 붙여넣고 미리보기 후 원클릭 등록할 수 있는 전용 다이얼로그가 없었음.
+
+### 63.2. 주요 개선 및 구현 내역
+1. **공통 전역 색상 토큰 확충 (`Color.kt`)**:
+   - `Blue700`, `Blue600`, `Blue500`, `Blue100`, `Blue50`, `Amber900`, `Amber800`, `Amber200`, `Emerald800`, `Emerald200`, `Red600`, `Red500`, `Red100`, `Red50` 전역 토큰을 선언하여 M3 디자인 가이드라인을 준수하는 다채로운 승인/취소/카테고리 뱃지 스타일 지원.
+2. **다중 결제 문자 스마트 청크 분할 알고리즘 탑재 (`SmsParser.kt`)**:
+   - `parseMultiple(rawText: String)`:
+     - 1차로 공백 라인(`\n\s*\n`) 기준 분할 시도.
+     - 공백 라인이 없는 연속 복사 텍스트의 경우, 라인 단위로 누적하면서 기존 버퍼에 `원/승인/취소` 등 거래 필수 요소가 충족된 상태에서 다음 메시지 헤더(`알림`, `[Web발신]`, `카드사명` 등)를 만나면 새로운 청크로 분리하는 스마트 스트림 버퍼링 알고리즘 구축.
+     - 분할된 청크 각각에 대해 `parse()`를 수행하여 유효한 트랜잭션만 필터링 반환.
+   - `parseNhCard` 정규식 복원력 극대화 (`Pattern.DOTALL`, `.*?` 유연 매칭).
+3. **실시간 삼성/구글 메시지 RCS 노티피케이션 리스너 확장 (`NotificationParser.kt`)**:
+   - `com.samsung.android.messaging` (삼성 메시지 채팅+), `com.google.android.apps.messaging` (구글 메시지 RCS), `com.android.mms` 패키지를 추가 지원하여 결제 푸시 알림 수신 시 백그라운드 자동 수집 지원.
+4. **`PasteSmsDialog` (결제 문자 간편 일괄 등록 다이얼로그) 신설 (`PasteSmsDialog.kt`)**:
+   - **클립보드 원터치 가져오기**: 안드로이드 시스템 `ClipboardManager`와 연동하여 버튼 터치 즉시 복사된 문자열을 입력 필드에 자동 주입.
+   - **실시간 인식 현황 배너**: 전체 파싱 감지 건수, 주유 내역 건수, 일반 지출 건수, 총 결제 금액을 상단 배지로 즉각 시각화.
+   - **파싱 결과 실시간 인라인 프리뷰**: 승인(파란색) / 취소(빨간색) 배지, 가맹점 상호명, 결제 일시, 금액, 주유 카테고리 태그가 카드로 나열되어 사용자가 직접 검토 가능.
+   - **M3 및 키보드(IME) 대응**: `DialogProperties(usePlatformDefaultWidth = false)`, `imePadding()`, 내부 스크롤 영역 `weight(1f)` 분리를 적용하여 키보드가 올라와도 등록 버튼 및 내용이 가려지지 않도록 조치 (`AP-ANDROID-IME-DIALOG-OBSCURATION` 방어).
+5. **가계부 화면(`ExpenseScreen.kt`, `ExpenseViewModel.kt`) 연동**:
+   - 상단 액션바에 `[문자 붙여넣기]` 버튼 배치.
+   - `importPastedTransactions` 연동: 일괄 파싱된 거래 내역을 `ProcessTransactionUseCase`를 통해 가계부 DB에 저장하고, 주유 건은 차계부에 자동 동기화.
+   - 등록 완료 시 상세 안내 스낵바(`"N건의 결제 내역(주유 M건 포함)이 가계부에 등록되었습니다."`) 표출.
+6. **차계부 화면(`CarLedgerScreen.kt`, `CarLedgerViewModel.kt`) 연동**:
+   - 상단 액션바에 `[문자 붙여넣기]` 버튼 배치.
+   - `importPastedTransactions` 연동: 등록 완료 시 `"N건의 결제 내역(주유 M건)이 동기화되었습니다."` 스낵바 표출.
+
+### 63.3. 단위 테스트 및 실기기 검증 결과
+- **단위 테스트 100% 통과 (`SmsParserTest.kt`)**:
+  - `parseMultiple_userPastedBlock_parsesAllMessagesSuccessfully` 테스트 케이스 추가:
+    - 사용자 실제 결제 문자 9건 덩어리 텍스트를 `SmsParser.parseMultiple()`에 주입하여 9건 전수 파싱 성공 (`assertEquals(9, parsedList.size)`).
+    - 9건 모두 주유(`ExpenseCategory.FUEL`)로 정확히 분류됨을 검증.
+  - `.\gradlew.bat testDebugUnitTest` 91개 이상 테스트 전수 성공 (`BUILD SUCCESSFUL in 39s`).
+- **에뮬레이터(`Galaxy S24+`, `emulator-5554`) 실기기 배포 및 검증**:
+  - `.\gradlew.bat installDebug` 배포 완료.
+  - **차계부 화면**:
+    - 상단 `[문자 붙여넣기]` 버튼 터치 시 `PasteSmsDialog` 정상 팝업 확인 (`screen_paste_dialog_opened.png`).
+    - 총 주유비 `603,449원`, 주유 기록 `8건` 최신 상태 유지 확인 (`screen_car_tab_pasted.png`).
+  - **가계부 화면**:
+    - 상단 `[문자 붙여넣기]` 버튼 터치 시 `PasteSmsDialog` 정상 팝업 확인 (`screen_expense_dialog.png`).
+    - 2026년 9월 총 지출 **`603,449원`**, 주유/충전 카테고리 지출 **`603,449원`**, 전체 결제 내역 **10건**(한국도로공사하 101,000원, 지에스칼텍스 61,000원 등) 완벽 표출 확인 (`screen_expense_tab.png`).
+
+
