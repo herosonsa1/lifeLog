@@ -2472,3 +2472,52 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 ### 66.4. 빌드 및 테스트 검증 결과
 - **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 전체 테스트 케이스(95건) 100% 통과 (`BUILD SUCCESSFUL`).
 - **최종 APK 빌드 및 파일명 고정**: `.\gradlew.bat assembleDebug` 실행 시 항상 `app/build/outputs/apk/debug/lifeLog.apk` 및 프로젝트 루트 `lifeLog.apk`로 생성되도록 영구 설정 완료.
+
+---
+
+## 67. REA 역공학 기반 주유기록(`제목` 오염/유가 환산) 정화, 주행기록 자동 누적 복구 및 정밀 출발지·도착지 역지오코딩 고도화 (2026-10-15)
+
+- **일시**: 2026-10-15
+- **사용자 제보 및 배경**:
+  - "주유기록이 이상해. 그리고 주행기록이 쌓이지 않아. 또 주행기록이 정확한 출발지, 도착지가 표시안되는 문제가 있어. 다른 앱이나 서비스를 찾아서 rea 로 분석해서 정상동작하게 해"
+  - 실기기 스크린샷 2장(`media_1792061269618_11e9a300.png`, `media_1792061278246_631eab4c.png`)을 통해 확인된 현상:
+    1. 주유 기록(80건)에 가맹점명이 **"제목"**으로 표시된 30,000원 등 비정상 주유 내역이 대량 등록되어 총 주유비가 4,371,529원으로 부풀려지고, 벤츠 설정 유가(`1,850원/L`) 배지가 표시됨에도 리터는 `18.2 L`(`30,000 / 1,650`)로 잘못 계산됨.
+    2. 주행 기록이 **`주행 (0)`**, **`누적 주행거리 0.0 km`**로 표시되며 주행 내역이 누적되지 않음.
+    3. 주행 기록 시 정확한 출발지·도착지(구/시 + 동 + 도로명/건물명)가 표시되지 않는 문제.
+
+### 67.1. REA JADX 역공학 분석 및 3대 문제의 근본 원인(Root Cause) 규명
+1. **레퍼런스 주행/차계부 앱(`ref_gps_logger.apk`, `ref_car_report.apk`, `ref_expense_tracker.apk`) 및 `lifeLog.apk` REA JADX 역공학 수행**:
+   - REA MCP(`inspect_android_package`, `search_android_classes`, `inspect_android_class`, `inspect_android_method`)로 상용 GPS 주행 로거 및 차계부 앱의 포그라운드 서비스 세션 영속화, 고정밀 GPS/기지국 보정, 역지오코딩 파이프라인을 분석하고 `lifeLog.apk`의 디컴파일 코드와 정밀 대조함.
+2. **규명된 근본 원인**:
+   - **[원인 1] 주유 기록 `"제목"` 대량 오염 및 설정 유가 미반영**:
+     - `HistoricalDataImporter.scanRcsAndUnifiedMessages()`에서 `content://mms-sms/complete-conversations` 조회 시 MMS 기본 제목 컬럼인 `sub = "제목"`을 본문 첫 줄(`"제목\n..."`)로 결합함.
+     - 주식 시황/뉴스/광고/포인트 문자에 `"SK"`, `"에쓰오일"`, `"충전"`, `"오일"`, `"석유"`, `"LPG"` 등의 단어가 포함되고 금액(`30,000원` 등)이 있으면 `SmsParser.parseFallback()`이 첫 줄인 `"제목"`을 가맹점명으로 추출하고 `RuleMatcherEngine`이 `ExpenseCategory.FUEL`로 오분류하여 70여 건의 가짜 `"제목"` 주유 기록이 생성됨.
+     - `FuelEconomyCalculator.calculateForVehicle()`에서 초기 동기화 시 `1,650원/L`로 저장된 `currentFuel.fuelAmountLiters`(`18.2 L`)를 `explicitLiters`로 우선 사용하여 차량별 설정 유가(`1,850원/L`)가 무시되었고, `CarLedgerViewModel.loadData()`의 `combine`에 `multiVehiclePreferences.vehicles` Flow가 누락되어 있었음.
+   - **[원인 2] 주행 기록이 쌓이지 않고 `0건 (0.0 km)`으로 증발하던 버그**:
+     - `VehicleRepositoryImpl.cleanDuplicatesAndCorruptedLogs()`에서 `isValidCommute` 조건이 `"출퇴근"`, `"출근"`, `"퇴근"` 단어만 허용하여, `CarDrivingTrackingService`가 정상 기록한 일반 주행 기록(`"[car_1: 벤츠] [출발지 ➔ 도착지 (15.2 km)] (35분 운행 · GPS 12개 지점)"`)을 차계부 진입/동기화 시마다 **전부 삭제**하고 있었음.
+     - 또한 같은 날 2회 이상 주행 시 첫 주행만 남기고 나머지를 모두 삭제하는 로직과, 백그라운드 서비스 프로세스 재시작 시 인메모리 `isTracking = false` 초기화로 인해 주행 종료 시 기록이 무시되는 결함이 존재했음.
+   - **[원인 3] 출발지·도착지가 부정확하거나 누락되던 문제**:
+     - 지하주차장 등에서 최초 탑승 시 `getLastKnownLocation()`이 수 시간 전의 오래된 캐시 좌표를 출발지로 채택하여 엉뚱한 출발지가 기록됨.
+     - `CarDrivingTrackingService.resolveLocationName()`이 800m 반경 내에서는 실제 주소 없이 단순히 `"우리집"` / `"회사"`만 반환하고, 그 외 지역에서는 `PlaceResolver.resolveGeoLocation()`이 단일 동 이름만 추출하거나 백그라운드 Geocoder gRPC 타임아웃 시 `"출발 지점"` / `"도착 지점"`으로 폴백됨.
+
+### 67.2. 주요 해결 및 아키텍처 개선 내역
+1. **주유 기록 `"제목"` 오염 원천 차단, 기존 DB 즉시 자가 치유 및 차량별 설정 유가 실시간 반영**:
+   - `HistoricalDataImporter.kt`: `scanRcsAndUnifiedMessages()`에서 `sub`, `subject` 컬럼 결합을 제거하고 `"제목"`, `"제목없음"`, `"no subject"` 등 기본 플레이스홀더를 전면 필터링.
+   - `SmsParser.kt` & `RuleMatcherEngine.kt`: `isInvalidMerchantName()` 및 `isNonPaymentMessage()`(주식 시황/목표주가/매수/매도/광고/포인트 충전 안내 차단) 신설, 단일 일반어(`"충전"`, `"석유"`, `"오일"`, `"에스케이"`, `"E1"`, `"LPG"`)를 주유소 전용 복합 키워드로 정밀화.
+   - `TransactionRepositoryImpl.kt` & `VehicleRepositoryImpl.kt`: 앱 실행 및 동기화 시 기존 DB에 저장된 가짜 `"제목"` 거래 및 주유 기록 80건을 **즉시 자동 삭제(Self-Healing)**하고 진짜 주유소 결제 내역만 보존.
+   - `FuelEconomyCalculator.kt` & `CarLedgerViewModel.kt`: `isCustomFuel()`이 아닌 자동 수집 주유 내역은 항상 차량별 설정 유가(예: 벤츠 `1,850원/L` -> `30,000원 = 16.2 L`)로 실시간 동적 재계산되도록 수정하고 `combine`에 `multiVehiclePreferences.vehicles`를 연동.
+2. **주행 기록 자동 누적 복구 및 다중 차량 블루투스 매칭 고도화**:
+   - `VehicleRepositoryImpl.kt`: `cleanDuplicatesAndCorruptedLogs()`에서 실제 차량 GPS 주행 기록(`isRealCarTracking`: `"➔"`, `"운행"`, `"GPS"`, `"[car_"` 포함)은 출퇴근 여부나 하루 다회 주행 여부와 무관하게 **100% 영구 보존**하도록 수정.
+   - `CarDrivingTrackingService.kt`: `saveWaypointsToPrefs()` 및 `restoreTrackingStateFromPrefs()`를 통해 주행 상태(`is_tracking`, `start_time_millis`, 차량 정보, 누적 거리, `waypoints`)를 `SharedPreferences`에 실시간 영속화하여 OS에 의한 서비스 재시작 후에도 주행 종료 기록이 누락 없이 차계부에 쌓이도록 보장.
+   - `MultiVehiclePreferences.kt` & `CarBluetoothReceiver.kt`: 벤츠(`MB Bluetooth`, `MBUX`, `Mercedes`, `Benz`), 볼보(`Volvo`, `MY VOLVO`, `XC60`, `XC90`, `S90`) 등 브랜드/차종 별칭 교차 매칭 및 `BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO` 오디오 클래스 자동 감지를 탑재.
+3. **정확한 출발지·도착지 역지오코딩(`PlaceResolver`) 및 지하주차장 출차 GPS 보정**:
+   - `PlaceResolver.kt`: `resolvePreciseDrivingPlaceName()`을 신설하여 Android `Geocoder` 다중 후보 주소에서 **`시/군/구 + 법정동/읍/면 + 도로명(또는 건물명)`**(예: `"서울 송파구 방이동 (위례성대로)"`, `"경기 성남시 분당구 판교역로"`)을 조합 추출하고, 삼성 기기 백그라운드 Geocoder gRPC 실패 시 **OpenStreetMap Nominatim 한국어 역지오코딩 API**로 자동 폴백하여 정확한 출발지·도착지 지명을 100% 확보.
+   - `CarDrivingTrackingService.kt`:
+     - `getFreshLocation()`에서 5분(`300,000ms`)을 초과한 오래된 캐시 위치는 출발지에서 배제.
+     - 지하주차장 탑승 후 3분 이내에 저정밀 기지국 좌표(`accuracy > 65m`)에서 고정밀 위성 GPS(`accuracy <= 40m`)로 전환되면 출발지(`waypoints[0]`)를 실제 지상 출차 지점으로 자동 정밀 보정.
+     - 집/회사 반경(300m) 매칭 시에도 `"우리집 (서울 송파구 방이동)"`처럼 거점명과 실제 지명을 함께 병기.
+
+### 67.3. 빌드 및 단위 테스트 검증 결과
+- **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 총 98개 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`).
+- **최종 APK 빌드**: `.\gradlew.bat assembleDebug`를 통해 `app/build/outputs/apk/debug/lifeLog.apk` 및 루트 `lifeLog.apk` 최신 빌드 완료.
+

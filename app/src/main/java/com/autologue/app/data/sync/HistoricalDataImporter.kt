@@ -264,7 +264,10 @@ class HistoricalDataImporter @Inject constructor(
                     body = bulkPartMap[item.mmsId] ?: ""
                 }
                 if (body.isBlank() && !item.inlineSubject.isNullOrBlank()) {
-                    body = item.inlineSubject
+                    val cleanSub = item.inlineSubject.trim()
+                    if (cleanSub !in listOf("제목", "제목없음", "제목 없음", "No subject", "no subject")) {
+                        body = cleanSub
+                    }
                 }
                 val address = getMmsSender(context, item.mmsId)
 
@@ -474,9 +477,11 @@ class HistoricalDataImporter @Inject constructor(
             "content://mms-sms/conversations"
         )
 
-        val bodyColumnCandidates = listOf("body", "text", "snippet", "content", "sub", "subject", "message_body")
+        // [중요] sub, subject 컬럼은 MMS 기본 제목("제목", "제목없음")이 들어있어 본문 끝에 붙으면 가맹점명이 "제목"으로 오염되므로 제외
+        val bodyColumnCandidates = listOf("body", "text", "snippet", "content", "message_body")
         val dateColumnCandidates = listOf("date", "date_sent", "timestamp", "inserted_timestamp", "time")
         val addrColumnCandidates = listOf("address", "sender", "remote_uri", "recipient_ids")
+        val invalidSubjects = setOf("제목", "제목없음", "제목 없음", "no subject", "nosubject")
 
         for (uriStr in candidateUris) {
             val cursor = runCatching {
@@ -504,8 +509,10 @@ class HistoricalDataImporter @Inject constructor(
                 while (c.moveToNext() && rowCount < limit) {
                     rowCount++
                     val rawBodies = bodyCols.mapNotNull { idx ->
-                        runCatching { c.getString(idx) }.getOrNull()?.takeIf { it.isNotBlank() }
-                    }
+                        runCatching { c.getString(idx) }.getOrNull()
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() && it.lowercase() !in invalidSubjects }
+                    }.distinct()
                     if (rawBodies.isEmpty()) continue
                     val combinedBody = rawBodies.joinToString("\n").trim()
                     if (!combinedBody.contains("원")) continue

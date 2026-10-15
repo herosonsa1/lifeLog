@@ -59,26 +59,35 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             val config = runCatching { userLocationPreferences.config.value }.getOrNull() ?: return
             val targetDevice = config.carBluetoothDevice.trim()
 
-            // 1. 다중 차량 프로필에서 등록된 블루투스 일치 확인
+            // 1. 다중 차량 프로필에서 등록된 블루투스 일치 확인 (브랜드/모델 별칭 포함)
             val matchedVehicle = if (deviceName.isNotBlank()) {
                 runCatching { multiVehiclePreferences.findVehicleByBluetooth(deviceName) }.getOrNull()
             } else null
 
-            // 2. 단일 거점 설정의 기기명 또는 실제 차량 인포테인먼트 키워드 매칭
-            // [오탐 방지] "bt" 등 이어폰/헤드폰과 겹치는 모호한 약어 키워드는 완전 제거
-            val isCarDevice = matchedVehicle != null || (if (targetDevice.isNotBlank()) {
-                deviceName.contains(targetDevice, ignoreCase = true)
-            } else {
-                val carKeywords = listOf(
-                    "car", "auto", "hyundai", "kia", "genesis", "bmw", "audi", "benz", "mercedes",
-                    "chevy", "chevrolet", "k3", "k5", "k7", "k8", "k9", "sonata", "avante", "grandeur",
-                    "tucson", "santafe", "sorento", "sportage", "carnival", "palisade", "casper",
-                    "handsfree", "carplay", "android auto"
-                )
-                // 기기명이 비어있거나 단순 이어폰 키워드(buds, qcy, airpod 등)인 경우 배제
-                val isEarphone = listOf("buds", "airpod", "qcy", "earphone", "headset", "headphone", "wh-", "wf-").any { deviceName.contains(it, ignoreCase = true) }
-                !isEarphone && carKeywords.any { deviceName.contains(it, ignoreCase = true) }
-            })
+            // 2. 이어폰/워치/스피커 등 비차량 오디오 기기 배제
+            val isEarphoneOrWearable = listOf(
+                "buds", "airpod", "qcy", "earphone", "headset", "headphone",
+                "wh-", "wf-", "watch", "fit", "band", "jbl", "marshall", "bose"
+            ).any { deviceName.contains(it, ignoreCase = true) }
+
+            val isCarAudioClass = runCatching {
+                device?.bluetoothClass?.deviceClass == android.bluetooth.BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO
+            }.getOrDefault(false)
+
+            val carKeywords = listOf(
+                "car", "auto", "hyundai", "kia", "genesis", "bmw", "audi", "benz", "mercedes",
+                "mb bluetooth", "mbux", "volvo", "my volvo", "xc40", "xc60", "xc90", "s60", "s90", "v60", "v90",
+                "polestar", "porsche", "tesla", "lexus", "toyota", "honda", "vw", "volkswagen",
+                "chevy", "chevrolet", "k3", "k5", "k7", "k8", "k9", "sonata", "avante", "grandeur",
+                "tucson", "santafe", "sorento", "sportage", "carnival", "palisade", "casper",
+                "ioniq", "ev6", "ev9", "gv60", "gv70", "gv80", "g70", "g80", "g90",
+                "handsfree", "carplay", "android auto", "벤츠", "볼보", "제네시스", "현대", "기아"
+            )
+
+            // 3. 다중 차량 프로필, 단일 거점 기기명, 차량 오디오 클래스, 차량 인포테인먼트 키워드 통합 판별
+            val isCarDevice = matchedVehicle != null ||
+                (targetDevice.isNotBlank() && (deviceName.contains(targetDevice, ignoreCase = true) || targetDevice.contains(deviceName, ignoreCase = true))) ||
+                (!isEarphoneOrWearable && (isCarAudioClass || carKeywords.any { deviceName.contains(it, ignoreCase = true) }))
 
             if (!isCarDevice) return
 
@@ -90,15 +99,32 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             }
 
             val prefs = context.getSharedPreferences("car_trip_tracking", Context.MODE_PRIVATE)
+            val servicePrefs = context.getSharedPreferences("car_driving_service_prefs", Context.MODE_PRIVATE)
 
             when (action) {
                 BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                    val activeName = matchedVehicle?.name ?: "차량"
-                    val activePlate = matchedVehicle?.licensePlate ?: ""
-                    val vehicleId = matchedVehicle?.id ?: "car_1"
-                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 감지: $deviceName ($activeName, $activePlate). 백그라운드 10분 주기 추적 서비스 시작")
-                    
-                    // 백그라운드 포그라운드 GPS 10분 주기 추적 서비스 시작
+                    val fallbackId = multiVehiclePreferences.selectedVehicleId.value
+                    val fallbackProfile = multiVehiclePreferences.vehicles.value.find { it.id == fallbackId }
+                    val activeProfile = matchedVehicle ?: fallbackProfile
+
+                    val activeName = activeProfile?.name ?: "차량"
+                    val activePlate = activeProfile?.licensePlate ?: ""
+                    val vehicleId = activeProfile?.id ?: fallbackId
+                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 감지: $deviceName ($activeName, $activePlate). 백그라운드 추적 서비스 시작")
+
+                    // 5분 이내 신선한 위치만 초기 출발 좌표 후보로 기록 (오래된 캐시 좌표로 인한 출발지 오염 방지)
+                    val loc = getCurrentLocation(context)
+                    prefs.edit()
+                        .putBoolean("is_driving", true)
+                        .putString("active_car_id", vehicleId)
+                        .putString("active_car_name", activeName)
+                        .putString("active_car_plate", activePlate)
+                        .putLong("start_time", System.currentTimeMillis())
+                        .putFloat("start_lat", (loc?.latitude ?: 0.0).toFloat())
+                        .putFloat("start_lng", (loc?.longitude ?: 0.0).toFloat())
+                        .apply()
+
+                    // 백그라운드 포그라운드 GPS 추적 서비스 시작
                     try {
                         com.autologue.app.service.CarDrivingTrackingService.startTracking(
                             context = context,
@@ -109,65 +135,67 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                     } catch (e: Throwable) {
                         Log.e("CarBluetoothReceiver", "CarDrivingTrackingService 시작 실패", e)
                     }
-
-                    val loc = getCurrentLocation(context)
-                    prefs.edit()
-                        .putBoolean("is_driving", true)
-                        .putString("active_car_name", activeName)
-                        .putString("active_car_plate", activePlate)
-                        .putLong("start_time", System.currentTimeMillis())
-                        .putFloat("start_lat", (loc?.latitude ?: 0.0).toFloat())
-                        .putFloat("start_lng", (loc?.longitude ?: 0.0).toFloat())
-                        .apply()
                 }
 
-            BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                val now = System.currentTimeMillis()
-                val lastDisconnect = prefs.getLong("last_disconnect_time", 0L)
-                val isDriving = prefs.getBoolean("is_driving", false)
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    val now = System.currentTimeMillis()
+                    val lastDisconnect = prefs.getLong("last_disconnect_time", 0L)
+                    val isDriving = prefs.getBoolean("is_driving", false) || servicePrefs.getBoolean("is_tracking", false)
 
-                // 1. 3초 이내에 동일/멀티 프로필(A2DP, HFP 등)로부터 연이어 수신된 중복 disconnect 브로드캐스트는 무시 (Debounce 3,000ms)
-                if (now - lastDisconnect < 3000L) {
-                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제 디바운스 스킵 (연속 수신 방어): $deviceName (${now - lastDisconnect}ms 전 수신됨)")
-                    return
+                    // 1. 3초 이내에 동일/멀티 프로필(A2DP, HFP 등)로부터 연이어 수신된 중복 disconnect 브로드캐스트는 무시 (Debounce 3,000ms)
+                    if (now - lastDisconnect < 3000L) {
+                        Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제 디바운스 스킵 (연속 수신 방어): $deviceName (${now - lastDisconnect}ms 전 수신됨)")
+                        return
+                    }
+                    prefs.edit().putLong("last_disconnect_time", now).apply()
+
+                    // 2. 실제로 주행 중이었을 때만 주행 종료 및 거리 계산 서비스 호출
+                    if (!isDriving) {
+                        Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제 수신되었으나 주행 중 상태가 아니므로 무시: $deviceName")
+                        return
+                    }
+
+                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제: $deviceName. 도착 지점 및 주행 완료 처리 시작")
+                    prefs.edit().putBoolean("is_driving", false).apply()
+
+                    // 백그라운드 GPS 추적 서비스에 정지 및 기록 신호 안전 전송
+                    try {
+                        com.autologue.app.service.CarDrivingTrackingService.stopTracking(context)
+                    } catch (e: Throwable) {
+                        Log.e("CarBluetoothReceiver", "CarDrivingTrackingService 정지 신호 전송 실패", e)
+                    }
+
+                    Log.d("CarBluetoothReceiver", "CarDrivingTrackingService에 주행 종료 및 정밀 거리 기록 위임 완료")
                 }
-                prefs.edit().putLong("last_disconnect_time", now).apply()
-
-                // 2. 실제로 주행 중이었을 때만 주행 종료 및 거리 계산 서비스 호출
-                if (!isDriving) {
-                    Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제 수신되었으나 주행 중 상태가 아니므로 무시: $deviceName")
-                    return
-                }
-
-                Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제: $deviceName. 도착 지점 및 주행 완료 처리 시작")
-                prefs.edit().putBoolean("is_driving", false).apply()
-
-                // 백그라운드 GPS 추적 서비스에 정지 및 기록 신호 안전 전송
-                try {
-                    com.autologue.app.service.CarDrivingTrackingService.stopTracking(context)
-                } catch (e: Throwable) {
-                    Log.e("CarBluetoothReceiver", "CarDrivingTrackingService 정지 신호 전송 실패", e)
-                }
-
-                Log.d("CarBluetoothReceiver", "CarDrivingTrackingService에 주행 종료 및 정밀 거리 기록 위임 완료")
             }
+        } catch (t: Throwable) {
+            Log.e("CarBluetoothReceiver", "onReceive 중 예기치 못한 에러 안전 포획", t)
         }
-    } catch (t: Throwable) {
-        Log.e("CarBluetoothReceiver", "onReceive 중 예기치 못한 에러 안전 포획", t)
     }
-}
 
+    /**
+     * 최근 5분(300,000ms) 이내에 수신된 신선한 위치만 반환합니다.
+     * 수 시간~며칠 전의 오래된 LastKnownLocation을 반환하여 출발지가 엉뚱한 곳으로 찍히는 현상을 방지합니다.
+     */
     private fun getCurrentLocation(context: Context): Location? {
         return try {
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            val now = System.currentTimeMillis()
+            val maxAgeMs = 5 * 60 * 1000L // 5분 이내 위치만 허용
             var best: Location? = null
             for (p in providers) {
                 if (lm.isProviderEnabled(p)) {
                     @SuppressLint("MissingPermission")
                     val loc = lm.getLastKnownLocation(p)
-                    if (loc != null && (best == null || loc.accuracy < best.accuracy)) {
-                        best = loc
+                    if (loc != null && loc.latitude != 0.0 && loc.longitude != 0.0 && (now - loc.time) <= maxAgeMs) {
+                        if (best == null || loc.time > best.time) {
+                            best = loc
+                        }
                     }
                 }
             }

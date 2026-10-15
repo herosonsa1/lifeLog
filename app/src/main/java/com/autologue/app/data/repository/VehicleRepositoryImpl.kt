@@ -56,19 +56,20 @@ class VehicleRepositoryImpl @Inject constructor(
 
     companion object {
         val FUEL_KEYWORDS = listOf(
-            "주유", "주유소", "충전", "충전소", "셀프주유", "셀프충전", "주유타운", "에너지", "석유", "오일",
-            "GS칼텍스", "지에스칼텍스", "GS주유", "GS셀프", "GS충전", "지에스이앤알", "지에스엠비즈",
-            "SK에너지", "SK주유", "SK엔크린", "엔크린", "에스케이", "SK가스", "SK충전", "SK네트웍스",
-            "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일", "쓰오일",
-            "현대오일뱅크", "HD현대", "오일뱅크", "현대오일",
-            "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소", "농협주유", "NH-OIL", "NHOIL", "농협하나로주유",
+            "주유", "주유소", "충전소", "셀프주유", "주유셀프", "직영주유", "셀프충전", "주유타운",
+            "GS칼텍스", "지에스칼텍스", "GS주유", "GS셀프", "GS충전", "GS이엠", "지에스이엠", "지에스이앤알", "지에스엠비즈",
+            "SK에너지", "SK주유", "SK엔크린", "엔크린", "SK가스", "SK충전", "SK셀프", "SK네트웍스",
+            "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일", "S오일", "에쓰-오일", "쓰오일",
+            "현대오일뱅크", "HD현대오일뱅크", "HD현대", "오일뱅크", "현대오일", "현대셀프",
+            "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소", "농협주유", "NH주유", "NH-OIL", "NHOIL", "하나로주유", "농협하나로주유",
             "한국도로공사", "한국도로공사하", "한국도로공사상", "도로공사주유", "도로공사충전",
-            "ex-oil", "EX-OIL", "EX주유소", "ex주유소", "휴게소주유", "휴게소충전",
+            "ex-oil", "EX-OIL", "EX주유소", "ex주유소", "휴게소주유", "휴게소충전", "만남의광장주유",
             "유진주유", "광신석유", "대성산업",
-            "E1", "LPG", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전", "일렉링크", "수소충전"
+            "LPG충전", "엘피지충전", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전", "일렉링크", "수소충전"
         )
 
         fun isFuelMerchant(merchantName: String): Boolean {
+            if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(merchantName)) return false
             val upper = merchantName.uppercase().replace(" ", "")
             return FUEL_KEYWORDS.any { upper.contains(it.uppercase().replace(" ", "")) }
         }
@@ -76,6 +77,21 @@ class VehicleRepositoryImpl @Inject constructor(
 
     override suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int = withContext(Dispatchers.IO) {
         var addedCount = 0
+
+        // 0. 기존 차계부 DB에 잘못 들어간 '제목' 등 비정상 주유 로그 선제 정리
+        val initialLogs = vehicleLogDao.getAllVehicleLogsSync()
+        for (entity in initialLogs) {
+            if (entity.logType == VehicleLogType.REFUELING) {
+                val station = entity.gasStationName?.trim() ?: ""
+                val note = entity.note ?: ""
+                val isManualRefuel = note.contains("직접 등록") || note.contains("[custom_fuel:true]")
+                if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station) ||
+                    (!isManualRefuel && !isFuelMerchant(station))
+                ) {
+                    vehicleLogDao.deleteVehicleLogById(entity.id)
+                }
+            }
+        }
 
         // 1. 승인취소(amount < 0 또는 [승인취소] 태그) 거래가 있는 경우 차계부에서 해당 가승인 로그 즉시 선제 삭제
         val cancelledItems = transactions.filter { it.amount < 0 || it.transferMemo?.contains("승인취소") == true }
@@ -86,12 +102,20 @@ class VehicleRepositoryImpl @Inject constructor(
 
         val currentLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }.toMutableList()
 
-        // 2. 주유 관련 거래 필터링 (상호명뿐 아니라 원문 텍스트 내 주유 키워드까지 교차 검증)
+        // 2. 주유 관련 거래 필터링 (비결제/무효 상호명 원천 차단 및 실제 주유소 가맹점만 선별)
         val fuelTransactions = transactions.filter { tx ->
             val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
-            val isFuel = tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
+            if (!isManual && (
+                    com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName) ||
+                    com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(tx.originalText)
+                )
+            ) {
+                return@filter false
+            }
+            val isCardMsg = !isManual && com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(tx.originalText)
+            val isFuel = isManual && tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
                 isFuelMerchant(tx.merchantName) ||
-                (!isManual && isFuelMerchant(tx.originalText))
+                (!isManual && tx.merchantName in setOf("카드 가맹점", "가맹점") && isCardMsg && isFuelMerchant(tx.originalText))
             isFuel && tx.amount > 0
         }
 
@@ -100,15 +124,18 @@ class VehicleRepositoryImpl @Inject constructor(
             val txDate = tx.timestamp.toLocalDate()
             val resolvedStationName = if (tx.merchantName in listOf("카드 가맹점", "가맹점", "출금 내역", "계좌 이체", "정선우", "정*우") || tx.merchantName.isBlank()) {
                 com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)?.merchantName
+                    ?.takeIf { !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(it) && isFuelMerchant(it) }
                     ?: FUEL_KEYWORDS.firstOrNull { tx.originalText.uppercase().contains(it.uppercase()) }
-                    ?: "주유소"
+                    ?: continue
             } else {
                 tx.merchantName
             }
 
+            if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(resolvedStationName)) continue
+
             val sameDayMerchantTxs = fuelTransactions.filter {
                 it.timestamp.toLocalDate() == txDate &&
-                (it.merchantName == tx.merchantName || isFuelMerchant(it.merchantName) || isFuelMerchant(it.originalText))
+                (it.merchantName == tx.merchantName || isFuelMerchant(it.merchantName))
             }
 
             // 셀프 주유소 가승인 금액(150,000원 또는 100,000원)인데,
@@ -208,7 +235,8 @@ class VehicleRepositoryImpl @Inject constructor(
     ): Int = withContext(Dispatchers.IO) {
         val all = vehicleLogDao.getAllVehicleLogsSync()
         var modifiedCount = 0
-        val seenDates = mutableSetOf<String>()
+        val seenCommuteDates = mutableSetOf<String>()
+        val seenMinuteTimestamps = mutableSetOf<String>()
 
         val corruptedKeywords = listOf(
             "GOVERNMENT", "WARNING", "ACCORDING", "TO THE SU",
@@ -219,9 +247,29 @@ class VehicleRepositoryImpl @Inject constructor(
         for (log in all) {
             val note = log.note ?: ""
 
-            // 1. 다이어리 이동 동선(도보/대중교통 오인입) 레코드 전수 영구 삭제
+            // 0. '제목' 등 비결제 MMS 제목 컬럼 오탐으로 생성된 가짜 주유 레코드 즉시 삭제
+            if (log.logType == VehicleLogType.REFUELING) {
+                val station = log.gasStationName?.trim() ?: ""
+                val isManualRefuel = note.contains("직접 등록") || note.contains("[custom_fuel:true]")
+                if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station) ||
+                    (!isManualRefuel && !isFuelMerchant(station) && station != "주유소")
+                ) {
+                    vehicleLogDao.deleteVehicleLogById(log.id)
+                    modifiedCount++
+                    continue
+                }
+            }
+
+            // 실제 블루투스/GPS 추적 서비스가 생성한 정상 주행 기록인지 판별
+            val isRealCarTracking = note.contains("운행") ||
+                note.contains("[car_") ||
+                note.contains("블루투스") ||
+                note.contains("GPS")
+
+            // 1. 다이어리 이동 동선(도보/대중교통 오인입) 레코드 전수 영구 삭제 (단, 실제 차량 GPS/블루투스 주행 기록은 보존)
             val isDiaryMovement = note.contains("다이어리 이동 동선") ||
-                    (log.logType == VehicleLogType.TRIP_DRIVING && (note.contains("방이동") || note.contains("동작동") || note.contains("영등포동") || note.contains("잠실동")) && !note.contains("블루투스"))
+                (log.logType == VehicleLogType.TRIP_DRIVING && !isRealCarTracking &&
+                    (note.contains("방이동") || note.contains("동작동") || note.contains("영등포동") || note.contains("잠실동")))
 
             if (isDiaryMovement) {
                 vehicleLogDao.deleteVehicleLogById(log.id)
@@ -229,9 +277,11 @@ class VehicleRepositoryImpl @Inject constructor(
                 continue
             }
 
-            // 2. OCR 쓰레기 문자열이 포함된 비정상 레코드 영구 삭제
+            // 2. OCR 쓰레기 문자열이 포함된 비정상 레코드 영구 삭제 (정상 차량 추적 기록 및 '➔' 경로 포함 주행 기록은 절대 삭제하지 않음)
             val isCorrupted = corruptedKeywords.any { note.contains(it, ignoreCase = true) } ||
-                    (log.logType == VehicleLogType.TRIP_DRIVING && note.length > 30 && !note.contains("출근") && !note.contains("퇴근") && !note.contains("블루투스") && !note.contains("주행"))
+                (log.logType == VehicleLogType.TRIP_DRIVING && note.length > 30 &&
+                    !isRealCarTracking && !note.contains("➔") &&
+                    !note.contains("출근") && !note.contains("퇴근") && !note.contains("주행"))
 
             if (isCorrupted) {
                 vehicleLogDao.deleteVehicleLogById(log.id)
@@ -240,24 +290,45 @@ class VehicleRepositoryImpl @Inject constructor(
             }
 
             // 3. 비정상 시각(새벽 00시~05시 또는 대낮 비정상 시간대)에 생성된 가짜 '출퇴근 왕복' 더미 레코드 삭제
+            //    또한 저녁 시간대(17시~23시)에 GPS 추적 없이 수동/더미로 생성된 '출근 주행' 오기록 삭제
             val hour = log.timestamp.hour
-            val isUnusualCommuteTime = (hour in 0..5 || hour in 11..16) && note.contains("출퇴근 왕복")
+            val isUnusualCommuteTime = ((hour in 0..5 || hour in 11..16) && note.contains("출퇴근 왕복")) ||
+                (!isRealCarTracking && hour in 17..23 && note.startsWith("출근 주행"))
             if (isUnusualCommuteTime && log.logType == VehicleLogType.TRIP_DRIVING) {
                 vehicleLogDao.deleteVehicleLogById(log.id)
                 modifiedCount++
                 continue
             }
 
-            // 4. 동일 날짜 중복 출근/퇴근 주행 레코드 정리 (방향별 1건만 유지)
-            val directionKey = if (note.contains("출근")) "WORK" else if (note.contains("퇴근")) "HOME" else "OTHER"
-            val dateKey = "${log.timestamp.toLocalDate()}_${log.logType}_$directionKey"
-            val isCommute = note.contains("출근") || note.contains("퇴근") || note.contains("출퇴근")
-            if (dateKey in seenDates && log.logType == VehicleLogType.TRIP_DRIVING && isCommute) {
-                vehicleLogDao.deleteVehicleLogById(log.id)
-                modifiedCount++
-                continue
+            // 4. 동일 날짜 중복 출근/퇴근 주행 레코드 정리 (출근 1건, 퇴근 1건만 중복 방지하며 일반 주행은 하루 여러 건 모두 보존)
+            if (log.logType == VehicleLogType.TRIP_DRIVING) {
+                val isToWork = note.contains("출근") && !note.contains("출퇴근")
+                val isToHome = note.contains("퇴근") && !note.contains("출퇴근")
+                val isCommuteRound = note.contains("출퇴근")
+                if (isToWork || isToHome || isCommuteRound) {
+                    val directionKey = when {
+                        isToWork -> "WORK"
+                        isToHome -> "HOME"
+                        else -> "ROUND"
+                    }
+                    val dateKey = "${log.timestamp.toLocalDate()}_${log.logType}_$directionKey"
+                    if (dateKey in seenCommuteDates) {
+                        vehicleLogDao.deleteVehicleLogById(log.id)
+                        modifiedCount++
+                        continue
+                    }
+                    seenCommuteDates.add(dateKey)
+                } else {
+                    // 일반 주행은 정확히 같은 분(minute) + 같은 거리로 중복 삽입된 경우만 제거하고 하루 다회 주행은 모두 보존
+                    val minuteKey = "${log.timestamp.withSecond(0).withNano(0)}_${log.tripDistanceKm}"
+                    if (minuteKey in seenMinuteTimestamps) {
+                        vehicleLogDao.deleteVehicleLogById(log.id)
+                        modifiedCount++
+                        continue
+                    }
+                    seenMinuteTimestamps.add(minuteKey)
+                }
             }
-            seenDates.add(dateKey)
 
             // 5. 과거 '출퇴근 왕복'으로 잘못 묶여 있던 레코드를 실제 출근 편도로 정상화
             if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근 왕복")) {
@@ -272,29 +343,17 @@ class VehicleRepositoryImpl @Inject constructor(
 
             // 6. "출발지 ➔ 도착지" 또는 0.0km로 기록된 오염 주행 로그 자가 치유(Self-Healing)
             if (log.logType == VehicleLogType.TRIP_DRIVING) {
+                if ((note.contains("출발지 ➔ 도착지") || note == "차량 주행 기록") && log.tripDistanceKm <= 0.0) {
+                    vehicleLogDao.deleteVehicleLogById(log.id)
+                    modifiedCount++
+                    continue
+                }
+
                 var needsUpdate = false
                 var healedDistance = log.tripDistanceKm
                 var healedNote = note
 
-                // 6-1. 지명이 "출발지 ➔ 도착지" 또는 "출발지"가 포함된 경우 정상 지명으로 복원
-                if (healedNote.contains("출발지 ➔ 도착지") || healedNote.contains("출발지") || healedNote.contains("도착지")) {
-                    healedNote = if (homeName.isNotBlank() && companyName.isNotBlank()) {
-                        val h = log.timestamp.hour
-                        if (h in 6..12) "출근 주행 ($homeName ➔ $companyName)"
-                        else if (h in 17..23) "퇴근 주행 ($companyName ➔ $homeName)"
-                        else "$homeName 인근 주행"
-                    } else {
-                        "차량 주행 기록"
-                    }
-                    needsUpdate = true
-                } else if (healedNote.contains(" ➔ ") && healedNote.split(" ➔ ").let { it.size == 2 && it[0].trim() == it[1].trim() }) {
-                    // 동일 지점 반복("영등포로 254 ➔ 영등포로 254") -> "영등포로 254 주변 주행"
-                    val place = healedNote.split(" ➔ ")[0].trim().substringBefore("(").trim()
-                    healedNote = "$place 주변 주행"
-                    needsUpdate = true
-                }
-
-                // 6-2. 주행거리가 0.0km 이하인 경우 운행 시간 기반 합리적 추정 거리로 복원
+                // 주행거리가 0.0km 이하인 경우 운행 시간 기반 합리적 추정 거리로 복원
                 if (healedDistance <= 0.0) {
                     val minMatch = Regex("(\\d+)\\s*분").find(note)
                     val durationMin = minMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: 10.0

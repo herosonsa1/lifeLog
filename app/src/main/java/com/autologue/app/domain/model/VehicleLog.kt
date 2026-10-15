@@ -88,6 +88,24 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
         return routeBracketMatch.groupValues[1].trim()
     }
 
+    // 1-1. 차량/단가 시스템 태그를 제외한 경로/주행 대괄호 타이틀 (예: "[서울 송파구 잠실동 주변 주행 (5.2 km)]")
+    val allBrackets = Regex("\\[([^\\]]+)\\]").findAll(n)
+    for (match in allBrackets) {
+        val inside = match.groupValues[1].trim()
+        val isSystemTag = inside.startsWith("car_") ||
+            inside.startsWith("차량 ") ||
+            inside.startsWith("unit_price") ||
+            inside.startsWith("custom_fuel")
+        val hasRouteKeyword = inside.contains("➔") ||
+            inside.contains("주행") ||
+            inside.contains("출발") ||
+            inside.contains("도착") ||
+            inside.contains("km", ignoreCase = true)
+        if (!isSystemTag && hasRouteKeyword && inside.isNotBlank()) {
+            return inside
+        }
+    }
+
     // 2. 괄호 없는 "출발지 ➔ 도착지" 패턴 검색
     val arrowMatch = Regex("([^(\\[]+➔[^)\\]]+)").find(n)
     if (arrowMatch != null) {

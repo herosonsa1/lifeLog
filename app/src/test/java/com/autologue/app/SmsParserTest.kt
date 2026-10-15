@@ -363,4 +363,44 @@ class SmsParserTest {
         assertEquals(ExpenseCategory.FUEL, txResult.transaction.category)
         assertEquals(com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD, txResult.transaction.paymentMethod)
     }
+
+    @Test
+    fun parseMmsSubjectPrefixAndNonPaymentStockNews_rejectsFakeJemokAndExtractsRealMerchant() {
+        // 1. 삼성 메시지 통합 테이블에서 sub="제목"과 결합된 비결제 주식/시황 문자 -> null 반환 (가짜 '제목' 주유 기록 원천 차단)
+        val stockSmsWithJemok = """
+            제목
+            [Web발신]
+            (광고) 오늘의 증시 시황 안내
+            SK이노베이션 목표주가 120,000원 상향
+            에쓰오일 매수 추천 30,000원
+            무료거부 080-1234-5678
+        """.trimIndent()
+        val fakeTx1 = SmsParser.parse("02-1234-5678", stockSmsWithJemok)
+        assertEquals(null, fakeTx1)
+
+        // 2. 충전 포인트/이벤트 안내 문자 -> null 반환
+        val pointEventWithJemok = """
+            제목
+            [안내] 포인트 충전 완료 30,000원 쿠폰 지급 안내
+        """.trimIndent()
+        val fakeTx2 = SmsParser.parse("1588-0000", pointEventWithJemok)
+        assertEquals(null, fakeTx2)
+
+        // 3. 실제 카드 승인 문자 앞에 MMS "제목" 줄이 붙어 있는 경우 -> "제목"을 제거하고 실제 주유소("GS칼텍스 잠실주유소")만 정확히 추출
+        val realCardWithJemok = """
+            제목
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            65,000원 일시불
+            10/15 18:10
+            GS칼텍스 잠실주유소
+            총누적1,250,000원
+        """.trimIndent()
+        val realTx = SmsParser.parse("1588-1600", realCardWithJemok)
+        assertNotNull(realTx)
+        assertEquals(65000L, realTx?.amount)
+        assertEquals("GS칼텍스 잠실주유소", realTx?.merchantName)
+        assertEquals(ExpenseCategory.FUEL, realTx?.category)
+    }
 }

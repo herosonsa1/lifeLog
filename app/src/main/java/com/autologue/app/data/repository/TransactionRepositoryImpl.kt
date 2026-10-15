@@ -89,10 +89,36 @@ class TransactionRepositoryImpl @Inject constructor(
         val all = transactionDao.getAllTransactionsSync()
         val toDeleteIds = mutableSetOf<Long>()
 
-        // 1. 기존 DB 내 오분류된 카드 승인 및 주유 내역 자가 치유 (Self-Healing)
+        // 1. 기존 DB 내 오분류된 카드 승인, 비결제 스팸/시황 문자('제목' 등), 주유 내역 자가 치유 (Self-Healing)
         for (tx in all) {
             val raw = tx.originalText
             val isManual = raw.startsWith("[직접 입력]") || raw.startsWith("[차계부 직접 입력]")
+
+            // 1-1. 비결제 문자(주식 시황, 광고, 뉴스 등) 또는 '제목' 오탐 레코드 정리
+            if (!isManual && (
+                    com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(raw) ||
+                    com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName)
+                )
+            ) {
+                val reparsed = com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
+                    ?: com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
+                if (reparsed != null && !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(reparsed.merchantName)) {
+                    val healed = tx.copy(
+                        amount = reparsed.amount,
+                        merchantName = reparsed.merchantName,
+                        paymentMethod = reparsed.paymentMethod,
+                        category = reparsed.category,
+                        cardOrBankName = reparsed.cardOrBankName ?: tx.cardOrBankName,
+                        transferMemo = reparsed.transferMemo,
+                        isAutoCategorized = true
+                    )
+                    transactionDao.updateTransaction(healed)
+                } else {
+                    toDeleteIds.add(tx.id)
+                }
+                continue
+            }
+
             val isCardMsg = !isManual && com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(raw)
 
             if (isCardMsg && (
@@ -119,11 +145,16 @@ class TransactionRepositoryImpl @Inject constructor(
                 }
             }
 
-            // 주유 키워드가 상호명 또는 원문에 포함된 거래가 주유 외 카테고리로 잘못 분류된 경우 복원
+            // 주유 키워드가 상호명에 포함된 거래가 주유 외 카테고리로 잘못 분류된 경우 복원 (반대로 주유소가 아닌데 주유로 오분류된 경우 정상 카테고리로 복원)
             val isFuel = VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
-                (!isManual && VehicleRepositoryImpl.isFuelMerchant(raw))
+                (!isManual && tx.merchantName in setOf("카드 가맹점", "가맹점") && isCardMsg && VehicleRepositoryImpl.isFuelMerchant(raw))
             if (isFuel && tx.category != ExpenseCategory.FUEL) {
                 val healedCategory = tx.copy(category = ExpenseCategory.FUEL, isAutoCategorized = true)
+                transactionDao.updateTransaction(healedCategory)
+                continue
+            } else if (!isManual && !isFuel && tx.category == ExpenseCategory.FUEL) {
+                val recalcCategory = com.autologue.app.data.parser.RuleMatcherEngine.classifyMerchant(tx.merchantName, originalText = raw)
+                val healedCategory = tx.copy(category = recalcCategory, isAutoCategorized = true)
                 transactionDao.updateTransaction(healedCategory)
                 continue
             }

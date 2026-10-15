@@ -1,4 +1,4 @@
-﻿package com.autologue.app
+package com.autologue.app
 
 import com.autologue.app.data.local.db.dao.VehicleLogDao
 import com.autologue.app.data.local.entity.VehicleLogEntity
@@ -151,6 +151,79 @@ class VehicleRepositoryCommuteTest {
 
         assertTrue("정품 주유 기록은 보존되어야 함", remainingIds.contains(5L))
         assertTrue("정상 출근 편도 기록은 보존되어야 함", remainingIds.contains(6L))
+    }
+
+    @Test
+    fun cleanDuplicatesAndCorruptedLogs_preservesRealGpsDrivingLogsAndPurgesJemokFuel() = runBlocking {
+        // 1. 일반 GPS 추적 주행 기록 1 (오전 이동) -> 절대 삭제되면 안 됨
+        fakeDao.insertVehicleLog(
+            createLogEntity(
+                id = 10L,
+                timestamp = LocalDateTime.of(2026, 10, 15, 11, 20),
+                logType = VehicleLogType.TRIP_DRIVING,
+                tripDistanceKm = 14.3,
+                note = "[car_1: 벤츠] [서울 송파구 방이동 (위례성대로) ➔ 서울 강남구 역삼동 (테헤란로) (14.3 km)] (32분 운행 · GPS 11개 지점)"
+            )
+        )
+
+        // 2. 같은 날 일반 GPS 추적 주행 기록 2 (오후 이동) -> 하루 다회 일반 주행도 모두 보존되어야 함
+        fakeDao.insertVehicleLog(
+            createLogEntity(
+                id = 11L,
+                timestamp = LocalDateTime.of(2026, 10, 15, 15, 45),
+                logType = VehicleLogType.TRIP_DRIVING,
+                tripDistanceKm = 9.8,
+                note = "[car_1: 벤츠] [서울 강남구 역삼동 (테헤란로) ➔ 경기 성남시 분당구 판교역로 (9.8 km)] (24분 운행 · GPS 8개 지점)"
+            )
+        )
+
+        // 3. 가짜 "제목" 오염 주유 기록 -> 즉시 자동 삭제되어야 함
+        fakeDao.insertVehicleLog(
+            createLogEntity(
+                id = 12L,
+                timestamp = LocalDateTime.of(2026, 9, 25, 12, 0),
+                logType = VehicleLogType.REFUELING,
+                fuelCost = 30000L,
+                fuelAmountLiters = 18.2,
+                gasStationName = "제목",
+                note = "가계부 결제 내역 자동 분석 (신용카드)"
+            )
+        )
+
+        repository.cleanDuplicatesAndCorruptedLogs(
+            homeName = "우리집",
+            companyName = "회사",
+            commuteDistanceKm = 25.0
+        )
+
+        val remainingIds = fakeDao.logs.map { it.id }
+        assertTrue("오전 일반 GPS 주행 기록은 보존되어야 함", remainingIds.contains(10L))
+        assertTrue("오후 일반 GPS 주행 기록도 보존되어야 함", remainingIds.contains(11L))
+        assertFalse("가짜 '제목' 주유 기록은 삭제되어야 함", remainingIds.contains(12L))
+    }
+
+    @Test
+    fun fuelEconomyCalculator_usesVehicleConfiguredGasPriceDynamically() {
+        // 초기 동기화 시 1,650원/L로 18.2L가 저장된 자동 수집 주유 내역이라도,
+        // 벤츠 차량 설정 유가가 1,850원/L이면 30,000 / 1,850 = 16.2L로 동적 환산되어야 함
+        val autoSyncedFuelLog = com.autologue.app.domain.model.VehicleLog(
+            id = 100L,
+            timestamp = LocalDateTime.of(2026, 9, 25, 18, 0),
+            logType = VehicleLogType.REFUELING,
+            fuelCost = 30000L,
+            fuelAmountLiters = 18.2, // 과거 1,650원 기준 저장값
+            gasStationName = "지에스칼텍스",
+            note = "[car_1: 벤츠] 가계부 결제 내역 자동 분석 (신용카드)"
+        )
+
+        val result = com.autologue.app.util.FuelEconomyCalculator.calculateForVehicle(
+            targetVehicleId = "car_1",
+            allLogs = listOf(autoSyncedFuelLog),
+            gasPrice = 1850.0
+        )
+
+        assertEquals(1, result.enrichedFuelLogs.size)
+        assertEquals(16.2, result.enrichedFuelLogs.first().fuelAmountLiters, 0.01)
     }
 
     private class FakeVehicleLogDao : VehicleLogDao {

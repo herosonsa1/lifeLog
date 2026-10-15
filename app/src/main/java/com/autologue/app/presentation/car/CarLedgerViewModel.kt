@@ -150,9 +150,10 @@ class CarLedgerViewModel @Inject constructor(
             combine(
                 vehicleRepository.getAllVehicleLogsFlow(),
                 diaryRepository.getDiaryEntriesFlow(),
-                multiVehiclePreferences.selectedVehicleId
-            ) { logs, diaryEntries, selectedId ->
-                val vehicleProfile = _uiState.value.vehicles.find { it.id == selectedId }
+                multiVehiclePreferences.selectedVehicleId,
+                multiVehiclePreferences.vehicles
+            ) { logs, diaryEntries, selectedId, vehicleList ->
+                val vehicleProfile = vehicleList.find { it.id == selectedId }
                 val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
                 val targetGasPrice = vehicleProfile?.defaultGasPrice ?: 1650.0
 

@@ -150,11 +150,12 @@ object FuelEconomyCalculator {
         val enrichedList = mutableListOf<VehicleLog>()
 
         for (currentFuel in vehicleFuelLogs) {
+            val isCustom = currentFuel.isCustomFuel()
             val detail = calculateFuelDetailHybrid(
                 fuelCost = currentFuel.fuelCost,
-                explicitLiters = currentFuel.fuelAmountLiters,
+                explicitLiters = if (isCustom) currentFuel.fuelAmountLiters else 0.0,
                 explicitUnitPrice = currentFuel.getExplicitUnitPrice(),
-                isCustom = currentFuel.isCustomFuel(),
+                isCustom = isCustom,
                 defaultGasPrice = gasPrice
             )
             val liters = detail.liters

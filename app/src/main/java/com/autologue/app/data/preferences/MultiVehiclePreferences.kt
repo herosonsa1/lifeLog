@@ -103,11 +103,41 @@ class MultiVehiclePreferences @Inject constructor(
 
     fun findVehicleByBluetooth(deviceName: String): VehicleProfile? {
         if (deviceName.isBlank()) return null
-        return _vehicles.value.firstOrNull {
+        val list = _vehicles.value
+
+        // 1순위: 사용자가 직접 입력한 블루투스 기기명과 직접 포함 관계 매칭
+        val directMatch = list.firstOrNull {
             it.bluetoothDevice.isNotBlank() && (
                 deviceName.contains(it.bluetoothDevice, ignoreCase = true) ||
                 it.bluetoothDevice.contains(deviceName, ignoreCase = true)
             )
         }
+        if (directMatch != null) return directMatch
+
+        // 2순위: 차량 이름(예: "벤츠", "볼보") 또는 블루투스 설정값과 인포테인먼트 표준 영문/국문 별칭 교차 매칭
+        val brandAliasGroups = listOf(
+            listOf("벤츠", "benz", "mercedes", "mb bluetooth", "mbux", "mb ", "amg", "glc", "gle", "gls", "e-class", "s-class", "c-class"),
+            listOf("볼보", "volvo", "my volvo", "xc40", "xc60", "xc90", "s60", "s90", "v60", "v90", "polestar", "폴스타"),
+            listOf("제네시스", "genesis", "g70", "g80", "g90", "gv60", "gv70", "gv80"),
+            listOf("현대", "hyundai", "grandeur", "그랜저", "santafe", "싼타페", "palisade", "팰리세이드", "sonata", "쏘나타", "avante", "아반떼", "tucson", "투싼", "ioniq", "아이오닉"),
+            listOf("기아", "kia", "sorento", "쏘렌토", "carnival", "카니발", "sportage", "스포티지", "k3", "k5", "k7", "k8", "k9", "ev6", "ev9"),
+            listOf("bmw", "비엠", "320", "520", "530", "x3", "x5", "x7"),
+            listOf("아우디", "audi", "a4", "a6", "a7", "a8", "q5", "q7", "q8"),
+            listOf("테슬라", "tesla", "model 3", "model y", "model s", "model x"),
+            listOf("포르쉐", "porsche", "카이엔", "cayenne", "파나메라", "타이칸")
+        )
+
+        val lowerDevice = deviceName.lowercase()
+        for (aliases in brandAliasGroups) {
+            if (aliases.any { lowerDevice.contains(it) }) {
+                val matchedByBrand = list.firstOrNull { profile ->
+                    val profileText = "${profile.name} ${profile.bluetoothDevice}".lowercase()
+                    aliases.any { alias -> profileText.contains(alias) }
+                }
+                if (matchedByBrand != null) return matchedByBrand
+            }
+        }
+
+        return null
     }
 }
