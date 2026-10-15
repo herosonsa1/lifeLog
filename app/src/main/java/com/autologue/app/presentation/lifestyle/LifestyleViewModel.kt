@@ -31,6 +31,14 @@ class LifestyleViewModel @Inject constructor(
     private val _syncProgress = MutableStateFlow<SyncProgress?>(null)
     val syncProgress: StateFlow<SyncProgress?> = _syncProgress.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            syncHistoricalDataUseCase.syncState.collect { progress ->
+                _syncProgress.value = if (progress == null || progress.isDone || !progress.isRunning) null else progress
+            }
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val metrics: StateFlow<LifestyleMetrics> = _selectedPeriod
         .flatMapLatest { period ->
@@ -47,10 +55,6 @@ class LifestyleViewModel @Inject constructor(
     }
 
     fun syncFromDevice(context: Context, daysBack: Int? = 30) {
-        viewModelScope.launch {
-            syncHistoricalDataUseCase(context, daysBack).collect { progress ->
-                _syncProgress.value = if (progress.isDone) null else progress
-            }
-        }
+        syncHistoricalDataUseCase.startAutoSync(context, daysBack = daysBack ?: 30, force = true)
     }
 }

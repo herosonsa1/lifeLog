@@ -31,7 +31,19 @@ data class GolfLockerSlipResult(
 class GolfLockerSlipOcrAnalyzer @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: Context
 ) {
-    private val recognizer by lazy { TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build()) }
+    @Volatile
+    private var recognizerInstance: com.google.mlkit.vision.text.TextRecognizer? = null
+    private val recognizerLock = Any()
+
+    private fun getRecognizer(): com.google.mlkit.vision.text.TextRecognizer {
+        recognizerInstance?.let { return it }
+        synchronized(recognizerLock) {
+            recognizerInstance?.let { return it }
+            return TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build()).also {
+                recognizerInstance = it
+            }
+        }
+    }
 
     /**
      * 실제 스마트폰 카메라 고해상도(12~50MP) 사진 로딩 시
@@ -82,11 +94,24 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
             } else {
                 InputImage.fromFilePath(context, imageUri)
             }
-            val visionText = recognizer.process(image).await()
+            val visionText = kotlinx.coroutines.withTimeoutOrNull(3500L) {
+                getRecognizer().process(image).await()
+            } ?: return@withContext GolfLockerSlipResult(
+                isLockerSlip = false,
+                clubName = "일반 사진",
+                lockerNumber = null,
+                teeOffTime = null,
+                courseName = null,
+                date = fallbackDate ?: LocalDate.now(),
+                playerName = null,
+                gender = null,
+                rawText = "OCR 타임아웃 스킵"
+            )
             val raw = visionText.text
 
             parseLockerSlipText(raw, fallbackDate)
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             // OutOfMemoryError 및 C++ Native 예외를 포괄하는 Throwable 안전망
             GolfLockerSlipResult(
                 isLockerSlip = false,
@@ -106,11 +131,12 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
 
     /**
      * [M-03] ML Kit TextRecognizer 네이티브 리소스 명시적 해제.
-     * @Singleton이므로 앱 수명 동안 점유하지만, 필요 시 명시적으로 해제할 수 있는 경로 제공.
-     * GolfViewModel.onCleared() 또는 앱 종료 시 호출 가능.
      */
     fun close() {
-        runCatching { recognizer.close() }
+        synchronized(recognizerLock) {
+            runCatching { recognizerInstance?.close() }
+            recognizerInstance = null
+        }
     }
 
     fun parseLockerSlipText(raw: String, fallbackDate: LocalDate? = null): GolfLockerSlipResult {

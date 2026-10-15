@@ -2521,3 +2521,38 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 총 98개 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`).
 - **최종 APK 빌드**: `.\gradlew.bat assembleDebug`를 통해 `app/build/outputs/apk/debug/lifeLog.apk` 및 루트 `lifeLog.apk` 최신 빌드 완료.
 
+---
+
+## 68. 앱 전역 백그라운드 동기화 엔진(`@Singleton` Application Scope) 구축 및 메뉴 이동 시 '동기화 중' 무한 고착 버그 해결 (2026-10-15)
+
+- **일시**: 2026-10-15
+- **사용자 제보 및 배경**:
+  - "일정기록 동기화가 벡그라운드에서는 안되나? 동기화중에 메뉴를 이동했던 최종 완료되지 않고, 계속해서 동기화 중으로 표기돼"
+
+### 68.1. 근본 원인(Root Cause) 정밀 진단
+1. **[원인 1] 동기화 코루틴이 화면 `ViewModel` 및 Cold `channelFlow`에 종속되어 메뉴 이동 시 상태 단절/충돌 발생**:
+   - 기존 [`SyncHistoricalDataUseCase`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/sync/SyncHistoricalDataUseCase.kt)는 `@Singleton`이 아닌 Cold `channelFlow`였으며, [`DiaryViewModel`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryViewModel.kt)과 [`LifestyleViewModel`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/lifestyle/LifestyleViewModel.kt) 각각의 `viewModelScope` 내부에서 개별 수집됨.
+   - 특히 자동 동기화(`autoSyncRecentWeek`)가 진행 중일 때 수동 동기화(`executeManualSync`)가 실행되거나 화면 재진입 시 `isAutoSyncing` 플래그가 해제되지 않고, `DiaryViewModel.updateFilteredEntries()`(`Dispatchers.Default`)가 비원자적 `_uiState.value = current.copy(...)`로 과거 스냅샷(`isAutoSyncing = true`)을 덮어쓰는 멀티스레드 경쟁 조건(Race Condition)이 발생함.
+2. **[원인 2] 골프 메뉴 이동 후 복귀 시 `GolfViewModel.onCleared()`가 앱 전역 싱글톤 OCR 엔진을 강제 종료(`close()`)**:
+   - 동기화 도중 사용자가 하단 `골프` 탭으로 이동했다가 다른 메뉴로 이동할 때 `GolfViewModel.onCleared()`가 호출되면서 `@Singleton`인 [`ScorecardOcrAnalyzer`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/ocr/ScorecardOcrAnalyzer.kt)의 단일 `by lazy` ML Kit `TextRecognizer`에 대해 `close()`를 호출함.
+   - 이로 인해 백그라운드 동기화 중이던 `autoProcessGolfMediaUseCase.processBatchCandidates()`의 ML Kit `recognizer.process(image).await()`가 닫힌 엔진에서 무한 대기(Hang)하거나 중단됨.
+3. **[원인 3] 개별 사진 OCR / 역지오코딩 호출에 타임아웃 및 중복 스킵 캐시 부재**:
+   - `ScorecardOcrAnalyzer`의 `quickProbeText` / `analyzeScorecard`에 코루틴 타임아웃(`withTimeoutOrNull`)이 없었고, 이미 검사하여 골프와 무관함이 확인된 일반 갤러리 사진(최대 300장)도 매 동기화마다 처음부터 2048px 비트맵 디코딩 및 OCR을 반복 수행함.
+   - 또한 `PlaceResolver.fetchNominatimReverseGeocode`가 오프라인/지연 상황에서 사진마다 5초씩 네트워크 대기를 누적시킴.
+4. **[원인 4] 빠른 작업 FAB(`UnifiedSpeedDialFab`) 메뉴 이동 시 백스택 옵션 누락**:
+   - 하단 탭바(`AppNavigation.kt`)와 달리 [`UnifiedSpeedDialFab`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/UnifiedSpeedDialFab.kt)은 `popUpTo / saveState / launchSingleTop / restoreState` 없이 단순 `navController.navigate(route)`를 호출하여 중복 `NavBackStackEntry`와 신규 `DiaryViewModel`을 생성함.
+
+### 68.2. 주요 해결 및 아키텍처 개선 내역
+1. **앱 전역 백그라운드 동기화 매니저(`@Singleton SyncHistoricalDataUseCase`) 구축**:
+   - [`SyncHistoricalDataUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/sync/SyncHistoricalDataUseCase.kt)를 `@Singleton`으로 격상하고 내부 전용 백그라운드 스코프(`CoroutineScope(SupervisorJob() + Dispatchers.IO)`)와 원자적 세션 번호(`AtomicLong`), 전역 상태 스트림(`syncState: StateFlow<SyncProgress?>`, `isManualSyncDialogVisible: StateFlow<Boolean>`)을 탑재.
+   - 동기화 중 어떤 메뉴(가계부, 차계부, 골프, 라이프)로 이동하더라도 백그라운드에서 멈춤 없이 끝까지 수행되며, 각 단계별 안전 타임아웃(`withTimeoutOrNull`)과 `finally (withContext(NonCancellable))` 블록을 통해 **100% 확률로 `isRunning = false, isDone = true` 완료 상태에 도달**하도록 보장.
+   - 동기화 중 다이얼로그에서 **`[백그라운드 전환]`** 버튼을 눌러 팝업을 닫고 다른 메뉴를 자유롭게 탐색할 수 있도록 UX 개선.
+2. **ML Kit OCR 자가 복구(`getRecognizer()`) 및 타임아웃·캐시 최적화**:
+   - [`GolfViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/golf/GolfViewModel.kt): `onCleared()`에서 공유 싱글톤 `scorecardOcrAnalyzer.close()` 호출을 제거.
+   - [`ScorecardOcrAnalyzer.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/ocr/ScorecardOcrAnalyzer.kt) & [`GolfLockerSlipOcrAnalyzer.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/ocr/GolfLockerSlipOcrAnalyzer.kt): 닫히더라도 즉시 재생성되는 `getRecognizer()` 구조로 전환하고 모든 `process(image).await()`에 `withTimeoutOrNull(3500L~4500L)` 적용.
+   - [`AutoProcessGolfMediaUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/golf/AutoProcessGolfMediaUseCase.kt): 비-골프 사진 URI 캐시(`nonGolfCheckedUris`) 및 기등록 18홀 라운드 사진 스킵, 사진당 5초 타임아웃을 적용하여 재동기화 시 0ms 즉시 패스 구현.
+   - [`PlaceResolver.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/PlaceResolver.kt): Nominatim 역지오코딩 폴백에 1.5초 타임아웃 및 실패 시 60초 서킷 브레이커 쿨다운 적용.
+3. **`DiaryViewModel` 원자적 상태 갱신(`_uiState.update`) 및 `UnifiedSpeedDialFab` 네비게이션 정규화**:
+   - [`DiaryViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryViewModel.kt) 및 [`LifestyleViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/lifestyle/LifestyleViewModel.kt)가 `syncHistoricalDataUseCase.syncState`를 직접 구독하도록 변경하고, 모든 상태 갱신을 CAS 기반 `_uiState.update { ... }`로 통일하여 완료 상태가 덮어씌워지는 현상을 원천 제거.
+   - [`UnifiedSpeedDialFab.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/UnifiedSpeedDialFab.kt)에 `popUpTo(findStartDestination().id) { saveState = true }`, `launchSingleTop = true`, `restoreState = true`를 적용.
+

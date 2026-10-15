@@ -47,7 +47,19 @@ class ScorecardOcrAnalyzer @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
 
-    private val recognizer by lazy { TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build()) }
+    @Volatile
+    private var recognizerInstance: com.google.mlkit.vision.text.TextRecognizer? = null
+    private val recognizerLock = Any()
+
+    private fun getRecognizer(): com.google.mlkit.vision.text.TextRecognizer {
+        recognizerInstance?.let { return it }
+        synchronized(recognizerLock) {
+            recognizerInstance?.let { return it }
+            return TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build()).also {
+                recognizerInstance = it
+            }
+        }
+    }
 
     /**
      * [C-01] 안전 비트맵 다운샘플링 (최대 maxDimension px).
@@ -458,7 +470,12 @@ class ScorecardOcrAnalyzer @Inject constructor(
             } else {
                 InputImage.fromFilePath(context, imageUri)
             }
-            val visionText = recognizer.process(image).await()
+            val visionText = kotlinx.coroutines.withTimeoutOrNull(3500L) {
+                getRecognizer().process(image).await()
+            } ?: run {
+                android.util.Log.w("ScorecardOcrAnalyzer", "quickProbeText 타임아웃 건너뜀 ($imageUri)")
+                return@withContext ""
+            }
             val text = visionText.text
             if (hasMedicalOrReceiptNegative(text)) {
                 android.util.Log.d("ScorecardOcrAnalyzer", "quickProbeText 의료/영수증 네거티브 감지로 차단 ($imageUri)")
@@ -469,6 +486,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
             text
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             android.util.Log.w("ScorecardOcrAnalyzer", "quickProbeText 실패 ($imageUri): ${t.message}", t)
             ""
         } finally {
@@ -485,7 +503,12 @@ class ScorecardOcrAnalyzer @Inject constructor(
             } else {
                 InputImage.fromFilePath(context, imageUri)
             }
-            val visionText = recognizer.process(image).await()
+            val visionText = kotlinx.coroutines.withTimeoutOrNull(4500L) {
+                getRecognizer().process(image).await()
+            } ?: run {
+                android.util.Log.w("ScorecardOcrAnalyzer", "analyzeScorecard 타임아웃 건너뜀 ($imageUri)")
+                return@withContext createEmptyResult("")
+            }
             val raw = visionText.text
             if (hasMedicalOrReceiptNegative(raw)) {
                 android.util.Log.d("ScorecardOcrAnalyzer", "analyzeScorecard 의료/영수증 감지로 즉시 차단 ($imageUri)")
@@ -517,6 +540,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
             merged.copy(playDate = verifiedDate)
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             ScorecardOcrResult(
                 totalScore = null,
                 totalPutts = null,
@@ -541,7 +565,10 @@ class ScorecardOcrAnalyzer @Inject constructor(
     }
 
     fun close() {
-        runCatching { recognizer.close() }
+        synchronized(recognizerLock) {
+            runCatching { recognizerInstance?.close() }
+            recognizerInstance = null
+        }
     }
 
     companion object {

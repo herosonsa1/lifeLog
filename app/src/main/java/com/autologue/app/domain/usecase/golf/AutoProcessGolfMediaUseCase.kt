@@ -7,6 +7,7 @@ import com.autologue.app.data.sync.ScannedPhoto
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.repository.GolfRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import javax.inject.Inject
@@ -89,6 +90,9 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
         val GOLF_FINGERPRINTS = GOLF_CORE_KEYWORDS + GOLF_AUXILIARY_KEYWORDS
     }
 
+    // 이미 OCR 프로브를 수행하여 비-골프(또는 의료/영수증)로 확인된 사진 URI 메모리 캐시 (재동기화 시 0ms 패스)
+    private val nonGolfCheckedUris = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /**
      * 후보 사진 목록(스크린샷 및 갤러리 사진)을 2단계 고속 지문 OCR 엔진(Two-Stage Fast Fingerprint OCR Pipeline)으로 처리합니다.
      * Stage 1: 2048px 가독 비트맵으로 ML Kit 텍스트 인식만 수행하여 골프 지문이 없는 비-골프 사진은 0.08초 만에 즉시 패스.
@@ -104,89 +108,109 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
         if (photos.isEmpty()) return@withContext 0
 
         val processedRounds = mutableSetOf<Long>()
-        val maxBatchSize = 300
+        val maxBatchSize = 200
         val targetPhotos = photos.take(maxBatchSize)
+
+        val existingRegisteredUris = runCatching {
+            golfRepository.getAllGolfRoundsList()
+                .filter { (it.totalScore ?: 0) >= 54 && it.holeScores.size >= 14 }
+                .flatMap { listOfNotNull(it.scorecardPhotoUri) + it.matchingPhotoUris }
+                .toSet()
+        }.getOrDefault(emptySet())
 
         android.util.Log.d("AutoProcessGolfMedia", "골프 미디어 고속 2-Stage 일괄 분석 시작: 총 ${targetPhotos.size}장 대상")
 
         for ((idx, photo) in targetPhotos.withIndex()) {
+            ensureActive()
             val currentIdx = idx + 1
             runCatching { onProgress?.invoke(currentIdx, targetPhotos.size, processedRounds.size) }
 
             if (photo.uri.isBlank()) continue
+            if (photo.uri in nonGolfCheckedUris || photo.uri in existingRegisteredUris) {
+                continue
+            }
+
             val uri = runCatching { Uri.parse(photo.uri) }.getOrNull() ?: continue
             val photoDate = photo.time.toLocalDate()
 
             try {
-                // [Stage 1: Fast Fingerprint Probe - ~80ms]
-                // 폰트가 뭉개지지 않도록 maxDimension=2048로 선명하게 ML Kit 텍스트만 신속 추출하여 골프 지문 1차 검사
-                val probeText = scorecardOcrAnalyzer.quickProbeText(uri, maxDimension = 2048)
-                if (probeText.isBlank() || ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(probeText)) {
-                    if (probeText.isNotBlank()) {
-                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 의료/영수증 지문 감지로 즉시 제외 ($uri)")
+                kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                    // [Stage 1: Fast Fingerprint Probe - ~80ms]
+                    // 폰트가 뭉개지지 않도록 maxDimension=2048로 선명하게 ML Kit 텍스트만 신속 추출하여 골프 지문 1차 검사
+                    val probeText = scorecardOcrAnalyzer.quickProbeText(uri, maxDimension = 2048)
+                    if (probeText.isBlank() || ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(probeText)) {
+                        if (probeText.isNotBlank()) {
+                            nonGolfCheckedUris.add(photo.uri)
+                            android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 의료/영수증 지문 감지로 즉시 제외 ($uri)")
+                        } else {
+                            android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 텍스트 없음/디코딩 실패 건너뜀 ($uri)")
+                        }
+                        return@withTimeoutOrNull
+                    }
+
+                    val probeUpper = probeText.uppercase()
+                    val matchedProbeKeywords = GOLF_FINGERPRINTS.filter { probeUpper.contains(it) }
+
+                    // 골프 지문이 단 1개도 없는 일반 사진은 캐시에 기록 후 즉시 패스 (전체 시간 90% 이상 절약)
+                    if (matchedProbeKeywords.isEmpty()) {
+                        nonGolfCheckedUris.add(photo.uri)
+                        return@withTimeoutOrNull
+                    }
+
+                    android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] ⛳ 골프 지문 감지: $matchedProbeKeywords ($uri)")
+
+                    // [Stage 2: Deep Analysis - 골프 지문 감지된 사진만 정밀 분석]
+                    // 2560px 2D 공간 그리드 복원 및 18홀 정밀 파싱
+                    val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri, photoDate)
+                    val rawText = scorecardResult.recognizedRawText.ifBlank { probeText }
+                    if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(rawText)) {
+                        nonGolfCheckedUris.add(photo.uri)
+                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] Deep Analysis 중 의료/영수증 지문 감지로 배제 ($uri)")
+                        return@withTimeoutOrNull
+                    }
+                    val rawUpper = rawText.uppercase()
+
+                    // A. 스코어카드 검증 (18홀 완전 스코어카드 필수 가드레일)
+                    // 9홀 불완전 조각(42타, 50타 등) 및 타수 없는 사진의 단독 등록 원천 차단
+                    val matchedCore = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
+                    val hasValidGolfKeywords = matchedCore.isNotEmpty()
+                    val hasValid18Holes = scorecardResult.holeScores.size >= 14
+                    val hasValid18TotalScore = scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144
+                    val isValidScorecard = hasValidGolfKeywords && (hasValid18TotalScore || hasValid18Holes)
+
+                    // B. 라커룸 안내지 검증 (스코어카드 사진이 전표로 둔갑하여 빈 라운드로 등록되는 부작용 방지)
+                    val isScorecardLike = rawUpper.contains("SCORE") || rawUpper.contains("스코어") || (rawUpper.contains("PAR") && rawUpper.contains("HOLE"))
+                    val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
+                    val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진" && !isScorecardLike
+
+                    if (isValidScorecard) {
+                        if (isValidSlip) {
+                            processGolfLockerSlipUseCase(slipResult, photo.uri)
+                        }
+                        val round = extractScorecardOcrUseCase.processScorecardResult(scorecardResult, photo.uri, photoDate)
+                        if (round != null) {
+                            processedRounds.add(round.id)
+                            android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] ⛳ 스코어카드 분석 성공: ${round.clubName} ${round.totalScore}타 (id=${round.id})")
+                            onProgress?.invoke(currentIdx, targetPhotos.size, processedRounds.size)
+                        }
+                    } else if (isValidSlip) {
+                        val round = processGolfLockerSlipUseCase(slipResult, photo.uri)
+                        if (round != null) {
+                            processedRounds.add(round.id)
+                            android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 📋 라커룸 안내지 분석 성공: ${round.clubName} (id=${round.id})")
+                            onProgress?.invoke(currentIdx, targetPhotos.size, processedRounds.size)
+                        }
                     } else {
-                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 텍스트 없음/디코딩 실패 건너뜀 ($uri)")
-                    }
-                    continue
-                }
-
-                val probeUpper = probeText.uppercase()
-                val matchedProbeKeywords = GOLF_FINGERPRINTS.filter { probeUpper.contains(it) }
-
-                // 골프 지문이 단 1개도 없는 일반 사진은 즉시 패스 (전체 시간 90% 절약)
-                if (matchedProbeKeywords.isEmpty()) {
-                    continue
-                }
-
-                android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] ⛳ 골프 지문 감지: $matchedProbeKeywords ($uri)")
-
-                // [Stage 2: Deep Analysis - 골프 지문 감지된 사진만 정밀 분석]
-                // 2560px 2D 공간 그리드 복원 및 18홀 정밀 파싱
-                val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri, photoDate)
-                val rawText = scorecardResult.recognizedRawText.ifBlank { probeText }
-                if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(rawText)) {
-                    android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] Deep Analysis 중 의료/영수증 지문 감지로 배제 ($uri)")
-                    continue
-                }
-                val rawUpper = rawText.uppercase()
-
-                // A. 스코어카드 검증 (18홀 완전 스코어카드 필수 가드레일)
-                // 9홀 불완전 조각(42타, 50타 등) 및 타수 없는 사진의 단독 등록 원천 차단
-                val matchedCore = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
-                val hasValidGolfKeywords = matchedCore.isNotEmpty()
-                val hasValid18Holes = scorecardResult.holeScores.size >= 14
-                val hasValid18TotalScore = scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144
-                val isValidScorecard = hasValidGolfKeywords && (hasValid18TotalScore || hasValid18Holes)
-
-                // B. 라커룸 안내지 검증 (스코어카드 사진이 전표로 둔갑하여 빈 라운드로 등록되는 부작용 방지)
-                val isScorecardLike = rawUpper.contains("SCORE") || rawUpper.contains("스코어") || (rawUpper.contains("PAR") && rawUpper.contains("HOLE"))
-                val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
-                val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진" && !isScorecardLike
-
-                if (isValidScorecard) {
-                    if (isValidSlip) {
-                        processGolfLockerSlipUseCase(slipResult, photo.uri)
-                    }
-                    val round = extractScorecardOcrUseCase.processScorecardResult(scorecardResult, photo.uri, photoDate)
-                    if (round != null) {
-                        processedRounds.add(round.id)
-                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] ⛳ 스코어카드 분석 성공: ${round.clubName} ${round.totalScore}타 (id=${round.id})")
-                        onProgress?.invoke(currentIdx, targetPhotos.size, processedRounds.size)
-                    }
-                } else if (isValidSlip) {
-                    val round = processGolfLockerSlipUseCase(slipResult, photo.uri)
-                    if (round != null) {
-                        processedRounds.add(round.id)
-                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 📋 라커룸 안내지 분석 성공: ${round.clubName} (id=${round.id})")
-                        onProgress?.invoke(currentIdx, targetPhotos.size, processedRounds.size)
+                        nonGolfCheckedUris.add(photo.uri)
                     }
                 }
             } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
                 android.util.Log.w("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 미디어 분석 건너뜀 (${photo.uri}): ${t.message}")
             }
         }
 
-        onProgress?.invoke(targetPhotos.size, targetPhotos.size, processedRounds.size)
+        runCatching { onProgress?.invoke(targetPhotos.size, targetPhotos.size, processedRounds.size) }
         android.util.Log.d("AutoProcessGolfMedia", "골프 미디어 고속 분석 완료: 총 ${processedRounds.size}건 등록/갱신됨")
         processedRounds.size
     }

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.autologue.app.presentation.navigation.Screen
 
 data class QuickActionItem(
@@ -42,6 +43,18 @@ fun UnifiedSpeedDialFab(
     var showSheet by remember { mutableStateOf(false) }
     val view = LocalView.current
 
+    val navigateToTab: (String) -> Unit = { route ->
+        if (navController.currentDestination?.route != route) {
+            navController.navigate(route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+
     val quickActions = listOf(
         QuickActionItem(
             title = "지출 직접 추가",
@@ -50,7 +63,7 @@ fun UnifiedSpeedDialFab(
             iconBgColor = Color(0xFF2563EB),
             targetRoute = Screen.Expense.route,
             onClick = {
-                navController.navigate(Screen.Expense.route)
+                navigateToTab(Screen.Expense.route)
             }
         ),
         QuickActionItem(
@@ -60,7 +73,7 @@ fun UnifiedSpeedDialFab(
             iconBgColor = Color(0xFFD97706),
             targetRoute = Screen.CarLedger.route,
             onClick = {
-                navController.navigate(Screen.CarLedger.route)
+                navigateToTab(Screen.CarLedger.route)
             }
         ),
         QuickActionItem(
@@ -70,7 +83,7 @@ fun UnifiedSpeedDialFab(
             iconBgColor = Color(0xFF059669),
             targetRoute = Screen.Golf.route,
             onClick = {
-                navController.navigate(Screen.Golf.route)
+                navigateToTab(Screen.Golf.route)
             }
         ),
         QuickActionItem(
@@ -80,7 +93,7 @@ fun UnifiedSpeedDialFab(
             iconBgColor = Color(0xFF7C3AED),
             targetRoute = Screen.Diary.route,
             onClick = {
-                navController.navigate(Screen.Diary.route)
+                navigateToTab(Screen.Diary.route)
             }
         )
     )

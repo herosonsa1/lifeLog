@@ -1771,6 +1771,10 @@ fun SyncProgressDialog(
                 ) {
                     Text("확인", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
                 }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text("백그라운드 전환", fontSize = 12.sp, color = AppColors.primary, fontWeight = FontWeight.Bold)
+                }
             }
         },
         containerColor = AppColors.surface,

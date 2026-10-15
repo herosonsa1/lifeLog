@@ -336,13 +336,17 @@ class PlaceResolver internal constructor(
         }
     }
 
+    @Volatile
+    private var nominatimCooldownUntilMillis: Long = 0L
+
     private fun fetchNominatimReverseGeocode(lat: Double, lng: Double): ResolvedLocation? {
+        if (System.currentTimeMillis() < nominatimCooldownUntilMillis) return null
         return runCatching {
             val urlStr = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=$lat&lon=$lng&zoom=18&addressdetails=1&accept-language=ko"
             val conn = (java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 2500
-                readTimeout = 2500
+                connectTimeout = 1500
+                readTimeout = 1500
                 setRequestProperty("User-Agent", "AutoLogueLifeLogApp/1.0 (Android)")
                 setRequestProperty("Accept-Language", "ko-KR,ko;q=0.9")
             }
@@ -377,8 +381,12 @@ class PlaceResolver internal constructor(
                         )
                     }
                 }
+            } else {
+                nominatimCooldownUntilMillis = System.currentTimeMillis() + 60_000L
             }
             null
+        }.onFailure {
+            nominatimCooldownUntilMillis = System.currentTimeMillis() + 60_000L
         }.getOrNull()
     }
 

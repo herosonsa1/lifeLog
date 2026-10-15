@@ -1111,11 +1111,8 @@ class GolfViewModel @Inject constructor(
         }
     }
 
-    /**
-     * [L-04] ViewModel 소멸 시 ScorecardOcrAnalyzer의 ML Kit 네이티브 리소스 해제.
-     */
     override fun onCleared() {
         super.onCleared()
-        scorecardOcrAnalyzer.close()
+        // ScorecardOcrAnalyzer는 @Singleton으로 백그라운드 동기화 작업과 공유되므로 ViewModel 종료 시 닫지 않음
     }
 }

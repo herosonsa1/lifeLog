@@ -99,6 +99,30 @@ class DiaryViewModel @Inject constructor(
     }
 
     private fun observeData() {
+        // 전역 백그라운드 동기화 상태를 실시간 구독하여 메뉴 이동 후 복귀 시에도 진행/완료 상태를 즉시 동기화
+        viewModelScope.launch {
+            combine(
+                syncHistoricalDataUseCase.syncState,
+                syncHistoricalDataUseCase.isManualSyncDialogVisible
+            ) { progress, isManualDialogVisible ->
+                progress to isManualDialogVisible
+            }.collect { (progress, isManualDialogVisible) ->
+                val isCurrentlyRunning = progress != null && progress.isRunning && !progress.isDone
+                _uiState.update { current ->
+                    current.copy(
+                        isAutoSyncing = isCurrentlyRunning,
+                        autoSyncStage = if (isCurrentlyRunning) progress?.stage.orEmpty() else "",
+                        syncProgress = progress,
+                        isSyncDialogVisible = isManualDialogVisible && progress != null
+                    )
+                }
+                if (progress?.isDone == true) {
+                    updateFilteredEntries()
+                    loadMonthlyCalendar(_uiState.value.currentYearMonth)
+                }
+            }
+        }
+
         viewModelScope.launch {
             diaryRepository.getDiaryEntriesFlow().collectLatest { list ->
                 rawEntries = list.map { entry ->
@@ -138,9 +162,10 @@ class DiaryViewModel @Inject constructor(
         // [H-05] 무거운 컬렉션 연산(filter/flatMap/sortedBy)을 Dispatchers.Default로 격리
         //   → 30일치 rawEntries가 많을 경우 메인 스레드 ANR 방지
         viewModelScope.launch(Dispatchers.Default) {
-            val date = _uiState.value.selectedDate
-            val mode = _uiState.value.viewMode
-            val mapFilter = _uiState.value.mapPeriodFilter
+            val snapshot = _uiState.value
+            val date = snapshot.selectedDate
+            val mode = snapshot.viewMode
+            val mapFilter = snapshot.mapPeriodFilter
 
             val isLongLoading = mapFilter != MapPeriodFilter.DAILY || mode == TimelineViewMode.WEEKLY || mode == TimelineViewMode.MONTHLY || customMessage.isNotBlank()
             if (isLongLoading) {
@@ -153,51 +178,56 @@ class DiaryViewModel @Inject constructor(
                     mode == TimelineViewMode.MONTHLY -> "월간 캘린더 데이터를 분석 중입니다..."
                     else -> "데이터를 불러오는 중입니다..."
                 }
-                _uiState.value = _uiState.value.copy(isLoading = true, loadingMessage = msg)
+                _uiState.update { it.copy(isLoading = true, loadingMessage = msg) }
                 // 1초 이상 걸리는 느낌을 방지하고 부드러운 애니메이션 인식을 위한 최소 딜레이
                 delay(300L)
             }
 
-            val filtered = when (mode) {
-                TimelineViewMode.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }
+            val currentMode = _uiState.value.viewMode
+            val currentMapFilter = _uiState.value.mapPeriodFilter
+            val currentDate = _uiState.value.selectedDate
+
+            val filtered = when (currentMode) {
+                TimelineViewMode.DAILY -> rawEntries.filter { it.date.toLocalDate() == currentDate }
                 TimelineViewMode.MAP_ROUTE -> {
-                    when (_uiState.value.mapPeriodFilter) {
-                        MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }
+                    when (currentMapFilter) {
+                        MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == currentDate }
                         MapPeriodFilter.WEEKLY -> {
-                            val start = date.minusDays(7)
-                            rawEntries.filter { it.date.toLocalDate() in start..date }
+                            val start = currentDate.minusDays(7)
+                            rawEntries.filter { it.date.toLocalDate() in start..currentDate }
                         }
                         MapPeriodFilter.MONTHLY -> {
-                            val start = date.minusDays(30)
-                            rawEntries.filter { it.date.toLocalDate() in start..date }
+                            val start = currentDate.minusDays(30)
+                            rawEntries.filter { it.date.toLocalDate() in start..currentDate }
                         }
                         MapPeriodFilter.ALL -> rawEntries
                     }
                 }
                 TimelineViewMode.WEEKLY -> {
-                    val start = date.minusDays(7)
-                    rawEntries.filter { it.date.toLocalDate() in start..date }
+                    val start = currentDate.minusDays(7)
+                    rawEntries.filter { it.date.toLocalDate() in start..currentDate }
                 }
                 TimelineViewMode.MONTHLY -> rawEntries
             }
 
-            val activeMapSteps = when (_uiState.value.mapPeriodFilter) {
-                MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == date }.flatMap { it.routeSteps }.sortedBy { it.time }
-                MapPeriodFilter.WEEKLY -> rawEntries.filter { it.date.toLocalDate() in date.minusDays(7)..date }.flatMap { it.routeSteps }.sortedBy { it.time }
-                MapPeriodFilter.MONTHLY -> rawEntries.filter { it.date.toLocalDate() in date.minusDays(30)..date }.flatMap { it.routeSteps }.sortedBy { it.time }
+            val activeMapSteps = when (currentMapFilter) {
+                MapPeriodFilter.DAILY -> rawEntries.filter { it.date.toLocalDate() == currentDate }.flatMap { it.routeSteps }.sortedBy { it.time }
+                MapPeriodFilter.WEEKLY -> rawEntries.filter { it.date.toLocalDate() in currentDate.minusDays(7)..currentDate }.flatMap { it.routeSteps }.sortedBy { it.time }
+                MapPeriodFilter.MONTHLY -> rawEntries.filter { it.date.toLocalDate() in currentDate.minusDays(30)..currentDate }.flatMap { it.routeSteps }.sortedBy { it.time }
                 MapPeriodFilter.ALL -> rawEntries.flatMap { it.routeSteps }.sortedBy { it.time }
             }.filter { it.stepType != RouteStepType.TRANSACTION && !DailyRouteAggregator.isIncomeOrTransferStep(it) }
 
-            val current = _uiState.value
-            // StateFlow.update는 thread-safe 하므로 withContext(Main) 불필요
-            _uiState.value = current.copy(
-                entries = filtered,
-                allEntries = rawEntries,
-                mapRouteSteps = activeMapSteps,
-                selectedMapStep = if (activeMapSteps.contains(current.selectedMapStep)) current.selectedMapStep else activeMapSteps.firstOrNull { it.latitude != null } ?: activeMapSteps.firstOrNull(),
-                isLoading = false,
-                loadingMessage = ""
-            )
+            // 원자적(CAS) StateFlow.update를 사용하여 백그라운드 동기화 완료 상태(isAutoSyncing=false)가 덮어씌워지는 경쟁 조건 원천 차단
+            _uiState.update { current ->
+                current.copy(
+                    entries = filtered,
+                    allEntries = rawEntries,
+                    mapRouteSteps = activeMapSteps,
+                    selectedMapStep = if (activeMapSteps.contains(current.selectedMapStep)) current.selectedMapStep else activeMapSteps.firstOrNull { it.latitude != null } ?: activeMapSteps.firstOrNull(),
+                    isLoading = false,
+                    loadingMessage = ""
+                )
+            }
         }
     }
 
@@ -330,7 +360,7 @@ class DiaryViewModel @Inject constructor(
             TimelineViewMode.MAP_ROUTE -> "이동 동선 지도를 불러오는 중입니다..."
             TimelineViewMode.DAILY -> ""
         }
-        _uiState.value = _uiState.value.copy(viewMode = mode)
+        _uiState.update { it.copy(viewMode = mode) }
         updateFilteredEntries(msg)
     }
 
@@ -341,29 +371,31 @@ class DiaryViewModel @Inject constructor(
             MapPeriodFilter.ALL -> "전체 이동 기록을 불러오는 중입니다..."
             MapPeriodFilter.DAILY -> "선택 일자의 이동 경로를 불러오는 중입니다..."
         }
-        _uiState.value = _uiState.value.copy(mapPeriodFilter = filter)
+        _uiState.update { it.copy(mapPeriodFilter = filter) }
         updateFilteredEntries(msg)
     }
 
     fun selectMapStep(step: RouteStep) {
-        _uiState.value = _uiState.value.copy(selectedMapStep = step)
+        _uiState.update { it.copy(selectedMapStep = step) }
     }
 
     fun selectDate(date: LocalDate) {
-        _uiState.value = _uiState.value.copy(selectedDate = date)
+        _uiState.update { it.copy(selectedDate = date) }
         updateFilteredEntries()
     }
 
     fun onCalendarDateClicked(date: LocalDate) {
-        _uiState.value = _uiState.value.copy(
-            selectedDate = date,
-            viewMode = TimelineViewMode.DAILY
-        )
+        _uiState.update {
+            it.copy(
+                selectedDate = date,
+                viewMode = TimelineViewMode.DAILY
+            )
+        }
         updateFilteredEntries()
     }
 
     fun changeYearMonth(yearMonth: YearMonth) {
-        _uiState.value = _uiState.value.copy(currentYearMonth = yearMonth)
+        _uiState.update { it.copy(currentYearMonth = yearMonth) }
         loadMonthlyCalendar(yearMonth)
     }
 
@@ -402,17 +434,17 @@ class DiaryViewModel @Inject constructor(
     private fun loadMonthlyCalendar(yearMonth: YearMonth) {
         viewModelScope.launch {
             getMonthlyCalendarDataUseCase(yearMonth).collectLatest { summary ->
-                _uiState.value = _uiState.value.copy(monthlyCalendarData = summary)
+                _uiState.update { it.copy(monthlyCalendarData = summary) }
             }
         }
     }
 
     fun openDiaryDetail(entry: DiaryEntry) {
-        _uiState.value = _uiState.value.copy(selectedDiaryDetail = entry)
+        _uiState.update { it.copy(selectedDiaryDetail = entry) }
     }
 
     fun closeDiaryDetail() {
-        _uiState.value = _uiState.value.copy(selectedDiaryDetail = null)
+        _uiState.update { it.copy(selectedDiaryDetail = null) }
     }
 
     fun openPhotoPreview(url: String, contextList: List<String>? = null) {
@@ -439,29 +471,35 @@ class DiaryViewModel @Inject constructor(
         }
 
         val initialIndex = list.indexOf(url).coerceAtLeast(0)
-        _uiState.value = _uiState.value.copy(
-            selectedPhotoPreviewUrl = url,
-            photoPreviewList = list,
-            photoPreviewIndex = initialIndex
-        )
+        _uiState.update {
+            it.copy(
+                selectedPhotoPreviewUrl = url,
+                photoPreviewList = list,
+                photoPreviewIndex = initialIndex
+            )
+        }
     }
 
     fun setPhotoPreviewIndex(index: Int) {
         val list = _uiState.value.photoPreviewList
         if (index in list.indices) {
-            _uiState.value = _uiState.value.copy(
-                photoPreviewIndex = index,
-                selectedPhotoPreviewUrl = list[index]
-            )
+            _uiState.update {
+                it.copy(
+                    photoPreviewIndex = index,
+                    selectedPhotoPreviewUrl = list[index]
+                )
+            }
         }
     }
 
     fun closePhotoPreview() {
-        _uiState.value = _uiState.value.copy(
-            selectedPhotoPreviewUrl = null,
-            photoPreviewList = emptyList(),
-            photoPreviewIndex = 0
-        )
+        _uiState.update {
+            it.copy(
+                selectedPhotoPreviewUrl = null,
+                photoPreviewList = emptyList(),
+                photoPreviewIndex = 0
+            )
+        }
     }
 
     /**
@@ -512,7 +550,7 @@ class DiaryViewModel @Inject constructor(
 
                     // 만약 현재 열려있는 바텀시트 상세 다이어리라면 실시간 동기화
                     if (_uiState.value.selectedDiaryDetail?.id == updatedEntry.id) {
-                        _uiState.value = _uiState.value.copy(selectedDiaryDetail = updatedEntry)
+                        _uiState.update { it.copy(selectedDiaryDetail = updatedEntry) }
                     }
                 }
 
@@ -520,19 +558,23 @@ class DiaryViewModel @Inject constructor(
                 val currentList = _uiState.value.photoPreviewList
                 val updatedList = currentList.filter { it != photoUrl }
                 if (updatedList.isEmpty()) {
-                    _uiState.value = _uiState.value.copy(
-                        selectedPhotoPreviewUrl = null,
-                        photoPreviewList = emptyList(),
-                        photoPreviewIndex = 0
-                    )
+                    _uiState.update {
+                        it.copy(
+                            selectedPhotoPreviewUrl = null,
+                            photoPreviewList = emptyList(),
+                            photoPreviewIndex = 0
+                        )
+                    }
                 } else {
                     val currentIndex = _uiState.value.photoPreviewIndex
                     val nextIndex = currentIndex.coerceIn(0, updatedList.size - 1)
-                    _uiState.value = _uiState.value.copy(
-                        photoPreviewList = updatedList,
-                        photoPreviewIndex = nextIndex,
-                        selectedPhotoPreviewUrl = updatedList[nextIndex]
-                    )
+                    _uiState.update {
+                        it.copy(
+                            photoPreviewList = updatedList,
+                            photoPreviewIndex = nextIndex,
+                            selectedPhotoPreviewUrl = updatedList[nextIndex]
+                        )
+                    }
                 }
 
                 // 4. 필터링된 엔트리 화면 갱신
@@ -544,11 +586,11 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun openAddCompanionDialog(step: RouteStep) {
-        _uiState.value = _uiState.value.copy(isAddCompanionDialogOpen = true, companionTargetStep = step)
+        _uiState.update { it.copy(isAddCompanionDialogOpen = true, companionTargetStep = step) }
     }
 
     fun closeAddCompanionDialog() {
-        _uiState.value = _uiState.value.copy(isAddCompanionDialogOpen = false, companionTargetStep = null)
+        _uiState.update { it.copy(isAddCompanionDialogOpen = false, companionTargetStep = null) }
     }
 
     fun addCompanionToStep(companionName: String) {
@@ -589,11 +631,12 @@ class DiaryViewModel @Inject constructor(
                 diaryRepository.updateDiaryEntry(updatedEntry)
 
                 // UI 상태 실시간 동기화
-                val current = _uiState.value
-                _uiState.value = current.copy(
-                    companionTargetStep = updatedTargetStep ?: current.companionTargetStep,
-                    selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
-                )
+                _uiState.update { current ->
+                    current.copy(
+                        companionTargetStep = updatedTargetStep ?: current.companionTargetStep,
+                        selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                    )
+                }
                 updateFilteredEntries()
             } catch (t: Throwable) {
                 t.printStackTrace()
@@ -636,11 +679,12 @@ class DiaryViewModel @Inject constructor(
                 )
                 diaryRepository.updateDiaryEntry(updatedEntry)
 
-                val current = _uiState.value
-                _uiState.value = current.copy(
-                    companionTargetStep = if (current.companionTargetStep?.id == stepId) updatedTargetStep else current.companionTargetStep,
-                    selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
-                )
+                _uiState.update { current ->
+                    current.copy(
+                        companionTargetStep = if (current.companionTargetStep?.id == stepId) updatedTargetStep else current.companionTargetStep,
+                        selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                    )
+                }
                 updateFilteredEntries()
             } catch (t: Throwable) {
                 t.printStackTrace()
@@ -656,78 +700,29 @@ class DiaryViewModel @Inject constructor(
                 summary = userNotes
             )
             diaryRepository.updateDiaryEntry(updated)
-            val current = _uiState.value
-            _uiState.value = current.copy(
-                selectedDiaryDetail = if (current.selectedDiaryDetail?.id == diaryId) updated else current.selectedDiaryDetail
-            )
-        }
-    }
-
-    private var hasAutoSynced = false
-
-    fun autoSyncRecentWeek(context: Context, force: Boolean = false) {
-        if (hasAutoSynced && !force) return
-        hasAutoSynced = true
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _uiState.value = _uiState.value.copy(
-                    isAutoSyncing = true,
-                    autoSyncStage = "최근 7일 일상 기록(결제 문자 & 사진) 동기화 시작..."
-                )
-                syncHistoricalDataUseCase(context, daysBack = 7).collect { progress ->
-                    _uiState.value = _uiState.value.copy(
-                        isAutoSyncing = !progress.isDone,
-                        autoSyncStage = progress.stage,
-                        syncProgress = progress
-                    )
-                    if (progress.isDone) {
-                        updateFilteredEntries()
-                        loadMonthlyCalendar(_uiState.value.currentYearMonth)
-                    }
-                }
-            } catch (t: Throwable) {
-                android.util.Log.e("AUTO_SYNC", "Auto sync encountered error safely", t)
-                _uiState.value = _uiState.value.copy(
-                    isAutoSyncing = false,
-                    autoSyncStage = "자동 동기화 완료 (안전 모드)"
+            _uiState.update { current ->
+                current.copy(
+                    selectedDiaryDetail = if (current.selectedDiaryDetail?.id == diaryId) updated else current.selectedDiaryDetail
                 )
             }
         }
     }
 
+    fun autoSyncRecentWeek(context: Context, force: Boolean = false) {
+        syncHistoricalDataUseCase.startAutoSync(context = appContext, daysBack = 7, force = force)
+    }
+
     fun openManualSyncDialog() {
-        _uiState.value = _uiState.value.copy(isManualSyncDialogOpen = true)
+        _uiState.update { it.copy(isManualSyncDialogOpen = true) }
     }
 
     fun closeManualSyncDialog() {
-        _uiState.value = _uiState.value.copy(isManualSyncDialogOpen = false)
+        _uiState.update { it.copy(isManualSyncDialogOpen = false) }
     }
 
     fun executeManualSync(daysBack: Int?, context: Context) {
         closeManualSyncDialog()
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _uiState.value = _uiState.value.copy(isSyncDialogVisible = true)
-                syncHistoricalDataUseCase(context, daysBack = daysBack).collect { progress ->
-                    _uiState.value = _uiState.value.copy(syncProgress = progress)
-                    if (progress.isDone) {
-                        updateFilteredEntries()
-                        loadMonthlyCalendar(_uiState.value.currentYearMonth)
-                    }
-                }
-            } catch (t: Throwable) {
-                android.util.Log.e("MANUAL_SYNC", "Manual sync encountered error safely", t)
-                _uiState.value = _uiState.value.copy(
-                    syncProgress = com.autologue.app.domain.usecase.sync.SyncProgress(
-                        isRunning = false,
-                        stage = "동기화 완료 (안전 모드로 색인 및 저장 완료)",
-                        isDone = true
-                    )
-                )
-                updateFilteredEntries()
-                loadMonthlyCalendar(_uiState.value.currentYearMonth)
-            }
-        }
+        syncHistoricalDataUseCase.startManualSync(context = appContext, daysBack = daysBack)
     }
 
     fun triggerHistoricalSync(context: Context) {
@@ -735,16 +730,17 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun dismissSyncDialog() {
-        _uiState.value = _uiState.value.copy(isSyncDialogVisible = false, syncProgress = null)
+        syncHistoricalDataUseCase.dismissManualSyncDialog()
+        _uiState.update { it.copy(isSyncDialogVisible = false) }
         updateFilteredEntries()
         loadMonthlyCalendar(_uiState.value.currentYearMonth)
     }
 
     fun exportToExcel(onComplete: (ExportResult) -> Unit) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isExportingExcel = true)
+            _uiState.update { it.copy(isExportingExcel = true) }
             val result = exportAllDataToExcelUseCase()
-            _uiState.value = _uiState.value.copy(isExportingExcel = false, exportResult = result)
+            _uiState.update { it.copy(isExportingExcel = false, exportResult = result) }
             onComplete(result)
         }
     }
