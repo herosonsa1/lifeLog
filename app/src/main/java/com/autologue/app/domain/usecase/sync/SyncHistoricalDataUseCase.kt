@@ -44,7 +44,9 @@ class SyncHistoricalDataUseCase @Inject constructor(
             val periodDesc = if (daysBack != null) "최근 ${daysBack}일" else "과거 전체"
             send(SyncProgress(isRunning = true, stage = "$periodDesc 결제 문자 스캔 중...", syncedTxCount = 0, syncedPhotoCount = 0, syncedGolfCount = 0))
 
-            val transactions = importer.scanHistoricalSms(context, daysBack = daysBack)
+            // 문자 스캔은 최소 365일(1년) 이상 수행하여 이전 월 카드/주유 내역 누락 원천 차단
+            val smsDaysBack = if (daysBack == null) null else maxOf(daysBack, 365)
+            val transactions = importer.scanHistoricalSms(context, daysBack = smsDaysBack, limit = 5000)
             var txCount = 0
             val savedTransactions = mutableListOf<com.autologue.app.domain.model.Transaction>()
             for (tx in transactions) {
@@ -55,11 +57,14 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 }
             }
 
-            // 주유 결제 내역 차계부 자동 동기화
-            runCatching { vehicleRepository.syncRefuelingFromTransactions(savedTransactions) }
-
-            // Post-import cleanup to guarantee zero duplicates
+            // Post-import cleanup & self-healing to guarantee zero duplicates and accurate categories
             runCatching { transactionRepository.cleanDuplicates() }
+
+            // 주유 결제 내역 차계부 자동 동기화 (전체 DB 트랜잭션 기준)
+            runCatching {
+                val allDbTxs = transactionRepository.getAllTransactionsFlow().first()
+                vehicleRepository.syncRefuelingFromTransactions(allDbTxs)
+            }
 
             send(SyncProgress(isRunning = true, stage = "$periodDesc 갤러리 사진 및 위치 분석 중...", syncedTxCount = txCount, syncedPhotoCount = 0, syncedGolfCount = 0))
 

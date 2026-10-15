@@ -6,15 +6,15 @@ object RuleMatcherEngine {
 
     private val KEYWORD_MAP = mapOf(
         ExpenseCategory.FUEL to listOf(
-            "주유", "주유소", "충전", "충전소", "셀프주유",
-            "GS칼텍스", "지에스칼텍스", "GS주유", "GS셀프",
-            "SK에너지", "SK주유", "SK엔크린", "엔크린", "에스케이", "SK가스",
-            "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일",
-            "현대오일뱅크", "HD현대", "오일뱅크", "현대오일",
-            "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소",
+            "주유", "주유소", "충전", "충전소", "셀프주유", "주유셀프", "직영주유",
+            "GS칼텍스", "지에스칼텍스", "GS주유", "GS셀프", "GS이엠", "지에스이엠",
+            "SK에너지", "SK주유", "SK엔크린", "엔크린", "에스케이", "SK가스", "SK셀프", "SK네트웍스",
+            "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일", "S오일", "에쓰-오일",
+            "현대오일뱅크", "HD현대", "오일뱅크", "현대오일", "현대셀프",
+            "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소", "농협주유", "NH주유", "NH-OIL", "하나로주유",
             "한국도로공사", "한국도로공사하", "한국도로공사상", "도로공사주유", "도로공사충전",
-            "ex-oil", "EX-OIL", "EX주유소", "ex주유소", "휴게소주유", "휴게소충전",
-            "E1", "LPG", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전"
+            "ex-oil", "EX-OIL", "EX주유소", "ex주유소", "휴게소주유", "휴게소충전", "만남의광장주유",
+            "E1", "LPG", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전", "석유", "오일"
         ),
         ExpenseCategory.GOLF_FIELD to listOf(
             "CC", "GC", "골프클럽", "컨트리클럽", "골프장", "라비에벨", "베어크리크", "남촌", "해슬리", "아난티", "그늘집"
@@ -39,7 +39,7 @@ object RuleMatcherEngine {
             "이마트", "홈플러스", "롯데마트", "트레이더스", "코스트코", "하나로마트", "슈퍼", "마트", "GS수퍼", "지에스리테일", "GS더프레시", "아이스크림",
             "넷플릭스", "유튜브", "왓챠", "디즈니", "웨이브", "티빙", "스포티파이", "멤버십", "네이버플러스",
             "천재교과서", "교과서", "교재", "학원", "학습", "메가스터디", "EBS",
-            "LGUPLUS", "LG유플러스", "SKT", "KT", "통신", "통신요금", "관리비", "도시가스", "전기요금"
+            "LGUPLUS", "LG유플러스", "SKT", "KT", "통신", "통신요금", "관리비", "도시가스", "전기요금", "편의점", "CU", "GS25", "세븐일레븐", "이마트24"
         ),
         ExpenseCategory.TRANSPORT to listOf(
             "코레일", "SRT", "택시", "카카오T", "지하철", "버스", "티머니", "하이패스"
@@ -49,14 +49,22 @@ object RuleMatcherEngine {
         )
     )
 
-    fun classifyMerchant(merchantName: String, isIncome: Boolean = false): ExpenseCategory {
+    fun classifyMerchant(merchantName: String, isIncome: Boolean = false, originalText: String = ""): ExpenseCategory {
         if (isIncome) return ExpenseCategory.INCOME
-        val upper = merchantName.uppercase()
+        val upper = merchantName.uppercase().replace(" ", "")
         for ((category, keywords) in KEYWORD_MAP) {
             for (kw in keywords) {
-                if (upper.contains(kw.uppercase())) {
+                if (upper.contains(kw.uppercase().replace(" ", ""))) {
                     return category
                 }
+            }
+        }
+        // 가맹점명만으로 분류되지 않았을 때 원문 내 주유소 키워드가 있으면 주유(FUEL)로 우선 분류
+        if (originalText.isNotBlank()) {
+            val upperOrig = originalText.uppercase().replace(" ", "")
+            val fuelKeywords = KEYWORD_MAP[ExpenseCategory.FUEL] ?: emptyList()
+            if (fuelKeywords.any { upperOrig.contains(it.uppercase().replace(" ", "")) }) {
+                return ExpenseCategory.FUEL
             }
         }
         return ExpenseCategory.ETC

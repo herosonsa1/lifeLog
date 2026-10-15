@@ -121,9 +121,9 @@ object FuelEconomyCalculator {
         additionalDrivingDistanceLookup: ((LocalDateTime?, LocalDateTime) -> Double)? = null,
         gasPrice: Double = DEFAULT_GAS_PRICE
     ): VehicleIntervalCalculationResult {
-        // 1. 해당 차량 주행 로그 필터링
+        // 1. 해당 차량 주행 로그 필터링 (차량 태그 미지정 자동 수집 로그는 현재 선택 차량에 귀속)
         val vehicleDrivingLogs = allLogs.filter {
-            it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId() == targetVehicleId
+            it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId(defaultVehicleId = targetVehicleId) == targetVehicleId
         }
 
         fun getDrivingDistance(start: LocalDateTime?, end: LocalDateTime): Double {
@@ -141,7 +141,7 @@ object FuelEconomyCalculator {
 
         // 2. 해당 차량 주유 로그 필터링 및 시간 오름차순(과거->최신) 정렬
         val vehicleFuelLogs = allLogs.filter {
-            it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId() == targetVehicleId
+            it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId(defaultVehicleId = targetVehicleId) == targetVehicleId
         }.sortedBy { it.timestamp }
 
         var prevFuelLog: VehicleLog? = null

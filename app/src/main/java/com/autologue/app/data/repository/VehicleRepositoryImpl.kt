@@ -56,15 +56,16 @@ class VehicleRepositoryImpl @Inject constructor(
 
     companion object {
         val FUEL_KEYWORDS = listOf(
-            "주유", "주유소", "충전", "충전소", "셀프주유",
-            "GS칼텍스", "지에스칼텍스", "GS주유", "GS셀프",
-            "SK에너지", "SK주유", "SK엔크린", "엔크린", "에스케이", "SK가스",
-            "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일",
+            "주유", "주유소", "충전", "충전소", "셀프주유", "셀프충전", "주유타운", "에너지", "석유", "오일",
+            "GS칼텍스", "지에스칼텍스", "GS주유", "GS셀프", "GS충전", "지에스이앤알", "지에스엠비즈",
+            "SK에너지", "SK주유", "SK엔크린", "엔크린", "에스케이", "SK가스", "SK충전", "SK네트웍스",
+            "에쓰오일", "S-OIL", "SOIL", "에스오일", "구도일", "쓰오일",
             "현대오일뱅크", "HD현대", "오일뱅크", "현대오일",
-            "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소",
+            "알뜰주유", "알뜰주유소", "알뜰셀프", "자영주유소", "농협주유", "NH-OIL", "NHOIL", "농협하나로주유",
             "한국도로공사", "한국도로공사하", "한국도로공사상", "도로공사주유", "도로공사충전",
             "ex-oil", "EX-OIL", "EX주유소", "ex주유소", "휴게소주유", "휴게소충전",
-            "E1", "LPG", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전"
+            "유진주유", "광신석유", "대성산업",
+            "E1", "LPG", "슈퍼차저", "전기차충전", "차지비", "파워큐브", "에버온", "채비", "모두의충전", "일렉링크", "수소충전"
         )
 
         fun isFuelMerchant(merchantName: String): Boolean {
@@ -85,19 +86,29 @@ class VehicleRepositoryImpl @Inject constructor(
 
         val currentLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }.toMutableList()
 
-        // 2. 주유 관련 거래 필터링
+        // 2. 주유 관련 거래 필터링 (상호명뿐 아니라 원문 텍스트 내 주유 키워드까지 교차 검증)
         val fuelTransactions = transactions.filter { tx ->
+            val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
             val isFuel = tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
-                isFuelMerchant(tx.merchantName)
+                isFuelMerchant(tx.merchantName) ||
+                (!isManual && isFuelMerchant(tx.originalText))
             isFuel && tx.amount > 0
         }
 
         // 날짜 및 상호별 그룹화하여 셀프주유소 가승인(15만원/10만원) 판별
         for (tx in fuelTransactions) {
             val txDate = tx.timestamp.toLocalDate()
+            val resolvedStationName = if (tx.merchantName in listOf("카드 가맹점", "가맹점", "출금 내역", "계좌 이체", "정선우", "정*우") || tx.merchantName.isBlank()) {
+                com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)?.merchantName
+                    ?: FUEL_KEYWORDS.firstOrNull { tx.originalText.uppercase().contains(it.uppercase()) }
+                    ?: "주유소"
+            } else {
+                tx.merchantName
+            }
+
             val sameDayMerchantTxs = fuelTransactions.filter {
                 it.timestamp.toLocalDate() == txDate &&
-                (it.merchantName == tx.merchantName || isFuelMerchant(it.merchantName))
+                (it.merchantName == tx.merchantName || isFuelMerchant(it.merchantName) || isFuelMerchant(it.originalText))
             }
 
             // 셀프 주유소 가승인 금액(150,000원 또는 100,000원)인데,
@@ -110,7 +121,7 @@ class VehicleRepositoryImpl @Inject constructor(
 
             if (isCommonPreAuthAmount && (hasOtherRealFuelTx || hasCancellationForThis)) {
                 // 이미 DB에 가승인 로그가 들어있다면 정리
-                deleteRefuelingLogByTransaction(tx.amount, txDate, tx.merchantName)
+                deleteRefuelingLogByTransaction(tx.amount, txDate, resolvedStationName)
                 continue
             }
 
@@ -135,7 +146,7 @@ class VehicleRepositoryImpl @Inject constructor(
                     fuelCost = tx.amount,
                     fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", tx.amount / 1650.0).toDouble(),
                     daysSinceLastFuel = daysSince,
-                    gasStationName = tx.merchantName,
+                    gasStationName = resolvedStationName,
                     note = "가계부 결제 내역 자동 분석"
                 )
                 val insertedId = vehicleLogDao.insertVehicleLog(log.toEntity())

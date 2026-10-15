@@ -27,6 +27,9 @@ class MmsBroadcastReceiver : BroadcastReceiver() {
     @Inject
     lateinit var processTransactionUseCase: ProcessTransactionUseCase
 
+    @Inject
+    lateinit var vehicleRepository: com.autologue.app.domain.repository.VehicleRepository
+
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         if (action == "android.provider.Telephony.WAP_PUSH_RECEIVED" ||
@@ -37,9 +40,12 @@ class MmsBroadcastReceiver : BroadcastReceiver() {
                 try {
                     // OS가 MMS 테이블(content://mms)에 데이터와 파트를 영속화할 시간을 1.5초 부여
                     delay(1500L)
-                    val result = importer.scanHistoricalSmsDetailed(context, daysBack = 1, limit = 10)
+                    val result = importer.scanHistoricalSmsDetailed(context, daysBack = 7, limit = 50)
                     for (tx in result.transactions) {
                         runCatching { processTransactionUseCase(tx) }
+                    }
+                    if (result.transactions.isNotEmpty()) {
+                        runCatching { vehicleRepository.syncRefuelingFromTransactions(result.transactions) }
                     }
                 } catch (t: Throwable) {
                     android.util.Log.e("MmsBroadcastReceiver", "MMS 실시간 수신 처리 중 예외", t)

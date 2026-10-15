@@ -2394,3 +2394,80 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - 스캔된 문자가 0건일 때(삼성 채팅+ RCS로 인한 비공개 격리 시)와 파싱 매칭 실패 건을 명확히 구분 안내.
 3. **최신 APK 빌드 및 실기기 배포 준비 완료**:
    - `app\build\outputs\apk\debug\app-debug.apk` 빌드 완료 및 단위 테스트 100% 통과.
+
+---
+
+## 66. REA 역공학(JADX) 분석 기반 카드/주유 내역 자동 집계 근본 결함 해결 및 삼성 One UI MMS/RCS·자가치유 파이프라인 고도화 (2026-10-15)
+
+- **일시**: 2026-10-15
+- **사용자 제보 및 배경**:
+  - "현재 앱에서 카드사용내역과 주유사용내역 집계가 정상적으로 안되고 있어. 해당내역을 집계/분석 하고있는 앱이나 서비스를 찾아서 rea로 분석해서 내 앱에서 해당 기능이 정확히 동작하도록 개선해줘."
+  - "현재까지의 작업내용을 `work_history/work_history.md` 에 한글로 append 해주고, gitHub 에 commit & push 해줘."
+
+### 66.1. REA JADX 역공학 분석 및 근본 원인(Root Cause) 전수 규명
+1. **레퍼런스 앱 및 현재 빌드 APK REA JADX 역공학 수행**:
+   - REA MCP(`inspect_android_package`, `search_android_classes`, `inspect_android_class`, `inspect_android_method`)를 활용하여 상용 자동 가계부/알림 수집 레퍼런스 APK(`ref_expense_tracker.apk`, `ref_notify_me.apk`) 및 현재 앱(`app-debug.apk`)을 정밀 디컴파일 분석하고, Git 히스토리(`76f41b6` 커밋 이후 변경점)와 대조 분석을 수행함.
+2. **규명된 7대 핵심 결함**:
+   - **[원인 1] 카드 승인 문자의 계좌이체(`TRANSFER`) 오분류 치명적 회귀 결함 (`SmsParser.kt`, `NotificationParser.kt`)**:
+     - 커밋 `76f41b6`에서 추가된 `isBankTransferNotice` 조건(`cleanBody.contains("잔액") || cleanBody.contains("출금") || Regex("\\d{3,}[-\\d*]{5,}").containsMatchIn(cleanBody)`)이 카드사 승인 파서보다 **먼저(최상단에서)** 실행됨.
+     - 카드 승인 문자나 알림에 카드사 고객센터 전화번호(`1588-1600`, `1800-1111`), 마스킹된 카드번호, 체크카드 `출금`, 한도 `잔액` 문구가 포함되면 전부 `BANK_TRANSFER` / `ExpenseCategory.TRANSFER`(계좌이체)로 가로채져 카드 사용내역 및 주유 내역(`CAR_FUEL`) 집계에서 100% 탈락함.
+   - **[원인 2] 삼성 갤럭시 One UI `content://mms/part`의 `_data` 컬럼 프로젝션 보안 예외 (`HistoricalDataImporter.kt`)**:
+     - `getMmsBody()`에서 `arrayOf("_id", "ct", "_data", "text")`를 프로젝션할 때, 삼성 One UI(Android 14+)의 `MmsProvider`는 서드파티 앱이 내부 파일 경로 컬럼인 `"_data"`를 조회하면 `SecurityException` / `IllegalArgumentException`을 발생시켜 장문(LMS/MMS) 카드 승인 문자 본문이 빈 문자열(`""`)로 유실됨.
+   - **[원인 3] 삼성 메시지 채팅+(RCS) 및 통합 대화 테이블 미스캔 (`HistoricalDataImporter.kt`)**:
+     - 삼성 기본 메시지 앱의 RCS(채팅+) 기업 메시지가 저장되는 `content://im/chat`, `content://im/rcs_read_im`, `content://mms-sms/complete-conversations` 등 확장 URI에 대한 스캔 및 격리 환경 복원 파이프라인이 부재함.
+   - **[원인 4] 연도 경계 시점 타임스탬프 왜곡 (`SmsParser.kt`)**:
+     - SMS 본문 내 `MM/dd HH:mm` 파싱 시 현재 시스템 연도(`LocalDateTime.now().year`)를 그대로 대입하여, 과거 연도 문자 스캔 시 미래 날짜로 왜곡되거나 월별 집계에서 누락됨.
+   - **[원인 5] 다중 줄/인박스 스타일 푸시 알림 텍스트 잘림 (`LifelogNotificationListenerService.kt`)**:
+     - `EXTRA_TEXT`와 `EXTRA_BIG_TEXT`만 확인하여, 삼성 메시지나 카드사 앱이 `Notification.EXTRA_TEXT_LINES` 또는 `Notification.EXTRA_MESSAGES`(MessagingStyle)로 보내는 멀티라인 카드 승인 알림의 가맹점명/금액이 누락됨.
+   - **[원인 6] 기존 DB 내 오분류 레코드 고착 및 과잉 중복 차단 (`TransactionRepositoryImpl.kt`)**:
+     - 과거 잘못된 파서로 인해 이미 `TRANSFER`나 `ETC`로 DB에 저장된 카드/주유 거래가 중복 체크(`existsDuplicate`)에 막혀 재스캔 시에도 영구히 복구되지 못함.
+   - **[원인 7] 앱 최초 실행 시 자동 스캔 미실행 및 빈 월(10월) 화면 고착 (`MainActivity.kt`, `ExpenseViewModel.kt`)**:
+     - 앱 시작 시 `READ_SMS` 권한이 있어도 백그라운드 자동 동기화가 트리거되지 않았으며, 현재 월(10월)에 거래가 0건이고 직전 월(9월)에 거래가 있을 때 빈 화면만 표시되어 사용자가 "집계가 안 된다"고 체감함.
+
+### 66.2. 주요 개선 및 아키텍처 고도화 내역
+1. **카드 승인 우선 판별 가드레일 및 범용 멀티라인 카드 파서 구축 (`SmsParser.kt`, `NotificationParser.kt`)**:
+   - `SmsParser.isCardApprovalMessage(body)` 신설: `[Web발신]`, 카드사명, `승인`, `일시불`, `할부`, `승인취소`, `결제완료`, `사용처`, `가맹점` 등 카드 결제 시그니처를 정밀 판별.
+   - `SmsParser.parse()`에서 **모든 카드사 전용 파서 및 범용 카드 파서(`parseUniversalCardSms`)를 은행 계좌이체 파서보다 최우선 실행**하도록 파이프라인 순서를 전면 재설계.
+   - `parseUniversalCardSms()` 추가: 카드사 양식이 변경되거나 줄바꿈이 불규칙한 멀티라인 SMS/LMS/RCS에서도 금액, 승인/취소 여부, 일시, 가맹점명을 100% 추출.
+   - `resolveTimestamp(fallbackDateTime, month, day, hour, minute)` 도입: 메시지 수신 시각(`fallbackDateTime`)을 기준으로 연도를 역산하여 날짜 왜곡 원천 차단.
+   - `cleanMerchantName()` 정교화: `체크출금 승인`, `일시불` 등 결제 상태 단독 라인을 가맹점명 후보에서 제외하고 불완전 법인 표기(`(주`, `주)`, `(주)가`)를 깔끔히 정제.
+2. **주유소 키워드 대폭 확장 및 원문(`originalText`) 교차 검증 (`RuleMatcherEngine.kt`, `VehicleRepositoryImpl.kt`, `FuelEconomyCalculator.kt`)**:
+   - `지에스칼텍스`, `SK에너지`, `SK엔크린`, `HD현대오일뱅크`, `S-OIL`, `에스오일`, `한국도로공사`, `ex-oil`, `알뜰주유소`, `주유소`, `셀프주유`, `유진주유소` 등 주유/충전 키워드 전수 망라.
+   - 가맹점명(`merchantName`)이 일부 잘리더라도 문자 원문(`originalText`)에 주유 키워드가 존재하면 `ExpenseCategory.CAR_FUEL`로 정확히 분류하도록 2중 안전망 구축.
+3. **삼성 One UI 호환 MMS 벌크 스캐너 및 RCS/통합 대화 스캔 엔진 탑재 (`HistoricalDataImporter.kt`)**:
+   - `getMmsBody()`에서 삼성 One UI 크래시를 유발하던 `"_data"` 컬럼 프로젝션을 전면 제거(`arrayOf("_id", "ct", "text")` 및 `null` 프로젝션 폴백 적용).
+   - `preloadBulkMmsParts()` 신설: `content://mms/part` 전체를 단일 벌크 쿼리로 선로딩하여 N+1 쿼리 병목 제거 및 수천 건의 LMS/MMS 본문 초고속 추출.
+   - `scanRcsAndUnifiedMessages()` 및 `recoverIsolatedRcsTransactions()` 탑재: `content://mms-sms/complete-conversations`, `content://im/chat`, `content://im/rcs_read_im` 등 삼성 채팅+(RCS) 프로바이더를 전수 스캔하고, One UI 보안 정책으로 격리된 주유/카드 내역까지 누락 없이 자동 복원.
+   - 기본 스캔 범위를 **365일(1년, 최대 5,000건)**로 확대하고 시간 오름차순 정렬(`sortedBy { it.timestamp }`)을 보장하여 셀프주유소 `가승인(150,000원) -> 실결제 -> 가승인 취소(-150,000원)` 시퀀스가 완벽하게 상쇄되도록 구현.
+4. **푸시 알림 멀티라인 전수 추출 및 즉시 동기화 (`LifelogNotificationListenerService.kt`, `SmsBroadcastReceiver.kt`, `MmsBroadcastReceiver.kt`)**:
+   - `Notification.EXTRA_TEXT`, `EXTRA_BIG_TEXT`, `EXTRA_SUB_TEXT`, `EXTRA_TEXT_LINES`, `EXTRA_MESSAGES`(MessagingStyle 배열)를 모두 결합하여 멀티라인 RCS/카드 푸시 알림 본문을 무손실 추출.
+   - `onListenerConnected()` 시점에 상태바의 활성 알림(`activeNotifications`)을 즉시 스캔하여 앱 미실행 중 도착한 알림까지 포착.
+   - SMS/MMS/푸시 수신으로 주유 내역이 감지되면 즉시 `vehicleRepository.syncRefuelingFromTransactions()`를 호출하여 차계부 주유 기록 실시간 갱신.
+5. **기존 DB 오분류 레코드 자가 치유(Self-Healing) 엔진 탑재 (`TransactionRepositoryImpl.kt`)**:
+   - `cleanDuplicates()` 실행 시 기존 DB에 `TRANSFER`나 `ETC`로 잘못 저장되어 있던 카드 승인 및 주유소 결제 레코드를 `SmsParser` 및 `RuleMatcherEngine`으로 재평가하여, 올바른 결제수단(`CREDIT_CARD`/`CHECK_CARD`), 가맹점명, 카테고리(`CAR_FUEL` 등)로 **자동 교정(Self-Healing)**하도록 구현.
+6. **앱 실행 시 무복사 자동 스캔 및 최근 거래 월 자동 포커싱 (`MainActivity.kt`, `ExpenseViewModel.kt`, `CarLedgerViewModel.kt`)**:
+   - `MainActivity` 시작 및 `ExpenseViewModel` 초기화 시 `READ_SMS` 권한이 있으면 사용자 조작 없이 백그라운드에서 즉시 365일 결제 문자 자동 스캔 및 차계부 주유 동기화 수행.
+   - 현재 월(10월)에 거래 내역이 0건이고 과거 월(예: 9월)에 거래 내역이 존재할 경우, 최초 1회 가장 최근 거래가 있는 월로 자동 이동(`hasAutoFocusedMonth`)하여 앱 진입 즉시 집계된 카드/주유 내역이 화면에 표시되도록 UX 개선.
+
+### 66.3. 변경된 주요 소스 파일 요약
+
+| 파일 경로 | 주요 변경 내용 |
+| :--- | :--- |
+| `app/src/main/java/com/autologue/app/data/parser/SmsParser.kt` | `isCardApprovalMessage`, `parseUniversalCardSms`, `resolveTimestamp` 신설, 카드 승인 파서 최우선 배치, `cleanMerchantName` 결제상태 라인 제외 |
+| `app/src/main/java/com/autologue/app/data/parser/NotificationParser.kt` | 문자/카드 앱 및 카드 승인 알림 우선 처리, 은행 계좌이체 알림 정밀 분리 |
+| `app/src/main/java/com/autologue/app/data/parser/RuleMatcherEngine.kt` | 주유소/충전소 키워드 확장 및 `originalText` 기반 주유 카테고리 폴백 분류 추가 |
+| `app/src/main/java/com/autologue/app/data/sync/HistoricalDataImporter.kt` | 삼성 One UI MMS `"_data"` 프로젝션 제거, `preloadBulkMmsParts` 벌크 스캐너, RCS/통합 대화 스캔 및 365일(5,000건) 전수 스캔 탑재 |
+| `app/src/main/java/com/autologue/app/service/LifelogNotificationListenerService.kt` | `EXTRA_TEXT_LINES` 및 `EXTRA_MESSAGES` 멀티라인 추출, `onListenerConnected` 활성 알림 스캔, 차계부 즉시 동기화 |
+| `app/src/main/java/com/autologue/app/service/SmsBroadcastReceiver.kt` | 주유 문자 수신 시 `vehicleRepository.syncRefuelingFromTransactions` 실시간 연동 |
+| `app/src/main/java/com/autologue/app/service/MmsBroadcastReceiver.kt` | 장문 MMS 주유 문자 수신 시 차계부 실시간 동기화 연동 |
+| `app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt` | 과잉 중복 차단 해소 및 기존 DB 오분류 카드/주유 레코드 자가 치유(Self-Healing) 로직 탑재 |
+| `app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt` | `originalText` 주유 키워드 교차 검증 및 미배정 차량 로그(`defaultVehicleId`) 매칭 보장 |
+| `app/src/main/java/com/autologue/app/domain/usecase/expense/ProcessTransactionUseCase.kt` | 주유 거래 처리 시 전체 트랜잭션 기준 가승인/취소 상쇄 동기화 호출 |
+| `app/src/main/java/com/autologue/app/MainActivity.kt` | 앱 시작 시 `READ_SMS` 권한 보유 시 백그라운드 자동 동기화 즉시 실행 |
+| `app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt` | 진입 시 자동 동기화 및 당월 거래 0건 시 최근 거래 월 자동 포커싱 구현 |
+| `app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt` | 차량 미선택 시 첫 번째 차량 자동 선택 및 365일 주유 내역 자동 동기화 |
+| `app/src/test/java/com/autologue/app/data/parser/SmsParserTest.kt` | 카드번호/전화번호/체크출금 포함 카드 문자 오분류 방어 및 범용 멀티라인 카드 파서 단위 테스트 추가 |
+
+### 66.4. 빌드 및 테스트 검증 결과
+- **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 전체 테스트 케이스(95건) 100% 통과 (`BUILD SUCCESSFUL`).
+- **디버그 APK 빌드**: `.\gradlew.bat assembleDebug` 성공 (`app/build/outputs/apk/debug/app-debug.apk`).

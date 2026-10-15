@@ -282,4 +282,85 @@ class SmsParserTest {
         val merchants = parsedList.map { it.merchantName }.toSet()
         assertEquals(setOf("한국도로공사하", "지에스칼텍스", "유진주유소"), merchants)
     }
+
+    @Test
+    fun parseCardSmsWithPhoneOrBalance_neverMisclassifiedAsBankTransfer() {
+        // 고객센터 전화번호(1588-1600)나 카드 마스킹 번호, 체크출금/잔액 문구가 함께 포함된 카드 승인 문자
+        val raw = """
+            [Web발신]
+            KB국민체크(1234)
+            정선우님
+            09/25 14:20
+            68,000원 체크출금 승인
+            SK에너지 강남주유소
+            잔액 520,000원
+            문의 1588-1688
+        """.trimIndent()
+
+        val tx = SmsParser.parse("1588-1688", raw)
+        assertNotNull(tx)
+        assertEquals(68000L, tx?.amount)
+        assertEquals(ExpenseCategory.FUEL, tx?.category)
+        assertEquals(com.autologue.app.domain.model.PaymentMethod.CHECK_CARD, tx?.paymentMethod)
+        // 본인 계좌 이체(isSelfTransfer)로 오인되어 지출 합계에서 누락되지 않아야 함
+        assertEquals(false, tx?.category == ExpenseCategory.TRANSFER)
+    }
+
+    @Test
+    fun parseMultilineSamsungAndKbCardSms_extractsFuelAndCardCorrectly() {
+        val samsungMultiline = """
+            [Web발신]
+            삼성카드 3412 승인
+            정*우
+            82,000원 일시불
+            09/28 19:15
+            에쓰오일 판교주유소
+            누적 1,450,000원
+        """.trimIndent()
+        val tx1 = SmsParser.parse("1588-8700", samsungMultiline)
+        assertNotNull(tx1)
+        assertEquals(82000L, tx1?.amount)
+        assertEquals(ExpenseCategory.FUEL, tx1?.category)
+        assertEquals(com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD, tx1?.paymentMethod)
+
+        val universalCard = """
+            [Web발신]
+            우리카드(9*1*) 승인
+            정*우님
+            45,000원 일시불
+            09/29 12:40
+            스타벅스 코리아
+            누적 890,000원
+        """.trimIndent()
+        val tx2 = SmsParser.parse("1588-9955", universalCard)
+        assertNotNull(tx2)
+        assertEquals(45000L, tx2?.amount)
+        assertEquals(ExpenseCategory.CAFE, tx2?.category)
+        assertEquals(com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD, tx2?.paymentMethod)
+    }
+
+    @Test
+    fun notificationParser_samsungMessagingRcsAndCardApp_parsesFuelAndCardAccurately() {
+        val rcsText = """
+            [Web발신]
+            NH카드6*9*승인
+            정*우
+            101,000원 일시불
+            09/27 18:31
+            한국도로공사하
+            총누적2,033,130원
+        """.trimIndent()
+
+        val res = com.autologue.app.data.parser.NotificationParser.parse(
+            packageName = "com.samsung.android.messaging",
+            title = "NH농협카드 (1588-1600)",
+            text = rcsText
+        )
+        assertNotNull(res)
+        val txResult = res as com.autologue.app.data.parser.NotificationParser.ParsedNotificationResult.TxResult
+        assertEquals(101000L, txResult.transaction.amount)
+        assertEquals("한국도로공사하", txResult.transaction.merchantName)
+        assertEquals(ExpenseCategory.FUEL, txResult.transaction.category)
+        assertEquals(com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD, txResult.transaction.paymentMethod)
+    }
 }

@@ -19,6 +19,9 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
     @Inject
     lateinit var processTransactionUseCase: ProcessTransactionUseCase
 
+    @Inject
+    lateinit var vehicleRepository: com.autologue.app.domain.repository.VehicleRepository
+
     // [H-04] 외부 정적 Scope 제거 — goAsync() 기반 패턴으로 전환
     //   기존: private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     //   → onReceive() 반환 후 시스템 프로세스 종료 가능 → DB 기록 유실 위험
@@ -30,13 +33,14 @@ class SmsBroadcastReceiver : BroadcastReceiver() {
                 val fullBody = messages.joinToString("") { it.messageBody ?: "" }
                 val sender = messages.firstOrNull()?.originatingAddress
 
-                val parsedTx = SmsParser.parse(sender, fullBody) ?: return
+                val parsedTx = SmsParser.parse(sender, fullBody) ?: SmsParser.parse(null, fullBody) ?: return
 
                 // [H-04] goAsync(): onReceive() 반환 후에도 프로세스를 살려 DB 기록 완료를 보장
                 val pendingResult = goAsync()
                 CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                     try {
                         runCatching { processTransactionUseCase(parsedTx) }
+                        runCatching { vehicleRepository.syncRefuelingFromTransactions(listOf(parsedTx)) }
                     } finally {
                         // 코루틴 완료 후 PendingResult.finish() → 시스템에 작업 완료 신호
                         pendingResult.finish()

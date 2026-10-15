@@ -38,15 +38,32 @@ class LifelogNotificationListenerService : NotificationListenerService() {
         private val recentNotificationCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        runCatching {
+            activeNotifications?.forEach { sbn ->
+                handleStatusBarNotification(sbn)
+            }
+        }
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
-        val sbnNonNull = sbn ?: return
-        val extras = sbnNonNull.notification.extras ?: return
-        val title = extras.getString("android.title") ?: ""
-        val text = extras.getCharSequence("android.text")?.toString() ?: ""
-        val packageName = sbnNonNull.packageName ?: ""
+        if (sbn != null) {
+            handleStatusBarNotification(sbn)
+        }
+    }
 
-        val cacheKey = "${packageName}_${title.trim()}_${text.trim()}"
+    private fun handleStatusBarNotification(sbn: StatusBarNotification) {
+        val extras = sbn.notification?.extras ?: return
+        val packageName = sbn.packageName ?: ""
+        if (packageName == applicationContext.packageName) return
+
+        val title = (extras.getCharSequence("android.title") ?: extras.getCharSequence("android.conversationTitle"))?.toString() ?: ""
+        val fullText = extractFullNotificationText(extras)
+        if (title.isBlank() && fullText.isBlank()) return
+
+        val cacheKey = "${packageName}_${title.trim()}_${fullText.trim()}"
         val now = System.currentTimeMillis()
         val lastTime = recentNotificationCache[cacheKey]
         if (lastTime != null && (now - lastTime) < 10_000L) {
@@ -58,13 +75,16 @@ class LifelogNotificationListenerService : NotificationListenerService() {
             recentNotificationCache.entries.removeIf { (now - it.value) > 30_000L }
         }
 
-        val result = NotificationParser.parse(packageName, title, text) ?: return
+        val result = NotificationParser.parse(packageName, title, fullText) ?: return
 
         scope.launch {
             try {
                 when (result) {
                     is NotificationParser.ParsedNotificationResult.TxResult -> {
                         processTransactionUseCase(result.transaction)
+                        runCatching {
+                            vehicleRepository.syncRefuelingFromTransactions(listOf(result.transaction))
+                        }
                     }
                     is NotificationParser.ParsedNotificationResult.GolfzonResult -> {
                         val round = GolfRound(
@@ -90,6 +110,55 @@ class LifelogNotificationListenerService : NotificationListenerService() {
                 android.util.Log.e("NotificationListener", "알림 처리 중 예외 안전 포획", t)
             }
         }
+    }
+
+    /**
+     * 삼성 메시지(채팅+ RCS), 구글 메시지, 카드사 앱의 멀티라인 알림(bigText, textLines, MessagingStyle messages) 본문을
+     * 누락 없이 전수 추출합니다.
+     */
+    private fun extractFullNotificationText(extras: android.os.Bundle): String {
+        val parts = mutableListOf<String>()
+
+        val text = extras.getCharSequence("android.text")?.toString()?.trim() ?: ""
+        val bigText = extras.getCharSequence("android.bigText")?.toString()?.trim() ?: ""
+
+        if (bigText.isNotBlank() && bigText.length >= text.length) {
+            parts.add(bigText)
+        } else if (text.isNotBlank()) {
+            parts.add(text)
+        }
+
+        // InboxStyle textLines 추출
+        runCatching {
+            val textLines = extras.getCharSequenceArray("android.textLines")
+            if (!textLines.isNullOrEmpty()) {
+                val joinedLines = textLines.mapNotNull { it?.toString()?.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n")
+                if (joinedLines.isNotBlank() && !parts.any { it.contains(joinedLines) }) {
+                    parts.add(joinedLines)
+                }
+            }
+        }
+
+        // MessagingStyle (RCS 채팅+ 등) android.messages 배열 추출
+        runCatching {
+            @Suppress("DEPRECATION")
+            val messages = extras.getParcelableArray("android.messages")
+            if (!messages.isNullOrEmpty()) {
+                val msgTexts = messages.mapNotNull { item ->
+                    (item as? android.os.Bundle)?.getCharSequence("text")?.toString()?.trim()
+                }.filter { it.isNotBlank() }
+                if (msgTexts.isNotEmpty()) {
+                    val lastMsg = msgTexts.last()
+                    if (!parts.any { it.contains(lastMsg) }) {
+                        parts.add(lastMsg)
+                    }
+                }
+            }
+        }
+
+        return parts.joinToString("\n").trim()
     }
 
     /**

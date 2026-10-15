@@ -41,13 +41,15 @@ object NotificationParser {
     fun parse(packageName: String, title: String, text: String): ParsedNotificationResult? {
         val combined = "$title $text".trim()
 
-        // 0. 삼성 메시지 / 구글 메시지 / 문자 RCS 실시간 알림 파싱 (채팅+ 기업 메시지 포함)
-        val isMessagingApp = packageName.contains("messaging") ||
+        // 0. 삼성 메시지 / 구글 메시지 / 문자 RCS / 카드사 앱 실시간 알림 파싱 (채팅+ 기업 메시지 포함)
+        val isMessagingOrCardApp = packageName.contains("messaging") ||
             packageName.contains("mms") ||
             packageName == "com.samsung.android.messaging" ||
-            packageName == "com.google.android.apps.messaging"
+            packageName == "com.google.android.apps.messaging" ||
+            packageName.contains("card") ||
+            packageName.contains("paybooc")
 
-        if (isMessagingApp || combined.contains("[Web발신]") || (combined.contains("승인") && combined.contains("원"))) {
+        if (isMessagingOrCardApp || combined.contains("[Web발신]") || SmsParser.isCardApprovalMessage(combined) || (combined.contains("승인") && combined.contains("원"))) {
             val parsedTx = SmsParser.parse(title, text) ?: SmsParser.parse(null, combined)
             if (parsedTx != null) {
                 return ParsedNotificationResult.TxResult(parsedTx)
@@ -63,7 +65,7 @@ object NotificationParser {
                     if (amount <= 0) continue
                     val receiver = sendMatcher.group("receiver")?.trim() ?: "카카오페이 송금"
                     val memo = runCatching { sendMatcher.group("memo")?.trim() }.getOrNull()
-                    val category = RuleMatcherEngine.classifyMerchant("$receiver ${memo ?: ""}")
+                    val category = RuleMatcherEngine.classifyMerchant("$receiver ${memo ?: ""}", originalText = combined)
 
                     return ParsedNotificationResult.TxResult(
                         Transaction(
@@ -89,7 +91,7 @@ object NotificationParser {
                     var merchant = payMatcher.group("merchant")?.trim() ?: "카카오페이 가맹점"
                     merchant = merchant.replace("결제", "").replace("완료", "").replace("승인", "").trim()
                     if (merchant.isBlank()) merchant = "카카오페이 가맹점"
-                    val category = RuleMatcherEngine.classifyMerchant(merchant)
+                    val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = combined)
 
                     return ParsedNotificationResult.TxResult(
                         Transaction(
@@ -117,7 +119,7 @@ object NotificationParser {
                     val merchant = runCatching { tossMatcher.group("merchant")?.trim() }.getOrNull()
                         ?: runCatching { tossMatcher.group("receiver")?.trim() }.getOrNull()
                         ?: "토스 결제/송금"
-                    val category = RuleMatcherEngine.classifyMerchant(merchant)
+                    val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = combined)
 
                     return ParsedNotificationResult.TxResult(
                         Transaction(
@@ -135,13 +137,13 @@ object NotificationParser {
             }
         }
 
-        // 3. 은행 계좌 이체/출금 전용 정밀 파싱 (NH농협, KB국민, 신한, 우리, 하나 등)
-        // 예: "09/14 00:23 312-****-9414-21 이민희 22,000원 출금 잔액383,252원"
-        //     "[NH스마트알림] 22,000원 출금 09/14 00:23 312-****-9414-21 이민희 잔액383,252원"
-        //     "09/14 00:23 312-****-9414-21 이민희 잔액383,252원 22,000원"
-        val isBankTransferNotice = combined.contains("출금") || combined.contains("송금") ||
+        // 3. 은행 계좌 이체/출금 전용 정밀 파싱 (단, 카드 승인 알림은 절대 가로채지 않도록 방어)
+        val isCardApproval = SmsParser.isCardApprovalMessage(combined)
+        val isBankTransferNotice = !isCardApproval && (
+            combined.contains("출금") || combined.contains("송금") ||
                 combined.contains("이체") || combined.contains("잔액") ||
                 Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(combined)
+            )
         if (isBankTransferNotice) {
             val transferTx = parseBankTransferNotification(packageName, combined)
             if (transferTx != null) {
@@ -155,11 +157,17 @@ object NotificationParser {
             if (bankMatcher.find()) {
                 val amount = bankMatcher.group("amount")?.replace(",", "")?.toLongOrNull() ?: 0L
                 if (amount <= 0) continue
-                val bank = runCatching { bankMatcher.group("bank")?.trim() }.getOrNull() ?: "은행 앱 알림"
+                val bank = runCatching { bankMatcher.group("bank")?.trim() }.getOrNull() ?: "카드/은행 알림"
                 var merchant = runCatching { bankMatcher.group("merchant")?.trim() }.getOrNull() ?: "가맹점"
                 merchant = merchant.replace("승인", "").replace("완료", "").replace("출금", "").trim()
                 val parsedDateTime = extractDateTime(combined)
-                val category = RuleMatcherEngine.classifyMerchant(merchant)
+                val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = combined)
+                val isCard = isCardApproval || bank.contains("카드") || combined.contains("카드") || combined.contains("승인")
+                val paymentMethod = when {
+                    combined.contains("체크") -> PaymentMethod.CHECK_CARD
+                    isCard -> PaymentMethod.CREDIT_CARD
+                    else -> PaymentMethod.BANK_TRANSFER
+                }
 
                 return ParsedNotificationResult.TxResult(
                     Transaction(
@@ -167,7 +175,7 @@ object NotificationParser {
                         merchantName = merchant,
                         originalText = combined,
                         timestamp = parsedDateTime,
-                        paymentMethod = PaymentMethod.BANK_TRANSFER,
+                        paymentMethod = paymentMethod,
                         category = category,
                         cardOrBankName = bank,
                         isAutoCategorized = category != ExpenseCategory.ETC
@@ -207,7 +215,9 @@ object NotificationParser {
             val hour = m.group("hour")?.toIntOrNull() ?: fallback.hour
             val minute = m.group("minute")?.toIntOrNull() ?: fallback.minute
             return runCatching {
-                LocalDateTime.of(fallback.year, month, day, hour, minute)
+                val candidate = LocalDateTime.of(fallback.year, month, day, hour, minute)
+                val now = LocalDateTime.now()
+                if (candidate.isAfter(now.plusDays(1))) candidate.minusYears(1) else candidate
             }.getOrDefault(fallback)
         }
         return fallback

@@ -2,6 +2,7 @@ package com.autologue.app.domain.usecase.expense
 
 import com.autologue.app.domain.model.*
 import com.autologue.app.domain.repository.*
+import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 import javax.inject.Inject
 
@@ -43,7 +44,8 @@ class ProcessTransactionUseCase @Inject constructor(
         val txId = transactionRepository.insertTransaction(enrichedTx)
 
         val isFuel = finalCategory == ExpenseCategory.FUEL ||
-            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(enrichedTx.merchantName)
+            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(enrichedTx.merchantName) ||
+            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(enrichedTx.originalText)
 
         if (isFuel) {
             if (enrichedTx.category != ExpenseCategory.FUEL) {
@@ -54,22 +56,12 @@ class ProcessTransactionUseCase @Inject constructor(
                 // 승인취소 시 해당 금액의 차계부 가승인 주유 로그 즉시 삭제
                 val cancelAmt = Math.abs(enrichedTx.amount)
                 vehicleRepository.deleteRefuelingLogByTransaction(cancelAmt, enrichedTx.timestamp.toLocalDate(), enrichedTx.merchantName)
-            } else if (enrichedTx.amount > 0) {
-                val lastFuel = vehicleRepository.getLatestRefuelingLog()
-                val daysSince = if (lastFuel != null) {
-                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), enrichedTx.timestamp.toLocalDate()).toInt()
-                } else null
+            }
 
-                val vehicleLog = VehicleLog(
-                    timestamp = enrichedTx.timestamp,
-                    logType = VehicleLogType.REFUELING,
-                    fuelCost = enrichedTx.amount,
-                    fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", enrichedTx.amount / 1650.0).toDouble(),
-                    daysSinceLastFuel = daysSince,
-                    gasStationName = enrichedTx.merchantName,
-                    note = "가계부 결제 연동 자동 기록"
-                )
-                vehicleRepository.insertVehicleLog(vehicleLog)
+            // 순서 무관(과거 스캔 시 역순 처리 포함) 가승인 15만원 상쇄 및 실주유 내역 정합성 보장을 위해 전체 트랜잭션 기준 동기화 수행
+            runCatching {
+                val allTxs = transactionRepository.getAllTransactionsFlow().first()
+                vehicleRepository.syncRefuelingFromTransactions(allTxs)
             }
         }
 

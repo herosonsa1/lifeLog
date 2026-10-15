@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var golfRepository: GolfRepository
     @Inject lateinit var historicalDataImporter: HistoricalDataImporter
     @Inject lateinit var scorecardOcrAnalyzer: com.autologue.app.data.ocr.ScorecardOcrAnalyzer
+    @Inject lateinit var processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
 
     private val _isInitialSyncDone = MutableStateFlow(false)
     val isInitialSyncDone: StateFlow<Boolean> = _isInitialSyncDone.asStateFlow()
@@ -63,8 +64,10 @@ class MainActivity : ComponentActivity() {
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ ->
-        // Permissions handled on startup
+    ) { grantResults ->
+        if (grantResults[Manifest.permission.READ_SMS] == true) {
+            syncInitialData()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -163,10 +166,26 @@ class MainActivity : ComponentActivity() {
             try {
                 Log.d("AUTOLOGUE_INIT", "Starting syncInitialData...")
 
-                // [더미 데이터 영구 제거] 실제 모바일 단말기의 SMS/사진/알림 데이터만으로 기록 및 분석 수행
+                // 1. 기존 DB 내 오분류/중복 레코드 자가 치유
+                runCatching { transactionRepository.cleanDuplicates() }
+
+                // 2. 기기 내 결제 문자(SMS/LMS/MMS/RCS) 자동 스캔 및 가계부 적재
+                runCatching {
+                    val scanResult = historicalDataImporter.scanHistoricalSmsDetailed(
+                        context = this@MainActivity,
+                        daysBack = 365,
+                        limit = 5000
+                    )
+                    for (tx in scanResult.transactions) {
+                        runCatching { processTransactionUseCase(tx) }
+                    }
+                }
+
+                // 3. 스캔 후 정제 및 차계부 주유 기록 전자동 동기화
+                runCatching { transactionRepository.cleanDuplicates() }
                 val allTxs = transactionRepository.getAllTransactionsFlow().first()
                 val syncedCount = vehicleRepository.syncRefuelingFromTransactions(allTxs)
-                Log.d("AUTOLOGUE_INIT", "Synced $syncedCount refueling logs to car ledger")
+                Log.d("AUTOLOGUE_INIT", "Synced $syncedCount refueling logs to car ledger (total txs=${allTxs.size})")
             } catch (e: Exception) {
                 Log.e("AUTOLOGUE_INIT", "Error during syncInitialData", e)
             } finally {

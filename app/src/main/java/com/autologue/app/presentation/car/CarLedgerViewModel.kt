@@ -176,15 +176,15 @@ class CarLedgerViewModel @Inject constructor(
                     enrichedFuelMap[log.id] ?: log
                 }
 
-                // 선택된 차량의 주유 로그 필터링
+                // 선택된 차량의 주유 로그 필터링 (미배정 자동 수집 주유 내역은 선택된 차량에 표시)
                 val vehicleFuelLogs = enrichedLogs.filter {
-                    it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId() == selectedId
+                    it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
                 }
                 val totalFuel = vehicleFuelLogs.sumOf { it.fuelCost }
 
                 // 선택된 차량의 총 주행거리 (주행 로그 및 다이어리 종합)
                 val vehicleDrivingLogs = enrichedLogs.filter {
-                    it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId() == selectedId
+                    it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
                 }
                 val vehicleLogDist = vehicleDrivingLogs.sumOf { it.tripDistanceKm }
                 val diaryDist = diaryLookup(null, LocalDateTime.now())
@@ -210,7 +210,7 @@ class CarLedgerViewModel @Inject constructor(
 
                 // 표시할 로그 목록: 현재 차량 필터 여부에 따라 분기
                 val displayedLogs = if (_uiState.value.filterCurrentVehicleOnly) {
-                    enrichedLogs.filter { it.getAssignedVehicleId() == selectedId }
+                    enrichedLogs.filter { it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId }
                 } else {
                     enrichedLogs
                 }
@@ -385,34 +385,30 @@ class CarLedgerViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSyncing = true)
 
-            // 0. 권한 체크
+            // 0. 기존 DB 내 오분류된 카드/주유 내역 자가 치유 선행
+            runCatching { transactionRepository.cleanDuplicates() }
+
             val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
                 context,
                 android.Manifest.permission.READ_SMS
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-            if (!hasPerm) {
-                _uiState.value = _uiState.value.copy(
-                    isSyncing = false,
-                    syncResultMessage = "문자(SMS) 읽기 권한이 필요합니다. [주유 동기화]를 눌러 권한을 허용해주세요."
-                )
-                return@launch
-            }
 
             val cfg = locationPreferences.config.value
             val home = if (cfg.homeName.isNotBlank()) cfg.homeName else "우리집"
             val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
             val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
 
-            // 1. 기기 결제 문자(SMS/LMS) 최근 90일 전수 스캔 및 가계부/차계부 자동 적재
-            var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), true, 0)
-            runCatching {
-                scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 90, limit = 2000)
-                for (tx in scanResult.transactions) {
-                    processTransactionUseCase(tx)
+            // 1. 기기 결제 문자(SMS/LMS/MMS/RCS) 최근 365일 전수 스캔 및 가계부/차계부 자동 적재
+            var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), hasPerm, 0)
+            if (hasPerm) {
+                runCatching {
+                    scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
+                    for (tx in scanResult.transactions) {
+                        processTransactionUseCase(tx)
+                    }
+                }.onFailure {
+                    android.util.Log.e("CarLedgerViewModel", "SMS/MMS 스캔 또는 처리 중 예외", it)
                 }
-            }.onFailure {
-                android.util.Log.e("CarLedgerViewModel", "SMS/MMS 스캔 또는 처리 중 예외", it)
             }
 
             // 2. 실제 골프 라운드 DB(18홀 유효)와 대조하여 누락된 주행기록 자동 복원 및 유령 레코드(8.8, 9.1 등) 영구 삭제
@@ -423,6 +419,7 @@ class CarLedgerViewModel @Inject constructor(
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
 
             // 4. 주유 결제 내역 동기화 (셀프주유소 가승인 15만원 자동 선별 및 실주유액 등록)
+            runCatching { transactionRepository.cleanDuplicates() }
             val txs = transactionRepository.getAllTransactionsFlow().first()
             val addedCount = vehicleRepository.syncRefuelingFromTransactions(txs)
 
@@ -434,18 +431,16 @@ class CarLedgerViewModel @Inject constructor(
 
             val totalScanned = scanResult.totalMessagesScanned
             val msg = when {
-                !scanResult.isPermissionGranted ->
-                    "문자(SMS) 읽기 권한이 허용되지 않았습니다. 앱 설정에서 권한을 허용해주세요."
+                !hasPerm && totalFuelLogs == 0 ->
+                    "문자(SMS) 읽기 권한이 필요합니다. [주유 동기화]를 눌러 권한을 허용해주세요."
                 addedCount > 0 ->
-                    "기기 결제 문자(SMS/MMS)에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다."
-                scanResult.transactions.isNotEmpty() && totalFuelLogs > 0 ->
-                    "기기 문자 총 ${totalScanned}건(SMS ${scanResult.smsCount}, MMS ${scanResult.mmsCount}) 스캔 완료: 모든 주유 내역(총 ${totalFuelLogs}건)이 이미 최신 상태입니다."
-                totalScanned > 0 ->
-                    "기기 문자 총 ${totalScanned}건(SMS ${scanResult.smsCount}, MMS ${scanResult.mmsCount})을 분석했으나 신규 주유 내역을 찾지 못했습니다."
+                    "결제 문자에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다 (총 ${totalFuelLogs}건)."
                 totalFuelLogs > 0 ->
-                    "기기 문자 수신함이 비어있습니다 (0건 스캔). 기존 주유 기록 ${totalFuelLogs}건을 표시 중입니다. (삼성 갤럭시 채팅+(RCS)는 [문자 붙여넣기] 지원)"
+                    "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 최신 상태로 자동 동기화되었습니다."
+                totalScanned > 0 ->
+                    "기기 문자 총 ${totalScanned}건을 분석했으나 신규 주유 내역을 찾지 못했습니다."
                 else ->
-                    "기기 문자 수신함에서 문자를 찾지 못했습니다 (0건 스캔). 삼성 갤럭시 채팅+(RCS)는 OS 보안상 [문자 붙여넣기]를 이용해주세요."
+                    "주유 결제 내역 스캔을 완료했습니다."
             }
             _uiState.value = _uiState.value.copy(isSyncing = false, syncResultMessage = msg)
         }

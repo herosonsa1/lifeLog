@@ -56,8 +56,7 @@ class TransactionRepositoryImpl @Inject constructor(
             val existingMillis = existing.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
             val timeDiff = Math.abs(existingMillis - timestampMillis)
 
-            isExactMerchant || (isSimilarMerchant && timeDiff <= 3 * 60 * 1000L) ||
-                    (existing.category == transaction.category && timeDiff <= 2 * 60 * 1000L)
+            isExactMerchant || (isSimilarMerchant && timeDiff <= 3 * 60 * 1000L)
         }
 
         if (duplicate != null) {
@@ -90,12 +89,49 @@ class TransactionRepositoryImpl @Inject constructor(
         val all = transactionDao.getAllTransactionsSync()
         val toDeleteIds = mutableSetOf<Long>()
 
-        // 1. 기존 DB 내 오분류된 이체/출금 카테고리 자동 교정
+        // 1. 기존 DB 내 오분류된 카드 승인 및 주유 내역 자가 치유 (Self-Healing)
         for (tx in all) {
-            if (tx.category == ExpenseCategory.ETC) {
+            val raw = tx.originalText
+            val isManual = raw.startsWith("[직접 입력]") || raw.startsWith("[차계부 직접 입력]")
+            val isCardMsg = !isManual && com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(raw)
+
+            if (isCardMsg && (
+                    tx.paymentMethod == com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER ||
+                    tx.category == ExpenseCategory.TRANSFER ||
+                    tx.category == ExpenseCategory.ETC ||
+                    tx.merchantName in listOf("출금 내역", "계좌 이체", "카드 가맹점", "가맹점", "정선우", "정*우")
+                )
+            ) {
+                val reparsed = com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
+                    ?: com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
+                if (reparsed != null) {
+                    val healed = tx.copy(
+                        amount = reparsed.amount,
+                        merchantName = reparsed.merchantName,
+                        paymentMethod = reparsed.paymentMethod,
+                        category = reparsed.category,
+                        cardOrBankName = reparsed.cardOrBankName ?: tx.cardOrBankName,
+                        transferMemo = reparsed.transferMemo,
+                        isAutoCategorized = true
+                    )
+                    transactionDao.updateTransaction(healed)
+                    continue
+                }
+            }
+
+            // 주유 키워드가 상호명 또는 원문에 포함된 거래가 주유 외 카테고리로 잘못 분류된 경우 복원
+            val isFuel = VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
+                (!isManual && VehicleRepositoryImpl.isFuelMerchant(raw))
+            if (isFuel && tx.category != ExpenseCategory.FUEL) {
+                val healedCategory = tx.copy(category = ExpenseCategory.FUEL, isAutoCategorized = true)
+                transactionDao.updateTransaction(healedCategory)
+                continue
+            }
+
+            // 순수 은행 이체/출금 내역만 TRANSFER로 분류 (카드 승인 문자는 제외)
+            if (!isCardMsg && tx.category == ExpenseCategory.ETC) {
                 val fullText = "${tx.merchantName} ${tx.originalText} ${tx.transferMemo ?: ""}"
-                val hasTransferKeyword = fullText.contains("출금") || fullText.contains("송금") ||
-                        fullText.contains("이체") || Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(fullText)
+                val hasTransferKeyword = fullText.contains("출금") || fullText.contains("송금") || fullText.contains("이체")
                 if (hasTransferKeyword) {
                     val updated = tx.copy(category = ExpenseCategory.TRANSFER, isAutoCategorized = true)
                     transactionDao.updateTransaction(updated)
@@ -104,7 +140,8 @@ class TransactionRepositoryImpl @Inject constructor(
         }
 
         // 2. 퍼지 시간 윈도우 중복 탐지 (동일 금액 + 10분 이내 + 동일/유사 가맹점)
-        val sortedList = all.sortedBy { it.id }
+        val refreshedAll = transactionDao.getAllTransactionsSync()
+        val sortedList = refreshedAll.sortedBy { it.id }
         for (i in sortedList.indices) {
             val a = sortedList[i]
             if (a.id in toDeleteIds) continue

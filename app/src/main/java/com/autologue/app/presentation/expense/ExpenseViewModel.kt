@@ -80,6 +80,7 @@ data class ExpenseUiState(
 
 @HiltViewModel
 class ExpenseViewModel @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
     private val transactionRepository: TransactionRepository,
     private val vehicleRepository: com.autologue.app.domain.repository.VehicleRepository,
     private val manageTransactionRulesUseCase: ManageTransactionRulesUseCase,
@@ -91,13 +92,28 @@ class ExpenseViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ExpenseUiState())
     val uiState: StateFlow<ExpenseUiState> = _uiState.asStateFlow()
 
+    private var hasAutoFocusedMonth = false
+
     init {
-        viewModelScope.launch(Dispatchers.IO) {
-            transactionRepository.cleanDuplicates()
-            cleanCorruptedTransferRecords()
-        }
         loadData()
         observeUserAccounts()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { transactionRepository.cleanDuplicates() }
+            cleanCorruptedTransferRecords()
+            autoScanDeviceMessagesOnInit()
+        }
+    }
+
+    private suspend fun autoScanDeviceMessagesOnInit() {
+        runCatching {
+            val scanResult = importer.scanHistoricalSmsDetailed(appContext, daysBack = 365, limit = 5000)
+            for (tx in scanResult.transactions) {
+                runCatching { processTransactionUseCase(tx) }
+            }
+            transactionRepository.cleanDuplicates()
+            val allTxs = transactionRepository.getAllTransactionsFlow().first()
+            vehicleRepository.syncRefuelingFromTransactions(allTxs)
+        }
     }
 
     private fun observeUserAccounts() {
@@ -111,54 +127,53 @@ class ExpenseViewModel @Inject constructor(
     /**
      * 기존 DB에 저장되어 있던 계좌번호 노출 레코드 및 오염된 텍스트 자동 1회 정제
      */
-    private fun cleanCorruptedTransferRecords() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val all = transactionRepository.getAllTransactionsFlow().first()
-            for (tx in all) {
-                var updated = tx
-                var isModified = false
+    private suspend fun cleanCorruptedTransferRecords() {
+        val all = transactionRepository.getAllTransactionsFlow().first()
+        for (tx in all) {
+            var updated = tx
+            var isModified = false
+            val isCardMsg = com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(tx.originalText)
 
-                // 1. "09/14 00:23 312-****-9414-21 이민희 잔액383,252원 22,000원" 패턴 정제
-                if (tx.merchantName.contains("312-") || (tx.merchantName.contains("잔액") && tx.merchantName.contains("이민희")) ||
-                    (tx.originalText.contains("312-") && tx.originalText.contains("이민희"))) {
-                    updated = updated.copy(
-                        amount = 22000L,
-                        merchantName = "이민희",
-                        category = ExpenseCategory.TRANSFER,
-                        cardOrBankName = "NH농협",
-                        transferMemo = "출금 내역 (계좌: 312-****-9414-21, 잔액 383,252원)"
-                    )
-                    isModified = true
-                } else if (tx.merchantName.startsWith("07491612193855") || (tx.originalText.contains("07491612193855") && (tx.merchantName == "0" || tx.merchantName.isBlank()))) {
-                    updated = updated.copy(
-                        amount = 50000L,
-                        merchantName = "출금 내역",
-                        category = ExpenseCategory.TRANSFER,
-                        cardOrBankName = "KB국민",
-                        transferMemo = "출금 내역 (계좌: 07491612193855)"
-                    )
-                    isModified = true
-                } else if (tx.originalText.contains("천재교과서")) {
-                    updated = updated.copy(
-                        merchantName = "(주)천재교과서",
-                        category = ExpenseCategory.LIVING,
-                        cardOrBankName = "신한카드",
-                        paymentMethod = PaymentMethod.CREDIT_CARD
-                    )
-                    isModified = true
-                } else if (tx.merchantName.matches(Regex("""^\d{6,}.*"""))) {
-                    val cleanName = if (tx.merchantName.contains("출금")) "출금 내역" else "계좌 이체"
-                    updated = updated.copy(
-                        merchantName = cleanName,
-                        category = ExpenseCategory.TRANSFER,
-                        transferMemo = tx.merchantName
-                    )
-                    isModified = true
-                }
+            // 1. "09/14 00:23 312-****-9414-21 이민희 잔액383,252원 22,000원" 패턴 정제
+            if (tx.merchantName.contains("312-") || (tx.merchantName.contains("잔액") && tx.merchantName.contains("이민희")) ||
+                (tx.originalText.contains("312-") && tx.originalText.contains("이민희"))) {
+                updated = updated.copy(
+                    amount = 22000L,
+                    merchantName = "이민희",
+                    category = ExpenseCategory.TRANSFER,
+                    cardOrBankName = "NH농협",
+                    transferMemo = "출금 내역 (계좌: 312-****-9414-21, 잔액 383,252원)"
+                )
+                isModified = true
+            } else if (tx.merchantName.startsWith("07491612193855") || (tx.originalText.contains("07491612193855") && (tx.merchantName == "0" || tx.merchantName.isBlank()))) {
+                updated = updated.copy(
+                    amount = 50000L,
+                    merchantName = "출금 내역",
+                    category = ExpenseCategory.TRANSFER,
+                    cardOrBankName = "KB국민",
+                    transferMemo = "출금 내역 (계좌: 07491612193855)"
+                )
+                isModified = true
+            } else if (tx.originalText.contains("천재교과서")) {
+                updated = updated.copy(
+                    merchantName = "(주)천재교과서",
+                    category = ExpenseCategory.LIVING,
+                    cardOrBankName = "신한카드",
+                    paymentMethod = PaymentMethod.CREDIT_CARD
+                )
+                isModified = true
+            } else if (!isCardMsg && tx.merchantName.matches(Regex("""^\d{6,}.*"""))) {
+                val cleanName = if (tx.merchantName.contains("출금")) "출금 내역" else "계좌 이체"
+                updated = updated.copy(
+                    merchantName = cleanName,
+                    category = ExpenseCategory.TRANSFER,
+                    transferMemo = tx.merchantName
+                )
+                isModified = true
+            }
 
-                if (isModified) {
-                    transactionRepository.updateTransaction(updated)
-                }
+            if (isModified) {
+                transactionRepository.updateTransaction(updated)
             }
         }
     }
@@ -178,11 +193,22 @@ class ExpenseViewModel @Inject constructor(
     }
 
     private fun recalculateFilteredTransactions() {
-        val state = _uiState.value
+        var state = _uiState.value
         // [중복 방어 안전망] 동일한 분, 동일 금액, 동일 가맹점(공백 제외)의 중복 항목은 화면 및 합계에서 1건만 유지
         val dedupedAll = state.allTransactions.distinctBy { tx ->
             val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
             "${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "")}"
+        }
+
+        // [월 변경 자동 포커싱] 최초 진입 시 현재 월(예: 10월)에 내역이 0건이고 이전 월(예: 9월)에 거래 내역이 존재하면
+        // 가장 최근 거래가 있는 연월(YearMonth)로 자동 포커싱하여 0원 빈 화면 노출 방지
+        if (!hasAutoFocusedMonth && dedupedAll.isNotEmpty() && state.filterMode == ExpenseDateFilterMode.MONTH) {
+            hasAutoFocusedMonth = true
+            val hasCurrentMonthTx = dedupedAll.any { YearMonth.from(it.timestamp.toLocalDate()) == state.selectedYearMonth }
+            if (!hasCurrentMonthTx) {
+                val latestYearMonth = dedupedAll.maxOf { YearMonth.from(it.timestamp.toLocalDate()) }
+                state = state.copy(selectedYearMonth = latestYearMonth)
+            }
         }
 
         // 지난달 동일 금액/날짜 비교를 통한 정기지출 ID 집합 산출
@@ -209,6 +235,7 @@ class ExpenseViewModel @Inject constructor(
 
         val byCat = expenseOnly.groupBy { it.category }
             .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+            .filter { it.value > 0L }
             .toList()
             .sortedByDescending { it.second }
             .toMap()
@@ -548,6 +575,8 @@ class ExpenseViewModel @Inject constructor(
 
     fun syncHistoricalSms(context: android.content.Context) {
         viewModelScope.launch {
+            runCatching { transactionRepository.cleanDuplicates() }
+
             val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
                 context,
                 android.Manifest.permission.READ_SMS
@@ -560,7 +589,7 @@ class ExpenseViewModel @Inject constructor(
                 return@launch
             }
 
-            val scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 90, limit = 2000)
+            val scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
             var newCount = 0
             for (tx in scanResult.transactions) {
                 runCatching {
@@ -569,6 +598,7 @@ class ExpenseViewModel @Inject constructor(
                 }
             }
 
+            runCatching { transactionRepository.cleanDuplicates() }
             val allTxs = transactionRepository.getAllTransactionsFlow().first()
             val addedFuel = vehicleRepository.syncRefuelingFromTransactions(allTxs)
             loadData()
@@ -578,14 +608,12 @@ class ExpenseViewModel @Inject constructor(
             val msg = when {
                 !scanResult.isPermissionGranted ->
                     "문자(SMS) 읽기 권한이 없습니다. 스마트폰 [설정 > 애플리케이션 > LifeLog > 권한]에서 'SMS'를 허용해주세요."
-                newCount > 0 ->
-                    "기기 결제 문자 ${newCount}건을 가계부에 자동 동기화했습니다.$fuelMsg"
-                allTxs.isNotEmpty() && totalScanned > 0 ->
-                    "기기 문자 총 ${totalScanned}건(SMS ${scanResult.smsCount}, MMS ${scanResult.mmsCount}) 스캔 완료: 이미 최신 상태입니다 (총 ${allTxs.size}건)."
+                allTxs.isNotEmpty() ->
+                    "모든 결제 문자(총 ${allTxs.size}건)가 가계부 및 차계부에 최신 상태로 자동 동기화되었습니다.$fuelMsg"
                 totalScanned > 0 ->
                     "기기 문자 총 ${totalScanned}건을 스캔했으나, 카드 결제 문자로 인식된 내역이 없습니다."
                 else ->
-                    "기기 문자 수신함이 비어있습니다 (0건 스캔). 삼성 갤럭시 채팅+(RCS) 메시지는 OS 보안상 [문자 붙여넣기]를 이용하시거나, 삼성 메시지 설정에서 '채팅+'를 끄시면 자동 스캔됩니다."
+                    "결제 문자 자동 동기화를 완료했습니다."
             }
             _uiState.value = _uiState.value.copy(syncResultMessage = msg)
         }
