@@ -2466,8 +2466,9 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 | `app/src/main/java/com/autologue/app/MainActivity.kt` | 앱 시작 시 `READ_SMS` 권한 보유 시 백그라운드 자동 동기화 즉시 실행 |
 | `app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt` | 진입 시 자동 동기화 및 당월 거래 0건 시 최근 거래 월 자동 포커싱 구현 |
 | `app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt` | 차량 미선택 시 첫 번째 차량 자동 선택 및 365일 주유 내역 자동 동기화 |
-| `app/src/test/java/com/autologue/app/data/parser/SmsParserTest.kt` | 카드번호/전화번호/체크출금 포함 카드 문자 오분류 방어 및 범용 멀티라인 카드 파서 단위 테스트 추가 |
+| `app/src/test/java/com/autologue/app/SmsParserTest.kt` | 카드번호/전화번호/체크출금 포함 카드 문자 오분류 방어 및 범용 멀티라인 카드 파서 단위 테스트 추가 |
+| `app/build.gradle.kts` | 모든 빌드 변형(`applicationVariants.all`)의 최종 출력 APK 파일명을 `lifeLog.apk`로 고정 및 루트 경로 자동 동기화 설정 |
 
 ### 66.4. 빌드 및 테스트 검증 결과
 - **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 전체 테스트 케이스(95건) 100% 통과 (`BUILD SUCCESSFUL`).
-- **디버그 APK 빌드**: `.\gradlew.bat assembleDebug` 성공 (`app/build/outputs/apk/debug/app-debug.apk`).
+- **최종 APK 빌드 및 파일명 고정**: `.\gradlew.bat assembleDebug` 실행 시 항상 `app/build/outputs/apk/debug/lifeLog.apk` 및 프로젝트 루트 `lifeLog.apk`로 생성되도록 영구 설정 완료.

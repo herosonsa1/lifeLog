@@ -41,12 +41,32 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.8"
     }
+
+    // 모든 빌드(Debug/Release) 시 최종 APK 파일명을 항상 lifeLog.apk로 고정
+    applicationVariants.all {
+        outputs.all {
+            val outputImpl = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            outputImpl?.outputFileName = "lifeLog.apk"
+        }
+    }
 }
 
 tasks.matching { it.name.startsWith("package") }.configureEach {
     val taskName = name
     val variant = taskName.removePrefix("package")
     dependsOn(tasks.matching { it.name == "write${variant}AppMetadata" })
+    doLast {
+        // 기존 app-debug.apk 잔존 파일 정리 및 프로젝트 루트에도 최신 lifeLog.apk 복사
+        val debugDir = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
+        val legacyApk = File(debugDir, "app-debug.apk")
+        if (legacyApk.exists()) {
+            legacyApk.delete()
+        }
+        val builtApk = File(debugDir, "lifeLog.apk")
+        if (builtApk.exists()) {
+            builtApk.copyTo(File(rootProject.projectDir, "lifeLog.apk"), overwrite = true)
+        }
+    }
 }
 
 dependencies {
