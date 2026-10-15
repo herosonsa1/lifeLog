@@ -1,15 +1,18 @@
 package com.autologue.app.presentation.navigation
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,6 +30,29 @@ import com.autologue.app.presentation.theme.*
 
 @Composable
 fun AppNavigation(navController: NavHostController = rememberNavController()) {
+    val context = LocalContext.current
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    var lastBackPressTime by remember { mutableLongStateOf(0L) }
+    var exitToast by remember { mutableStateOf<Toast?>(null) }
+
+    // 스마트 다이어리(홈) 메뉴 상태에서 뒤로가기 1회 시 토스트 알림, 2초 내 한 번 더 누르면 앱 완전 종료
+    BackHandler(enabled = currentRoute == Screen.Diary.route || currentRoute == null) {
+        val now = System.currentTimeMillis()
+        if (now - lastBackPressTime < 2000L) {
+            exitToast?.cancel()
+            (context as? Activity)?.finishAffinity()
+        } else {
+            lastBackPressTime = now
+            exitToast?.cancel()
+            exitToast = Toast.makeText(
+                context,
+                "뒤로가기 버튼을 한 번 더 누르면 앱이 종료됩니다.",
+                Toast.LENGTH_SHORT
+            ).also { it.show() }
+        }
+    }
+
     val items = listOf(
         Screen.Diary,
         Screen.Expense,
@@ -51,8 +77,6 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                     horizontalArrangement = Arrangement.SpaceAround,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val navBackStackEntry by navController.currentBackStackEntryAsState()
-                    val currentRoute = navBackStackEntry?.destination?.route
 
                     items.forEach { screen ->
                         val isSelected = currentRoute == screen.route

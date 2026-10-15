@@ -2555,4 +2555,10 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 3. **`DiaryViewModel` 원자적 상태 갱신(`_uiState.update`) 및 `UnifiedSpeedDialFab` 네비게이션 정규화**:
    - [`DiaryViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryViewModel.kt) 및 [`LifestyleViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/lifestyle/LifestyleViewModel.kt)가 `syncHistoricalDataUseCase.syncState`를 직접 구독하도록 변경하고, 모든 상태 갱신을 CAS 기반 `_uiState.update { ... }`로 통일하여 완료 상태가 덮어씌워지는 현상을 원천 제거.
    - [`UnifiedSpeedDialFab.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/UnifiedSpeedDialFab.kt)에 `popUpTo(findStartDestination().id) { saveState = true }`, `launchSingleTop = true`, `restoreState = true`를 적용.
+4. **스마트 다이어리 두 번 뒤로가기 종료(Double-Back-To-Exit) 및 토스트 알림 적용 (`AppNavigation.kt`)**:
+   - [`AppNavigation.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/navigation/AppNavigation.kt)에 `BackHandler(enabled = currentRoute == Screen.Diary.route || currentRoute == null)`를 구성하여 스마트 다이어리(홈) 메뉴 상태에서 뒤로가기 1회 입력 시 창이 즉시 최소화되지 않고 `"뒤로가기 버튼을 한 번 더 누르면 앱이 종료됩니다."` 토스트 알림을 표시하도록 개선.
+   - 2초(`2,000ms`) 이내에 뒤로가기 버튼을 한 번 더 누르면 기존 토스트를 즉시 취소(`exitToast?.cancel()`)하고 `(context as? Activity)?.finishAffinity()`를 호출하여 앱을 깔끔하게 종료하도록 구현.
 
+### 68.3. 빌드 및 테스트 검증 결과
+- **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 전체 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`).
+- **최종 APK 빌드**: `.\gradlew.bat assembleDebug`를 통해 `app/build/outputs/apk/debug/lifeLog.apk` 및 프로젝트 루트 `lifeLog.apk` 최신 빌드 반영 완료.
