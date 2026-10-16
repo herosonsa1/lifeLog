@@ -19,8 +19,10 @@ import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 import javax.inject.Inject
@@ -273,7 +275,7 @@ class CalculateLifestyleMetricsUseCase @Inject constructor(
                 spatialFootprint = spatialFootprint,
                 insights = insights
             )
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     private fun calculateDaysSpan(dates: List<LocalDateTime>): Int {

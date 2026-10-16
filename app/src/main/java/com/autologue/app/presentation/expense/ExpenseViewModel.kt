@@ -84,6 +84,9 @@ data class ExpenseUiState(
     val oneTimeEditedIds: Set<Long> = emptySet(),
     val metaVersion: Long = 0L,
     val isSaving: Boolean = false,
+    val isLoading: Boolean = true,
+    val loadingTitle: String = "가계부 내역 조회 중",
+    val loadingMessage: String = "결제 내역과 통계를 불러오고 있습니다...",
     // 선택적 일괄 삭제 모드 상태
     val isSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
@@ -179,6 +182,8 @@ class ExpenseViewModel @Inject constructor(
     val uiState: StateFlow<ExpenseUiState> = _uiState.asStateFlow()
 
     private var hasAutoFocusedMonth = false
+    private var dataLoadJob: kotlinx.coroutines.Job? = null
+    private var rulesLoadJob: kotlinx.coroutines.Job? = null
 
     init {
         loadData()
@@ -187,7 +192,6 @@ class ExpenseViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { transactionRepository.cleanDuplicates() }
             cleanCorruptedTransferRecords()
-            autoScanDeviceMessagesOnInit()
         }
     }
 
@@ -209,19 +213,6 @@ class ExpenseViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(metaVersion = ver)
                 recalculateFilteredTransactions()
             }
-        }
-    }
-
-    private suspend fun autoScanDeviceMessagesOnInit() {
-        runCatching {
-            val scanResult = importer.scanHistoricalSmsDetailed(appContext, daysBack = 365, limit = 5000)
-            for (tx in scanResult.transactions) {
-                if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
-                runCatching { processTransactionUseCase(tx) }
-            }
-            transactionRepository.cleanDuplicates()
-            val allTxs = transactionRepository.getAllTransactionsFlow().first()
-            vehicleRepository.syncRefuelingFromTransactions(allTxs)
         }
     }
 
@@ -292,13 +283,15 @@ class ExpenseViewModel @Inject constructor(
     }
 
     private fun loadData() {
-        viewModelScope.launch {
+        dataLoadJob?.cancel()
+        dataLoadJob = viewModelScope.launch {
             transactionRepository.getAllTransactionsFlow().collectLatest { list ->
                 _uiState.value = _uiState.value.copy(allTransactions = list)
                 recalculateFilteredTransactions()
             }
         }
-        viewModelScope.launch {
+        rulesLoadJob?.cancel()
+        rulesLoadJob = viewModelScope.launch {
             manageTransactionRulesUseCase.getAllRules().collectLatest { rules ->
                 _uiState.value = _uiState.value.copy(rules = rules)
             }
@@ -307,8 +300,16 @@ class ExpenseViewModel @Inject constructor(
 
     private var recalcJob: kotlinx.coroutines.Job? = null
 
-    private fun recalculateFilteredTransactions() {
+    private fun recalculateFilteredTransactions(
+        loadingTitle: String = "가계부 내역 조회 중",
+        loadingMessage: String = "조건에 맞는 결제 내역과 통계를 불러오고 있습니다..."
+    ) {
         recalcJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            isLoading = true,
+            loadingTitle = loadingTitle,
+            loadingMessage = loadingMessage
+        )
         recalcJob = viewModelScope.launch(Dispatchers.Default) {
             var state = _uiState.value
             // [중복 방어 및 비실사용 내역 차단 안전망 + 카드/은행 표준명 정규화]
@@ -452,7 +453,8 @@ class ExpenseViewModel @Inject constructor(
                 userClassByTxId = uClassMap,
                 customCategoryByTxId = cCatMap,
                 corporateByTxId = corpMap,
-                oneTimeEditedIds = oneTimeSet
+                oneTimeEditedIds = oneTimeSet,
+                isLoading = false
             )
         }
     }
@@ -460,21 +462,29 @@ class ExpenseViewModel @Inject constructor(
     // 전월 이동
     fun previousMonth() {
         val current = _uiState.value
+        val targetMonth = current.selectedYearMonth.minusMonths(1)
         _uiState.value = current.copy(
             filterMode = ExpenseDateFilterMode.MONTH,
-            selectedYearMonth = current.selectedYearMonth.minusMonths(1)
+            selectedYearMonth = targetMonth
         )
-        recalculateFilteredTransactions()
+        recalculateFilteredTransactions(
+            loadingTitle = "${targetMonth.year}년 ${targetMonth.monthValue}월 내역 조회 중",
+            loadingMessage = "해당 월의 결제 내역과 카테고리 통계를 집계하고 있습니다..."
+        )
     }
 
     // 다음월 이동
     fun nextMonth() {
         val current = _uiState.value
+        val targetMonth = current.selectedYearMonth.plusMonths(1)
         _uiState.value = current.copy(
             filterMode = ExpenseDateFilterMode.MONTH,
-            selectedYearMonth = current.selectedYearMonth.plusMonths(1)
+            selectedYearMonth = targetMonth
         )
-        recalculateFilteredTransactions()
+        recalculateFilteredTransactions(
+            loadingTitle = "${targetMonth.year}년 ${targetMonth.monthValue}월 내역 조회 중",
+            loadingMessage = "해당 월의 결제 내역과 카테고리 통계를 집계하고 있습니다..."
+        )
     }
 
     // 특정 월 선택
@@ -484,7 +494,10 @@ class ExpenseViewModel @Inject constructor(
             selectedYearMonth = yearMonth,
             isDateRangePickerOpen = false
         )
-        recalculateFilteredTransactions()
+        recalculateFilteredTransactions(
+            loadingTitle = "${yearMonth.year}년 ${yearMonth.monthValue}월 내역 조회 중",
+            loadingMessage = "선택하신 월의 결제 내역을 불러오고 있습니다..."
+        )
     }
 
     // 기간 직접 지정
@@ -495,7 +508,10 @@ class ExpenseViewModel @Inject constructor(
             customEndDate = endDate,
             isDateRangePickerOpen = false
         )
-        recalculateFilteredTransactions()
+        recalculateFilteredTransactions(
+            loadingTitle = "지정 기간 내역 조회 중",
+            loadingMessage = "$startDate ~ $endDate 기간의 결제 내역을 분석하고 있습니다..."
+        )
     }
 
     // 빠른 프리셋 선택 (이번 달, 지난 달, 최근 3개월, 올해 전체)
@@ -533,7 +549,10 @@ class ExpenseViewModel @Inject constructor(
                 )
             }
         }
-        recalculateFilteredTransactions()
+        recalculateFilteredTransactions(
+            loadingTitle = "$preset 내역 조회 중",
+            loadingMessage = "선택하신 기간($preset)의 결제 내역과 통계를 불러오고 있습니다..."
+        )
     }
 
     fun openDateRangeDialog() {
@@ -1319,9 +1338,17 @@ class ExpenseViewModel @Inject constructor(
     // 엑셀 내보내기 (사용자 분류, 커스텀 카테고리, 카드/법인 여부 포함)
     fun exportToExcel(context: android.content.Context) {
         viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                loadingTitle = "가계부 엑셀 파일 생성 중",
+                loadingMessage = "결제 내역과 분류 통계를 엑셀 시트로 변환하고 있습니다..."
+            )
             runCatching {
-                val result = exportAllDataToExcelUseCase()
+                val result = withContext(Dispatchers.IO) {
+                    exportAllDataToExcelUseCase()
+                }
                 _uiState.value = _uiState.value.copy(
+                    isLoading = false,
                     syncResultMessage = "엑셀 파일이 다운로드 폴더에 저장되었습니다: ${result.fileName} (사용자 분류 · 카드/법인 구분 포함)"
                 )
                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -1335,6 +1362,7 @@ class ExpenseViewModel @Inject constructor(
                 context.startActivity(chooser)
             }.onFailure { e ->
                 _uiState.value = _uiState.value.copy(
+                    isLoading = false,
                     syncResultMessage = "엑셀 내보내기 중 오류가 발생했습니다: ${e.localizedMessage}"
                 )
             }
@@ -1433,29 +1461,32 @@ class ExpenseViewModel @Inject constructor(
 
     fun importPastedTransactions(transactions: List<Transaction>) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isPasteSmsDialogOpen = false)
-            var addedCount = 0
-            for (tx in transactions) {
-                runCatching {
-                    processTransactionUseCase(tx)
-                    addedCount++
+            _uiState.value = _uiState.value.copy(
+                isPasteSmsDialogOpen = false,
+                isLoading = true,
+                loadingTitle = "결제 문자 등록 중",
+                loadingMessage = "붙여넣은 결제 내역을 가계부와 차계부에 반영하고 있습니다..."
+            )
+            val addedFuel = withContext(Dispatchers.IO) {
+                var addedCount = 0
+                for (tx in transactions) {
+                    runCatching {
+                        processTransactionUseCase(tx)
+                        addedCount++
+                    }
                 }
+                val allTxs = transactionRepository.getAllTransactionsFlow().first()
+                vehicleRepository.syncRefuelingFromTransactions(allTxs)
             }
-            // 주유 내역 동기화
-            val allTxs = transactionRepository.getAllTransactionsFlow().first()
-            val addedFuel = vehicleRepository.syncRefuelingFromTransactions(allTxs)
 
-            loadData()
             val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
             val msg = "결제 내역 ${transactions.size}건을 가계부에 성공적으로 등록했습니다.$fuelMsg"
-            _uiState.value = _uiState.value.copy(syncResultMessage = msg)
+            _uiState.value = _uiState.value.copy(isLoading = false, syncResultMessage = msg)
         }
     }
 
     fun syncHistoricalSms(context: android.content.Context) {
         viewModelScope.launch {
-            runCatching { transactionRepository.cleanDuplicates() }
-
             val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
                 context,
                 android.Manifest.permission.READ_SMS
@@ -1468,34 +1499,43 @@ class ExpenseViewModel @Inject constructor(
                 return@launch
             }
 
-            val scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
-            var newCount = 0
-            for (tx in scanResult.transactions) {
-                if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
-                runCatching {
-                    processTransactionUseCase(tx)
-                    newCount++
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                loadingTitle = "결제 문자 동기화 중",
+                loadingMessage = "단말기 결제 문자를 분석하여 가계부를 동기화하고 있습니다..."
+            )
+
+            val msg = withContext(Dispatchers.IO) {
+                runCatching { transactionRepository.cleanDuplicates() }
+                val scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
+                var newCount = 0
+                for (tx in scanResult.transactions) {
+                    if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
+                    runCatching {
+                        processTransactionUseCase(tx)
+                        newCount++
+                    }
+                }
+
+                runCatching { transactionRepository.cleanDuplicates() }
+                val allTxs = transactionRepository.getAllTransactionsFlow().first()
+                val addedFuel = vehicleRepository.syncRefuelingFromTransactions(allTxs)
+
+                val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
+                val totalScanned = scanResult.totalMessagesScanned
+                when {
+                    !scanResult.isPermissionGranted ->
+                        "문자(SMS) 읽기 권한이 없습니다. 스마트폰 [설정 > 애플리케이션 > LifeLog > 권한]에서 'SMS'를 허용해주세요."
+                    allTxs.isNotEmpty() ->
+                        "모든 결제 문자(총 ${allTxs.size}건)가 가계부 및 차계부에 최신 상태로 자동 동기화되었습니다.$fuelMsg"
+                    totalScanned > 0 ->
+                        "기기 문자 총 ${totalScanned}건을 스캔했으나, 카드 결제 문자로 인식된 내역이 없습니다."
+                    else ->
+                        "결제 문자 자동 동기화를 완료했습니다."
                 }
             }
-
-            runCatching { transactionRepository.cleanDuplicates() }
-            val allTxs = transactionRepository.getAllTransactionsFlow().first()
-            val addedFuel = vehicleRepository.syncRefuelingFromTransactions(allTxs)
-            loadData()
-
-            val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
-            val totalScanned = scanResult.totalMessagesScanned
-            val msg = when {
-                !scanResult.isPermissionGranted ->
-                    "문자(SMS) 읽기 권한이 없습니다. 스마트폰 [설정 > 애플리케이션 > LifeLog > 권한]에서 'SMS'를 허용해주세요."
-                allTxs.isNotEmpty() ->
-                    "모든 결제 문자(총 ${allTxs.size}건)가 가계부 및 차계부에 최신 상태로 자동 동기화되었습니다.$fuelMsg"
-                totalScanned > 0 ->
-                    "기기 문자 총 ${totalScanned}건을 스캔했으나, 카드 결제 문자로 인식된 내역이 없습니다."
-                else ->
-                    "결제 문자 자동 동기화를 완료했습니다."
-            }
-            _uiState.value = _uiState.value.copy(syncResultMessage = msg)
+            _uiState.value = _uiState.value.copy(isLoading = false, syncResultMessage = msg)
         }
     }
 }
+

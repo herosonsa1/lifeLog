@@ -308,14 +308,17 @@ fun CarLedgerScreen(
             }
         }
     ) { padding ->
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(bottom = Spacing.xxxl)
+                .padding(padding)
         ) {
-            // 다중 차량 (2대) 선택 탭 바
-            item {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = Spacing.xxxl)
+            ) {
+                // 다중 차량 (2대) 선택 탭 바
+                item {
                 VehicleSelectorBar(
                     vehicles = uiState.vehicles,
                     selectedVehicleId = uiState.selectedVehicleId,
@@ -774,7 +777,10 @@ fun CarLedgerScreen(
                     }
                 }
             } else {
-                items(uiState.filteredLogs) { log ->
+                items(
+                    items = uiState.filteredLogs,
+                    key = { it.id }
+                ) { log ->
                     SaaSCarLogRow(
                         log = log,
                         vehicles = uiState.vehicles,
@@ -788,6 +794,14 @@ fun CarLedgerScreen(
                     HairlineDivider()
                 }
             }
+        }
+
+        com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
+            isLoading = uiState.isLoading || uiState.isSyncing,
+            accentColor = MenuColors.carLedger,
+            title = uiState.loadingTitle,
+            message = uiState.loadingMessage
+        )
         }
     }
 }

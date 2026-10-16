@@ -373,7 +373,10 @@ fun DiaryScreen(
                                     )
                                 }
                             } else {
-                                items(uiState.entries) { entry ->
+                                items(
+                                    items = uiState.entries,
+                                    key = { it.id }
+                                ) { entry ->
                                     SaaSTimelineRow(
                                         entry = entry,
                                         onClick = { viewModel.openDiaryDetail(entry) },
@@ -421,7 +424,10 @@ fun DiaryScreen(
                                     )
                                 }
                             } else {
-                                items(uiState.entries) { entry ->
+                                items(
+                                    items = uiState.entries,
+                                    key = { it.id }
+                                ) { entry ->
                                     SaaSTimelineRow(
                                         entry = entry,
                                         onClick = { viewModel.openDiaryDetail(entry) },
@@ -439,10 +445,10 @@ fun DiaryScreen(
                 }
             }
 
-            // 감성적인 스마트 다이어리 로딩 애니메이션 오버레이 (0.5초~1초 이상 로딩 시 부드럽게 표출)
+            // 스마트 다이어리 로딩 애니메이션 오버레이 (0.5초 이상 로딩 시 부드럽게 표출)
             SmartDiaryLoadingOverlay(
-                isLoading = uiState.isLoading,
-                message = uiState.loadingMessage,
+                isLoading = uiState.isLoading || uiState.isExportingExcel,
+                message = if (uiState.isExportingExcel) "다이어리 및 전체 라이프로그 엑셀 파일을 생성하고 있습니다..." else uiState.loadingMessage,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -1942,84 +1948,13 @@ fun SmartDiaryLoadingOverlay(
     message: String,
     modifier: Modifier = Modifier
 ) {
-    AnimatedVisibility(
-        visible = isLoading,
-        enter = fadeIn(animationSpec = tween(200)),
-        exit = fadeOut(animationSpec = tween(250)),
+    com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
+        isLoading = isLoading,
+        accentColor = MenuColors.diary,
+        title = "다이어리 데이터 조회 중",
+        message = message.ifBlank { "라이프로그와 이동 경로를 안전하게 분석하고 있습니다..." },
+        delayMillis = 500L,
         modifier = modifier
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF0F172A).copy(alpha = 0.45f))
-                .clickable(enabled = false) {}, // 클릭 이벤트 가로채기 (로딩 중 중복 터치 방지)
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = PureWhite,
-                shadowElevation = 8.dp,
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                modifier = Modifier
-                    .padding(horizontal = Spacing.xxl)
-                    .fillMaxWidth(0.85f)
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.xl),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    val infiniteTransition = rememberInfiniteTransition(label = "DiaryLoading")
-                    val pulseScale by infiniteTransition.animateFloat(
-                        initialValue = 0.92f,
-                        targetValue = 1.08f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(800, easing = FastOutSlowInEasing),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "pulseScale"
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale)
-                            .clip(CircleShape)
-                            .background(Color(0xFFEFF6FF)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(
-                            strokeWidth = 3.dp,
-                            color = AppColors.primary,
-                            modifier = Modifier.size(44.dp)
-                        )
-                        Text(
-                            text = "🚗",
-                            fontSize = 20.sp
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Text(
-                        text = "데이터 분석 및 불러오는 중",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF0F172A)
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = message.ifBlank { "라이프로그와 이동 경로를 안전하게 분석하고 있습니다..." },
-                        fontSize = 12.sp,
-                        color = Color(0xFF64748B),
-                        textAlign = TextAlign.Center,
-                        lineHeight = 17.sp
-                    )
-                }
-            }
-        }
-    }
+    )
 }
 

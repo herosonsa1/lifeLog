@@ -60,6 +60,9 @@ data class GolfUiState(
     val rounds: List<GolfRound> = emptyList(),
     val averageScore: Double = 0.0,
     val bestScore: Int? = null,
+    val isLoading: Boolean = true,
+    val loadingTitle: String = "골프 라운드 조회 중",
+    val loadingMessage: String = "라운드 기록 및 스코어 통계를 불러오고 있습니다...",
     val isOcrScanning: Boolean = false,
     val ocrScanningMessage: String = "",
     val isGalleryScanDialogOpen: Boolean = false,
@@ -472,16 +475,19 @@ class GolfViewModel @Inject constructor(
     private fun loadRounds() {
         viewModelScope.launch {
             golfRepository.getAllGolfRoundsFlow().collectLatest { list ->
-                val scoredList = list.mapNotNull { it.totalScore }
-                val avg = if (scoredList.isNotEmpty()) scoredList.average() else 0.0
-                val best = scoredList.minOrNull()
-
-                val currentSelected = _uiState.value.selectedRound
-                val updatedSelected = if (currentSelected != null) {
-                    list.find { it.id == currentSelected.id } ?: currentSelected
-                } else null
+                val (avg, best, updatedSelected) = withContext(Dispatchers.Default) {
+                    val scoredList = list.mapNotNull { it.totalScore }
+                    val a = if (scoredList.isNotEmpty()) scoredList.average() else 0.0
+                    val b = scoredList.minOrNull()
+                    val currentSelected = _uiState.value.selectedRound
+                    val sel = if (currentSelected != null) {
+                        list.find { it.id == currentSelected.id } ?: currentSelected
+                    } else null
+                    Triple(a, b, sel)
+                }
 
                 _uiState.value = _uiState.value.copy(
+                    isLoading = false,
                     rounds = list,
                     averageScore = avg,
                     bestScore = best,
@@ -494,7 +500,7 @@ class GolfViewModel @Inject constructor(
     }
 
     fun loadWeatherForRounds(rounds: List<GolfRound>, forceRefresh: Boolean = false) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val currentMap = _uiState.value.weatherMap.toMutableMap()
             // 다가오는 예약 라운드 및 최근 라운드 8건 날씨 수집
             for (round in rounds.take(8)) {

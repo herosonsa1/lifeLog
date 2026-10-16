@@ -3,6 +3,9 @@ package com.autologue.app.presentation.navigation
 import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,6 +23,7 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.*
 import com.autologue.app.presentation.car.CarLedgerScreen
+import com.autologue.app.presentation.common.AutoLogueLoadingOverlay
 import com.autologue.app.presentation.common.HairlineDivider
 import com.autologue.app.presentation.common.UnifiedSpeedDialFab
 import com.autologue.app.presentation.diary.DiaryScreen
@@ -33,11 +37,40 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     val context = LocalContext.current
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+    var pendingScreen by remember { mutableStateOf<Screen?>(null) }
+    var isMenuTransitioning by remember { mutableStateOf(false) }
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     var exitToast by remember { mutableStateOf<Toast?>(null) }
 
+    val effectiveRoute = pendingScreen?.route ?: currentRoute
+
+    // 메뉴 탭 클릭 시 먼저 하단 탭 선택 상태와 로딩 바를 즉시 렌더링한 뒤 네비게이션을 수행하여 멈춘 느낌 원천 해소
+    LaunchedEffect(pendingScreen) {
+        val target = pendingScreen ?: return@LaunchedEffect
+        if (currentRoute == target.route) {
+            pendingScreen = null
+            isMenuTransitioning = false
+            return@LaunchedEffect
+        }
+        isMenuTransitioning = true
+        // 1프레임 양보하여 하단 탭 하이라이트 및 상단 진행 바가 0ms 즉시 그려지도록 보장
+        withFrameNanos { }
+        runCatching {
+            navController.navigate(target.route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+        withFrameNanos { }
+        pendingScreen = null
+        isMenuTransitioning = false
+    }
+
     // 스마트 다이어리(홈) 메뉴 상태에서 뒤로가기 1회 시 토스트 알림, 2초 내 한 번 더 누르면 앱 완전 종료
-    BackHandler(enabled = currentRoute == Screen.Diary.route || currentRoute == null) {
+    BackHandler(enabled = effectiveRoute == Screen.Diary.route || effectiveRoute == null) {
         val now = System.currentTimeMillis()
         if (now - lastBackPressTime < 2000L) {
             exitToast?.cancel()
@@ -79,19 +112,13 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                 ) {
 
                     items.forEach { screen ->
-                        val isSelected = currentRoute == screen.route
+                        val isSelected = effectiveRoute == screen.route
                         Column(
                             modifier = Modifier
                                 .weight(1f)
                                 .clickable {
-                                    if (currentRoute != screen.route) {
-                                        navController.navigate(screen.route) {
-                                            popUpTo(navController.graph.findStartDestination().id) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
+                                    if (effectiveRoute != screen.route) {
+                                        pendingScreen = screen
                                     }
                                 }
                                 .padding(vertical = Spacing.xs),
@@ -127,18 +154,38 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                 }
             }
         }
-    )
- { paddingValues ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Diary.route,
-            modifier = Modifier.padding(paddingValues)
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
         ) {
-            composable(Screen.Diary.route) { DiaryScreen() }
-            composable(Screen.Expense.route) { ExpenseScreen() }
-            composable(Screen.CarLedger.route) { CarLedgerScreen() }
-            composable(Screen.Golf.route) { GolfScreen() }
-            composable(Screen.Lifestyle.route) { LifestyleScreen() }
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Diary.route,
+                enterTransition = { fadeIn(animationSpec = tween(140)) },
+                exitTransition = { fadeOut(animationSpec = tween(100)) },
+                popEnterTransition = { fadeIn(animationSpec = tween(140)) },
+                popExitTransition = { fadeOut(animationSpec = tween(100)) },
+                modifier = Modifier.fillMaxSize()
+            ) {
+                composable(Screen.Diary.route) { DiaryScreen() }
+                composable(Screen.Expense.route) { ExpenseScreen() }
+                composable(Screen.CarLedger.route) { CarLedgerScreen() }
+                composable(Screen.Golf.route) { GolfScreen() }
+                composable(Screen.Lifestyle.route) { LifestyleScreen() }
+            }
+
+            val activeScreenObj = items.find { it.route == effectiveRoute } ?: Screen.Diary
+            AutoLogueLoadingOverlay(
+                isLoading = isMenuTransitioning,
+                title = "${activeScreenObj.title} 화면으로 이동 중",
+                message = "${activeScreenObj.title} 데이터를 불러오고 있습니다...",
+                accentColor = activeScreenObj.themeColor,
+                delayMillis = 500L,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }
+

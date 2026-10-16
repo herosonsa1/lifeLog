@@ -7,8 +7,10 @@ import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.util.LocationDistanceUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import java.time.LocalDate
 import java.time.YearMonth
 import javax.inject.Inject
@@ -31,25 +33,36 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
         ) { entries, transactions, golfRounds, vehicleLogs ->
             val daysMap = mutableMapOf<LocalDate, DaySummary>()
 
-            val monthTxs = transactions.filter {
-                val d = it.timestamp.toLocalDate()
-                !d.isBefore(startDate) && !d.isAfter(endDate)
-            }
-            val monthGolf = golfRounds.filter {
-                val d = it.roundDate.toLocalDate()
-                !d.isBefore(startDate) && !d.isAfter(endDate)
-            }
-            val monthVehicles = vehicleLogs.filter {
-                val d = it.timestamp.toLocalDate()
-                !d.isBefore(startDate) && !d.isAfter(endDate)
-            }
+            val monthTxsByDay = transactions.asSequence()
+                .filter {
+                    val d = it.timestamp.toLocalDate()
+                    !d.isBefore(startDate) && !d.isAfter(endDate)
+                }
+                .groupBy { it.timestamp.toLocalDate() }
+
+            val monthGolfByDay = golfRounds.asSequence()
+                .filter {
+                    val d = it.roundDate.toLocalDate()
+                    !d.isBefore(startDate) && !d.isAfter(endDate)
+                }
+                .groupBy { it.roundDate.toLocalDate() }
+
+            val monthVehiclesByDay = vehicleLogs.asSequence()
+                .filter {
+                    val d = it.timestamp.toLocalDate()
+                    !d.isBefore(startDate) && !d.isAfter(endDate)
+                }
+                .groupBy { it.timestamp.toLocalDate() }
+
+            val entriesByDay = entries.groupBy { it.date.toLocalDate() }
 
             var curr = startDate
             while (!curr.isAfter(endDate)) {
-                val dayTxs = monthTxs.filter { it.timestamp.toLocalDate() == curr }
-                val dayGolf = monthGolf.any { it.roundDate.toLocalDate() == curr }
-                val dayRefuel = monthVehicles.any { it.timestamp.toLocalDate() == curr && it.logType == com.autologue.app.domain.model.VehicleLogType.REFUELING }
-                val dayEntries = entries.filter { it.date.toLocalDate() == curr }
+                val dayTxs = monthTxsByDay[curr].orEmpty()
+                val dayGolf = !monthGolfByDay[curr].isNullOrEmpty()
+                val dayVehicles = monthVehiclesByDay[curr].orEmpty()
+                val dayRefuel = dayVehicles.any { it.logType == com.autologue.app.domain.model.VehicleLogType.REFUELING }
+                val dayEntries = entriesByDay[curr].orEmpty()
                 val photoCount = dayEntries.sumOf { it.photoUris.size }
                 val dayEntriesExpense = dayEntries.sumOf { entry ->
                     maxOf(
@@ -61,7 +74,7 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
                     dayTxs.filter { !com.autologue.app.data.sync.DailyRouteAggregator.isFinancialIncomeOrTransfer(it) }.sumOf { it.amount },
                     dayEntriesExpense
                 )
-                val dayVehicleDist = monthVehicles.filter { it.timestamp.toLocalDate() == curr }.sumOf { it.tripDistanceKm }
+                val dayVehicleDist = dayVehicles.sumOf { it.tripDistanceKm }
                 val dayEntriesDist = dayEntries.sumOf { entry ->
                     if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
                     else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
@@ -80,7 +93,7 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
                 curr = curr.plusDays(1)
             }
 
-            val monthVehicleDist = monthVehicles.sumOf { it.tripDistanceKm }
+            val monthVehicleDist = monthVehiclesByDay.values.flatten().sumOf { it.tripDistanceKm }
             val monthEntriesDist = entries.sumOf { entry ->
                 if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
                 else LocationDistanceUtils.calculateRouteDrivingDistanceKm(entry.routeSteps)
@@ -90,10 +103,10 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
             MonthlySummary(
                 yearMonth = yearMonth,
                 totalExpense = daysMap.values.sumOf { it.totalExpense },
-                totalGolfRounds = monthGolf.size,
+                totalGolfRounds = monthGolfByDay.values.sumOf { it.size },
                 totalDistanceKm = Math.round(totalMonthDistance * 10.0) / 10.0,
                 days = daysMap
             )
-        }
+        }.flowOn(Dispatchers.Default)
     }
 }

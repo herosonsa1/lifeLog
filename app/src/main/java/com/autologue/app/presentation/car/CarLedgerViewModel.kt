@@ -45,6 +45,9 @@ data class CarLedgerUiState(
     val latestIntervalDays: Int? = null,
     val totalDrivingDistanceKm: Double = 0.0,
     val averageEfficiencyKmPerL: Double = 12.5,
+    val isLoading: Boolean = true,
+    val loadingTitle: String = "차계부 내역 조회 중",
+    val loadingMessage: String = "차량 주유 및 주행 기록을 불러오고 있습니다...",
     val isSyncing: Boolean = false,
     val commuteConfig: CommuteConfig = CommuteConfig(),
     val showLocationDialog: Boolean = false,
@@ -92,13 +95,14 @@ class CarLedgerViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(CarLedgerUiState())
     val uiState: StateFlow<CarLedgerUiState> = _uiState.asStateFlow()
 
+    private var loadDataJob: kotlinx.coroutines.Job? = null
+
     init {
         loadData()
         observeCommuteConfig()
         observeMaintenanceConfig()
         observeVehicles()
         observeExpenseTransactionsForVehicleSync()
-        manualSyncRefueling()
     }
 
     private fun observeExpenseTransactionsForVehicleSync() {
@@ -187,91 +191,102 @@ class CarLedgerViewModel @Inject constructor(
     }
 
     private fun loadData() {
-        viewModelScope.launch {
+        loadDataJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            isLoading = true,
+            loadingTitle = "차계부 내역 조회 중",
+            loadingMessage = "차량 주유 및 주행 기록을 불러오고 있습니다..."
+        )
+        loadDataJob = viewModelScope.launch {
             combine(
                 vehicleRepository.getAllVehicleLogsFlow(),
                 diaryRepository.getDiaryEntriesFlow(),
                 multiVehiclePreferences.selectedVehicleId,
                 multiVehiclePreferences.vehicles
-            ) { logs, diaryEntries, selectedId, vehicleList ->
-                val vehicleProfile = vehicleList.find { it.id == selectedId }
-                val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
-                val targetGasPrice = vehicleProfile?.defaultGasPrice ?: 1650.0
+            ) { logs, _, selectedId, vehicleList ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    val vehicleProfile = vehicleList.find { it.id == selectedId }
+                    val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
+                    val targetGasPrice = vehicleProfile?.defaultGasPrice ?: 1650.0
 
-                // [원칙] 차량 주행거리는 오직 실제 차량 블루투스 세션(TRIP_DRIVING)만 반영하며,
-                // 다이어리의 도보/대중교통 일반 이동은 차량 연비/소모품에 합산하지 않음
-                val diaryLookup: (LocalDateTime?, LocalDateTime) -> Double = { _, _ -> 0.0 }
+                    // [원칙] 차량 주행거리는 오직 실제 차량 블루투스 세션(TRIP_DRIVING)만 반영하며,
+                    // 다이어리의 도보/대중교통 일반 이동은 차량 연비/소모품에 합산하지 않음
+                    val diaryLookup: (LocalDateTime?, LocalDateTime) -> Double = { _, _ -> 0.0 }
 
-                // 1. 선택된 차량에 대해 Full-to-Full 주유 주기 및 구간 연비 계산 (차량별 설정 기본 유가 전달)
-                val calculationResult = FuelEconomyCalculator.calculateForVehicle(
-                    targetVehicleId = selectedId,
-                    allLogs = logs,
-                    gasPrice = targetGasPrice,
-                    additionalDrivingDistanceLookup = diaryLookup
-                )
+                    // 1. 선택된 차량에 대해 Full-to-Full 주유 주기 및 구간 연비 계산 (차량별 설정 기본 유가 전달)
+                    val calculationResult = FuelEconomyCalculator.calculateForVehicle(
+                        targetVehicleId = selectedId,
+                        allLogs = logs,
+                        gasPrice = targetGasPrice,
+                        additionalDrivingDistanceLookup = diaryLookup
+                    )
 
-                // 계산된 주유 로그 맵 생성 (ID 기준)
-                val enrichedFuelMap = calculationResult.enrichedFuelLogs.associateBy { it.id }
+                    // 계산된 주유 로그 맵 생성 (ID 기준)
+                    val enrichedFuelMap = calculationResult.enrichedFuelLogs.associateBy { it.id }
 
-                // 전체 로그 리스트에 계산된 주유 로그 치환
-                val enrichedLogs = logs.map { log ->
-                    enrichedFuelMap[log.id] ?: log
+                    // 전체 로그 리스트에 계산된 주유 로그 치환
+                    val enrichedLogs = logs.map { log ->
+                        enrichedFuelMap[log.id] ?: log
+                    }
+
+                    // 선택된 차량의 주유 로그 필터링 (미배정 자동 수집 주유 내역은 선택된 차량에 표시)
+                    val vehicleFuelLogs = enrichedLogs.filter {
+                        it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
+                    }
+                    val totalFuel = vehicleFuelLogs.sumOf { it.fuelCost }
+
+                    // 선택된 차량의 총 주행거리 (주행 로그 및 다이어리 종합)
+                    val vehicleDrivingLogs = enrichedLogs.filter {
+                        it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
+                    }
+                    val vehicleLogDist = vehicleDrivingLogs.sumOf { it.tripDistanceKm }
+                    val diaryDist = diaryLookup(null, LocalDateTime.now())
+                    val totalDist = if (vehicleLogDist > 0.0) {
+                        if (selectedId == "car_1") maxOf(vehicleLogDist, diaryDist) else vehicleLogDist
+                    } else diaryDist
+
+                    // 총 주유 리터 합계 (1,650원 기준 환산량 반영)
+                    val totalFuelLiters = vehicleFuelLogs.sumOf { it.fuelAmountLiters }
+                    val rawEffFromTotal = if (totalDist > 0.0 && totalFuelLiters > 0.0) {
+                        Math.round((totalDist / totalFuelLiters) * 10.0) / 10.0
+                    } else null
+
+                    // 최종 평균 연비 (구간 가중평균 우선 -> 전체 누적 연비 -> 차량 프로필 목표 연비)
+                    val avgEff = when {
+                        calculationResult.weightedAverageEfficiencyKmPerL != null &&
+                        calculationResult.weightedAverageEfficiencyKmPerL in 4.0..30.0 ->
+                            calculationResult.weightedAverageEfficiencyKmPerL
+                        rawEffFromTotal != null && rawEffFromTotal in 4.0..30.0 ->
+                            rawEffFromTotal
+                        else -> targetEff
+                    }
+
+                    // 표시할 로그 목록: 현재 차량 필터 여부에 따라 분기
+                    val displayedLogs = if (_uiState.value.filterCurrentVehicleOnly) {
+                        enrichedLogs.filter { it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId }
+                    } else {
+                        enrichedLogs
+                    }
+
+                    val refuelCount = displayedLogs.count { it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE }
+                    val drivingCount = displayedLogs.count { it.logType == VehicleLogType.TRIP_DRIVING }
+
+                    _uiState.value.copy(
+                        isLoading = false,
+                        selectedVehicleId = selectedId,
+                        selectedVehicleDefaultGasPrice = targetGasPrice,
+                        logs = displayedLogs,
+                        totalFuelExpense = totalFuel,
+                        latestIntervalDays = calculationResult.latestIntervalDays ?: vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel,
+                        totalDrivingDistanceKm = Math.round(totalDist * 10.0) / 10.0,
+                        averageEfficiencyKmPerL = avgEff,
+                        totalRefuelCount = refuelCount,
+                        totalDrivingCount = drivingCount
+                    )
                 }
-
-                // 선택된 차량의 주유 로그 필터링 (미배정 자동 수집 주유 내역은 선택된 차량에 표시)
-                val vehicleFuelLogs = enrichedLogs.filter {
-                    it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
-                }
-                val totalFuel = vehicleFuelLogs.sumOf { it.fuelCost }
-
-                // 선택된 차량의 총 주행거리 (주행 로그 및 다이어리 종합)
-                val vehicleDrivingLogs = enrichedLogs.filter {
-                    it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
-                }
-                val vehicleLogDist = vehicleDrivingLogs.sumOf { it.tripDistanceKm }
-                val diaryDist = diaryLookup(null, LocalDateTime.now())
-                val totalDist = if (vehicleLogDist > 0.0) {
-                    if (selectedId == "car_1") maxOf(vehicleLogDist, diaryDist) else vehicleLogDist
-                } else diaryDist
-
-                // 총 주유 리터 합계 (1,650원 기준 환산량 반영)
-                val totalFuelLiters = vehicleFuelLogs.sumOf { it.fuelAmountLiters }
-                val rawEffFromTotal = if (totalDist > 0.0 && totalFuelLiters > 0.0) {
-                    Math.round((totalDist / totalFuelLiters) * 10.0) / 10.0
-                } else null
-
-                // 최종 평균 연비 (구간 가중평균 우선 -> 전체 누적 연비 -> 차량 프로필 목표 연비)
-                val avgEff = when {
-                    calculationResult.weightedAverageEfficiencyKmPerL != null &&
-                    calculationResult.weightedAverageEfficiencyKmPerL in 4.0..30.0 ->
-                        calculationResult.weightedAverageEfficiencyKmPerL
-                    rawEffFromTotal != null && rawEffFromTotal in 4.0..30.0 ->
-                        rawEffFromTotal
-                    else -> targetEff
-                }
-
-                // 표시할 로그 목록: 현재 차량 필터 여부에 따라 분기
-                val displayedLogs = if (_uiState.value.filterCurrentVehicleOnly) {
-                    enrichedLogs.filter { it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId }
-                } else {
-                    enrichedLogs
-                }
-
-                val refuelCount = displayedLogs.count { it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE }
-                val drivingCount = displayedLogs.count { it.logType == VehicleLogType.TRIP_DRIVING }
-
-                _uiState.value = _uiState.value.copy(
-                    selectedVehicleId = selectedId,
-                    selectedVehicleDefaultGasPrice = targetGasPrice,
-                    logs = displayedLogs,
-                    totalFuelExpense = totalFuel,
-                    latestIntervalDays = calculationResult.latestIntervalDays ?: vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel,
-                    totalDrivingDistanceKm = Math.round(totalDist * 10.0) / 10.0,
-                    averageEfficiencyKmPerL = avgEff,
-                    totalRefuelCount = refuelCount,
-                    totalDrivingCount = drivingCount
-                )
-            }.collectLatest { }
+            }.collectLatest { nextState ->
+                _uiState.value = nextState
+            }
         }
     }
 
@@ -513,86 +528,91 @@ class CarLedgerViewModel @Inject constructor(
 
     fun manualSyncRefueling() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSyncing = true)
+            _uiState.value = _uiState.value.copy(
+                isSyncing = true,
+                loadingTitle = "주유 내역 동기화 중",
+                loadingMessage = "최근 결제 문자 및 주유 기록을 정밀 분석하고 있습니다..."
+            )
+            val msg = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                // 0. 기존 DB 내 오분류된 카드/주유 내역 자가 치유 선행
+                runCatching { transactionRepository.cleanDuplicates() }
 
-            // 0. 기존 DB 내 오분류된 카드/주유 내역 자가 치유 선행
-            runCatching { transactionRepository.cleanDuplicates() }
+                val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.READ_SMS
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-            val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
-                context,
-                android.Manifest.permission.READ_SMS
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                val cfg = locationPreferences.config.value
+                val (home, comp) = resolveCommuteNeighborhoods(cfg)
+                val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
+                runCatching { vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist) }
 
-            val cfg = locationPreferences.config.value
-            val (home, comp) = resolveCommuteNeighborhoods(cfg)
-            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
-            runCatching { vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist) }
+                // 1. 기기 결제 문자(SMS/LMS/MMS/RCS) 최근 365일 전수 스캔 및 가계부/차계부 자동 적재
+                var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), hasPerm, 0)
+                if (hasPerm) {
+                    runCatching {
+                        scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
+                        for (tx in scanResult.transactions) {
+                            processTransactionUseCase(tx)
+                        }
+                    }.onFailure {
+                        android.util.Log.e("CarLedgerViewModel", "SMS/MMS 스캔 또는 처리 중 예외", it)
+                    }
+                }
 
-            // 1. 기기 결제 문자(SMS/LMS/MMS/RCS) 최근 365일 전수 스캔 및 가계부/차계부 자동 적재
-            var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), hasPerm, 0)
-            if (hasPerm) {
+                // 2. 실제 골프 라운드 DB(18홀 유효)와 대조 전, 미래 오탐(10/24 등) 및 '나인CC' 가짜 라운드 우선 제거
+                val today = LocalDate.now()
                 runCatching {
-                    scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
-                    for (tx in scanResult.transactions) {
-                        processTransactionUseCase(tx)
+                    val rawRounds = golfRepository.getAllGolfRoundsList()
+                    for (r in rawRounds) {
+                        val rDay = (r.startTime ?: r.roundDate).toLocalDate()
+                        val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
+                            r.clubName.contains("나인 CC", ignoreCase = true) ||
+                            r.clubName == "나인"
+                        val isFutureFalseOcr = rDay.isAfter(today) && (
+                            r.totalScore != null ||
+                            r.holeScores.isNotEmpty() ||
+                            !r.scorecardPhotoUri.isNullOrBlank() ||
+                            r.matchingPhotoUris.isNotEmpty() ||
+                            isFakeNine ||
+                            rDay == LocalDate.of(2026, 10, 24)
+                        )
+                        if (isFakeNine || isFutureFalseOcr) {
+                            golfRepository.deleteGolfRound(r.id)
+                        }
                     }
-                }.onFailure {
-                    android.util.Log.e("CarLedgerViewModel", "SMS/MMS 스캔 또는 처리 중 예외", it)
+                    diaryRepository.cleanDuplicates()
                 }
-            }
+                val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
+                vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
 
-            // 2. 실제 골프 라운드 DB(18홀 유효)와 대조 전, 미래 오탐(10/24 등) 및 '나인CC' 가짜 라운드 우선 제거
-            val today = LocalDate.now()
-            runCatching {
-                val rawRounds = golfRepository.getAllGolfRoundsList()
-                for (r in rawRounds) {
-                    val rDay = (r.startTime ?: r.roundDate).toLocalDate()
-                    val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
-                        r.clubName.contains("나인 CC", ignoreCase = true) ||
-                        r.clubName == "나인"
-                    val isFutureFalseOcr = rDay.isAfter(today) && (
-                        r.totalScore != null ||
-                        r.holeScores.isNotEmpty() ||
-                        !r.scorecardPhotoUri.isNullOrBlank() ||
-                        r.matchingPhotoUris.isNotEmpty() ||
-                        isFakeNine ||
-                        rDay == LocalDate.of(2026, 10, 24)
-                    )
-                    if (isFakeNine || isFutureFalseOcr) {
-                        golfRepository.deleteGolfRound(r.id)
-                    }
+                // 3. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
+                vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
+
+                // 4. 주유 결제 내역 동기화 (셀프주유소 가승인 15만원 자동 선별 및 실주유액 등록)
+                runCatching { transactionRepository.cleanDuplicates() }
+                val txs = transactionRepository.getAllTransactionsFlow().first()
+                val addedCount = vehicleRepository.syncRefuelingFromTransactions(txs)
+
+                // 5. 재정제 및 골프 정합성 확정
+                vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
+                vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
+
+                val totalFuelLogs = vehicleRepository.getRefuelingLogsFlow().first().size
+
+                val totalScanned = scanResult.totalMessagesScanned
+                when {
+                    !hasPerm && totalFuelLogs == 0 ->
+                        "문자(SMS) 읽기 권한이 필요합니다. [주유 동기화]를 눌러 권한을 허용해주세요."
+                    addedCount > 0 ->
+                        "결제 문자에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다 (총 ${totalFuelLogs}건)."
+                    totalFuelLogs > 0 ->
+                        "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 최신 상태로 자동 동기화되었습니다."
+                    totalScanned > 0 ->
+                        "기기 문자 총 ${totalScanned}건을 분석했으나 신규 주유 내역을 찾지 못했습니다."
+                    else ->
+                        "주유 결제 내역 스캔을 완료했습니다."
                 }
-                diaryRepository.cleanDuplicates()
-            }
-            val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
-            vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
-
-            // 3. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
-            vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
-
-            // 4. 주유 결제 내역 동기화 (셀프주유소 가승인 15만원 자동 선별 및 실주유액 등록)
-            runCatching { transactionRepository.cleanDuplicates() }
-            val txs = transactionRepository.getAllTransactionsFlow().first()
-            val addedCount = vehicleRepository.syncRefuelingFromTransactions(txs)
-
-            // 5. 재정제 및 골프 정합성 확정
-            vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
-            vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
-
-            val totalFuelLogs = vehicleRepository.getRefuelingLogsFlow().first().size
-
-            val totalScanned = scanResult.totalMessagesScanned
-            val msg = when {
-                !hasPerm && totalFuelLogs == 0 ->
-                    "문자(SMS) 읽기 권한이 필요합니다. [주유 동기화]를 눌러 권한을 허용해주세요."
-                addedCount > 0 ->
-                    "결제 문자에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다 (총 ${totalFuelLogs}건)."
-                totalFuelLogs > 0 ->
-                    "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 최신 상태로 자동 동기화되었습니다."
-                totalScanned > 0 ->
-                    "기기 문자 총 ${totalScanned}건을 분석했으나 신규 주유 내역을 찾지 못했습니다."
-                else ->
-                    "주유 결제 내역 스캔을 완료했습니다."
             }
             _uiState.value = _uiState.value.copy(isSyncing = false, syncResultMessage = msg)
         }
@@ -608,27 +628,34 @@ class CarLedgerViewModel @Inject constructor(
 
     fun importPastedTransactions(transactions: List<Transaction>) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSyncing = true, showPasteSmsDialog = false)
-            var addedTxCount = 0
-            for (tx in transactions) {
-                runCatching {
-                    processTransactionUseCase(tx)
-                    addedTxCount++
+            _uiState.value = _uiState.value.copy(
+                isSyncing = true,
+                loadingTitle = "문자 내역 반영 중",
+                loadingMessage = "붙여넣은 결제 문자를 가계부·차계부에 반영하고 있습니다...",
+                showPasteSmsDialog = false
+            )
+            val msg = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                var addedTxCount = 0
+                for (tx in transactions) {
+                    runCatching {
+                        processTransactionUseCase(tx)
+                        addedTxCount++
+                    }
                 }
-            }
-            val cfg = locationPreferences.config.value
-            val (home, comp) = resolveCommuteNeighborhoods(cfg)
-            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
+                val cfg = locationPreferences.config.value
+                val (home, comp) = resolveCommuteNeighborhoods(cfg)
+                val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
 
-            val txs = transactionRepository.getAllTransactionsFlow().first()
-            val addedFuelCount = vehicleRepository.syncRefuelingFromTransactions(txs)
-            vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
+                val txs = transactionRepository.getAllTransactionsFlow().first()
+                val addedFuelCount = vehicleRepository.syncRefuelingFromTransactions(txs)
+                vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
 
-            val totalFuel = vehicleRepository.getRefuelingLogsFlow().first().size
-            val msg = if (addedFuelCount > 0) {
-                "결제 내역 ${transactions.size}건을 등록했습니다. (가계부 ${addedTxCount}건, 차계부 주유 ${addedFuelCount}건 반영, 총 주유 ${totalFuel}건)"
-            } else {
-                "결제 내역 ${transactions.size}건을 가계부에 성공적으로 등록했습니다."
+                val totalFuel = vehicleRepository.getRefuelingLogsFlow().first().size
+                if (addedFuelCount > 0) {
+                    "결제 내역 ${transactions.size}건을 등록했습니다. (가계부 ${addedTxCount}건, 차계부 주유 ${addedFuelCount}건 반영, 총 주유 ${totalFuel}건)"
+                } else {
+                    "결제 내역 ${transactions.size}건을 가계부에 성공적으로 등록했습니다."
+                }
             }
             _uiState.value = _uiState.value.copy(
                 isSyncing = false,
@@ -671,7 +698,7 @@ class CarLedgerViewModel @Inject constructor(
         )
         closeLocationDialog()
 
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val (homeDong, compDong) = resolveCommuteNeighborhoods(locationPreferences.config.value)
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(
                 homeName = homeDong,
@@ -682,7 +709,7 @@ class CarLedgerViewModel @Inject constructor(
     }
 
     fun recordManualCommute(isToWork: Boolean) {
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val cfg = locationPreferences.config.value
             val (homeDong, compDong) = resolveCommuteNeighborhoods(cfg)
             val dist = if (cfg.commuteOneWayKm > 0) cfg.commuteOneWayKm else (cfg.commuteRoundTripKm / 2.0).coerceAtLeast(1.0)
@@ -697,12 +724,18 @@ class CarLedgerViewModel @Inject constructor(
 
     fun clearAllDummyLogs() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSyncing = true)
-            vehicleRepository.clearTripDrivingLogs()
-            locationPreferences.resetConfig()
-            // 유효한 18홀 라운드에 대한 정상 주행기록만 복원
-            val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
-            vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
+            _uiState.value = _uiState.value.copy(
+                isSyncing = true,
+                loadingTitle = "주행 기록 정리 중",
+                loadingMessage = "비정상 주행 기록을 정리하고 있습니다..."
+            )
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                vehicleRepository.clearTripDrivingLogs()
+                locationPreferences.resetConfig()
+                // 유효한 18홀 라운드에 대한 정상 주행기록만 복원
+                val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
+                vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
+            }
             _uiState.value = _uiState.value.copy(isSyncing = false)
         }
     }
@@ -755,6 +788,13 @@ class CarLedgerViewModel @Inject constructor(
     }
 
     fun selectVehicle(vehicleId: String) {
+        if (_uiState.value.selectedVehicleId != vehicleId) {
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                loadingTitle = "차량 전환 중",
+                loadingMessage = "선택한 차량의 주유 및 주행 기록을 계산하고 있습니다..."
+            )
+        }
         multiVehiclePreferences.selectVehicle(vehicleId)
         maintenancePreferences.setCurrentVehicleId(vehicleId)
     }

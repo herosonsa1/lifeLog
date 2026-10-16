@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -27,6 +29,9 @@ class LifestyleViewModel @Inject constructor(
 
     private val _selectedPeriod = MutableStateFlow(LifeOrbitPeriod.MONTH)
     val selectedPeriod: StateFlow<LifeOrbitPeriod> = _selectedPeriod.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     private val _syncProgress = MutableStateFlow<SyncProgress?>(null)
     val syncProgress: StateFlow<SyncProgress?> = _syncProgress.asStateFlow()
@@ -43,6 +48,8 @@ class LifestyleViewModel @Inject constructor(
     val metrics: StateFlow<LifestyleMetrics> = _selectedPeriod
         .flatMapLatest { period ->
             calculateLifestyleMetricsUseCase(period)
+                .onStart { _isLoading.value = true }
+                .onEach { _isLoading.value = false }
         }
         .stateIn(
             scope = viewModelScope,
@@ -51,7 +58,10 @@ class LifestyleViewModel @Inject constructor(
         )
 
     fun selectPeriod(period: LifeOrbitPeriod) {
-        _selectedPeriod.value = period
+        if (_selectedPeriod.value != period) {
+            _isLoading.value = true
+            _selectedPeriod.value = period
+        }
     }
 
     fun syncFromDevice(context: Context, daysBack: Int? = 30) {

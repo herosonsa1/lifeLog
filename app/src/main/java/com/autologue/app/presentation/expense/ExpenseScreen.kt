@@ -165,10 +165,13 @@ fun ExpenseScreen(
             }
         }
     ) { padding ->
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+        ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = Spacing.xxxl)
         ) {
             // Level 0: Month / Period Navigator Bar & Management Action Chips
@@ -1022,7 +1025,10 @@ fun ExpenseScreen(
                     }
                 }
             } else {
-                items(uiState.filteredTransactions) { tx ->
+                items(
+                    items = uiState.filteredTransactions,
+                    key = { it.id }
+                ) { tx ->
                     val matchingAccount = viewModel.getMatchingAccount(tx)
                     val isRecurring = tx.id in uiState.recurringTransactionIds
                     val userClass = uiState.userClassByTxId[tx.id]
@@ -1053,6 +1059,16 @@ fun ExpenseScreen(
                     HairlineDivider()
                 }
             }
+        }
+
+            com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
+                isLoading = uiState.isLoading || uiState.isSaving,
+                title = if (uiState.isSaving) "변경 사항 저장 중" else uiState.loadingTitle,
+                message = if (uiState.isSaving) "선택하신 영구저장 항목과 내역을 반영하고 있습니다..." else uiState.loadingMessage,
+                accentColor = MenuColors.expense,
+                delayMillis = 500L,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 

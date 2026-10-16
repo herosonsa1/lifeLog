@@ -66,8 +66,8 @@ data class DiaryUiState(
     val photoPreviewIndex: Int = 0,
     val isAddCompanionDialogOpen: Boolean = false,
     val companionTargetStep: RouteStep? = null,
-    val isLoading: Boolean = false,
-    val loadingMessage: String = ""
+    val isLoading: Boolean = true,
+    val loadingMessage: String = "다이어리 타임라인을 불러오고 있습니다..."
 )
 
 @HiltViewModel
@@ -90,6 +90,8 @@ class DiaryViewModel @Inject constructor(
 
     private var rawEntries: List<DiaryEntry> = emptyList()
     private var hasUpgradedLegacyEntries = false
+    private var filterJob: kotlinx.coroutines.Job? = null
+    private var monthlyCalendarJob: kotlinx.coroutines.Job? = null
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -126,72 +128,74 @@ class DiaryViewModel @Inject constructor(
 
         viewModelScope.launch {
             diaryRepository.getDiaryEntriesFlow().collectLatest { list ->
-                rawEntries = list.map { entry ->
-                    var current = entry
-                    val hadIntermediateDriving = current.routeSteps.any { DailyRouteAggregator.isIntermediateDrivingStep(it) }
-                    val hadInvalidTx = current.routeSteps.any { DailyRouteAggregator.isInvalidTransactionStep(it) }
-                    val cleanedSteps = current.routeSteps
-                        .filterNot { DailyRouteAggregator.isIntermediateDrivingStep(it) || DailyRouteAggregator.isInvalidTransactionStep(it) }
-                        .map { DailyRouteAggregator.normalizeDrivingStep(it) }
-                    if (cleanedSteps != current.routeSteps) {
-                        current = current.copy(routeSteps = cleanedSteps)
-                    }
-                    val stepsExpense = DailyRouteAggregator.calculateRouteStepsExpense(current.routeSteps)
-                    if (hadInvalidTx || current.totalExpense < stepsExpense) {
-                        current = current.copy(totalExpense = stepsExpense)
-                    }
-                    if (current.drivingDistanceKm <= 0.0) {
-                        val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
-                        val finalDist = if (calculated > 0.0) calculated else if (current.hasGolfRound) {
-                            GolfCourseDistanceUtils.getEstimatedRoundTripKm(current.placeName ?: "")
-                        } else 0.0
-                        if (finalDist > 0.0) current = current.copy(drivingDistanceKm = finalDist)
-                    } else if (!current.hasGolfRound && current.drivingDistanceKm > 65.0) {
-                        val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
-                        val healedDist = if (calculated in 1.0..65.0) calculated else 27.1
-                        val healedSummary = current.summary.replace(Regex("(\\d+(?:\\.\\d+)?)\\s*km", RegexOption.IGNORE_CASE)) { m ->
-                            val km = m.groupValues[1].toDoubleOrNull() ?: 0.0
-                            if (km > 65.0) "27.1 km" else m.value
+                rawEntries = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    list.map { entry ->
+                        var current = entry
+                        val hadIntermediateDriving = current.routeSteps.any { DailyRouteAggregator.isIntermediateDrivingStep(it) }
+                        val hadInvalidTx = current.routeSteps.any { DailyRouteAggregator.isInvalidTransactionStep(it) }
+                        val cleanedSteps = current.routeSteps
+                            .filterNot { DailyRouteAggregator.isIntermediateDrivingStep(it) || DailyRouteAggregator.isInvalidTransactionStep(it) }
+                            .map { DailyRouteAggregator.normalizeDrivingStep(it) }
+                        if (cleanedSteps != current.routeSteps) {
+                            current = current.copy(routeSteps = cleanedSteps)
                         }
-                        current = current.copy(drivingDistanceKm = healedDist, summary = healedSummary)
-                    }
-                    if (hadIntermediateDriving) {
-                        val validPlaces = current.routeSteps
-                            .filter { step ->
-                                when (step.stepType) {
-                                    RouteStepType.TRANSACTION -> false
-                                    RouteStepType.DRIVING -> DailyRouteAggregator.isBoardingOrAlightingStep(step)
-                                    else -> true
-                                }
+                        val stepsExpense = DailyRouteAggregator.calculateRouteStepsExpense(current.routeSteps)
+                        if (hadInvalidTx || current.totalExpense < stepsExpense) {
+                            current = current.copy(totalExpense = stepsExpense)
+                        }
+                        if (current.drivingDistanceKm <= 0.0) {
+                            val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
+                            val finalDist = if (calculated > 0.0) calculated else if (current.hasGolfRound) {
+                                GolfCourseDistanceUtils.getEstimatedRoundTripKm(current.placeName ?: "")
+                            } else 0.0
+                            if (finalDist > 0.0) current = current.copy(drivingDistanceKm = finalDist)
+                        } else if (!current.hasGolfRound && current.drivingDistanceKm > 65.0) {
+                            val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
+                            val healedDist = if (calculated in 1.0..65.0) calculated else 27.1
+                            val healedSummary = current.summary.replace(Regex("(\\d+(?:\\.\\d+)?)\\s*km", RegexOption.IGNORE_CASE)) { m ->
+                                val km = m.groupValues[1].toDoubleOrNull() ?: 0.0
+                                if (km > 65.0) "27.1 km" else m.value
                             }
-                            .mapNotNull { it.locationName }
-                            .filter { it.isNotBlank() && !it.contains("사진 촬영") && !it.contains("사진 기록") }
-                            .distinct()
-                        val rebuiltMoveSummary = validPlaces.joinToString(" ➔ ").ifBlank { null }
-                        val rebuiltTitle = when {
-                            validPlaces.size >= 2 -> "${validPlaces.first()} & ${validPlaces[1]}"
-                            validPlaces.size == 1 -> "${validPlaces.first()} 방문 및 일상"
-                            cleanedSteps.any { it.stepType == RouteStepType.DRIVING } -> "차량 주행 및 일상"
-                            else -> current.title
+                            current = current.copy(drivingDistanceKm = healedDist, summary = healedSummary)
                         }
-                        current = current.copy(
-                            title = rebuiltTitle,
-                            placeName = validPlaces.firstOrNull(),
-                            movementSummary = rebuiltMoveSummary
-                        )
-                    } else {
-                        val moveSummary = current.movementSummary
-                        if (moveSummary != null && moveSummary.contains("사진 기록")) {
-                            val cleanSummary = moveSummary
-                                .split("➔", "->")
-                                .map { it.trim() }
-                                .filter { it.isNotBlank() && !it.contains("사진 기록") && !it.contains("사진 촬영") }
+                        if (hadIntermediateDriving) {
+                            val validPlaces = current.routeSteps
+                                .filter { step ->
+                                    when (step.stepType) {
+                                        RouteStepType.TRANSACTION -> false
+                                        RouteStepType.DRIVING -> DailyRouteAggregator.isBoardingOrAlightingStep(step)
+                                        else -> true
+                                    }
+                                }
+                                .mapNotNull { it.locationName }
+                                .filter { it.isNotBlank() && !it.contains("사진 촬영") && !it.contains("사진 기록") }
                                 .distinct()
-                                .joinToString(" ➔ ")
-                            current = current.copy(movementSummary = cleanSummary.ifBlank { null })
+                            val rebuiltMoveSummary = validPlaces.joinToString(" ➔ ").ifBlank { null }
+                            val rebuiltTitle = when {
+                                validPlaces.size >= 2 -> "${validPlaces.first()} & ${validPlaces[1]}"
+                                validPlaces.size == 1 -> "${validPlaces.first()} 방문 및 일상"
+                                cleanedSteps.any { it.stepType == RouteStepType.DRIVING } -> "차량 주행 및 일상"
+                                else -> current.title
+                            }
+                            current = current.copy(
+                                title = rebuiltTitle,
+                                placeName = validPlaces.firstOrNull(),
+                                movementSummary = rebuiltMoveSummary
+                            )
+                        } else {
+                            val moveSummary = current.movementSummary
+                            if (moveSummary != null && moveSummary.contains("사진 기록")) {
+                                val cleanSummary = moveSummary
+                                    .split("➔", "->")
+                                    .map { it.trim() }
+                                    .filter { it.isNotBlank() && !it.contains("사진 기록") && !it.contains("사진 촬영") }
+                                    .distinct()
+                                    .joinToString(" ➔ ")
+                                current = current.copy(movementSummary = cleanSummary.ifBlank { null })
+                            }
                         }
+                        current
                     }
-                    current
                 }
                 // Room DB 업데이트 후 무한 재귀 호출 루프를 원천 차단하기 위해 세션 당 최초 1회만 레거시 점검
                 if (!hasUpgradedLegacyEntries && list.isNotEmpty()) {
@@ -206,30 +210,25 @@ class DiaryViewModel @Inject constructor(
     }
 
     private fun updateFilteredEntries(customMessage: String = "") {
+        filterJob?.cancel()
+        val snapshot = _uiState.value
+        val mode = snapshot.viewMode
+        val mapFilter = snapshot.mapPeriodFilter
+        val msg = when {
+            customMessage.isNotBlank() -> customMessage
+            mapFilter == MapPeriodFilter.WEEKLY -> "최근 7일간의 이동 경로와 라이프로그를 분석 중입니다..."
+            mapFilter == MapPeriodFilter.MONTHLY -> "최근 30일간의 이동 경로를 분석 중입니다..."
+            mapFilter == MapPeriodFilter.ALL -> "전체 이동 기록을 불러오는 중입니다..."
+            mode == TimelineViewMode.WEEKLY -> "최근 7일간의 주간 다이어리를 분석 중입니다..."
+            mode == TimelineViewMode.MONTHLY -> "월간 캘린더 데이터를 분석 중입니다..."
+            mode == TimelineViewMode.MAP_ROUTE -> "이동 동선 지도를 불러오는 중입니다..."
+            else -> "다이어리 타임라인을 조회하고 있습니다..."
+        }
+        _uiState.update { it.copy(isLoading = true, loadingMessage = msg) }
+
         // [H-05] 무거운 컬렉션 연산(filter/flatMap/sortedBy)을 Dispatchers.Default로 격리
         //   → 30일치 rawEntries가 많을 경우 메인 스레드 ANR 방지
-        viewModelScope.launch(Dispatchers.Default) {
-            val snapshot = _uiState.value
-            val date = snapshot.selectedDate
-            val mode = snapshot.viewMode
-            val mapFilter = snapshot.mapPeriodFilter
-
-            val isLongLoading = mapFilter != MapPeriodFilter.DAILY || mode == TimelineViewMode.WEEKLY || mode == TimelineViewMode.MONTHLY || customMessage.isNotBlank()
-            if (isLongLoading) {
-                val msg = when {
-                    customMessage.isNotBlank() -> customMessage
-                    mapFilter == MapPeriodFilter.WEEKLY -> "최근 7일간의 이동 경로와 라이프로그를 분석 중입니다..."
-                    mapFilter == MapPeriodFilter.MONTHLY -> "최근 30일간의 이동 경로를 분석 중입니다..."
-                    mapFilter == MapPeriodFilter.ALL -> "전체 이동 기록을 불러오는 중입니다..."
-                    mode == TimelineViewMode.WEEKLY -> "최근 7일간의 주간 다이어리를 분석 중입니다..."
-                    mode == TimelineViewMode.MONTHLY -> "월간 캘린더 데이터를 분석 중입니다..."
-                    else -> "데이터를 불러오는 중입니다..."
-                }
-                _uiState.update { it.copy(isLoading = true, loadingMessage = msg) }
-                // 1초 이상 걸리는 느낌을 방지하고 부드러운 애니메이션 인식을 위한 최소 딜레이
-                delay(300L)
-            }
-
+        filterJob = viewModelScope.launch(Dispatchers.Default) {
             val currentMode = _uiState.value.viewMode
             val currentMapFilter = _uiState.value.mapPeriodFilter
             val currentDate = _uiState.value.selectedDate
@@ -458,7 +457,13 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun changeYearMonth(yearMonth: YearMonth) {
-        _uiState.update { it.copy(currentYearMonth = yearMonth) }
+        _uiState.update {
+            it.copy(
+                currentYearMonth = yearMonth,
+                isLoading = true,
+                loadingMessage = "월간 캘린더 데이터를 불러오는 중입니다..."
+            )
+        }
         loadMonthlyCalendar(yearMonth)
     }
 
@@ -495,9 +500,15 @@ class DiaryViewModel @Inject constructor(
     }
 
     private fun loadMonthlyCalendar(yearMonth: YearMonth) {
-        viewModelScope.launch {
+        monthlyCalendarJob?.cancel()
+        monthlyCalendarJob = viewModelScope.launch {
             getMonthlyCalendarDataUseCase(yearMonth).collectLatest { summary ->
-                _uiState.update { it.copy(monthlyCalendarData = summary) }
+                _uiState.update { current ->
+                    current.copy(
+                        monthlyCalendarData = summary,
+                        isLoading = if (current.viewMode == TimelineViewMode.MONTHLY) false else current.isLoading
+                    )
+                }
             }
         }
     }

@@ -80,58 +80,69 @@ fun LifestyleScreen(
     val context = LocalContext.current
     val selectedPeriod by viewModel.selectedPeriod.collectAsState()
     val metrics by viewModel.metrics.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
     val syncProgress by viewModel.syncProgress.collectAsState()
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AppColors.background)
-            .padding(horizontal = Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(Spacing.md)
-    ) {
-        item {
-            Spacer(modifier = Modifier.height(Spacing.xs))
-            LifestyleHeader(
-                onSyncClick = { viewModel.syncFromDevice(context, 30) },
-                isSyncing = syncProgress?.isRunning == true
-            )
-        }
-
-        syncProgress?.let { progress ->
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(AppColors.background)
+                .padding(horizontal = Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.md)
+        ) {
             item {
-                SyncProgressBanner(progress = progress)
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                LifestyleHeader(
+                    onSyncClick = { viewModel.syncFromDevice(context, 30) },
+                    isSyncing = syncProgress?.isRunning == true
+                )
+            }
+
+            syncProgress?.let { progress ->
+                item {
+                    SyncProgressBanner(progress = progress)
+                }
+            }
+
+            item {
+                PeriodSelectorTabs(
+                    selectedPeriod = selectedPeriod,
+                    onPeriodSelected = { viewModel.selectPeriod(it) }
+                )
+            }
+
+            item {
+                LifeOrbitHeroCard(
+                    metrics = metrics,
+                    onSyncClick = { viewModel.syncFromDevice(context, 30) }
+                )
+            }
+
+            item {
+                LifeBalanceRadarSection(scores = metrics.balanceScores)
+            }
+
+            item {
+                OrbitCompassSection(insights = metrics.insights)
+            }
+
+            item {
+                FourPillarsBentoGrid(metrics = metrics)
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(Spacing.xl))
             }
         }
 
-        item {
-            PeriodSelectorTabs(
-                selectedPeriod = selectedPeriod,
-                onPeriodSelected = { viewModel.selectPeriod(it) }
-            )
-        }
-
-        item {
-            LifeOrbitHeroCard(
-                metrics = metrics,
-                onSyncClick = { viewModel.syncFromDevice(context, 30) }
-            )
-        }
-
-        item {
-            LifeBalanceRadarSection(scores = metrics.balanceScores)
-        }
-
-        item {
-            OrbitCompassSection(insights = metrics.insights)
-        }
-
-        item {
-            FourPillarsBentoGrid(metrics = metrics)
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(Spacing.xl))
-        }
+        com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
+            isLoading = isLoading || (syncProgress?.isRunning == true),
+            accentColor = MenuColors.lifestyle,
+            title = if (syncProgress?.isRunning == true) "라이프로그 동기화 중" else "라이프 궤도 분석 중",
+            message = syncProgress?.stage?.ifBlank { null }
+                ?: "결제·이동·골프·다이어리 데이터를 종합 분석하고 있습니다..."
+        )
     }
 }
 
