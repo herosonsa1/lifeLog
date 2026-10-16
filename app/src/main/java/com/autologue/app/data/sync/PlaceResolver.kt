@@ -233,32 +233,137 @@ class PlaceResolver internal constructor(
         }
     }
 
+    private fun normalizeDongName(rawDong: String?): String? {
+        if (rawDong.isNullOrBlank()) return null
+        val trimmed = rawDong.trim()
+        // 예: "영등포동3가" -> "영등포동", "문래동3가" -> "문래동", "성수동1가" -> "성수동"
+        val dongGaMatch = Regex("^([가-힣]{2,}동)[0-9]+가$").find(trimmed)
+        if (dongGaMatch != null) {
+            return dongGaMatch.groupValues[1]
+        }
+        // 예: "거여1동" -> "거여동", "방이2동" -> "방이동", "역삼1동" -> "역삼동"
+        val numberedDongMatch = Regex("^([가-힣]{2,})[0-9]+동$").find(trimmed)
+        if (numberedDongMatch != null) {
+            return "${numberedDongMatch.groupValues[1]}동"
+        }
+        return trimmed
+    }
+
     /**
-     * 차량 주행 기록의 출발지·도착지 표기를 위한 고정밀 지명 해석:
-     * 1) Android Geocoder에서 최대 3개 주소 후보를 조회하여 시/군/구 + 행정동 + 도로명(번지)을 결합
-     * 2) 백그라운드에서 Geocoder gRPC 타임아웃/실패 시 OpenStreetMap Nominatim 한국어 역지오코딩으로 즉시 폴백
+     * 도로명 주소만 반환되었거나 오프라인 거점 문자열만 있을 때 동네명(시/구 + 동)을 추론합니다.
+     * 예: "위례대로6길 20" -> ("송파구", "위례동"), "영등포로 254" -> ("영등포구", "영등포동")
      */
-    fun resolvePreciseDrivingPlaceName(context: Context? = null, lat: Double, lng: Double): String {
-        val cacheKey = "precise_%.4f,%.4f".format(java.util.Locale.US, lat, lng)
-        geoCache[cacheKey]?.let {
-            if (!it.placeName.startsWith("위도 ")) return it.placeName
+    internal fun inferNeighborhoodFromText(existingGu: String?, text: String?): Pair<String?, String?> {
+        if (text.isNullOrBlank()) return Pair(existingGu, null)
+        val clean = text.trim()
+        val tokens = clean.split(" ", ",", "(", ")").map { it.trim() }.filter { it.isNotBlank() && it != "대한민국" }
+
+        var gu = existingGu
+        var dong: String? = null
+
+        for (t in tokens) {
+            if (gu == null && (t.endsWith("시") || t.endsWith("군") || t.endsWith("구"))) {
+                gu = t
+            } else if (gu != null && gu.endsWith("시") && t.endsWith("구") && !gu.contains(t)) {
+                gu = "$gu $t"
+            }
+            if (dong == null && (t.endsWith("동") || t.endsWith("읍") || t.endsWith("면")) &&
+                !t.endsWith("동로") && !t.endsWith("동길") && !t.endsWith("운동장")
+            ) {
+                dong = normalizeDongName(t)
+            }
+        }
+
+        if (dong == null) {
+            when {
+                clean.contains("위례") -> {
+                    dong = when {
+                        gu?.contains("하남") == true -> "학암동"
+                        gu?.contains("성남") == true || gu?.contains("수정") == true -> "창곡동"
+                        else -> "위례동"
+                    }
+                    if (gu == null) gu = "송파구"
+                }
+                clean.contains("영등포로") || clean.contains("영등포") -> {
+                    dong = "영등포동"
+                    if (gu == null) gu = "영등포구"
+                }
+                clean.contains("여의대로") || clean.contains("여의나루") || clean.contains("여의도") -> {
+                    dong = "여의도동"
+                    if (gu == null) gu = "영등포구"
+                }
+                clean.contains("판교") -> {
+                    dong = "판교동"
+                    if (gu == null) gu = "분당구"
+                }
+                clean.contains("테헤란로") || clean.contains("역삼") -> {
+                    dong = "역삼동"
+                    if (gu == null) gu = "강남구"
+                }
+                clean.contains("가산디지털") -> {
+                    dong = "가산동"
+                    if (gu == null) gu = "금천구"
+                }
+                else -> {
+                    // 일반 도로명(예: "방이로", "잠실대로", "문정로")에서 번호 제거
+                    val roadToken = tokens.firstOrNull { it.endsWith("로") || it.endsWith("길") || it.endsWith("대로") }
+                    if (roadToken != null) {
+                        val prefixMatch = Regex("^([가-힣]{2,})(?:로|대로|길).*$").find(roadToken)
+                        val stem = prefixMatch?.groupValues?.get(1)
+                        dong = if (!stem.isNullOrBlank() && stem.length in 2..3 && !stem.endsWith("대")) {
+                            roadToken
+                        } else {
+                            roadToken
+                        }
+                    }
+                }
+            }
+        }
+
+        return Pair(gu, normalizeDongName(dong))
+    }
+
+    /**
+     * 단일 주소/도로명 텍스트로부터 동네명(예: "송파구 위례동", "영등포구 영등포동") 문자열을 추론합니다.
+     */
+    fun inferNeighborhoodFromText(text: String): String {
+        if (text.isBlank()) return ""
+        val (gu, dong) = inferNeighborhoodFromText(null, text)
+        return buildNeighborhoodPlaceString(gu, dong, text)
+    }
+
+    /**
+     * 대략적인 출발지·도착지 좌표(또는 거점 주소 힌트)를 역지오코딩하여
+     * 깔끔한 동네명(예: "송파구 위례동", "하남시 학암동", "영등포구 영등포동")으로 반환합니다.
+     */
+    fun resolveNeighborhoodName(
+        context: Context? = null,
+        lat: Double,
+        lng: Double,
+        fallbackAddressHint: String = ""
+    ): String {
+        val hasValidCoord = com.autologue.app.util.LocationDistanceUtils.isValidCoordinate(lat, lng)
+        val cacheKey = "dong_%.3f,%.3f".format(java.util.Locale.US, lat, lng)
+        if (hasValidCoord) {
+            geoCache[cacheKey]?.let {
+                if (it.placeName.isNotBlank() && !it.placeName.startsWith("위도 ")) return it.placeName
+            }
         }
 
         val activeContext = context ?: this.context
+        var siGunGu: String? = null
+        var dong: String? = null
+        var road: String? = null
+        var fullAddr = ""
 
-        // 1. Android Geocoder 다중 결과(도로명 + 지번 동시 추출)
-        if (activeContext != null) {
+        // 1. Android Geocoder에서 최대 5개 주소 후보를 조회하여 법정동/행정동 우선 추출
+        if (hasValidCoord && activeContext != null) {
             runCatching {
                 if (android.location.Geocoder.isPresent()) {
                     val geocoder = android.location.Geocoder(activeContext, java.util.Locale.KOREAN)
                     @Suppress("DEPRECATION")
-                    val addresses = geocoder.getFromLocation(lat, lng, 3)
+                    val addresses = geocoder.getFromLocation(lat, lng, 5)
                     if (!addresses.isNullOrEmpty()) {
-                        var siGunGu: String? = null
-                        var dong: String? = null
-                        var road: String? = null
-                        var fullAddr = ""
-
                         for (addr in addresses) {
                             if (fullAddr.isBlank()) fullAddr = addr.getAddressLine(0) ?: ""
                             val lineTokens = (addr.getAddressLine(0) ?: "").split(" ", ",")
@@ -268,69 +373,102 @@ class PlaceResolver internal constructor(
                             if (siGunGu == null) {
                                 for (t in lineTokens) {
                                     if (t.endsWith("시") || t.endsWith("군") || t.endsWith("구")) {
-                                        if (siGunGu == null) {
+                                        val currentGu = siGunGu
+                                        if (currentGu == null) {
                                             siGunGu = t
-                                        } else if (siGunGu.endsWith("시") && t.endsWith("구")) {
-                                            siGunGu = "$siGunGu $t"
+                                        } else if (currentGu.endsWith("시") && t.endsWith("구") && !currentGu.contains(t)) {
+                                            siGunGu = "$currentGu $t"
                                         }
                                     }
                                 }
+                                if (siGunGu == null) {
+                                    siGunGu = listOfNotNull(addr.subLocality, addr.locality, addr.subAdminArea)
+                                        .map { it.trim() }
+                                        .firstOrNull { it.endsWith("시") || it.endsWith("군") || it.endsWith("구") }
+                                }
                             }
                             if (dong == null) {
-                                dong = extractDong(addr)
+                                dong = normalizeDongName(extractDong(addr))
                             }
                             if (road == null) {
                                 road = extractRoadAndNumber(addr)
                             }
-                        }
-
-                        val preciseName = buildPrecisePlaceString(siGunGu, dong, road)
-                            .ifBlank { parseAddressToDisplayName(addresses[0]) }
-                        if (preciseName.isNotBlank() && !preciseName.startsWith("위도 ")) {
-                            geoCache[cacheKey] = ResolvedLocation(preciseName, fullAddr.ifBlank { preciseName }, lat, lng)
-                            return preciseName
                         }
                     }
                 }
             }
         }
 
-        // 2. Geocoder 실패 시 OpenStreetMap Nominatim 역지오코딩 폴백 (백그라운드 gRPC 오류 완벽 방어)
-        val nominatimResult = fetchNominatimReverseGeocode(lat, lng)
-        if (nominatimResult != null) {
-            geoCache[cacheKey] = nominatimResult
-            return nominatimResult.placeName
+        // 2. Geocoder에서 동(동/읍/면)이 누락된 경우 OpenStreetMap Nominatim에서 동네명 보충
+        if (hasValidCoord && dong == null) {
+            val nominatimResult = fetchNominatimReverseGeocode(lat, lng)
+            if (nominatimResult != null && nominatimResult.placeName.isNotBlank()) {
+                if (hasValidCoord) {
+                    geoCache[cacheKey] = nominatimResult
+                }
+                return nominatimResult.placeName
+            }
         }
 
-        // 3. 기존 일반 캐시 조회
-        val general = resolveGeoLocation(activeContext, lat, lng)
-        if (!general.placeName.startsWith("위도 ")) {
-            return general.placeName
+        // 3. 도로명 또는 fallbackAddressHint로부터 동네명 보완 추론
+        if (dong == null) {
+            val (inferredGu, inferredDong) = inferNeighborhoodFromText(
+                siGunGu,
+                fallbackAddressHint.ifBlank { fullAddr.ifBlank { road } }
+            )
+            if (siGunGu == null) siGunGu = inferredGu
+            if (dong == null) dong = inferredDong
+        }
+
+        val neighborhood = buildNeighborhoodPlaceString(siGunGu, dong, road)
+        if (neighborhood.isNotBlank()) {
+            if (hasValidCoord) {
+                geoCache[cacheKey] = ResolvedLocation(neighborhood, fullAddr.ifBlank { neighborhood }, lat, lng)
+            }
+            return neighborhood
+        }
+
+        if (fallbackAddressHint.isNotBlank()) {
+            val (hintGu, hintDong) = inferNeighborhoodFromText(null, fallbackAddressHint)
+            val fromHint = buildNeighborhoodPlaceString(hintGu, hintDong, fallbackAddressHint)
+            if (fromHint.isNotBlank()) return fromHint
         }
 
         return ""
     }
 
-    private fun buildPrecisePlaceString(siGunGu: String?, dong: String?, road: String?): String {
-        val cleanGu = siGunGu?.trim().orEmpty()
-        val cleanDong = dong?.trim().orEmpty()
-        val cleanRoad = road?.trim().orEmpty()
+    /**
+     * 차량 주행 기록의 출발지·도착지 표기를 위한 동네명 해석:
+     * 대략적인 출발위치와 도착위치를 역지오코딩하여 직관적인 동네명(시/군/구 + 동/읍/면)으로 표시합니다.
+     */
+    fun resolvePreciseDrivingPlaceName(
+        context: Context? = null,
+        lat: Double,
+        lng: Double,
+        fallbackAddressHint: String = ""
+    ): String {
+        return resolveNeighborhoodName(context, lat, lng, fallbackAddressHint)
+    }
+
+    private fun buildNeighborhoodPlaceString(siGunGu: String?, dong: String?, road: String?): String {
+        val rawGu = siGunGu?.trim().orEmpty()
+        // "성남시 수정구" -> "수정구" 또는 "성남시 수정구" 중 간결한 구/시 명칭 유지
+        val cleanGu = if (rawGu.contains(" ")) {
+            val parts = rawGu.split(" ").filter { it.isNotBlank() }
+            if (parts.size >= 2 && parts.last().endsWith("구")) parts.last() else rawGu
+        } else {
+            rawGu
+        }
+        val cleanDong = normalizeDongName(dong)?.trim().orEmpty()
+        val cleanRoadOnly = road?.trim()?.replace(Regex("\\s+[0-9]+(-[0-9]+)?$"), "").orEmpty()
 
         return when {
-            cleanGu.isNotBlank() && cleanDong.isNotBlank() && cleanRoad.isNotBlank() -> {
-                "$cleanGu $cleanDong $cleanRoad"
-            }
-            cleanGu.isNotBlank() && cleanRoad.isNotBlank() -> {
-                "$cleanGu $cleanRoad"
-            }
             cleanGu.isNotBlank() && cleanDong.isNotBlank() -> {
-                "$cleanGu $cleanDong"
+                if (cleanDong.contains(cleanGu)) cleanDong else "$cleanGu $cleanDong"
             }
-            cleanDong.isNotBlank() && cleanRoad.isNotBlank() -> {
-                "$cleanDong $cleanRoad"
-            }
-            cleanRoad.isNotBlank() -> cleanRoad
             cleanDong.isNotBlank() -> cleanDong
+            cleanGu.isNotBlank() && cleanRoadOnly.isNotBlank() -> "$cleanGu $cleanRoadOnly"
+            cleanRoadOnly.isNotBlank() -> cleanRoadOnly
             cleanGu.isNotBlank() -> cleanGu
             else -> ""
         }
@@ -342,7 +480,7 @@ class PlaceResolver internal constructor(
     private fun fetchNominatimReverseGeocode(lat: Double, lng: Double): ResolvedLocation? {
         if (System.currentTimeMillis() < nominatimCooldownUntilMillis) return null
         return runCatching {
-            val urlStr = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=$lat&lon=$lng&zoom=18&addressdetails=1&accept-language=ko"
+            val urlStr = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=$lat&lon=$lng&zoom=16&addressdetails=1&accept-language=ko"
             val conn = (java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 1500
@@ -359,23 +497,21 @@ class PlaceResolver internal constructor(
                     val city = addrObj.optString("city", "").ifBlank { addrObj.optString("county", "") }
                     val borough = addrObj.optString("borough", "").ifBlank { addrObj.optString("city_district", "") }
                     val siGunGu = when {
-                        city.isNotBlank() && borough.isNotBlank() && city != borough && !city.contains("서울") -> "$city $borough"
                         borough.isNotBlank() -> borough
                         city.isNotBlank() -> city
                         else -> ""
                     }
-                    val dong = listOf("suburb", "quarter", "neighbourhood", "village", "town")
+                    val rawDong = listOf("suburb", "quarter", "neighbourhood", "village", "town")
                         .map { addrObj.optString(it, "").trim() }
                         .firstOrNull { it.isNotBlank() }
+                    val dong = normalizeDongName(rawDong)
                     val roadName = addrObj.optString("road", "").trim()
-                    val houseNo = addrObj.optString("house_number", "").trim()
-                    val road = if (roadName.isNotBlank() && houseNo.isNotBlank()) "$roadName $houseNo" else roadName
 
-                    val precise = buildPrecisePlaceString(siGunGu, dong, road)
-                    if (precise.isNotBlank()) {
+                    val neighborhood = buildNeighborhoodPlaceString(siGunGu, dong, roadName)
+                    if (neighborhood.isNotBlank()) {
                         return@runCatching ResolvedLocation(
-                            placeName = precise,
-                            address = displayName.ifBlank { precise },
+                            placeName = neighborhood,
+                            address = displayName.ifBlank { neighborhood },
                             latitude = lat,
                             longitude = lng
                         )
@@ -389,6 +525,7 @@ class PlaceResolver internal constructor(
             nominatimCooldownUntilMillis = System.currentTimeMillis() + 60_000L
         }.getOrNull()
     }
+
 
     fun resolveGeoLocation(context: Context? = null, lat: Double, lng: Double): ResolvedLocation {
         val cacheKey = "%.3f,%.3f".format(java.util.Locale.US, lat, lng)

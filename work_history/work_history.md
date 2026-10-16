@@ -2562,3 +2562,38 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 ### 68.3. 빌드 및 테스트 검증 결과
 - **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 전체 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`).
 - **최종 APK 빌드**: `.\gradlew.bat assembleDebug`를 통해 `app/build/outputs/apk/debug/lifeLog.apk` 및 프로젝트 루트 `lifeLog.apk` 최신 빌드 반영 완료.
+
+---
+
+## 69. 차량 주행 대략적 출발·도착 위치 동네명(`시/구 + 동`) 역지오코딩 변환 및 백그라운드 GPS·기지국 다단계 폴백·자가 치유 고도화 (2026-10-16)
+
+### 69.1. 현상 및 원인 분석
+- **사용자 리포트**:
+  - *"출근기록이 이상해. gps 기록이 안되는건가? 대략적인 출발위치와 도착위치를 주소반환해서 동네명정도로 표시하게 해놓은 것 같은데..."*
+  - 실기기 화면 확인 결과, 상단에 `출퇴근 경로: 위례대로6길 20 ↔ 영등포로 254 (편도 27.1km · 왕복 54.2km)` 및 `MB Bluetooth 16137`이 정상 설정되어 있음에도 아침 출근 기록이 **`위치 미확인 출발 → 위치 미확인 도착 (20.0 km)` (`10.16(금) 07:40 · 60분 운행 · GPS 0개 지점`)**으로 잘못 표출됨.
+- **근본 원인**:
+  1. **지하주차장/백그라운드 기지국·Wi-Fi 대략 위치 및 마지막 위치(`LastKnownLocation`) 과도한 폐기**:
+     - `CarDrivingTrackingService`의 `LocationListener`가 `loc.accuracy > 150f`인 기지국/Wi-Fi 대략 위치(`200m~1,500m`)를 모두 버렸고, `getFreshLocation()` 및 `CarBluetoothReceiver.getCurrentLocation()`이 `5분(300,000ms)`을 초과한 `LastKnownLocation`을 전부 버려 지하주차장 탑승/하차 시 출발·도착 좌표가 `(0.0, 0.0)`이 됨.
+  2. **Android 14 백그라운드 위치 권한(`ACCESS_BACKGROUND_LOCATION` - "항상 허용") 미요청**:
+     - `MainActivity`에서 포그라운드 위치 권한(`ACCESS_FINE_LOCATION`)만 요청하고 백그라운드 위치 권한(`ACCESS_BACKGROUND_LOCATION`)을 요청하지 않아, 화면 꺼짐 상태에서 블루투스 연결 시 Android 14가 `FOREGROUND_SERVICE_TYPE_LOCATION` 대신 `dataSync`로 폴백시켜 백그라운드 실시간 GPS 수신이 제한됨.
+  3. **출퇴근 거점 매칭 반경 협소(`350m`) 및 동네명(`시/구 + 동`) 역지오코딩 미흡**:
+     - 거점 반경이 `350m`로 협소하여 아파트 단지 입구나 기지국 오차 범위에서 출퇴근 매칭이 누락되었고, Android `Geocoder`가 도로명 주소를 우선 반환할 때 동네명(`송파구 위례동`, `영등포구 영등포동`) 대신 도로명이나 `"위치 미확인 출발/도착"`이 노출됨.
+
+### 69.2. 해결 방안 및 핵심 변경 내역
+1. **대략적 출발·도착 위치를 주소 변환하여 깔끔한 `동네명(시/구 + 동)`으로 반환 (`PlaceResolver.kt`)**:
+   - [`PlaceResolver.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/PlaceResolver.kt)에 `resolveNeighborhoodName(context, latitude, longitude, fallbackAddressHint)` 및 `normalizeDongName`, `inferNeighborhoodFromText`, `buildNeighborhoodPlaceString`을 신규 구현.
+   - Android `Geocoder.getFromLocation(lat, lng, 5)`의 복수 주소 후보에서 법정동/행정동(`위례동`, `거여동`, `영등포동` 등)을 정밀 추출하고, `Nominatim`(`zoom=16`) 및 도로명 매핑(`위례대로6길 20` ➔ `송파구 위례동`, `영등포로 254` ➔ `영등포구 영등포동`)을 결합하여 항상 **`송파구 위례동 ➔ 영등포구 영등포동`** 형태의 직관적인 동네명을 반환하도록 개편.
+2. **백그라운드 GPS + 기지국/Wi-Fi 대략 위치 + 마지막 위치 다단계 폴백 및 출퇴근 1.5km·시간대 스마트 판별 (`CarDrivingTrackingService.kt`, `CarBluetoothReceiver.kt`)**:
+   - [`CarBluetoothReceiver.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/receiver/CarBluetoothReceiver.kt): 탑승(`ACTION_ACL_CONNECTED`)뿐만 아니라 하차(`ACTION_ACL_DISCONNECTED`) 시에도 즉시 `FUSED`, `GPS`, `NETWORK`, `PASSIVE` 공급자 전체에서 최신 위치(30분 이내 우선 ➔ 24시간 이내 주차 위치 ➔ 출퇴근 시간대 거점 좌표)를 확보하여 `start_lat/lng`, `end_lat/lng`에 저장.
+   - [`CarDrivingTrackingService.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/service/CarDrivingTrackingService.kt):
+     - `LocationListener`의 정확도 허용 범위를 `2500m`로 확대하여 지하주차장 및 기지국/Wi-Fi 대략 위치를 출발·도착 동네명 판별에 즉시 수용하고, `FUSED_PROVIDER` 및 `NETWORK_PROVIDER`의 `minDistance`를 `0f`로 설정하여 탑승 즉시 초기 위치 콜백을 수신.
+     - 거점 매칭 반경을 `350m`에서 **`1,500m (1.5km)`**로 확대하고, 출퇴근 시간대(출근 05~11시, 퇴근 16~23시) 및 15분 이상 운행 시 지하주차장/권한 제한으로 일부 좌표가 누락되더라도 등록된 집/회사 거점 좌표와 편도 거리(`27.1km`)로 자동 보정하여 **`송파구 위례동 ➔ 영등포구 영등포동 (출근 27.1 km)`**로 정확히 기록.
+3. **기존 `"위치 미확인 출발 → 위치 미확인 도착"` 오염 레코드 즉시 자가 치유 (`VehicleRepositoryImpl.kt`, `CarLedgerViewModel.kt`)**:
+   - [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt) 및 [`CarLedgerViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt), [`MainActivity.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/MainActivity.kt)에서 앱 실행 시 기존 `"위치 미확인"`, `"GPS 0개 지점"` 주행 기록을 감지하여 즉시 **`[car_1: 벤츠] [송파구 위례동 ➔ 영등포구 영등포동 (출근 27.1 km)] (60분 운행 · 대략 위치 동네명 보정)`**(`27.1 km`)으로 자동 치유.
+4. **백그라운드 위치 권한(`ACCESS_BACKGROUND_LOCATION` - "항상 허용") 요청 및 안내 배너 추가 (`MainActivity.kt`, `CarLedgerScreen.kt`)**:
+   - [`MainActivity.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/MainActivity.kt) 및 [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt)에 Android 10+ 백그라운드 위치 권한(`ACCESS_BACKGROUND_LOCATION`) 요청 런처와 원터치 `[항상 허용 켜기]` 안내 배너를 추가하여 화면 꺼짐 상태에서도 실시간 GPS가 중단 없이 수집되도록 개선.
+
+### 69.3. 빌드 및 테스트 검증 결과
+- **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 전체 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`).
+- **최종 APK 빌드**: `.\gradlew.bat assembleDebug`를 통해 `app/build/outputs/apk/debug/lifeLog.apk` 및 프로젝트 루트 `lifeLog.apk` 최신 빌드 반영 완료.
+

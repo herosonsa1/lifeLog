@@ -112,16 +112,32 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                     val vehicleId = activeProfile?.id ?: fallbackId
                     Log.d("CarBluetoothReceiver", "차량 블루투스 연결 감지: $deviceName ($activeName, $activePlate). 백그라운드 추적 서비스 시작")
 
-                    // 5분 이내 신선한 위치만 초기 출발 좌표 후보로 기록 (오래된 캐시 좌표로 인한 출발지 오염 방지)
+                    // 탑승 시점 대략적 출발 위치 확보 (30분 이내 우선 -> 24시간 이내 마지막 위치 -> 출퇴근 거점 폴백)
                     val loc = getCurrentLocation(context)
+                    val hour = LocalDateTime.now().hour
+                    val fallbackStartLat = when {
+                        loc != null && loc.latitude != 0.0 -> loc.latitude
+                        hour in 4..11 && config.homeLat != 0.0 -> config.homeLat
+                        hour in 16..23 && config.companyLat != 0.0 -> config.companyLat
+                        else -> 0.0
+                    }
+                    val fallbackStartLng = when {
+                        loc != null && loc.longitude != 0.0 -> loc.longitude
+                        hour in 4..11 && config.homeLng != 0.0 -> config.homeLng
+                        hour in 16..23 && config.companyLng != 0.0 -> config.companyLng
+                        else -> 0.0
+                    }
+
                     prefs.edit()
                         .putBoolean("is_driving", true)
                         .putString("active_car_id", vehicleId)
                         .putString("active_car_name", activeName)
                         .putString("active_car_plate", activePlate)
                         .putLong("start_time", System.currentTimeMillis())
-                        .putFloat("start_lat", (loc?.latitude ?: 0.0).toFloat())
-                        .putFloat("start_lng", (loc?.longitude ?: 0.0).toFloat())
+                        .putFloat("start_lat", fallbackStartLat.toFloat())
+                        .putFloat("start_lng", fallbackStartLng.toFloat())
+                        .putFloat("end_lat", 0.0f)
+                        .putFloat("end_lng", 0.0f)
                         .apply()
 
                     // 백그라운드 포그라운드 GPS 추적 서비스 시작
@@ -155,8 +171,14 @@ class CarBluetoothReceiver : BroadcastReceiver() {
                         return
                     }
 
+                    // 하차 시점 대략적 도착 위치 즉시 확보 및 저장
+                    val endLoc = getCurrentLocation(context, maxFallbackAgeMs = 15 * 60 * 1000L)
                     Log.d("CarBluetoothReceiver", "차량 블루투스 연결 해제: $deviceName. 도착 지점 및 주행 완료 처리 시작")
-                    prefs.edit().putBoolean("is_driving", false).apply()
+                    prefs.edit()
+                        .putBoolean("is_driving", false)
+                        .putFloat("end_lat", (endLoc?.latitude ?: 0.0).toFloat())
+                        .putFloat("end_lng", (endLoc?.longitude ?: 0.0).toFloat())
+                        .apply()
 
                     // 백그라운드 GPS 추적 서비스에 정지 및 기록 신호 안전 전송
                     try {
@@ -174,32 +196,53 @@ class CarBluetoothReceiver : BroadcastReceiver() {
     }
 
     /**
-     * 최근 5분(300,000ms) 이내에 수신된 신선한 위치만 반환합니다.
-     * 수 시간~며칠 전의 오래된 LastKnownLocation을 반환하여 출발지가 엉뚱한 곳으로 찍히는 현상을 방지합니다.
+     * FUSED / NETWORK / PASSIVE / GPS 공급자에서 대략적인 현재(또는 마지막) 위치를 확보합니다.
+     * 1순위: 최근 30분 이내의 위치
+     * 2순위: 지정된 허용 시간(기본 24시간) 이내의 가장 최신 유효 위치 (지하주차장 탑승 시 집/회사 마지막 위치 보존)
      */
-    private fun getCurrentLocation(context: Context): Location? {
+    private fun getCurrentLocation(
+        context: Context,
+        maxFallbackAgeMs: Long = 24 * 60 * 60 * 1000L
+    ): Location? {
         return try {
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val providers = listOf(
-                LocationManager.GPS_PROVIDER,
-                LocationManager.NETWORK_PROVIDER,
-                LocationManager.PASSIVE_PROVIDER
+            val providers = mutableListOf<String>()
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                lm.allProviders.contains(LocationManager.FUSED_PROVIDER)
+            ) {
+                providers.add(LocationManager.FUSED_PROVIDER)
+            }
+            providers.addAll(
+                listOf(
+                    LocationManager.GPS_PROVIDER,
+                    LocationManager.NETWORK_PROVIDER,
+                    LocationManager.PASSIVE_PROVIDER
+                )
             )
             val now = System.currentTimeMillis()
-            val maxAgeMs = 5 * 60 * 1000L // 5분 이내 위치만 허용
-            var best: Location? = null
+            val freshAgeMs = 30 * 60 * 1000L
+            var bestFresh: Location? = null
+            var bestFallback: Location? = null
+
             for (p in providers) {
-                if (lm.isProviderEnabled(p)) {
+                runCatching {
                     @SuppressLint("MissingPermission")
                     val loc = lm.getLastKnownLocation(p)
-                    if (loc != null && loc.latitude != 0.0 && loc.longitude != 0.0 && (now - loc.time) <= maxAgeMs) {
-                        if (best == null || loc.time > best.time) {
-                            best = loc
+                    if (loc != null && loc.latitude != 0.0 && loc.longitude != 0.0) {
+                        val age = (now - loc.time).coerceAtLeast(0L)
+                        if (age <= freshAgeMs) {
+                            if (bestFresh == null || loc.time > bestFresh!!.time) {
+                                bestFresh = loc
+                            }
+                        } else if (age <= maxFallbackAgeMs) {
+                            if (bestFallback == null || loc.time > bestFallback!!.time) {
+                                bestFallback = loc
+                            }
                         }
                     }
                 }
             }
-            best
+            bestFresh ?: bestFallback
         } catch (e: Exception) {
             null
         }

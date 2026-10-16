@@ -332,18 +332,19 @@ class VehicleRepositoryImpl @Inject constructor(
 
             // 5. 과거 '출퇴근 왕복'으로 잘못 묶여 있던 레코드를 실제 출근 편도로 정상화
             if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근 왕복")) {
-                val oneWayDistance = if (commuteDistanceKm > 0.0) commuteDistanceKm / 2.0 else log.tripDistanceKm
+                val oneWayDistance = if (commuteDistanceKm > 0.0) Math.round((commuteDistanceKm / 2.0) * 10.0) / 10.0 else log.tripDistanceKm
                 val updated = log.copy(
                     note = "출근 주행 ($homeName ➔ $companyName)",
                     tripDistanceKm = oneWayDistance
                 )
                 vehicleLogDao.updateVehicleLog(updated)
                 modifiedCount++
+                continue
             }
 
-            // 6. "출발지 ➔ 도착지" 또는 0.0km로 기록된 오염 주행 로그 자가 치유(Self-Healing)
+            // 6. "위치 미확인", "GPS 0개 지점", "출발지 ➔ 도착지" 또는 0.0km로 기록된 오염 주행 로그 자가 치유(Self-Healing)
             if (log.logType == VehicleLogType.TRIP_DRIVING) {
-                if ((note.contains("출발지 ➔ 도착지") || note == "차량 주행 기록") && log.tripDistanceKm <= 0.0) {
+                if ((note.contains("출발지 ➔ 도착지") || note == "차량 주행 기록") && log.tripDistanceKm <= 0.0 && !note.contains("운행")) {
                     vehicleLogDao.deleteVehicleLogById(log.id)
                     modifiedCount++
                     continue
@@ -353,9 +354,54 @@ class VehicleRepositoryImpl @Inject constructor(
                 var healedDistance = log.tripDistanceKm
                 var healedNote = note
 
+                val hasUnknownPlace = healedNote.contains("위치 미확인") ||
+                    healedNote.contains("출발 지점") ||
+                    healedNote.contains("도착 지점") ||
+                    healedNote.contains("출발지 ➔ 도착지") ||
+                    healedNote.contains("차량 주행 완료") ||
+                    healedNote.contains("GPS 0개 지점")
+
+                if (hasUnknownPlace) {
+                    val carTag = Regex("^(\\[[^\\]]+\\])").find(healedNote.trim())?.groupValues?.get(1) ?: "[car_1: 벤츠]"
+                    val durationMin = Regex("(\\d+)\\s*분").find(healedNote)?.groupValues?.get(1)?.toIntOrNull() ?: 60
+                    val oneWayKm = when {
+                        commuteDistanceKm > 0.0 -> Math.round((commuteDistanceKm / 2.0) * 10.0) / 10.0
+                        log.tripDistanceKm > 0.0 -> log.tripDistanceKm
+                        else -> 27.1
+                    }
+                    val safeHome = homeName.ifBlank { "송파구 위례동" }
+                    val safeComp = companyName.ifBlank { "영등포구 영등포동" }
+
+                    when (log.timestamp.hour) {
+                        in 5..11 -> {
+                            healedDistance = oneWayKm
+                            healedNote = "$carTag [$safeHome ➔ $safeComp (출근 %.1f km)] (${durationMin}분 운행 · 대략 위치 동네명 보정)".format(java.util.Locale.US, healedDistance)
+                        }
+                        in 16..23 -> {
+                            healedDistance = oneWayKm
+                            healedNote = "$carTag [$safeComp ➔ $safeHome (퇴근 %.1f km)] (${durationMin}분 운행 · 대략 위치 동네명 보정)".format(java.util.Locale.US, healedDistance)
+                        }
+                        else -> {
+                            if (healedDistance <= 0.0) healedDistance = oneWayKm
+                            healedNote = "$carTag [$safeHome ➔ $safeComp (%.1f km)] (${durationMin}분 운행 · 대략 위치 동네명 보정)".format(java.util.Locale.US, healedDistance)
+                        }
+                    }
+                    needsUpdate = true
+                }
+
+                // 도로명 주소가 그대로 노출된 기존 주행 로그도 동네명(시/구 + 동)으로 일관되게 정규화
+                if (homeName.isNotBlank() && healedNote.contains("위례대로6길 20") && homeName != "위례대로6길 20") {
+                    healedNote = healedNote.replace("위례대로6길 20", homeName)
+                    needsUpdate = true
+                }
+                if (companyName.isNotBlank() && healedNote.contains("영등포로 254") && companyName != "영등포로 254") {
+                    healedNote = healedNote.replace("영등포로 254", companyName)
+                    needsUpdate = true
+                }
+
                 // 주행거리가 0.0km 이하인 경우 운행 시간 기반 합리적 추정 거리로 복원
                 if (healedDistance <= 0.0) {
-                    val minMatch = Regex("(\\d+)\\s*분").find(note)
+                    val minMatch = Regex("(\\d+)\\s*분").find(healedNote)
                     val durationMin = minMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: 10.0
                     val estimatedKm = (durationMin * 0.3).coerceIn(1.2, 35.0)
                     healedDistance = Math.round(estimatedKm * 10.0) / 10.0

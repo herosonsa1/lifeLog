@@ -49,6 +49,37 @@ fun CarLedgerScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
+    var hasBgLocationPerm by remember {
+        mutableStateOf(
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+            } else true
+        )
+    }
+
+    val bgLocationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasBgLocationPerm = granted || (
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+        if (!hasBgLocationPerm) {
+            runCatching {
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
+                }
+                context.startActivity(intent)
+            }
+        }
+    }
+
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
@@ -402,6 +433,40 @@ fun CarLedgerScreen(
                                 text = "차량 블루투스 연동: ${uiState.commuteConfig.carBluetoothDevice} (탑승 시 자동 판별)",
                                 style = AppTypography.captionMuted.copy(fontSize = 11.sp)
                             )
+                        }
+                        if (!hasBgLocationPerm && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Amber50,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        bgLocationPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "화면 꺼짐 시 실시간 GPS 수집을 위해 위치 권한을 [항상 허용]으로 설정해주세요.",
+                                        style = AppTypography.caption.copy(color = Slate800, fontSize = 11.sp),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "항상 허용 켜기",
+                                        style = AppTypography.caption.copy(
+                                            color = MenuColors.carLedger,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        )
+                                    )
+                                }
+                            }
                         }
                         Spacer(modifier = Modifier.height(Spacing.xs))
                         Row(

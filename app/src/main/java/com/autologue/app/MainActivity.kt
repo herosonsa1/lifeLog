@@ -55,6 +55,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var historicalDataImporter: HistoricalDataImporter
     @Inject lateinit var scorecardOcrAnalyzer: com.autologue.app.data.ocr.ScorecardOcrAnalyzer
     @Inject lateinit var processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
+    @Inject lateinit var userLocationPreferences: com.autologue.app.data.preferences.UserLocationPreferences
+    @Inject lateinit var placeResolver: com.autologue.app.data.sync.PlaceResolver
 
     private val _isInitialSyncDone = MutableStateFlow(false)
     val isInitialSyncDone: StateFlow<Boolean> = _isInitialSyncDone.asStateFlow()
@@ -62,11 +64,22 @@ class MainActivity : ComponentActivity() {
     private val _pendingCrashLog = MutableStateFlow<String?>(null)
     val pendingCrashLog: StateFlow<String?> = _pendingCrashLog.asStateFlow()
 
+    private val requestBackgroundLocationLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        Log.d("AUTOLOGUE_PERM", "ACCESS_BACKGROUND_LOCATION result: $granted")
+    }
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grantResults ->
         if (grantResults[Manifest.permission.READ_SMS] == true) {
             syncInitialData()
+        }
+        if (grantResults[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grantResults[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        ) {
+            requestBackgroundLocationIfNeeded()
         }
     }
 
@@ -166,6 +179,21 @@ class MainActivity : ComponentActivity() {
             try {
                 Log.d("AUTOLOGUE_INIT", "Starting syncInitialData...")
 
+                // 0. 차계부 주행 기록("위치 미확인", "GPS 0개 지점" 등) 동네명 기반 즉시 자가 치유
+                runCatching {
+                    val cfg = userLocationPreferences.config.value
+                    val homeHint = cfg.homeAddress.ifBlank { cfg.homeName }
+                    val compHint = cfg.companyAddress.ifBlank { cfg.companyName }
+                    val homeDong = placeResolver.resolveNeighborhoodName(
+                        this@MainActivity, cfg.homeLat, cfg.homeLng, homeHint
+                    ).ifBlank { cfg.homeName.ifBlank { "송파구 위례동" } }
+                    val compDong = placeResolver.resolveNeighborhoodName(
+                        this@MainActivity, cfg.companyLat, cfg.companyLng, compHint
+                    ).ifBlank { cfg.companyName.ifBlank { "영등포구 영등포동" } }
+                    val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
+                    vehicleRepository.cleanDuplicatesAndCorruptedLogs(homeDong, compDong, dist)
+                }
+
                 // 1. 기존 DB 내 오분류/중복 레코드 자가 치유
                 runCatching { transactionRepository.cleanDuplicates() }
 
@@ -229,9 +257,38 @@ class MainActivity : ComponentActivity() {
 
             if (needed.isNotEmpty()) {
                 requestPermissionLauncher.launch(needed.toTypedArray())
+            } else {
+                requestBackgroundLocationIfNeeded()
             }
         } catch (e: Exception) {
             Log.e("AUTOLOGUE_PERM", "Exception while requesting permissions: ${e.message}", e)
+        }
+    }
+
+    private fun requestBackgroundLocationIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val hasFineOrCoarse = ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+
+                val hasBgLocation = ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+
+                if (hasFineOrCoarse && !hasBgLocation) {
+                    val prefs = getSharedPreferences("autologue_perm_prefs", Context.MODE_PRIVATE)
+                    val promptedOnce = prefs.getBoolean("bg_location_prompted", false)
+                    if (!promptedOnce) {
+                        prefs.edit().putBoolean("bg_location_prompted", true).apply()
+                        requestBackgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AUTOLOGUE_PERM", "Background location request warning: ${e.message}", e)
+            }
         }
     }
 }

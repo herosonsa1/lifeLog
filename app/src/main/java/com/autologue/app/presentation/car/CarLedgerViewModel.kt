@@ -85,6 +85,8 @@ class CarLedgerViewModel @Inject constructor(
     private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
 ) : ViewModel() {
 
+    private val placeResolver = com.autologue.app.data.sync.PlaceResolver()
+
     private val _uiState = MutableStateFlow(CarLedgerUiState())
     val uiState: StateFlow<CarLedgerUiState> = _uiState.asStateFlow()
 
@@ -94,6 +96,32 @@ class CarLedgerViewModel @Inject constructor(
         observeMaintenanceConfig()
         observeVehicles()
         manualSyncRefueling()
+    }
+
+    private suspend fun resolveCommuteNeighborhoods(cfg: CommuteConfig): Pair<String, String> {
+        val homeHint = cfg.homeAddress.ifBlank { cfg.homeName }
+        val compHint = cfg.companyAddress.ifBlank { cfg.companyName }
+        val homeDong = runCatching {
+            placeResolver.resolveNeighborhoodName(
+                context = context,
+                lat = cfg.homeLat,
+                lng = cfg.homeLng,
+                fallbackAddressHint = homeHint
+            )
+        }.getOrDefault("").ifBlank {
+            placeResolver.inferNeighborhoodFromText(homeHint).ifBlank { cfg.homeName.ifBlank { "송파구 위례동" } }
+        }
+        val compDong = runCatching {
+            placeResolver.resolveNeighborhoodName(
+                context = context,
+                lat = cfg.companyLat,
+                lng = cfg.companyLng,
+                fallbackAddressHint = compHint
+            )
+        }.getOrDefault("").ifBlank {
+            placeResolver.inferNeighborhoodFromText(compHint).ifBlank { cfg.companyName.ifBlank { "영등포구 영등포동" } }
+        }
+        return Pair(homeDong, compDong)
     }
 
     private fun observeVehicles() {
@@ -395,9 +423,8 @@ class CarLedgerViewModel @Inject constructor(
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
             val cfg = locationPreferences.config.value
-            val home = if (cfg.homeName.isNotBlank()) cfg.homeName else "우리집"
-            val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
-            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
+            val (home, comp) = resolveCommuteNeighborhoods(cfg)
+            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
 
             // 1. 기기 결제 문자(SMS/LMS/MMS/RCS) 최근 365일 전수 스캔 및 가계부/차계부 자동 적재
             var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), hasPerm, 0)
@@ -466,9 +493,8 @@ class CarLedgerViewModel @Inject constructor(
                 }
             }
             val cfg = locationPreferences.config.value
-            val home = if (cfg.homeName.isNotBlank()) cfg.homeName else "우리집"
-            val comp = if (cfg.companyName.isNotBlank()) cfg.companyName else "회사"
-            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 25.0
+            val (home, comp) = resolveCommuteNeighborhoods(cfg)
+            val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
 
             val txs = transactionRepository.getAllTransactionsFlow().first()
             val addedFuelCount = vehicleRepository.syncRefuelingFromTransactions(txs)
@@ -522,9 +548,10 @@ class CarLedgerViewModel @Inject constructor(
         closeLocationDialog()
 
         viewModelScope.launch {
+            val (homeDong, compDong) = resolveCommuteNeighborhoods(locationPreferences.config.value)
             vehicleRepository.cleanDuplicatesAndCorruptedLogs(
-                homeName = homeName,
-                companyName = companyName,
+                homeName = homeDong,
+                companyName = compDong,
                 commuteDistanceKm = roundTripKm
             )
         }
@@ -533,11 +560,12 @@ class CarLedgerViewModel @Inject constructor(
     fun recordManualCommute(isToWork: Boolean) {
         viewModelScope.launch {
             val cfg = locationPreferences.config.value
+            val (homeDong, compDong) = resolveCommuteNeighborhoods(cfg)
             val dist = if (cfg.commuteOneWayKm > 0) cfg.commuteOneWayKm else (cfg.commuteRoundTripKm / 2.0).coerceAtLeast(1.0)
             vehicleRepository.recordCommuteTrip(
                 isToWork = isToWork,
-                homeName = cfg.homeName.ifBlank { "우리집" },
-                companyName = cfg.companyName.ifBlank { "회사" },
+                homeName = homeDong,
+                companyName = compDong,
                 distanceKm = dist
             )
         }
