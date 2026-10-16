@@ -12,6 +12,7 @@ import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.TransactionRule
+import com.autologue.app.domain.model.isBankAccountTransaction
 import com.autologue.app.domain.model.isDepositTransaction
 import com.autologue.app.domain.model.isSelfTransfer
 import com.autologue.app.domain.repository.TransactionRepository
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.YearMonth
@@ -81,10 +83,11 @@ data class ExpenseUiState(
     val corporateByTxId: Map<Long, Boolean> = emptyMap(),
     val oneTimeEditedIds: Set<Long> = emptySet(),
     val metaVersion: Long = 0L,
+    val isSaving: Boolean = false,
     // 선택적 일괄 삭제 모드 상태
     val isSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
-    // 정기지출 상태
+    // 정기지출(고정지출) 상태
     val recurringTransactionIds: Set<Long> = emptySet(),
     val isRecurringFilterOnly: Boolean = false,
     val recurringExpenseTotal: Long = 0L,
@@ -251,7 +254,7 @@ class ExpenseViewModel @Inject constructor(
                     amount = 22000L,
                     merchantName = merchantAliasPreferences.resolveAlias("이민희", false),
                     category = ExpenseCategory.TRANSFER,
-                    cardOrBankName = "NH농협",
+                    cardOrBankName = "NH농협은행",
                     transferMemo = "출금 내역 (계좌: 312-****-9414-21, 잔액 383,252원)"
                 )
                 isModified = true
@@ -260,7 +263,7 @@ class ExpenseViewModel @Inject constructor(
                     amount = 50000L,
                     merchantName = merchantAliasPreferences.resolveAlias("출금 내역", false),
                     category = ExpenseCategory.TRANSFER,
-                    cardOrBankName = "KB국민",
+                    cardOrBankName = "KB국민은행",
                     transferMemo = "출금 내역 (계좌: 07491612193855)"
                 )
                 isModified = true
@@ -302,120 +305,139 @@ class ExpenseViewModel @Inject constructor(
         }
     }
 
+    private var recalcJob: kotlinx.coroutines.Job? = null
+
     private fun recalculateFilteredTransactions() {
-        var state = _uiState.value
-        // [중복 방어 및 비실사용 내역 차단 안전망]
-        // 누적이용금액, 결제예정금액, 총사용금액, '금액' 등 비실사용 내역을 즉시 제외하고,
-        // 동일한 분, 동일 금액, 동일 가맹점(공백 제외)의 중복 항목은 화면 및 합계에서 1건만 유지
-        val dedupedAll = state.allTransactions
-            .filterNot { tx ->
-                val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
-                !isManual && com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
-                    tx.merchantName,
-                    tx.cardOrBankName,
-                    tx.originalText
+        recalcJob?.cancel()
+        recalcJob = viewModelScope.launch(Dispatchers.Default) {
+            var state = _uiState.value
+            // [중복 방어 및 비실사용 내역 차단 안전망 + 카드/은행 표준명 정규화]
+            val dedupedAll = state.allTransactions
+                .filterNot { tx ->
+                    val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+                    !isManual && com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
+                        tx.merchantName,
+                        tx.cardOrBankName,
+                        tx.originalText
+                    )
+                }
+                .distinctBy { tx ->
+                    val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
+                    val dirTag = if (tx.isDepositTransaction()) "IN" else "OUT"
+                    "${dirTag}_${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "")}"
+                }
+                .map { tx ->
+                    val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(tx)
+                    if (!displayCardOrBank.isNullOrBlank() && displayCardOrBank != tx.cardOrBankName) {
+                        tx.copy(cardOrBankName = displayCardOrBank)
+                    } else {
+                        tx
+                    }
+                }
+
+            // [월 변경 자동 포커싱] 최초 진입 시 현재 월에 내역이 0건이고 이전 월에 거래 내역이 존재하면 가장 최근 거래 연월로 자동 포커싱
+            if (!hasAutoFocusedMonth && dedupedAll.isNotEmpty() && state.filterMode == ExpenseDateFilterMode.MONTH) {
+                hasAutoFocusedMonth = true
+                val hasCurrentMonthTx = dedupedAll.any { YearMonth.from(it.timestamp.toLocalDate()) == state.selectedYearMonth }
+                if (!hasCurrentMonthTx) {
+                    val latestYearMonth = dedupedAll.maxOf { YearMonth.from(it.timestamp.toLocalDate()) }
+                    state = state.copy(selectedYearMonth = latestYearMonth)
+                }
+            }
+
+            // 지난달 동일 금액/날짜 자동 감지 + 사용자의 고정지출 수동/영구 지정 통합 산출
+            val autoRecurringIds = RecurringExpenseDetector.detectRecurringTransactionIds(dedupedAll)
+            val recurringIds = mutableSetOf<Long>()
+
+            val uClassMap = mutableMapOf<Long, UserClassificationItem>()
+            val cCatMap = mutableMapOf<Long, String>()
+            val corpMap = mutableMapOf<Long, Boolean>()
+            val oneTimeSet = mutableSetOf<Long>()
+
+            for (tx in dedupedAll) {
+                expenseCustomMetaPreferences.resolveUserClassification(tx)?.let { uClassMap[tx.id] = it }
+                expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx)?.let { cCatMap[tx.id] = it }
+                if (expenseCustomMetaPreferences.isCorporateTransaction(tx)) {
+                    corpMap[tx.id] = true
+                }
+                if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
+                    oneTimeSet.add(tx.id)
+                }
+                val isFixed = expenseCustomMetaPreferences.resolveIsFixedExpense(
+                    tx = tx,
+                    autoRecurringIds = autoRecurringIds
                 )
-            }
-            .distinctBy { tx ->
-                val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
-                val dirTag = if (tx.isDepositTransaction()) "IN" else "OUT"
-                "${dirTag}_${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "")}"
-            }
-
-        // [월 변경 자동 포커싱] 최초 진입 시 현재 월(예: 10월)에 내역이 0건이고 이전 월(예: 9월)에 거래 내역이 존재하면
-        // 가장 최근 거래가 있는 연월(YearMonth)로 자동 포커싱하여 0원 빈 화면 노출 방지
-        if (!hasAutoFocusedMonth && dedupedAll.isNotEmpty() && state.filterMode == ExpenseDateFilterMode.MONTH) {
-            hasAutoFocusedMonth = true
-            val hasCurrentMonthTx = dedupedAll.any { YearMonth.from(it.timestamp.toLocalDate()) == state.selectedYearMonth }
-            if (!hasCurrentMonthTx) {
-                val latestYearMonth = dedupedAll.maxOf { YearMonth.from(it.timestamp.toLocalDate()) }
-                state = state.copy(selectedYearMonth = latestYearMonth)
-            }
-        }
-
-        // 지난달 동일 금액/날짜 비교를 통한 정기지출 ID 집합 산출
-        val recurringIds = RecurringExpenseDetector.detectRecurringTransactionIds(dedupedAll)
-
-        val filtered = when (state.filterMode) {
-            ExpenseDateFilterMode.MONTH -> {
-                dedupedAll.filter { tx ->
-                    YearMonth.from(tx.timestamp.toLocalDate()) == state.selectedYearMonth
+                if (isFixed) {
+                    recurringIds.add(tx.id)
                 }
             }
-            ExpenseDateFilterMode.CUSTOM_RANGE -> {
-                dedupedAll.filter { tx ->
-                    val date = tx.timestamp.toLocalDate()
-                    !date.isBefore(state.customStartDate) && !date.isAfter(state.customEndDate)
+
+            val filtered = when (state.filterMode) {
+                ExpenseDateFilterMode.MONTH -> {
+                    dedupedAll.filter { tx ->
+                        YearMonth.from(tx.timestamp.toLocalDate()) == state.selectedYearMonth
+                    }
+                }
+                ExpenseDateFilterMode.CUSTOM_RANGE -> {
+                    dedupedAll.filter { tx ->
+                        val date = tx.timestamp.toLocalDate()
+                        !date.isBefore(state.customStartDate) && !date.isAfter(state.customEndDate)
+                    }
                 }
             }
-        }
 
-        val expenseOnly = filtered.filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
-        val totalExp = expenseOnly.sumOf { it.amount }
-        val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
-        val recurringExp = expenseOnly.filter { it.id in recurringIds }.sumOf { it.amount }
+            val expenseOnly = filtered.filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
+            val totalExp = expenseOnly.sumOf { it.amount }
+            val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
+            val recurringExp = expenseOnly.filter { it.id in recurringIds }.sumOf { it.amount }
 
-        val uClassMap = mutableMapOf<Long, UserClassificationItem>()
-        val cCatMap = mutableMapOf<Long, String>()
-        val corpMap = mutableMapOf<Long, Boolean>()
-        val oneTimeSet = mutableSetOf<Long>()
+            val byCat = expenseOnly.groupBy { it.category }
+                .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+                .filter { it.value > 0L }
+                .toList()
+                .sortedByDescending { it.second }
+                .toMap()
 
-        for (tx in dedupedAll) {
-            expenseCustomMetaPreferences.resolveUserClassification(tx)?.let { uClassMap[tx.id] = it }
-            expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx)?.let { cCatMap[tx.id] = it }
-            if (expenseCustomMetaPreferences.isCorporateTransaction(tx)) {
-                corpMap[tx.id] = true
+            val byEffectiveCat = expenseOnly
+                .groupBy { tx -> cCatMap[tx.id] ?: expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(tx.category) }
+                .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+                .filter { it.value > 0L }
+                .toList()
+                .sortedByDescending { it.second }
+                .toMap()
+
+            val rawByUser = expenseOnly
+                .groupBy { tx -> uClassMap[tx.id]?.name ?: UNASSIGNED_USER_FILTER }
+                .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+
+            val allKnownUsers = (state.userClassifications.map { it.name } + rawByUser.keys.filter { it != UNASSIGNED_USER_FILTER }).distinct()
+            val sortedUserPairs = allKnownUsers
+                .map { uName -> uName to (rawByUser[uName] ?: 0L) }
+                .sortedByDescending { it.second }
+                .toMutableList()
+
+            val unassignedAmt = rawByUser[UNASSIGNED_USER_FILTER] ?: 0L
+            if (unassignedAmt > 0L || sortedUserPairs.isEmpty()) {
+                sortedUserPairs.add(UNASSIGNED_USER_FILTER to unassignedAmt)
             }
-            if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
-                oneTimeSet.add(tx.id)
-            }
+            val byUserClass = sortedUserPairs.toMap()
+
+            _uiState.value = _uiState.value.copy(
+                selectedYearMonth = state.selectedYearMonth,
+                transactions = filtered,
+                totalExpense = totalExp,
+                totalIncome = totalInc,
+                categoryTotals = byCat,
+                effectiveCategoryTotals = byEffectiveCat,
+                userClassificationTotals = byUserClass,
+                recurringTransactionIds = recurringIds,
+                recurringExpenseTotal = recurringExp,
+                userClassByTxId = uClassMap,
+                customCategoryByTxId = cCatMap,
+                corporateByTxId = corpMap,
+                oneTimeEditedIds = oneTimeSet
+            )
         }
-
-        val byCat = expenseOnly.groupBy { it.category }
-            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
-            .filter { it.value > 0L }
-            .toList()
-            .sortedByDescending { it.second }
-            .toMap()
-
-        val byEffectiveCat = expenseOnly
-            .groupBy { tx -> cCatMap[tx.id] ?: expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(tx.category) }
-            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
-            .filter { it.value > 0L }
-            .toList()
-            .sortedByDescending { it.second }
-            .toMap()
-
-        val rawByUser = expenseOnly
-            .groupBy { tx -> uClassMap[tx.id]?.name ?: UNASSIGNED_USER_FILTER }
-            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
-
-        val allKnownUsers = (state.userClassifications.map { it.name } + rawByUser.keys.filter { it != UNASSIGNED_USER_FILTER }).distinct()
-        val sortedUserPairs = allKnownUsers
-            .map { uName -> uName to (rawByUser[uName] ?: 0L) }
-            .sortedByDescending { it.second }
-            .toMutableList()
-
-        val unassignedAmt = rawByUser[UNASSIGNED_USER_FILTER] ?: 0L
-        if (unassignedAmt > 0L || sortedUserPairs.isEmpty()) {
-            sortedUserPairs.add(UNASSIGNED_USER_FILTER to unassignedAmt)
-        }
-        val byUserClass = sortedUserPairs.toMap()
-
-        _uiState.value = state.copy(
-            transactions = filtered,
-            totalExpense = totalExp,
-            totalIncome = totalInc,
-            categoryTotals = byCat,
-            effectiveCategoryTotals = byEffectiveCat,
-            userClassificationTotals = byUserClass,
-            recurringTransactionIds = recurringIds,
-            recurringExpenseTotal = recurringExp,
-            userClassByTxId = uClassMap,
-            customCategoryByTxId = cCatMap,
-            corporateByTxId = corpMap,
-            oneTimeEditedIds = oneTimeSet
-        )
     }
 
     // 전월 이동
@@ -519,7 +541,7 @@ class ExpenseViewModel @Inject constructor(
     }
 
     fun closeEditDialog() {
-        _uiState.value = _uiState.value.copy(editingTransaction = null)
+        _uiState.value = _uiState.value.copy(editingTransaction = null, isSaving = false)
     }
 
     fun addManualTransaction(
@@ -530,73 +552,125 @@ class ExpenseViewModel @Inject constructor(
         memo: String?,
         isCorporate: Boolean = false,
         customCategoryName: String? = null,
-        userClassificationName: String? = null
+        userClassificationName: String? = null,
+        isFixedExpense: Boolean = false
     ) {
+        if (_uiState.value.isSaving) return
+        _uiState.value = _uiState.value.copy(isSaving = true)
         viewModelScope.launch {
-            val isFuel = category == ExpenseCategory.FUEL ||
-                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(merchantName)
-            val finalCategory = if (isFuel) ExpenseCategory.FUEL else category
-            val formattedCard = expenseCustomMetaPreferences.formatCardDesignation(
-                cardOrBankName.ifBlank { "직접 입력" },
-                isCorporate
-            )
+            kotlinx.coroutines.delay(40)
+            try {
+                withContext(Dispatchers.IO) {
+                    val isCustomFuel = customCategoryName?.let { it.contains("주유") || it.contains("충전") } == true
+                    val isCustomMaint = customCategoryName?.let { it.contains("정비") || it.contains("세차") } == true
+                    val isFuel = category == ExpenseCategory.FUEL || isCustomFuel ||
+                        (category != ExpenseCategory.CAR_MAINTENANCE && !isCustomMaint &&
+                            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(merchantName))
+                    val isMaintenance = category == ExpenseCategory.CAR_MAINTENANCE || isCustomMaint ||
+                        (!isFuel && com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(merchantName))
+                    val finalCategory = when {
+                        isFuel -> ExpenseCategory.FUEL
+                        isMaintenance -> ExpenseCategory.CAR_MAINTENANCE
+                        else -> category
+                    }
+                    val isBankTx = finalCategory == ExpenseCategory.TRANSFER || finalCategory == ExpenseCategory.INCOME
+                    val effectiveCardOrBank = if (isBankTx) {
+                        com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName(cardOrBankName)
+                            ?: cardOrBankName.ifBlank { "NH농협은행" }
+                    } else {
+                        expenseCustomMetaPreferences.formatCardDesignation(
+                            cardOrBankName.ifBlank { "직접 입력" },
+                            isCorporate
+                        )
+                    }
 
-            val tx = Transaction(
-                amount = amount,
-                merchantName = merchantName,
-                originalText = "[직접 입력] $merchantName %,d원".format(amount),
-                timestamp = LocalDateTime.now(),
-                paymentMethod = if (formattedCard.contains("체크")) PaymentMethod.CHECK_CARD else PaymentMethod.CREDIT_CARD,
-                category = finalCategory,
-                cardOrBankName = formattedCard,
-                transferMemo = memo?.ifBlank { null },
-                isAutoCategorized = false
-            )
-            val insertedId = transactionRepository.insertTransaction(tx)
-            if (insertedId > 0L) {
-                expenseCustomMetaPreferences.setTransactionCardDesignation(
-                    txId = insertedId,
-                    merchantName = merchantName,
-                    cardCompany = cardOrBankName.ifBlank { "직접 입력" },
-                    isCorporate = isCorporate,
-                    applyToMerchantRule = false
-                )
-                if (!customCategoryName.isNullOrBlank()) {
-                    expenseCustomMetaPreferences.assignCustomCategory(
-                        txId = insertedId,
+                    val tx = Transaction(
+                        amount = amount,
                         merchantName = merchantName,
-                        customCategoryName = customCategoryName,
-                        applyToMerchantRule = false
+                        originalText = "[직접 입력] $merchantName %,d원".format(amount),
+                        timestamp = LocalDateTime.now(),
+                        paymentMethod = when {
+                            isBankTx -> PaymentMethod.BANK_TRANSFER
+                            effectiveCardOrBank.contains("체크") -> PaymentMethod.CHECK_CARD
+                            else -> PaymentMethod.CREDIT_CARD
+                        },
+                        category = finalCategory,
+                        cardOrBankName = effectiveCardOrBank,
+                        transferMemo = memo?.ifBlank { null },
+                        isAutoCategorized = false
                     )
-                }
-                if (!userClassificationName.isNullOrBlank()) {
-                    expenseCustomMetaPreferences.assignUserClassification(
-                        txId = insertedId,
-                        merchantName = merchantName,
-                        userClassificationName = userClassificationName,
-                        applyToMerchantRule = false
-                    )
-                }
-            }
+                    val insertedId = transactionRepository.insertTransaction(tx)
+                    if (insertedId > 0L) {
+                        expenseCustomMetaPreferences.setTransactionCardDesignation(
+                            txId = insertedId,
+                            merchantName = merchantName,
+                            cardCompany = effectiveCardOrBank,
+                            isCorporate = if (isBankTx) false else isCorporate,
+                            applyToMerchantRule = false,
+                            isDeposit = finalCategory == ExpenseCategory.INCOME,
+                            isBankAccountTx = isBankTx
+                        )
+                        if (!customCategoryName.isNullOrBlank()) {
+                            expenseCustomMetaPreferences.assignCustomCategory(
+                                txId = insertedId,
+                                merchantName = merchantName,
+                                customCategoryName = customCategoryName,
+                                applyToMerchantRule = false,
+                                isDeposit = finalCategory == ExpenseCategory.INCOME
+                            )
+                        }
+                        if (!userClassificationName.isNullOrBlank()) {
+                            expenseCustomMetaPreferences.assignUserClassification(
+                                txId = insertedId,
+                                merchantName = merchantName,
+                                userClassificationName = userClassificationName,
+                                applyToMerchantRule = false,
+                                isDeposit = finalCategory == ExpenseCategory.INCOME
+                            )
+                        }
+                        if (isFixedExpense) {
+                            expenseCustomMetaPreferences.setFixedExpense(
+                                txId = insertedId,
+                                merchantName = merchantName,
+                                isFixed = true,
+                                applyToMerchantRule = false,
+                                isDeposit = finalCategory == ExpenseCategory.INCOME
+                            )
+                        }
+                    }
 
-            if (isFuel && amount > 0) {
-                val lastFuel = vehicleRepository.getLatestRefuelingLog()
-                val daysSince = if (lastFuel != null) {
-                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), tx.timestamp.toLocalDate()).toInt()
-                } else null
+                    if ((isFuel || isMaintenance) && amount > 0) {
+                        val targetLogType = if (isMaintenance && !isFuel) {
+                            com.autologue.app.domain.model.VehicleLogType.MAINTENANCE
+                        } else {
+                            com.autologue.app.domain.model.VehicleLogType.REFUELING
+                        }
+                        val daysSince = if (targetLogType == com.autologue.app.domain.model.VehicleLogType.REFUELING) {
+                            val lastFuel = vehicleRepository.getLatestRefuelingLog()
+                            if (lastFuel != null) {
+                                java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), tx.timestamp.toLocalDate()).toInt()
+                            } else null
+                        } else null
 
-                val vehicleLog = com.autologue.app.domain.model.VehicleLog(
-                    timestamp = tx.timestamp,
-                    logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
-                    fuelCost = tx.amount,
-                    fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", tx.amount / 1650.0).toDouble(),
-                    daysSinceLastFuel = daysSince,
-                    gasStationName = tx.merchantName,
-                    note = "가계부 직접 입력 연동"
-                )
-                vehicleRepository.insertVehicleLog(vehicleLog)
+                        val liters = if (targetLogType == com.autologue.app.domain.model.VehicleLogType.REFUELING) {
+                            String.format(java.util.Locale.US, "%.1f", tx.amount / 1650.0).toDouble()
+                        } else 0.0
+
+                        val vehicleLog = com.autologue.app.domain.model.VehicleLog(
+                            timestamp = tx.timestamp,
+                            logType = targetLogType,
+                            fuelCost = tx.amount,
+                            fuelAmountLiters = liters,
+                            daysSinceLastFuel = daysSince,
+                            gasStationName = tx.merchantName,
+                            note = "가계부 직접 입력 연동"
+                        )
+                        vehicleRepository.insertVehicleLog(vehicleLog)
+                    }
+                }
+            } finally {
+                _uiState.value = _uiState.value.copy(isSaving = false, isAddDialogOpen = false)
             }
-            closeAddDialog()
         }
     }
 
@@ -611,191 +685,258 @@ class ExpenseViewModel @Inject constructor(
         isCorporate: Boolean = false,
         customCategoryName: String? = null,
         userClassificationName: String? = null,
-        isOneTimeSave: Boolean = false
+        isOneTimeSave: Boolean = false,
+        isFixedExpense: Boolean? = null
     ) {
+        if (_uiState.value.isSaving) return
+        val currentTx = _uiState.value.allTransactions.find { it.id == transactionId } ?: return
+        _uiState.value = _uiState.value.copy(isSaving = true)
+
         viewModelScope.launch {
-            val currentTx = _uiState.value.allTransactions.find { it.id == transactionId } ?: return@launch
-            val isDeposit = currentTx.isDepositTransaction()
-            val oldMerchantName = currentTx.merchantName.trim()
-            val finalMerchantName = newMerchantName.trim().ifBlank { oldMerchantName }
-            val isMerchantRenamed = finalMerchantName.isNotBlank() && finalMerchantName != oldMerchantName
-            val applyToMerchantRule = !isOneTimeSave
+            // 저장 버튼의 스피너 애니메이션이 UI에 즉시 그려지도록 프레임 양보
+            kotlinx.coroutines.delay(40)
+            try {
+                val resultMessage = withContext(Dispatchers.IO) {
+                    val isDeposit = currentTx.isDepositTransaction()
+                    val oldMerchantName = currentTx.merchantName.trim()
+                    val finalMerchantName = newMerchantName.trim().ifBlank { oldMerchantName }
+                    val applyToMerchantRule = !isOneTimeSave
 
-            val isManual = currentTx.originalText.startsWith("[직접 입력]") || currentTx.originalText.startsWith("[차계부 직접 입력]")
-            val rawParsedName = if (!isManual && currentTx.originalText.isNotBlank()) {
-                com.autologue.app.data.parser.SmsParser.parse(currentTx.cardOrBankName, currentTx.originalText, currentTx.timestamp)?.merchantName
-                    ?: com.autologue.app.data.parser.SmsParser.parse(null, currentTx.originalText, currentTx.timestamp)?.merchantName
-            } else null
+                    val isManual = currentTx.originalText.startsWith("[직접 입력]") || currentTx.originalText.startsWith("[차계부 직접 입력]")
+                    val rawParsedName = if (!isManual && currentTx.originalText.isNotBlank()) {
+                        com.autologue.app.data.parser.SmsParser.parse(currentTx.cardOrBankName, currentTx.originalText, currentTx.timestamp)?.merchantName
+                            ?: com.autologue.app.data.parser.SmsParser.parse(null, currentTx.originalText, currentTx.timestamp)?.merchantName
+                    } else null
 
-            val genericPlaceholders = setOf("출금 내역", "계좌 이체", "입금 내역", "카드 가맹점", "가맹점", "직접 추가 지출")
-            val effectiveOldKey = if (oldMerchantName !in genericPlaceholders) {
-                oldMerchantName
-            } else {
-                rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders } ?: ""
-            }
-            val effectiveRawKey = rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders }
+                    val genericPlaceholders = setOf("출금 내역", "계좌 이체", "입금 내역", "카드 가맹점", "가맹점", "직접 추가 지출")
+                    val effectiveOldKey = if (oldMerchantName !in genericPlaceholders) {
+                        oldMerchantName
+                    } else {
+                        rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders } ?: ""
+                    }
+                    val effectiveRawKey = rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders }
 
-            val wasFuel = currentTx.category == ExpenseCategory.FUEL ||
-                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(oldMerchantName) ||
-                merchantAliasPreferences.getOriginalNamesForTarget(oldMerchantName, isDeposit).any {
-                    com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(it)
-                }
-            val isNowFuel = category == ExpenseCategory.FUEL ||
-                (category == currentTx.category && wasFuel) ||
-                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(finalMerchantName)
+                    val wasFuel = currentTx.category == ExpenseCategory.FUEL ||
+                        com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(oldMerchantName) ||
+                        merchantAliasPreferences.getOriginalNamesForTarget(oldMerchantName, isDeposit).any {
+                            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(it)
+                        }
+                    val wasMaint = currentTx.category == ExpenseCategory.CAR_MAINTENANCE ||
+                        com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(oldMerchantName)
+                    val wasVehicleCategory = wasFuel || wasMaint
 
-            val resolvedCategory = if (isNowFuel && category == currentTx.category) ExpenseCategory.FUEL else category
+                    val isCustomFuel = customCategoryName?.let { it.contains("주유") || it.contains("충전") } == true
+                    val isCustomMaint = customCategoryName?.let { it.contains("정비") || it.contains("세차") } == true
 
-            val formattedCard = if (cardCompany != null) {
-                expenseCustomMetaPreferences.setTransactionCardDesignation(
-                    txId = transactionId,
-                    merchantName = finalMerchantName,
-                    cardCompany = cardCompany,
-                    isCorporate = isCorporate,
-                    applyToMerchantRule = applyToMerchantRule,
-                    isDeposit = isDeposit,
-                    extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
-                )
-            } else {
-                currentTx.cardOrBankName
-            }
+                    val isNowFuel = category == ExpenseCategory.FUEL || isCustomFuel ||
+                        (category == currentTx.category && !isCustomMaint && wasFuel) ||
+                        (category == currentTx.category && !isCustomMaint &&
+                            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(finalMerchantName))
+                    val isNowMaint = category == ExpenseCategory.CAR_MAINTENANCE || isCustomMaint ||
+                        (category == currentTx.category && !isNowFuel && wasMaint) ||
+                        (category == currentTx.category && !isNowFuel &&
+                            com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(finalMerchantName))
 
-            expenseCustomMetaPreferences.assignBaseCategory(
-                merchantName = finalMerchantName,
-                category = resolvedCategory,
-                applyToMerchantRule = applyToMerchantRule,
-                isDeposit = isDeposit,
-                extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
-            )
+                    val resolvedCategory = when {
+                        category == ExpenseCategory.FUEL || isCustomFuel -> ExpenseCategory.FUEL
+                        category == ExpenseCategory.CAR_MAINTENANCE || isCustomMaint -> ExpenseCategory.CAR_MAINTENANCE
+                        isNowFuel && category == currentTx.category -> ExpenseCategory.FUEL
+                        isNowMaint && category == currentTx.category -> ExpenseCategory.CAR_MAINTENANCE
+                        else -> category
+                    }
 
-            expenseCustomMetaPreferences.assignCustomCategory(
-                txId = transactionId,
-                merchantName = finalMerchantName,
-                customCategoryName = customCategoryName,
-                applyToMerchantRule = applyToMerchantRule,
-                isDeposit = isDeposit,
-                extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
-            )
-            expenseCustomMetaPreferences.assignUserClassification(
-                txId = transactionId,
-                merchantName = finalMerchantName,
-                userClassificationName = userClassificationName,
-                applyToMerchantRule = applyToMerchantRule,
-                isDeposit = isDeposit,
-                extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
-            )
+                    val isBankTx = currentTx.isBankAccountTransaction(resolvedCategory)
+                    val effectiveCorporate = if (isBankTx) false else isCorporate
 
-            val updatedTx = currentTx.copy(
-                merchantName = finalMerchantName,
-                category = resolvedCategory,
-                cardOrBankName = formattedCard,
-                transferMemo = memo?.ifBlank { null }
-            )
-
-            if (isOneTimeSave) {
-                expenseCustomMetaPreferences.markOneTimeEdited(updatedTx)
-            } else {
-                expenseCustomMetaPreferences.clearOneTimeEdited(updatedTx)
-            }
-
-            transactionRepository.updateTransaction(updatedTx)
-
-            var globalRenamedCount = 0
-            if (!isOneTimeSave) {
-                val targetKeyForGlobal = effectiveOldKey.ifBlank { finalMerchantName }
-                if (targetKeyForGlobal.isNotBlank()) {
-                    // 1. 가계부 내 동일 결제처 + 동일 입출금 구분(입금/출금) 기존 내역 일괄 치환 및 영구 자동 치환 규칙 등록
-                    val txRenamed = transactionRepository.renameMerchantGlobally(
-                        oldMerchantName = targetKeyForGlobal,
-                        newMerchantName = finalMerchantName,
-                        rawOriginalMerchantName = effectiveRawKey,
-                        isDeposit = isDeposit,
-                        targetCategory = resolvedCategory,
-                        targetCardOrBankName = formattedCard
-                    )
-                    // 2. 출금(결제) 내역이고 결제명이 변경된 경우 차계부 주유 내역 중 동일 결제처 항목도 동시 일괄 치환
-                    val fuelRenamed = if (!isDeposit && isMerchantRenamed && effectiveOldKey.isNotBlank()) {
-                        vehicleRepository.renameGasStationGlobally(
-                            oldStationName = effectiveOldKey,
-                            newStationName = finalMerchantName,
-                            rawOriginalStationName = effectiveRawKey
+                    val formattedCard = if (cardCompany != null) {
+                        expenseCustomMetaPreferences.setTransactionCardDesignation(
+                            txId = transactionId,
+                            merchantName = finalMerchantName,
+                            cardCompany = cardCompany,
+                            isCorporate = effectiveCorporate,
+                            applyToMerchantRule = applyToMerchantRule,
+                            isDeposit = isDeposit,
+                            extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey),
+                            isBankAccountTx = isBankTx
                         )
-                    } else 0
-                    globalRenamedCount = txRenamed + fuelRenamed
-                }
-            }
+                    } else {
+                        expenseCustomMetaPreferences.resolveDisplayCardOrBankName(currentTx) ?: currentTx.cardOrBankName
+                    }
 
-            if (!wasFuel && updatedTx.category == ExpenseCategory.FUEL && updatedTx.amount > 0) {
-                val lastFuel = vehicleRepository.getLatestRefuelingLog()
-                val daysSince = if (lastFuel != null) {
-                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), updatedTx.timestamp.toLocalDate()).toInt()
-                } else null
-
-                val noteTag = if (isOneTimeSave) {
-                    "가계부 지출 카테고리 변경 연동 [custom_name:true] [one_time_edit:true]"
-                } else {
-                    "가계부 지출 카테고리 변경 연동 [custom_name:true]"
-                }
-                val vehicleLog = com.autologue.app.domain.model.VehicleLog(
-                    timestamp = updatedTx.timestamp,
-                    logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
-                    fuelCost = updatedTx.amount,
-                    fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", updatedTx.amount / 1650.0).toDouble(),
-                    daysSinceLastFuel = daysSince,
-                    gasStationName = updatedTx.merchantName,
-                    note = noteTag
-                )
-                vehicleRepository.insertVehicleLog(vehicleLog)
-            } else if (wasFuel && updatedTx.category != ExpenseCategory.FUEL) {
-                vehicleRepository.deleteRefuelingLogByTransaction(
-                    amount = currentTx.amount,
-                    date = currentTx.timestamp.toLocalDate(),
-                    merchantName = oldMerchantName
-                )
-            }
-
-            if (!isOneTimeSave && makeGlobalRule && !merchantKeyword.isNullOrBlank()) {
-                manageTransactionRulesUseCase.addRule(
-                    TransactionRule(
-                        keywordPattern = merchantKeyword.trim(),
-                        targetCategory = updatedTx.category
+                    expenseCustomMetaPreferences.assignBaseCategory(
+                        merchantName = finalMerchantName,
+                        category = resolvedCategory,
+                        applyToMerchantRule = applyToMerchantRule,
+                        isDeposit = isDeposit,
+                        extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
                     )
+
+                    expenseCustomMetaPreferences.assignCustomCategory(
+                        txId = transactionId,
+                        merchantName = finalMerchantName,
+                        customCategoryName = customCategoryName,
+                        applyToMerchantRule = applyToMerchantRule,
+                        isDeposit = isDeposit,
+                        extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
+                    )
+                    expenseCustomMetaPreferences.assignUserClassification(
+                        txId = transactionId,
+                        merchantName = finalMerchantName,
+                        userClassificationName = userClassificationName,
+                        applyToMerchantRule = applyToMerchantRule,
+                        isDeposit = isDeposit,
+                        extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
+                    )
+
+                    if (isFixedExpense != null) {
+                        expenseCustomMetaPreferences.setFixedExpense(
+                            txId = transactionId,
+                            merchantName = finalMerchantName,
+                            isFixed = isFixedExpense,
+                            applyToMerchantRule = applyToMerchantRule,
+                            isDeposit = isDeposit,
+                            extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
+                        )
+                    }
+
+                    val updatedTx = currentTx.copy(
+                        merchantName = finalMerchantName,
+                        category = resolvedCategory,
+                        cardOrBankName = formattedCard,
+                        transferMemo = memo?.ifBlank { null }
+                    )
+
+                    if (isOneTimeSave) {
+                        expenseCustomMetaPreferences.markOneTimeEdited(updatedTx)
+                    } else {
+                        expenseCustomMetaPreferences.clearOneTimeEdited(updatedTx)
+                    }
+
+                    transactionRepository.updateTransaction(updatedTx)
+
+                    var globalRenamedCount = 0
+                    if (!isOneTimeSave) {
+                        val targetKeyForGlobal = effectiveOldKey.ifBlank { finalMerchantName }
+                        if (targetKeyForGlobal.isNotBlank()) {
+                            // 1. 가계부 내 동일 결제처 + 동일 입출금 구분(입금/출금) 기존 내역 일괄 치환 및 영구 자동 치환 규칙 등록
+                            val txRenamed = transactionRepository.renameMerchantGlobally(
+                                oldMerchantName = targetKeyForGlobal,
+                                newMerchantName = finalMerchantName,
+                                rawOriginalMerchantName = effectiveRawKey,
+                                isDeposit = isDeposit,
+                                targetCategory = resolvedCategory,
+                                targetCardOrBankName = formattedCard
+                            )
+                            // 2. 출금(결제) 내역인 경우 차계부 주유/정비 내역 중 동일 결제처 항목도 동시 일괄 치환
+                            val fuelRenamed = if (!isDeposit && targetKeyForGlobal.isNotBlank()) {
+                                vehicleRepository.renameGasStationGlobally(
+                                    oldStationName = targetKeyForGlobal,
+                                    newStationName = finalMerchantName,
+                                    rawOriginalStationName = effectiveRawKey
+                                )
+                            } else 0
+                            globalRenamedCount = txRenamed + fuelRenamed
+                        }
+                    }
+
+                    val isNowVehicleCategory = updatedTx.category == ExpenseCategory.FUEL ||
+                        updatedTx.category == ExpenseCategory.CAR_MAINTENANCE
+                    if (isNowVehicleCategory && updatedTx.amount > 0) {
+                        val targetLogType = if (updatedTx.category == ExpenseCategory.CAR_MAINTENANCE) {
+                            com.autologue.app.domain.model.VehicleLogType.MAINTENANCE
+                        } else {
+                            com.autologue.app.domain.model.VehicleLogType.REFUELING
+                        }
+                        val daysSince = if (targetLogType == com.autologue.app.domain.model.VehicleLogType.REFUELING) {
+                            val lastFuel = vehicleRepository.getLatestRefuelingLog()
+                            if (lastFuel != null) {
+                                java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), updatedTx.timestamp.toLocalDate()).toInt()
+                            } else null
+                        } else null
+
+                        val liters = if (targetLogType == com.autologue.app.domain.model.VehicleLogType.REFUELING) {
+                            String.format(java.util.Locale.US, "%.1f", updatedTx.amount / 1650.0).toDouble()
+                        } else 0.0
+
+                        val noteTag = if (isOneTimeSave) {
+                            "가계부 지출 카테고리 변경 연동 [custom_name:true] [one_time_edit:true]"
+                        } else {
+                            "가계부 지출 카테고리 변경 연동 [custom_name:true]"
+                        }
+                        val vehicleLog = com.autologue.app.domain.model.VehicleLog(
+                            timestamp = updatedTx.timestamp,
+                            logType = targetLogType,
+                            fuelCost = updatedTx.amount,
+                            fuelAmountLiters = liters,
+                            daysSinceLastFuel = daysSince,
+                            gasStationName = updatedTx.merchantName,
+                            note = noteTag
+                        )
+                        vehicleRepository.insertVehicleLog(vehicleLog)
+                        val allTxs = transactionRepository.getAllTransactionsFlow().first()
+                        vehicleRepository.syncRefuelingFromTransactions(allTxs)
+                    } else if (wasVehicleCategory && !isNowVehicleCategory) {
+                        vehicleRepository.deleteRefuelingLogByTransaction(
+                            amount = currentTx.amount,
+                            date = currentTx.timestamp.toLocalDate(),
+                            merchantName = oldMerchantName
+                        )
+                    }
+
+                    if (!isOneTimeSave && makeGlobalRule && !merchantKeyword.isNullOrBlank()) {
+                        manageTransactionRulesUseCase.addRule(
+                            TransactionRule(
+                                keywordPattern = merchantKeyword.trim(),
+                                targetCategory = updatedTx.category
+                            )
+                        )
+                    }
+
+                    val dirLabel = if (isDeposit) "입금" else "출금"
+                    if (isOneTimeSave) {
+                        "'$finalMerchantName' [$dirLabel] 내역 1건을 1회성으로 저장했습니다. (동일 결제처의 다른 내역은 변경되지 않습니다)"
+                    } else {
+                        val extraMsg = if (globalRenamedCount > 0) " (동일 [$dirLabel] 내역 ${globalRenamedCount}건 추가 치환 완료)" else ""
+                        "'$finalMerchantName' [$dirLabel] 영구저장 완료! 앞으로 동일 결제처의 [$dirLabel] 항목에만 구분되어 자동 치환됩니다.$extraMsg"
+                    }
+                }
+
+                recalculateFilteredTransactions()
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = resultMessage,
+                    editingTransaction = null,
+                    isSaving = false
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isSaving = false,
+                    editingTransaction = null,
+                    syncResultMessage = "저장 중 오류가 발생했습니다: ${e.localizedMessage ?: "알 수 없는 오류"}"
                 )
             }
-
-            recalculateFilteredTransactions()
-
-            val dirLabel = if (isDeposit) "입금" else "출금"
-            if (isOneTimeSave) {
-                _uiState.value = _uiState.value.copy(
-                    syncResultMessage = "'$finalMerchantName' [$dirLabel] 내역 1건을 1회성으로 저장했습니다. (동일 결제처의 다른 내역은 변경되지 않습니다)"
-                )
-            } else {
-                val extraMsg = if (globalRenamedCount > 0) " (동일 [$dirLabel] 내역 ${globalRenamedCount}건 추가 치환 완료)" else ""
-                _uiState.value = _uiState.value.copy(
-                    syncResultMessage = "'$finalMerchantName' [$dirLabel] 영구저장 완료! 앞으로 동일 결제처의 [$dirLabel] 항목에만 구분되어 자동 치환됩니다.$extraMsg"
-                )
-            }
-            closeEditDialog()
         }
     }
 
     fun deleteTransaction(transactionId: Long) {
         viewModelScope.launch {
-            val currentTx = _uiState.value.allTransactions.find { it.id == transactionId }
-            if (currentTx != null) {
-                expenseCustomMetaPreferences.markTransactionDeleted(currentTx)
-                val isFuel = currentTx.category == ExpenseCategory.FUEL ||
-                    com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName)
-                if (isFuel) {
-                    vehicleRepository.deleteRefuelingLogByTransaction(
-                        amount = currentTx.amount,
-                        date = currentTx.timestamp.toLocalDate(),
-                        merchantName = currentTx.merchantName
-                    )
+            withContext(Dispatchers.IO) {
+                val currentTx = _uiState.value.allTransactions.find { it.id == transactionId }
+                if (currentTx != null) {
+                    expenseCustomMetaPreferences.markTransactionDeleted(currentTx)
+                    val isVehicleRelated = currentTx.category == ExpenseCategory.FUEL ||
+                        currentTx.category == ExpenseCategory.CAR_MAINTENANCE ||
+                        com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName) ||
+                        com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(currentTx.merchantName)
+                    if (isVehicleRelated) {
+                        vehicleRepository.deleteRefuelingLogByTransaction(
+                            amount = currentTx.amount,
+                            date = currentTx.timestamp.toLocalDate(),
+                            merchantName = currentTx.merchantName
+                        )
+                    }
                 }
+                transactionRepository.deleteTransaction(transactionId)
             }
-            transactionRepository.deleteTransaction(transactionId)
             closeEditDialog()
         }
     }
@@ -842,18 +983,22 @@ class ExpenseViewModel @Inject constructor(
         if (selectedIds.isEmpty()) return
         viewModelScope.launch {
             val targets = _uiState.value.allTransactions.filter { it.id in selectedIds }
-            expenseCustomMetaPreferences.markTransactionsDeleted(targets)
-            for (tx in targets) {
-                val isFuel = tx.category == ExpenseCategory.FUEL ||
-                    com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(tx.merchantName)
-                if (isFuel) {
-                    vehicleRepository.deleteRefuelingLogByTransaction(
-                        amount = tx.amount,
-                        date = tx.timestamp.toLocalDate(),
-                        merchantName = tx.merchantName
-                    )
+            withContext(Dispatchers.IO) {
+                expenseCustomMetaPreferences.markTransactionsDeleted(targets)
+                for (tx in targets) {
+                    val isVehicleRelated = tx.category == ExpenseCategory.FUEL ||
+                        tx.category == ExpenseCategory.CAR_MAINTENANCE ||
+                        com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
+                        com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(tx.merchantName)
+                    if (isVehicleRelated) {
+                        vehicleRepository.deleteRefuelingLogByTransaction(
+                            amount = tx.amount,
+                            date = tx.timestamp.toLocalDate(),
+                            merchantName = tx.merchantName
+                        )
+                    }
+                    transactionRepository.deleteTransaction(tx.id)
                 }
-                transactionRepository.deleteTransaction(tx.id)
             }
             _uiState.value = _uiState.value.copy(
                 isSelectionMode = false,

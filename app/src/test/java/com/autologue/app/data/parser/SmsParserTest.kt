@@ -1,5 +1,6 @@
 package com.autologue.app.data.parser
 
+import com.autologue.app.domain.model.isBankAccountTransaction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -58,7 +59,44 @@ class SmsParserTest {
         val tx = notifResult!!.transaction
         assertEquals(4500L, tx.amount)
         assertEquals("지에스25송파물류단지점", tx.merchantName)
-        assertEquals("하나0*2*", tx.cardOrBankName)
+        assertEquals("하나카드", tx.cardOrBankName)
+    }
+
+    @Test
+    fun `카드사 및 은행 힌트 문자열에서 표준 카드사명과 은행명이 자동 추출되어야 한다`() {
+        assertEquals(
+            "하나카드",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany("하나0*2*")
+        )
+        assertEquals(
+            "NH농협카드",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany("NH농협1*3*")
+        )
+        assertEquals(
+            "우리카드",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany("우리(4*5*)")
+        )
+        assertEquals(
+            "KB국민카드",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany("KB국민체크")
+        )
+
+        assertEquals(
+            "NH농협은행",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName("NH농협")
+        )
+        assertEquals(
+            "우리은행",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName("우리")
+        )
+        assertEquals(
+            "하나은행",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName("하나")
+        )
+        assertEquals(
+            "KB국민은행",
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName("KB국민")
+        )
     }
 
     @Test
@@ -107,15 +145,19 @@ class SmsParserTest {
 
         assertNotNull(depositTx)
         assertNotNull(withdrawTx)
+        assertEquals("NH농협은행", depositTx!!.cardOrBankName)
+        assertEquals("NH농협은행", withdrawTx!!.cardOrBankName)
+        assertTrue(depositTx.isBankAccountTransaction())
+        assertTrue(withdrawTx.isBankAccountTransaction())
 
         assertTrue(com.autologue.app.domain.model.isDepositDirection(
-            category = depositTx!!.category,
+            category = depositTx.category,
             merchantName = depositTx.merchantName,
             originalText = depositSms,
             transferMemo = depositTx.transferMemo
         ))
         assertFalse(com.autologue.app.domain.model.isDepositDirection(
-            category = withdrawTx!!.category,
+            category = withdrawTx.category,
             merchantName = withdrawTx.merchantName,
             originalText = withdrawSms,
             transferMemo = withdrawTx.transferMemo

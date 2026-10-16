@@ -84,4 +84,27 @@ fun isDepositDirection(
     return category == ExpenseCategory.INCOME
 }
 
+/**
+ * 해당 내역이 카드사 결제가 아닌 '은행 계좌 출금/이체/입금' 내역인지 판별합니다.
+ * 출금/이체/입금 내역인 경우 카드 선택 UI를 숨기고 은행 선택 UI를 표시합니다.
+ */
+fun Transaction.isBankAccountTransaction(overrideCategory: ExpenseCategory? = null): Boolean {
+    val effectiveCat = overrideCategory ?: category
+    if (effectiveCat == ExpenseCategory.TRANSFER || effectiveCat == ExpenseCategory.INCOME) return true
+    if (isDepositTransaction()) return true
+    if (paymentMethod == PaymentMethod.BANK_TRANSFER) return true
+
+    val orig = originalText
+    val memo = transferMemo.orEmpty()
+    val hasCardIndicator = orig.contains("카드") || orig.contains("신용(") || orig.contains("체크(") ||
+        orig.contains("일시불") || orig.contains("할부") || orig.contains("사용처") ||
+        orig.contains("(결제)") || orig.contains("누적이용") || cardOrBankName.contains("카드") ||
+        cardOrBankName.contains("페이")
+    if (hasCardIndicator) return false
+
+    return orig.contains("출금") || orig.contains("입금") || orig.contains("잔액") ||
+        memo.contains("계좌:") || memo.contains("출금") || memo.contains("입금")
+}
+
+
 

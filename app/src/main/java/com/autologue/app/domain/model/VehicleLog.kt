@@ -231,10 +231,10 @@ fun VehicleLog.getDrivingDetailSubtitle(): String? {
  */
 fun VehicleLog.displayTitle(): String {
     return when (logType) {
-        VehicleLogType.REFUELING -> gasStationName ?: "주유"
+        VehicleLogType.REFUELING -> gasStationName?.takeIf { it.isNotBlank() } ?: "주유"
         VehicleLogType.TRIP_DRIVING -> getDrivingRouteTitle() ?: (note ?: "주행 완료")
-        VehicleLogType.MAINTENANCE -> note ?: "차량 정비"
-        VehicleLogType.PARKING -> note ?: "주차 기록"
+        VehicleLogType.MAINTENANCE -> gasStationName?.takeIf { it.isNotBlank() } ?: (note ?: "차량정비/세차")
+        VehicleLogType.PARKING -> gasStationName?.takeIf { it.isNotBlank() } ?: (note ?: "주차 기록")
     }
 }
 

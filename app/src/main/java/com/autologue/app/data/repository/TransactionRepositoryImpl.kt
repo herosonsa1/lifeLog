@@ -105,10 +105,16 @@ class TransactionRepositoryImpl @Inject constructor(
                 ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(transaction.merchantName, isDeposit)
         } else null
 
+        val effectiveCategory = savedBaseCategory ?: transaction.category
+        val canonicalCardOrBank = savedCardDesignation
+            ?: expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
+                transaction.copy(merchantName = resolvedMerchantName, category = effectiveCategory)
+            )
+
         val aliasedTransaction = transaction.copy(
             merchantName = resolvedMerchantName,
-            category = savedBaseCategory ?: transaction.category,
-            cardOrBankName = savedCardDesignation ?: transaction.cardOrBankName
+            category = effectiveCategory,
+            cardOrBankName = canonicalCardOrBank ?: transaction.cardOrBankName
         )
 
         val timestampMillis = aliasedTransaction.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -192,6 +198,7 @@ class TransactionRepositoryImpl @Inject constructor(
 
         val all = transactionDao.getAllTransactionsSync()
         var updatedCount = 0
+        val genericPlaceholders = setOf("출금 내역", "입금 내역", "계좌 이체", "카드 가맹점", "가맹점", "정선우", "정*우")
         for (tx in all) {
             val domainTx = tx.toDomain()
             // 1회성 저장으로 보호된 내역은 일괄 치환에서 제외
@@ -201,15 +208,22 @@ class TransactionRepositoryImpl @Inject constructor(
             val txIsDeposit = domainTx.isDepositTransaction()
             if (txIsDeposit != isDeposit) continue
 
+            val directMatched = merchantAliasPreferences.isSameMerchant(tx.merchantName, oldMerchantName) ||
+                merchantAliasPreferences.isSameMerchant(tx.merchantName, targetName) ||
+                (!rawOriginalMerchantName.isNullOrBlank() && merchantAliasPreferences.isSameMerchant(tx.merchantName, rawOriginalMerchantName))
+
             val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
-            val rawParsed = if (!isManual && tx.originalText.isNotBlank()) {
+            val needsRawParse = !directMatched && !isManual && tx.originalText.isNotBlank() && (
+                tx.merchantName in genericPlaceholders ||
+                (oldMerchantName.isNotBlank() && tx.originalText.contains(oldMerchantName, ignoreCase = true)) ||
+                (!rawOriginalMerchantName.isNullOrBlank() && tx.originalText.contains(rawOriginalMerchantName, ignoreCase = true))
+            )
+            val rawParsed = if (needsRawParse) {
                 com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, tx.originalText, tx.timestamp)?.merchantName
                     ?: com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)?.merchantName
             } else null
 
-            val isMatchedOld = merchantAliasPreferences.isSameMerchant(tx.merchantName, oldMerchantName) ||
-                merchantAliasPreferences.isSameMerchant(tx.merchantName, targetName) ||
-                (!rawOriginalMerchantName.isNullOrBlank() && merchantAliasPreferences.isSameMerchant(tx.merchantName, rawOriginalMerchantName)) ||
+            val isMatchedOld = directMatched ||
                 (!rawParsed.isNullOrBlank() && (
                     merchantAliasPreferences.isSameMerchant(rawParsed, oldMerchantName) ||
                     merchantAliasPreferences.isSameMerchant(rawParsed, targetName) ||
@@ -219,7 +233,7 @@ class TransactionRepositoryImpl @Inject constructor(
             val resolvedName = if (isMatchedOld) {
                 targetName
             } else {
-                resolveMerchantWithAlias(tx.merchantName, tx.originalText, tx.cardOrBankName, tx.timestamp, txIsDeposit)
+                merchantAliasPreferences.resolveAlias(tx.merchantName, txIsDeposit).ifBlank { tx.merchantName }
             }
 
             val resolvedCategory = if (isMatchedOld && targetCategory != null) {
@@ -308,21 +322,25 @@ class TransactionRepositoryImpl @Inject constructor(
 
             val isDeposit = domainRawTx.isDepositTransaction()
 
-            // 1-0. 사용자가 등록한 결제처 별칭(입금/출금 방향별 자동 치환 규칙) 및 영구 카테고리/카드 설정 최우선 반영
+            // 1-0. 사용자가 등록한 결제처 별칭(입금/출금 방향별 자동 치환 규칙) 및 영구 카테고리/카드 설정 + 카드/은행 표준명 최우선 반영
             val aliasedMerchant = resolveMerchantWithAlias(rawTx.merchantName, raw, rawTx.cardOrBankName, rawTx.timestamp, isDeposit)
             val savedBaseCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(aliasedMerchant, isDeposit)
                 ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(rawTx.merchantName, isDeposit)
+            val effectiveCat = savedBaseCategory ?: rawTx.category
             val savedCard = expenseCustomMetaPreferences.resolveMerchantCardDesignation(aliasedMerchant, isDeposit)
                 ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(rawTx.merchantName, isDeposit)
+                ?: expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
+                    domainRawTx.copy(merchantName = aliasedMerchant.ifBlank { rawTx.merchantName }, category = effectiveCat)
+                )
 
             val tx = if ((aliasedMerchant.isNotBlank() && aliasedMerchant != rawTx.merchantName) ||
                 (savedBaseCategory != null && savedBaseCategory != rawTx.category) ||
-                (savedCard != null && savedCard != rawTx.cardOrBankName)
+                (!savedCard.isNullOrBlank() && savedCard != rawTx.cardOrBankName)
             ) {
                 val updated = rawTx.copy(
                     merchantName = aliasedMerchant.ifBlank { rawTx.merchantName },
-                    category = savedBaseCategory ?: rawTx.category,
-                    cardOrBankName = savedCard ?: rawTx.cardOrBankName
+                    category = effectiveCat,
+                    cardOrBankName = savedCard?.ifBlank { rawTx.cardOrBankName } ?: rawTx.cardOrBankName
                 )
                 transactionDao.updateTransaction(updated)
                 updated

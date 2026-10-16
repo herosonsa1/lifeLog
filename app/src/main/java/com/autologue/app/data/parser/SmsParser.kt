@@ -1,5 +1,6 @@
 package com.autologue.app.data.parser
 
+import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.Transaction
@@ -358,7 +359,8 @@ object SmsParser {
                 if (isInvalidMerchantName(merchant) || merchant == "가맹점") return null
 
                 val cardMatcher = cardPattern.matcher(body)
-                val cardName = if (cardMatcher.find()) cardMatcher.group("card")?.trim() ?: "하나카드" else "하나카드"
+                val rawCardHint = if (cardMatcher.find()) cardMatcher.group("card")?.trim() else null
+                val cardName = ExpenseCustomMetaPreferences.inferCanonicalCardCompany(rawCardHint, body) ?: "하나카드"
 
                 var timestamp = fallbackDateTime
                 val timeMatcher = timePattern.matcher(body)
@@ -426,8 +428,7 @@ object SmsParser {
         if (m.find()) {
             val rawAmount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
             val amount = if (isCancel) -rawAmount else rawAmount
-            val cardNo = m.group("cardNo")?.trim()
-            val cardName = if (!cardNo.isNullOrBlank()) "NH농협카드($cardNo)" else "NH농협카드"
+            val cardName = "NH농협카드"
 
             val month = m.group("month")?.toIntOrNull() ?: fallbackDateTime.monthValue
             val day = m.group("day")?.toIntOrNull() ?: fallbackDateTime.dayOfMonth
@@ -467,8 +468,7 @@ object SmsParser {
         if (m.find()) {
             val rawAmount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
             val amount = if (isCancel) -rawAmount else rawAmount
-            val cardNo = m.group("cardNo")?.trim()?.trim('(', ')')
-            val cardName = if (!cardNo.isNullOrBlank()) "삼성카드($cardNo)" else "삼성카드"
+            val cardName = "삼성카드"
 
             val month = m.group("month")?.toIntOrNull() ?: fallbackDateTime.monthValue
             val day = m.group("day")?.toIntOrNull() ?: fallbackDateTime.dayOfMonth
@@ -509,8 +509,7 @@ object SmsParser {
         if (m.find()) {
             val rawAmount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
             val amount = if (isCancel) -rawAmount else rawAmount
-            val cardNo = m.group("cardNo")?.trim()?.trim('(', ')')
-            val cardName = if (!cardNo.isNullOrBlank()) "KB국민카드($cardNo)" else "KB국민카드"
+            val cardName = "KB국민카드"
 
             var timestamp = fallbackDateTime
             val monthStr = m.group("month")
@@ -580,7 +579,7 @@ object SmsParser {
                 timestamp = timestamp,
                 paymentMethod = PaymentMethod.BANK_TRANSFER,
                 category = category,
-                cardOrBankName = "KB국민",
+                cardOrBankName = "KB국민은행",
                 transferMemo = "$txType 내역" + (if (!acc.isNullOrBlank()) " (계좌: $acc)" else "") + (if (rawMemo != displayMerchant) " (적요: $rawMemo)" else ""),
                 isAutoCategorized = true
             )
@@ -618,7 +617,7 @@ object SmsParser {
                 timestamp = timestamp,
                 paymentMethod = PaymentMethod.BANK_TRANSFER,
                 category = category,
-                cardOrBankName = "NH농협",
+                cardOrBankName = "NH농협은행",
                 transferMemo = "$txType 내역 (적요: $cleanMemo)",
                 isAutoCategorized = true
             )
@@ -654,21 +653,11 @@ object SmsParser {
             fallbackDateTime
         }
 
-        // 3. 은행명 추출
+        // 3. 은행명 추출 (표준 은행명으로 정규화)
         val bankBracketMatch = Regex("""\[(?<bank>[^\]]+)\]""").find(body)
         val bankCandidate = bankBracketMatch?.groups?.get("bank")?.value?.trim()
-        val bankName = when {
-            bankCandidate != null && (bankCandidate.contains("농협") || bankCandidate.contains("NH")) -> "NH농협"
-            bankCandidate != null && (bankCandidate.contains("국민") || bankCandidate.contains("KB")) -> "KB국민"
-            body.contains("농협") || body.contains("NH") || body.contains("312-") -> "NH농협"
-            body.contains("국민") || body.contains("KB") || body.contains("0749") -> "KB국민"
-            body.contains("신한") -> "신한은행"
-            body.contains("우리") -> "우리은행"
-            body.contains("하나") -> "하나은행"
-            body.contains("카카오뱅크") -> "카카오뱅크"
-            body.contains("토스뱅크") -> "토스뱅크"
-            else -> bankCandidate ?: sender ?: "은행 이체"
-        }
+        val bankName = ExpenseCustomMetaPreferences.inferCanonicalBankName(bankCandidate ?: sender, body)
+            ?: bankCandidate ?: sender ?: "은행 이체"
 
         // 4. 계좌번호 추출
         val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(body)
@@ -681,7 +670,7 @@ object SmsParser {
         remain = remain.replace(amtMatch.value, "")
         remain = remain.replace(Regex("""\d{1,2}/\d{1,2}\s*\d{1,2}:\d{1,2}"""), "")
         if (accNo != null) remain = remain.replace(accNo, "")
-        remain = remain.replace(Regex("""(?:NH농협|농협은행|농협|KB국민은행|KB국민|국민은행|신한은행|우리은행|하나은행|카카오뱅크|토스뱅크|기업은행|IBK기업|Web발신)"""), "")
+        remain = remain.replace(Regex("""(?:NH농협은행|NH농협|농협은행|농협|KB국민은행|KB국민|국민은행|신한은행|우리은행|하나은행|카카오뱅크|토스뱅크|기업은행|IBK기업|Web발신)"""), "")
         remain = remain.replace(Regex("""(?:출금|입금|송금|이체|결제|승인|완료|잔액|원)\b"""), "")
         remain = remain.replace("출금", "").replace("입금", "").replace("송금", "").replace("이체", "")
         remain = remain.trim()
@@ -730,8 +719,7 @@ object SmsParser {
             val rawAmount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
             val amount = if (isCancel) -rawAmount else rawAmount
             val rawCardName = m.group("cardHeader") ?: m.group("cardName") ?: sender ?: "신용카드"
-            val cardNo = m.group("cardNo")?.trim()?.trim('(', ')')
-            val fullCardName = if (!cardNo.isNullOrBlank()) "$rawCardName($cardNo)" else rawCardName
+            val fullCardName = ExpenseCustomMetaPreferences.inferCanonicalCardCompany(rawCardName, body) ?: rawCardName
 
             val monthStr = m.group("month")
             val dayStr = m.group("day")
@@ -806,21 +794,11 @@ object SmsParser {
         }
         val slashCardNoMatch = Regex("""(?:신용|체크)\s*\(\s*,?\s*(?<no>[0-9*]{2,})\s*\)""").find(bodyWithoutAccum)
         val slashCardNo = slashCardNoMatch?.groups?.get("no")?.value
-        val cardName = when {
-            bodyWithoutAccum.contains("NH") || bodyWithoutAccum.contains("농협") -> "NH농협카드"
-            bodyWithoutAccum.contains("삼성") -> "삼성카드"
-            bodyWithoutAccum.contains("KB") || bodyWithoutAccum.contains("국민") -> "KB국민카드"
-            bodyWithoutAccum.contains("신한") -> "신한카드"
-            bodyWithoutAccum.contains("현대") -> "현대카드"
-            bodyWithoutAccum.contains("롯데") -> "롯데카드"
-            bodyWithoutAccum.contains("우리") -> "우리카드"
-            bodyWithoutAccum.contains("하나") -> if (!slashCardNo.isNullOrBlank()) "하나$slashCardNo" else "하나카드"
-            bodyWithoutAccum.contains("BC") || bodyWithoutAccum.contains("비씨") || bodyWithoutAccum.contains("기업") -> "BC카드"
-            bodyWithoutAccum.contains("카카오뱅크") -> "카카오뱅크 체크"
-            bodyWithoutAccum.contains("토스뱅크") -> "토스뱅크 카드"
-            !slashCardNo.isNullOrBlank() -> "하나$slashCardNo"
-            else -> safeSender ?: "신용카드"
-        }
+        val cardName = ExpenseCustomMetaPreferences.inferCanonicalCardCompany(safeSender, bodyWithoutAccum)
+            ?: when {
+                !slashCardNo.isNullOrBlank() -> "하나카드"
+                else -> safeSender ?: "신용카드"
+            }
 
         // 4. 가맹점명 추출 (명시적 라벨 우선 -> 슬래시 구분자 -> 라인별 정제 추출)
         val explicitMerMatch = Regex("""(?:사용처|가맹점명?|이용처)\s*[:：]\s*(?<mer>[^\n\r]+)""").find(bodyWithoutAccum)

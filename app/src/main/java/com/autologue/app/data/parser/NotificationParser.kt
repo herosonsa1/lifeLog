@@ -1,5 +1,6 @@
 package com.autologue.app.data.parser
 
+import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.Transaction
@@ -61,9 +62,9 @@ object NotificationParser {
                 title.contains("출금") ||
                 title.contains("입금")
             val parsedTx = if (titleHasPaymentAmountOrAction) {
-                SmsParser.parse(null, combined)
+                SmsParser.parse(packageName, combined)
             } else {
-                SmsParser.parse(title, text) ?: SmsParser.parse(null, combined)
+                SmsParser.parse(title, text) ?: SmsParser.parse(packageName, combined)
             }
             if (parsedTx != null && !SmsParser.isNonUsageOrCorruptedTransaction(parsedTx.merchantName, parsedTx.cardOrBankName, parsedTx.originalText)) {
                 return ParsedNotificationResult.TxResult(parsedTx)
@@ -207,6 +208,11 @@ object NotificationParser {
                     isCard -> PaymentMethod.CREDIT_CARD
                     else -> PaymentMethod.BANK_TRANSFER
                 }
+                val normalizedCardOrBank = if (isCard) {
+                    ExpenseCustomMetaPreferences.inferCanonicalCardCompany(bank, combined) ?: bank
+                } else {
+                    ExpenseCustomMetaPreferences.inferCanonicalBankName(bank, combined) ?: bank
+                }
 
                 return ParsedNotificationResult.TxResult(
                     Transaction(
@@ -216,7 +222,7 @@ object NotificationParser {
                         timestamp = parsedDateTime,
                         paymentMethod = paymentMethod,
                         category = category,
-                        cardOrBankName = bank,
+                        cardOrBankName = normalizedCardOrBank,
                         isAutoCategorized = category != ExpenseCategory.ETC
                     )
                 )
@@ -260,24 +266,19 @@ object NotificationParser {
         // 2. 날짜/시간 추출
         val timestamp = extractDateTime(combined)
 
-        // 3. 은행명 추출
+        // 3. 은행명 추출 (표준 은행명으로 정규화)
         val bankBracketMatch = Regex("""\[(?<bank>[^\]]+)\]""").find(combined)
         val bankCandidate = bankBracketMatch?.groups?.get("bank")?.value?.trim()
-        val bankName = when {
-            bankCandidate != null && (bankCandidate.contains("은행") || bankCandidate.contains("알림") || bankCandidate.contains("NH") || bankCandidate.contains("KB")) -> {
-                if (bankCandidate.contains("NH") || bankCandidate.contains("농협")) "NH농협"
-                else if (bankCandidate.contains("KB") || bankCandidate.contains("국민")) "KB국민"
-                else bankCandidate
+        val bankName = ExpenseCustomMetaPreferences.inferCanonicalBankName(bankCandidate, "$combined $packageName")
+            ?: when {
+                packageName.contains("nh.") -> "NH농협은행"
+                packageName.contains("kbstar") -> "KB국민은행"
+                packageName.contains("shinhan") -> "신한은행"
+                packageName.contains("wooribank") -> "우리은행"
+                packageName.contains("kebhana") -> "하나은행"
+                packageName.contains("kakaobank") -> "카카오뱅크"
+                else -> bankCandidate ?: "은행 이체"
             }
-            combined.contains("농협") || combined.contains("NH") || packageName.contains("nh.") || combined.contains("312-") -> "NH농협"
-            combined.contains("국민") || combined.contains("KB") || packageName.contains("kbstar") || combined.contains("0749") -> "KB국민"
-            combined.contains("신한") || packageName.contains("shinhan") -> "신한은행"
-            combined.contains("우리") || packageName.contains("wooribank") -> "우리은행"
-            combined.contains("하나") || packageName.contains("kebhana") -> "하나은행"
-            combined.contains("카카오뱅크") || packageName.contains("kakaobank") -> "카카오뱅크"
-            combined.contains("토스뱅크") -> "토스뱅크"
-            else -> bankCandidate ?: "은행 이체"
-        }
 
         // 4. 계좌번호 추출
         val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(combined)

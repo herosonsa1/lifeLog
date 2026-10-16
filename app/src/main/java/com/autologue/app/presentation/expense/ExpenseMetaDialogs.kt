@@ -32,7 +32,7 @@ import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 
 /**
- * 사용자 분류 배지용 8가지 고대비 색상 팔레트 (글자색 to 배경색)
+ * 사용자 분류 배지용 10가지 고대비 색상 팔레트 (글자색 to 배경색)
  */
 fun getUserClassificationBadgeColors(colorIndex: Int): Pair<Color, Color> {
     val palettes = listOf(
@@ -43,7 +43,9 @@ fun getUserClassificationBadgeColors(colorIndex: Int): Pair<Color, Color> {
         Color(0xFF0E7490) to Color(0xFFCFFAFE), // 4: 시안 블루
         Color(0xFF1D4ED8) to Color(0xFFDBEAFE), // 5: 로얄 블루
         Color(0xFF0F766E) to Color(0xFFCCFBF1), // 6: 틸 그린
-        Color(0xFFA21CAF) to Color(0xFFFAE8FF)  // 7: 푸시아 핑크
+        Color(0xFFA21CAF) to Color(0xFFFAE8FF), // 7: 푸시아 핑크
+        Color(0xFF4338CA) to Color(0xFFE0E7FF), // 8: 인디고 블루
+        Color(0xFF374151) to Color(0xFFE5E7EB)  // 9: 슬레이트 그레이
     )
     val idx = (colorIndex % palettes.size + palettes.size) % palettes.size
     return palettes[idx]
@@ -311,11 +313,11 @@ fun UserClassificationManageDialog(
                         }
 
                         // 배지 색상 선택 팔레트
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text("배지 색상:", fontSize = 11.sp, color = Slate600)
+                            Text("배지 색상:", fontSize = 11.sp, color = Slate600, modifier = Modifier.align(Alignment.CenterVertically))
                             for (idx in 0 until ExpenseCustomMetaPreferences.BADGE_COLOR_COUNT) {
                                 val (fg, bg) = getUserClassificationBadgeColors(idx)
                                 val isSel = selectedColorIndex == idx
@@ -344,7 +346,7 @@ fun UserClassificationManageDialog(
                 HairlineDivider()
 
                 Text(
-                    text = "등록된 사용자 분류 (${userClassifications.size}개)",
+                    text = "등록된 사용자 분류 (${userClassifications.size}개) · 색상 원을 누르면 즉시 변경됩니다",
                     style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate700)
                 )
 
@@ -393,11 +395,11 @@ fun UserClassificationManageDialog(
                                         Text("취소", fontSize = 11.sp, color = Slate600)
                                     }
                                 }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Text("색상 변경:", fontSize = 11.sp, color = Slate600)
+                                    Text("색상 변경:", fontSize = 11.sp, color = Slate600, modifier = Modifier.align(Alignment.CenterVertically))
                                     for (idx in 0 until ExpenseCustomMetaPreferences.BADGE_COLOR_COUNT) {
                                         val (fg, bg) = getUserClassificationBadgeColors(idx)
                                         val isSel = editingColorIndex == idx
@@ -422,43 +424,77 @@ fun UserClassificationManageDialog(
                                 }
                             }
                         } else {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Row(
+                                    modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    MetricBadge(
-                                        text = item.name,
-                                        textColor = badgeFg,
-                                        backgroundColor = badgeBg
-                                    )
-                                    Text(
-                                        text = "배지 미리보기",
-                                        style = AppTypography.captionMuted.copy(fontSize = 11.sp)
-                                    )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    IconButton(
-                                        onClick = {
-                                            editingOriginalName = item.name
-                                            editingNameText = item.name
-                                            editingColorIndex = item.colorIndex
-                                        },
-                                        modifier = Modifier.size(30.dp)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Icon(Icons.Default.Edit, contentDescription = "수정", tint = Slate600, modifier = Modifier.size(16.dp))
+                                        MetricBadge(
+                                            text = item.name,
+                                            textColor = badgeFg,
+                                            backgroundColor = badgeBg
+                                        )
+                                        Text(
+                                            text = "이름 수정·삭제 및 배지 색상 선택",
+                                            style = AppTypography.captionMuted.copy(fontSize = 10.5.sp)
+                                        )
                                     }
-                                    IconButton(
-                                        onClick = { onDeleteUserClassification(item.name) },
-                                        modifier = Modifier.size(30.dp)
-                                    ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "삭제", tint = Color(0xFFDC2626), modifier = Modifier.size(16.dp))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        IconButton(
+                                            onClick = {
+                                                editingOriginalName = item.name
+                                                editingNameText = item.name
+                                                editingColorIndex = item.colorIndex
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Default.Edit, contentDescription = "수정", tint = Slate600, modifier = Modifier.size(15.dp))
+                                        }
+                                        IconButton(
+                                            onClick = { onDeleteUserClassification(item.name) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "삭제", tint = Color(0xFFDC2626), modifier = Modifier.size(15.dp))
+                                        }
+                                    }
+                                }
+                                // 인라인 원클릭 배지 색상 변경 바
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    for (idx in 0 until ExpenseCustomMetaPreferences.BADGE_COLOR_COUNT) {
+                                        val (fg, bg) = getUserClassificationBadgeColors(idx)
+                                        val isSel = item.colorIndex == idx
+                                        Box(
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .clip(CircleShape)
+                                                .background(bg)
+                                                .border(
+                                                    width = if (isSel) 2.dp else 1.dp,
+                                                    color = if (isSel) fg else Slate300,
+                                                    shape = CircleShape
+                                                )
+                                                .clickable {
+                                                    onUpdateUserClassification(item.name, item.name, idx)
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSel) {
+                                                Icon(Icons.Default.Check, contentDescription = null, tint = fg, modifier = Modifier.size(11.dp))
+                                            }
+                                        }
                                     }
                                 }
                             }

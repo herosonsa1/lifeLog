@@ -68,7 +68,7 @@ data class CarLedgerUiState(
     val filteredLogs: List<VehicleLog>
         get() = when (logFilterMode) {
             LogFilterMode.ALL -> logs
-            LogFilterMode.REFUEL_ONLY -> logs.filter { it.logType == VehicleLogType.REFUELING }
+            LogFilterMode.REFUEL_ONLY -> logs.filter { it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE }
             LogFilterMode.DRIVING_ONLY -> logs.filter { it.logType == VehicleLogType.TRIP_DRIVING }
         }
 }
@@ -97,7 +97,18 @@ class CarLedgerViewModel @Inject constructor(
         observeCommuteConfig()
         observeMaintenanceConfig()
         observeVehicles()
+        observeExpenseTransactionsForVehicleSync()
         manualSyncRefueling()
+    }
+
+    private fun observeExpenseTransactionsForVehicleSync() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            transactionRepository.getAllTransactionsFlow().collectLatest { txs ->
+                if (txs.isNotEmpty()) {
+                    runCatching { vehicleRepository.syncRefuelingFromTransactions(txs) }
+                }
+            }
+        }
     }
 
     private suspend fun resolveCommuteNeighborhoods(cfg: CommuteConfig): Pair<String, String> {
@@ -246,7 +257,7 @@ class CarLedgerViewModel @Inject constructor(
                     enrichedLogs
                 }
 
-                val refuelCount = displayedLogs.count { it.logType == VehicleLogType.REFUELING }
+                val refuelCount = displayedLogs.count { it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE }
                 val drivingCount = displayedLogs.count { it.logType == VehicleLogType.TRIP_DRIVING }
 
                 _uiState.value = _uiState.value.copy(
