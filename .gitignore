@@ -6,6 +6,8 @@ build/
 app/build/
 captures/
 *.apk
+!lifeLog_v*.apk
 .externalNativeBuild/
 .cxx/
 screen_*.png
+
