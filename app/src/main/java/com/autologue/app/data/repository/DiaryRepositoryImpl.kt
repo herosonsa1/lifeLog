@@ -242,7 +242,11 @@ class DiaryRepositoryImpl @Inject constructor(
                     cleanTags.add("지출기록")
                 }
 
-                // 4. 실제 골프 라운드 스텝 유무 확인 및 병원 영수증 등으로 오탐된 '스코어카드 자동 분석' 메모 자가치유
+                // 4. 실제 골프 라운드 스텝 유무 확인 및 병원 영수증/중간 주행 경유지로 오염된 메모·동선 자가치유
+                val hadIntermediateDrivingSteps = entry.routeSteps.any {
+                    com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it) ||
+                        it.description?.contains("GPS 백그라운드 수신") == true
+                }
                 val hasRealGolf = cleanSteps.any {
                     it.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.locationName ?: it.title)
                 }
@@ -250,12 +254,20 @@ class DiaryRepositoryImpl @Inject constructor(
                 if (!newHasGolfRound) {
                     cleanTags.removeAll { it == "골프" || it.startsWith("⛳") }
                 }
+                val distinctPlaces = cleanSteps
+                    .filter { step ->
+                        step.stepType != RouteStepType.TRANSACTION &&
+                        !com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(step) &&
+                        (step.stepType != RouteStepType.DRIVING || com.autologue.app.data.sync.DailyRouteAggregator.isBoardingOrAlightingStep(step))
+                    }
+                    .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("승차") && !t.contains("하차") && !t.contains("촬영") && !t.contains("사진") } }
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() && it != "출발 인근" && it != "도착 인근" && it != "사진 기록" }
+                    .distinct()
+
                 val isBogusScorecardMemo = entry.summary.contains("스코어카드 자동 분석") && !hasRealGolf
-                val newSummary = if (isBogusScorecardMemo) {
-                    val distinctPlaces = cleanSteps
-                        .filter { it.stepType != RouteStepType.TRANSACTION }
-                        .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") && !t.contains("사진") } }
-                        .distinct()
+                val isLegacyPeriodicGpsMemo = entry.summary.contains("10분 주기 GPS")
+                val newSummary = if (isBogusScorecardMemo || isLegacyPeriodicGpsMemo || hadIntermediateDrivingSteps) {
                     com.autologue.app.data.sync.DailyRouteAggregator.buildSummaryNarrative(
                         date = d,
                         steps = cleanSteps,
@@ -265,20 +277,26 @@ class DiaryRepositoryImpl @Inject constructor(
                     )
                 } else entry.summary
 
-                // 5. 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동', 비정상 UI 단어 및 문정동 타이틀 자가치유 보정
+                val newMovementSummary = if (hadIntermediateDrivingSteps) {
+                    if (distinctPlaces.isNotEmpty()) distinctPlaces.joinToString(" ➔ ") else "기록된 활동 없음"
+                } else entry.movementSummary
+
+                // 5. 스크린샷/중간 주행 경유지 제거 후 다이어리 제목 자가치유 보정
                 var newTitle = entry.title
-                val isCorruptedTitle = newTitle.contains("기록 삭제") || newTitle.contains("저장하기") ||
+                val isCorruptedTitle = hadIntermediateDrivingSteps ||
+                        newTitle.contains("일상 및 주행 기록") ||
+                        newTitle.contains("기록 삭제") || newTitle.contains("저장하기") ||
                         newTitle.contains("상세 기록") || newTitle.contains("FIELD") ||
                         newTitle == "서울 방이동 일정" || newTitle == "서울 방이동" || newTitle.contains("사진 촬영") || newTitle == "사진 기록 일정" ||
                         (newTitle.contains("문정동") && cleanSteps.any { it.locationName?.contains("문정동") == false && !it.locationName.isNullOrBlank() })
                 if (isCorruptedTitle) {
-                    val validPlace = cleanSteps.firstOrNull { it.latitude != null && !it.locationName.isNullOrBlank() && !it.locationName.contains("사진") }?.locationName
                     val golfStep = cleanSteps.firstOrNull { it.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.locationName ?: it.title) }
                     val cleanGolf = golfStep?.let { (it.locationName ?: it.title).replace(" 라운드", "").replace(" 라운딩", "") }
                     newTitle = when {
-                        cleanGolf != null && validPlace != null -> "$cleanGolf 라운딩 & $validPlace"
+                        cleanGolf != null && distinctPlaces.isNotEmpty() -> "$cleanGolf 라운딩 & ${distinctPlaces.first()}"
                         cleanGolf != null -> "$cleanGolf 라운딩"
-                        validPlace != null -> "${validPlace} 일정"
+                        distinctPlaces.size >= 2 -> "${distinctPlaces.first()} & ${distinctPlaces.last()}"
+                        distinctPlaces.size == 1 -> "${distinctPlaces.first()} 일정"
                         cleanPhotos.isNotEmpty() -> "오늘의 사진 기록"
                         else -> "${d.monthValue}월 ${d.dayOfMonth}일의 다이어리"
                     }
@@ -286,11 +304,13 @@ class DiaryRepositoryImpl @Inject constructor(
 
                 if (cleanSteps.size != entry.routeSteps.size ||
                     stepsContentChanged ||
+                    hadIntermediateDrivingSteps ||
                     cleanPhotos.size != entry.photoUris.size ||
                     cleanTags != entry.tags ||
                     newTitle != entry.title ||
                     resolvedExpense != entry.totalExpense ||
                     newSummary != entry.summary ||
+                    newMovementSummary != entry.movementSummary ||
                     newHasGolfRound != entry.hasGolfRound
                 ) {
                     val updated = entry.copy(
@@ -300,7 +320,8 @@ class DiaryRepositoryImpl @Inject constructor(
                         totalExpense = resolvedExpense,
                         hasGolfRound = newHasGolfRound,
                         tags = cleanTags,
-                        routeSteps = cleanSteps
+                        routeSteps = cleanSteps,
+                        movementSummary = newMovementSummary
                     )
                     diaryDao.updateEntry(updated)
                     modifiedCount++

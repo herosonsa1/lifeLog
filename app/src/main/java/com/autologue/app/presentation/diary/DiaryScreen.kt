@@ -577,8 +577,9 @@ fun NaturalSummaryHeader(
     }
     val totalPlaces = remember(entries) {
         entries.flatMap { entry ->
-            if (entry.routeSteps.isNotEmpty()) {
-                entry.routeSteps.mapNotNull { it.locationName ?: it.title }
+            val validSteps = entry.routeSteps.filterNot { com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it) }
+            if (validSteps.isNotEmpty()) {
+                validSteps.mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
             } else {
                 listOfNotNull(entry.placeName)
             }
@@ -896,6 +897,7 @@ fun DiaryDetailDialog(
                             Text("방문 장소", style = AppTypography.caption)
                             val distinctPlaceCount = remember(entry.routeSteps, entry.placeName) {
                                 val places = entry.routeSteps
+                                    .filterNot { com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it) }
                                     .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
                                     .filter { !it.contains("촬영") }
                                     .distinct()
@@ -931,17 +933,23 @@ fun DiaryDetailDialog(
                     // Chronological Vertical Timeline Stepper
                     Text("📍 시간대별 상세 이동 경로 및 활동", style = AppTypography.h3)
 
-                    if (entry.routeSteps.isEmpty()) {
+                    val visibleRouteSteps = remember(entry.routeSteps) {
+                        entry.routeSteps
+                            .filterNot { com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it) }
+                            .map { com.autologue.app.data.sync.DailyRouteAggregator.normalizeDrivingStep(it) }
+                    }
+
+                    if (visibleRouteSteps.isEmpty()) {
                         Text(
                             text = "세부 경로 데이터가 없습니다. 상단 동기화 버튼을 눌러 다시 색인해보세요.",
                             style = AppTypography.bodySecondary
                         )
                     } else {
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            entry.routeSteps.forEachIndexed { index, step ->
+                            visibleRouteSteps.forEachIndexed { index, step ->
                                 VerticalTimelineStepItem(
                                     step = step,
-                                    isLast = index == entry.routeSteps.size - 1,
+                                    isLast = index == visibleRouteSteps.size - 1,
                                     onPhotoClick = onPhotoClick,
                                     onAddCompanionClick = onAddCompanionClick,
                                     onRemoveCompanion = onRemoveCompanion

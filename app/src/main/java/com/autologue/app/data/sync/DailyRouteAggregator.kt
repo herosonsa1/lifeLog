@@ -153,52 +153,93 @@ class DailyRouteAggregator @Inject constructor(
             )
         }
 
-        // 4. Map Vehicle Logs (GPS 좌표가 있는 정밀 주행 스텝이 이미 존재하면 보존하고, 없을 때만 vLog 기반 단일 스텝 추가)
+        // 4. Map Vehicle Logs (승차/하차 GPS 스텝이 이미 존재하면 보존하고, 없을 때만 vLog 기반으로 승차/하차 스텝 생성)
         val existingDrivingGpsSteps = existingRouteSteps.filter {
-            it.stepType == RouteStepType.DRIVING && it.latitude != null && it.longitude != null
-        }
+            it.stepType == RouteStepType.DRIVING &&
+                !isIntermediateDrivingStep(it) &&
+                (it.latitude != null && it.longitude != null || it.title.contains("승차") || it.title.contains("하차") || it.title.contains("출발") || it.title.contains("도착"))
+        }.map { normalizeDrivingStep(it) }
+
         if (existingDrivingGpsSteps.isNotEmpty()) {
             steps.addAll(existingDrivingGpsSteps)
         } else {
             for (vLog in vehicleLogs) {
                 val note = vLog.note ?: ""
-                // [차량명 (차량번호)] 파싱 (예: "[벤츠 A클래스 (169저7737)]" 또는 "[벤츠 A클래스]")
-                val matchedBracket = Regex("\\[(.*?)\\]").find(note)?.groupValues?.get(1)
-                val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(matchedBracket ?: note)
-                val carDisplayTitle = if (matchedBracket != null) {
-                    "차량 주행 $brandEmoji [$matchedBracket]"
-                } else {
-                    "차량 주행"
-                }
-                val stepDesc = when {
-                    note.isNotBlank() -> note
-                    else -> "주행 거리 %.1f km".format(vLog.tripDistanceKm)
-                }
-                val vehicleTag = matchedBracket ?: "차량"
+                val matchedVehicle = Regex("\\[(?:[^:\\[\\]]*?:\\s*)?([^\\[\\]]+)\\]").find(note)?.groupValues?.get(1)?.trim()
+                val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(matchedVehicle ?: note)
+                val vehicleTag = (matchedVehicle ?: "차량").split(" ").firstOrNull() ?: "차량"
+                val vehicleDisplayName = matchedVehicle ?: "차량"
 
-                steps.add(
-                    RouteStep(
-                        id = UUID.randomUUID().toString(),
-                        time = vLog.timestamp,
-                        stepType = RouteStepType.DRIVING,
-                        title = carDisplayTitle,
-                        description = stepDesc,
-                        category = "차계부",
-                        tags = listOf("차량주행", "$brandEmoji $vehicleTag")
+                val routeMatch = Regex("\\[([^\\[\\]]*?➔[^\\[\\]]*?)\\]").find(note)?.groupValues?.get(1)
+                if (routeMatch != null) {
+                    val startPlace = routeMatch.substringBefore("➔").trim()
+                    val endPlace = routeMatch.substringAfterLast("➔").substringBefore("(").trim()
+                    val durationMin = Regex("\\((\\d+)분\\s*운행").find(note)?.groupValues?.get(1)?.toLongOrNull() ?: 20L
+                    val depTime = vLog.timestamp.minusMinutes(durationMin.coerceAtLeast(1))
+
+                    if (startPlace.isNotBlank()) {
+                        steps.add(
+                            RouteStep(
+                                id = UUID.randomUUID().toString(),
+                                time = depTime,
+                                stepType = RouteStepType.DRIVING,
+                                title = "$brandEmoji [$vehicleDisplayName] 승차 (출발)",
+                                description = if (endPlace.isNotBlank()) "승차: $startPlace ➔ $endPlace" else "승차 위치: $startPlace",
+                                locationName = startPlace,
+                                category = "차계부",
+                                tags = listOf("차량주행", "$brandEmoji $vehicleTag", "승차", "출발지점")
+                            )
+                        )
+                    }
+                    steps.add(
+                        RouteStep(
+                            id = UUID.randomUUID().toString(),
+                            time = vLog.timestamp,
+                            stepType = RouteStepType.DRIVING,
+                            title = "$brandEmoji [$vehicleDisplayName] 하차 (총 %.1f km)".format(vLog.tripDistanceKm),
+                            description = if (startPlace.isNotBlank() && endPlace.isNotBlank()) {
+                                "$startPlace ➔ $endPlace (${durationMin}분 운행 · %.1f km)".format(vLog.tripDistanceKm)
+                            } else {
+                                "주행 거리 %.1f km".format(vLog.tripDistanceKm)
+                            },
+                            locationName = endPlace.ifBlank { null },
+                            category = "차계부",
+                            tags = listOf("차량주행", "$brandEmoji $vehicleTag", "하차", "도착지점")
+                        )
                     )
-                )
+                } else {
+                    steps.add(
+                        RouteStep(
+                            id = UUID.randomUUID().toString(),
+                            time = vLog.timestamp,
+                            stepType = RouteStepType.DRIVING,
+                            title = "$brandEmoji [$vehicleDisplayName] 하차 (총 %.1f km)".format(vLog.tripDistanceKm),
+                            description = note.ifBlank { "주행 거리 %.1f km".format(vLog.tripDistanceKm) },
+                            category = "차계부",
+                            tags = listOf("차량주행", "$brandEmoji $vehicleTag", "하차")
+                        )
+                    )
+                }
             }
         }
 
-        // 5. 지능형 중복 제거 및 시간순 정렬 (허위/더미 골프 스텝 및 금융 입출금 스텝 제외)
-        val validSteps = steps.filter { !isIncomeOrTransferStep(it) && !isInvalidOrDummyGolfStep(it) }
+        // 5. 지능형 중복 제거 및 시간순 정렬 (중간 주행 경유지, 허위/더미 골프 스텝 및 금융 입출금 스텝 제외)
+        val validSteps = steps.filter {
+            !isIncomeOrTransferStep(it) &&
+            !isInvalidOrDummyGolfStep(it) &&
+            !isIntermediateDrivingStep(it)
+        }.map { normalizeDrivingStep(it) }
         val uniqueSteps = deduplicateRouteSteps(validSteps)
 
-        // Extract Distinct Place Names for Itinerary Chain (결제 정보는 지도 이동 경로에서 제외하고 실제 방문 장소만 추출)
-        val invalidPlaceKeywords = listOf("촬영", "일반 사진", "필드 골프장", "사진 기록", "사진", "기록", "더미", "OCR", "일상 기록")
+        // Extract Distinct Place Names for Itinerary Chain (결제 정보 및 단순 경유 주행은 제외하고 승차/하차 및 실제 방문 장소만 추출)
+        val invalidPlaceKeywords = listOf("촬영", "일반 사진", "필드 골프장", "사진 기록", "사진", "기록", "더미", "OCR", "일상 기록", "출발 인근", "도착 인근")
         val distinctPlaces = uniqueSteps
-            .filter { it.stepType != RouteStepType.TRANSACTION }
-            .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
+            .filter { step ->
+                step.stepType != RouteStepType.TRANSACTION &&
+                !isIntermediateDrivingStep(step) &&
+                (step.stepType != RouteStepType.DRIVING || isBoardingOrAlightingStep(step))
+            }
+            .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("승차") && !t.contains("하차") && !t.contains("촬영") } }
             .map { it.trim() }
             .filter { place ->
                 place.isNotBlank() &&
@@ -227,7 +268,7 @@ class DailyRouteAggregator @Inject constructor(
                 val otherPlace = distinctPlaces.firstOrNull { it != golfPlace && !it.contains("CC") && !it.contains("골프") && !it.contains("GC") }
                 if (otherPlace != null) "$cleanGolfTitle & $otherPlace" else cleanGolfTitle
             }
-            distinctPlaces.size >= 2 -> "${distinctPlaces.first()} & ${distinctPlaces[1]}"
+            distinctPlaces.size >= 2 -> "${distinctPlaces.first()} & ${distinctPlaces.last()}"
             distinctPlaces.size == 1 -> "${distinctPlaces.first()} 일정"
             cleanPhotos.isNotEmpty() -> if (mainPlace == "일상 기록") "오늘의 사진 기록" else "${mainPlace} 일정"
             else -> "${date.monthValue}월 ${date.dayOfMonth}일의 다이어리"
@@ -441,14 +482,70 @@ class DailyRouteAggregator @Inject constructor(
         }
 
         /**
+         * 차량 이동 중 중간 경유(10분/30m 주기 GPS 샘플링) 스텝인지 판별합니다.
+         * 차량 이동 경로는 승차(출발) 및 하차(도착) 시점에만 표시되어야 하므로 중간 경유 스텝은 제외합니다.
+         */
+        fun isIntermediateDrivingStep(step: RouteStep): Boolean {
+            if (step.stepType != RouteStepType.DRIVING) return false
+            if ("주행경유" in step.tags || "주행거점" in step.tags) return true
+            if (step.title.contains("주행 경유") || step.title.contains("주행경유") || step.title.contains("단일 거점")) return true
+            val isLegacyPeriodicGps = step.description?.contains("GPS 백그라운드 수신") == true &&
+                !step.title.contains("출발") && !step.title.contains("도착") &&
+                !step.title.contains("승차") && !step.title.contains("하차")
+            return isLegacyPeriodicGps
+        }
+
+        /**
+         * 차량 스텝이 승차(출발) 또는 하차(도착) 스텝인지 판별합니다.
+         */
+        fun isBoardingOrAlightingStep(step: RouteStep): Boolean {
+            if (step.stepType != RouteStepType.DRIVING) return false
+            if (isIntermediateDrivingStep(step)) return false
+            return step.title.contains("승차") || step.title.contains("하차") ||
+                step.title.contains("출발") || step.title.contains("도착") ||
+                "승차" in step.tags || "하차" in step.tags ||
+                "출발지점" in step.tags || "도착지점" in step.tags
+        }
+
+        /**
+         * 기존 DB에 저장되어 있던 '출발'/'도착' 주행 스텝을 깔끔한 '승차 (출발)'/'하차' 표기로 정규화하고
+         * 불필요한 '10분 단위 GPS 백그라운드 수신' 문구를 정리합니다.
+         */
+        fun normalizeDrivingStep(step: RouteStep): RouteStep {
+            if (step.stepType != RouteStepType.DRIVING) return step
+            val newTitle = step.title
+                .replace("] 출발", "] 승차 (출발)")
+                .replace("] 도착", "] 하차")
+            var newDesc = step.description
+            if (newDesc != null && newDesc.contains("GPS 백그라운드 수신")) {
+                val place = step.locationName ?: step.address ?: ""
+                newDesc = when {
+                    newTitle.contains("승차") || newTitle.contains("출발") ->
+                        if (place.isNotBlank()) "승차 위치: $place" else "차량 승차 (출발)"
+                    newTitle.contains("하차") || newTitle.contains("도착") ->
+                        if (place.isNotBlank()) "하차 위치: $place" else "차량 하차 (도착)"
+                    else -> place.ifBlank { null }
+                }
+            }
+            return if (newTitle != step.title || newDesc != step.description) {
+                step.copy(title = newTitle, description = newDesc)
+            } else {
+                step
+            }
+        }
+
+        /**
          * RouteStep 리스트의 중복(동일 사진, 동일 위치/시간대, 동일 결제/주행/골프)을
          * 지능적으로 통합 및 제거하여 단일 정제 리스트로 반환합니다.
+         * 차량 주행 중 중간 경유(주행 경유) 스텝은 이 단계에서 원천 배제됩니다.
          */
         fun deduplicateRouteSteps(steps: List<RouteStep>): List<RouteStep> {
             if (steps.isEmpty()) return emptyList()
 
             val result = mutableListOf<RouteStep>()
-            for (step in steps) {
+            for (rawStep in steps) {
+                if (isIntermediateDrivingStep(rawStep)) continue
+                val step = normalizeDrivingStep(rawStep)
                 val matchIndex = result.indexOfFirst { existing -> isDuplicateStep(existing, step) }
                 if (matchIndex >= 0) {
                     result[matchIndex] = mergeSteps(result[matchIndex], step)
@@ -496,11 +593,13 @@ class DailyRouteAggregator @Inject constructor(
                     return a.time.toLocalDate() == b.time.toLocalDate() && a.title == b.title
                 }
                 RouteStepType.DRIVING -> {
+                    val minDiff = java.time.Duration.between(a.time, b.time).abs().toMinutes()
+                    if (a.title == b.title && minDiff <= 15) return true
                     if (a.latitude != null && a.longitude != null && b.latitude != null && b.longitude != null) {
                         val latDiff = kotlin.math.abs(a.latitude - b.latitude)
                         val lngDiff = kotlin.math.abs(a.longitude - b.longitude)
                         val secDiff = java.time.Duration.between(a.time, b.time).abs().seconds
-                        return latDiff < 0.0001 && lngDiff < 0.0001 && secDiff <= 120
+                        return latDiff < 0.0005 && lngDiff < 0.0005 && secDiff <= 300
                     }
                     return a.time.toLocalDate() == b.time.toLocalDate() && a.title == b.title
                 }

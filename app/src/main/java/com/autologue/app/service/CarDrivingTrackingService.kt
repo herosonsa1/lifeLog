@@ -595,8 +595,17 @@ class CarDrivingTrackingService : Service() {
                     Log.d(TAG, "일반 주행 자동 기록 완료: [$activeVehicleName$carPlatePrefix] $routeTitle")
                 }
 
-                // 다이어리 이동동선에 10분 주기 GPS Waypoint들을 RouteStep으로 저장
-                saveWaypointsToDiary(finalTripKm, durationMin)
+                // 다이어리 이동동선에 승차(출발) 및 하차(도착) 시점의 RouteStep만 저장 (중간 주행 경유지 제외)
+                saveWaypointsToDiary(
+                    finalTripKm = finalTripKm,
+                    durationMin = durationMin,
+                    startLat = startLat,
+                    startLng = startLng,
+                    startPlace = startPlace,
+                    endLat = endLat,
+                    endLng = endLng,
+                    endPlace = endPlace
+                )
 
                 // 완료 알림 표출
                 showTripCompleteNotification(finalTripKm, durationMin)
@@ -625,17 +634,28 @@ class CarDrivingTrackingService : Service() {
     }
 
     /**
-     * 수집된 10분 주기 GPS Waypoint들을 지명 역지오코딩 및 브랜드 엠블럼과 결합하여
-     * 당일 다이어리의 RouteStep 목록으로 자동 영구 저장합니다.
-     * 구글 지도 웹뷰(GoogleMapRouteView)에 마커 핀과 경로로 즉시 표시됩니다.
+     * 차량 이동 중 수집된 중간 GPS 경유 지점(주행 경유)은 주행거리 산출에만 사용하고 방문경로 항목에서 제외하며,
+     * 오직 승차(출발) 및 하차(도착) 시점에만 당일 다이어리의 RouteStep으로 등록합니다.
      */
-    private suspend fun saveWaypointsToDiary(finalTripKm: Double, durationMin: Long) {
+    private suspend fun saveWaypointsToDiary(
+        finalTripKm: Double,
+        durationMin: Long,
+        startLat: Double,
+        startLng: Double,
+        startPlace: String,
+        endLat: Double,
+        endLng: Double,
+        endPlace: String
+    ) {
         try {
             val validList = synchronized(waypoints) {
                 waypoints.filter { LocationDistanceUtils.isValidCoordinate(it.latitude, it.longitude) }
             }
-            if (validList.isEmpty()) {
-                Log.d(TAG, "유효한 GPS 좌표가 없어 다이어리 RouteStep 저장을 스킵합니다.")
+            val hasValidStart = LocationDistanceUtils.isValidCoordinate(startLat, startLng)
+            val hasValidEnd = LocationDistanceUtils.isValidCoordinate(endLat, endLng)
+
+            if (validList.isEmpty() && !hasValidStart && !hasValidEnd) {
+                Log.d(TAG, "유효한 승차/하차 GPS 좌표가 없어 다이어리 RouteStep 저장을 스킵합니다.")
                 return
             }
 
@@ -643,76 +663,119 @@ class CarDrivingTrackingService : Service() {
             val vehicleTag = activeVehicleName.split(" ").firstOrNull() ?: activeVehicleName
             val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
 
+            val firstWp = validList.firstOrNull()
+            val lastWp = validList.lastOrNull()
+
+            val depLat = if (hasValidStart) startLat else firstWp?.latitude ?: 0.0
+            val depLng = if (hasValidStart) startLng else firstWp?.longitude ?: 0.0
+            val arrLat = if (hasValidEnd) endLat else lastWp?.latitude ?: depLat
+            val arrLng = if (hasValidEnd) endLng else lastWp?.longitude ?: depLng
+
+            val depTimeMillis = when {
+                firstWp != null && firstWp.timestamp > 0L -> firstWp.timestamp
+                startTimeMillis > 0L -> startTimeMillis
+                else -> System.currentTimeMillis() - (durationMin * 60_000L)
+            }
+            val arrTimeMillis = when {
+                lastWp != null && lastWp.timestamp > depTimeMillis -> lastWp.timestamp
+                else -> System.currentTimeMillis().coerceAtLeast(depTimeMillis + 60_000L)
+            }
+
+            val depTime = java.time.LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(depTimeMillis),
+                java.time.ZoneId.systemDefault()
+            )
+            val arrTime = java.time.LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(arrTimeMillis),
+                java.time.ZoneId.systemDefault()
+            )
+
+            val depResolved = if (LocationDistanceUtils.isValidCoordinate(depLat, depLng)) {
+                placeResolver.resolveGeoLocation(this@CarDrivingTrackingService, depLat, depLng)
+            } else null
+            val arrResolved = if (LocationDistanceUtils.isValidCoordinate(arrLat, arrLng)) {
+                placeResolver.resolveGeoLocation(this@CarDrivingTrackingService, arrLat, arrLng)
+            } else null
+
+            val depPlaceName = startPlace.ifBlank { depResolved?.placeName.orEmpty() }
+            val arrPlaceName = endPlace.ifBlank { arrResolved?.placeName.orEmpty() }
+            val depAddress = depResolved?.address?.ifBlank { depPlaceName } ?: depPlaceName
+            val arrAddress = arrResolved?.address?.ifBlank { arrPlaceName } ?: arrPlaceName
+
             val newRouteSteps = mutableListOf<RouteStep>()
 
-            validList.forEachIndexed { index, wp ->
-                val time = java.time.LocalDateTime.ofInstant(
-                    java.time.Instant.ofEpochMilli(wp.timestamp),
-                    java.time.ZoneId.systemDefault()
-                )
-                val resolved = placeResolver.resolveGeoLocation(this@CarDrivingTrackingService, wp.latitude, wp.longitude)
-                val locName = resolveLocationName(wp.latitude, wp.longitude, isDeparture = (index == 0))
-
-                val (stepTitle, tags) = when {
-                    validList.size == 1 -> {
-                        Pair(
-                            "$brandEmoji [$activeVehicleName] 주행 기록 (단일 거점)",
-                            listOf("차량주행", "$brandEmoji $vehicleTag", "주행거점")
-                        )
-                    }
-                    index == 0 -> {
-                        // 출발 지점 (GPS 최초 유효 좌표)
-                        Pair(
-                            "$brandEmoji [$activeVehicleName] 출발",
-                            listOf("차량주행", "$brandEmoji $vehicleTag", "출발지점")
-                        )
-                    }
-                    index == validList.lastIndex -> {
-                        // 최종 도착 지점 (GPS 최종 유효 좌표)
-                        Pair(
-                            "$brandEmoji [$activeVehicleName] 도착 (총 %.1f km)".format(finalTripKm),
-                            listOf("차량주행", "$brandEmoji $vehicleTag", "도착지점")
-                        )
-                    }
-                    else -> {
-                        // 중간 주기 경유 지점
-                        val elapsed = ((wp.timestamp - startTimeMillis) / 60000).coerceAtLeast(1)
-                        Pair(
-                            "$brandEmoji [$activeVehicleName] 주행 경유 (${elapsed}분 경과)",
-                            listOf("차량주행", "$brandEmoji $vehicleTag", "주행경유")
-                        )
-                    }
+            // 1. 승차(출발) 스텝
+            if (LocationDistanceUtils.isValidCoordinate(depLat, depLng) || depPlaceName.isNotBlank()) {
+                val boardingDesc = when {
+                    depPlaceName.isNotBlank() && arrPlaceName.isNotBlank() && depPlaceName != arrPlaceName ->
+                        "승차: $depPlaceName ➔ $arrPlaceName"
+                    depPlaceName.isNotBlank() ->
+                        "승차 위치: $depPlaceName"
+                    else -> "차량 승차 (출발)"
                 }
-
                 newRouteSteps.add(
                     RouteStep(
                         id = UUID.randomUUID().toString(),
-                        time = time,
+                        time = depTime,
                         stepType = RouteStepType.DRIVING,
-                        title = stepTitle,
-                        description = "10분 단위 GPS 백그라운드 수신 · 위치: (%.4f, %.4f)".format(wp.latitude, wp.longitude),
-                        locationName = locName,
-                        address = resolved.address.ifBlank { locName },
-                        latitude = wp.latitude,
-                        longitude = wp.longitude,
+                        title = "$brandEmoji [$activeVehicleName] 승차 (출발)",
+                        description = boardingDesc,
+                        locationName = depPlaceName.ifBlank { null },
+                        address = depAddress.ifBlank { null },
+                        latitude = if (LocationDistanceUtils.isValidCoordinate(depLat, depLng)) depLat else null,
+                        longitude = if (LocationDistanceUtils.isValidCoordinate(depLat, depLng)) depLng else null,
                         category = "차계부",
-                        tags = tags
+                        tags = listOf("차량주행", "$brandEmoji $vehicleTag", "승차", "출발지점")
+                    )
+                )
+            }
+
+            // 2. 하차(도착) 스텝
+            if (LocationDistanceUtils.isValidCoordinate(arrLat, arrLng) || arrPlaceName.isNotBlank()) {
+                val alightingDesc = when {
+                    depPlaceName.isNotBlank() && arrPlaceName.isNotBlank() ->
+                        "$depPlaceName ➔ $arrPlaceName (${durationMin}분 운행 · %.1f km)".format(finalTripKm)
+                    arrPlaceName.isNotBlank() ->
+                        "하차 위치: $arrPlaceName (${durationMin}분 운행 · %.1f km)".format(finalTripKm)
+                    else ->
+                        "차량 하차 (${durationMin}분 운행 · %.1f km)".format(finalTripKm)
+                }
+                newRouteSteps.add(
+                    RouteStep(
+                        id = UUID.randomUUID().toString(),
+                        time = if (arrTime.isAfter(depTime)) arrTime else depTime.plusMinutes(durationMin.coerceAtLeast(1)),
+                        stepType = RouteStepType.DRIVING,
+                        title = "$brandEmoji [$activeVehicleName] 하차 (총 %.1f km)".format(finalTripKm),
+                        description = alightingDesc,
+                        locationName = arrPlaceName.ifBlank { null },
+                        address = arrAddress.ifBlank { null },
+                        latitude = if (LocationDistanceUtils.isValidCoordinate(arrLat, arrLng)) arrLat else null,
+                        longitude = if (LocationDistanceUtils.isValidCoordinate(arrLat, arrLng)) arrLng else null,
+                        category = "차계부",
+                        tags = listOf("차량주행", "$brandEmoji $vehicleTag", "하차", "도착지점")
                     )
                 )
             }
 
             val today = java.time.LocalDate.now()
+            val diaryTitle = when {
+                depPlaceName.isNotBlank() && arrPlaceName.isNotBlank() && depPlaceName != arrPlaceName ->
+                    "$depPlaceName & $arrPlaceName"
+                arrPlaceName.isNotBlank() -> "$arrPlaceName 일정"
+                depPlaceName.isNotBlank() -> "$depPlaceName 일정"
+                else -> "${today.monthValue}월 ${today.dayOfMonth}일의 다이어리"
+            }
             val diaryEntry = DiaryEntry(
                 date = today.atTime(java.time.LocalTime.now()),
-                title = "$today 일상 및 주행 기록",
-                summary = "$brandEmoji [$activeVehicleName$carPlatePrefix] 블루투스 연동 자동 주행 (${durationMin}분 운행, 10분 주기 GPS ${validList.size}개 지점 추적 완료)",
+                title = diaryTitle,
+                summary = "$brandEmoji [$activeVehicleName$carPlatePrefix] $depPlaceName ➔ $arrPlaceName (${durationMin}분 운행, 총 %.1f km)".format(finalTripKm),
                 drivingDistanceKm = finalTripKm,
                 routeSteps = newRouteSteps,
                 tags = listOf("차량주행", "$brandEmoji $vehicleTag")
             )
 
             diaryRepository.insertDiaryEntry(diaryEntry)
-            Log.d(TAG, "다이어리 RouteStep ${newRouteSteps.size}개 자동 영구 저장 완료: [$activeVehicleName]")
+            Log.d(TAG, "다이어리 승차/하차 RouteStep ${newRouteSteps.size}개 자동 저장 완료: [$activeVehicleName]")
         } catch (e: Throwable) {
             Log.e(TAG, "다이어리 RouteStep 저장 중 오류 발생", e)
         }
