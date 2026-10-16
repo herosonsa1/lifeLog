@@ -149,8 +149,11 @@ fun CarLedgerScreen(
             log = uiState.editingRefuelLog!!,
             vehicles = uiState.vehicles,
             onDismiss = { viewModel.closeRefuelEditDialog() },
-            onSave = { logId, stationName, vId, cost, liters, unitPrice ->
-                viewModel.updateRefuelDetail(logId, stationName, vId, cost, liters, unitPrice)
+            onSave = { logId, stationName, vId, cost, liters, unitPrice, isOneTimeSave ->
+                viewModel.updateRefuelDetail(logId, stationName, vId, cost, liters, unitPrice, isOneTimeSave)
+            },
+            onDelete = { logId ->
+                viewModel.deleteSingleLog(logId)
             }
         )
     }
@@ -608,22 +611,105 @@ fun CarLedgerScreen(
                             )
                         }
 
-                        androidx.compose.material3.Surface(
-                            onClick = { viewModel.toggleVehicleFilter() },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (uiState.filterCurrentVehicleOnly) MenuColors.carLedgerBg else Slate100,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (uiState.filterCurrentVehicleOnly) MenuColors.carLedgerBorder else Slate300
-                            )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = if (uiState.filterCurrentVehicleOnly) "현재 차량만" else "전체 차량",
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (uiState.filterCurrentVehicleOnly) MenuColors.carLedger else Slate600,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
+                            androidx.compose.material3.Surface(
+                                onClick = { viewModel.toggleSelectionMode() },
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (uiState.isSelectionMode) androidx.compose.ui.graphics.Color(0xFFFEF2F2) else Slate100,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (uiState.isSelectionMode) androidx.compose.ui.graphics.Color(0xFFDC2626) else Slate300
+                                )
+                            ) {
+                                Text(
+                                    text = if (uiState.isSelectionMode) "선택 해제" else "선택 삭제",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (uiState.isSelectionMode) androidx.compose.ui.graphics.Color(0xFFDC2626) else Slate700,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+
+                            androidx.compose.material3.Surface(
+                                onClick = { viewModel.toggleVehicleFilter() },
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (uiState.filterCurrentVehicleOnly) MenuColors.carLedgerBg else Slate100,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (uiState.filterCurrentVehicleOnly) MenuColors.carLedgerBorder else Slate300
+                                )
+                            ) {
+                                Text(
+                                    text = if (uiState.filterCurrentVehicleOnly) "현재 차량만" else "전체 차량",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (uiState.filterCurrentVehicleOnly) MenuColors.carLedger else Slate600,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (uiState.isSelectionMode) {
+                        androidx.compose.material3.Surface(
+                            color = androidx.compose.ui.graphics.Color(0xFFFEF2F2),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFFFECACA)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.xl, vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    androidx.compose.material3.Surface(
+                                        onClick = { viewModel.selectAllVisibleLogs() },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = androidx.compose.ui.graphics.Color.White,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Slate300)
+                                    ) {
+                                        Text(
+                                            text = "전체 선택",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Slate700,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = "${uiState.selectedLogIds.size}건 선택됨 (재동기화 차단)",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = androidx.compose.ui.graphics.Color(0xFFB91C1C)
+                                    )
+                                }
+
+                                androidx.compose.material3.Surface(
+                                    onClick = { viewModel.deleteSelectedLogs() },
+                                    enabled = uiState.selectedLogIds.isNotEmpty(),
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (uiState.selectedLogIds.isNotEmpty()) androidx.compose.ui.graphics.Color(0xFFDC2626) else Slate300
+                                ) {
+                                    Text(
+                                        text = "${uiState.selectedLogIds.size}건 영구 삭제",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = androidx.compose.ui.graphics.Color.White,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -692,6 +778,10 @@ fun CarLedgerScreen(
                     SaaSCarLogRow(
                         log = log,
                         vehicles = uiState.vehicles,
+                        isSelectionMode = uiState.isSelectionMode,
+                        isSelected = uiState.selectedLogIds.contains(log.id),
+                        onToggleSelect = { viewModel.toggleSelectLog(log.id) },
+                        onDeleteLog = { viewModel.deleteSingleLog(log.id) },
                         onAssignVehicle = { logId, vId -> viewModel.assignVehicleToFuelLog(logId, vId) },
                         onEditRefuel = { viewModel.openRefuelEditDialog(it) }
                     )
@@ -706,28 +796,43 @@ fun CarLedgerScreen(
 fun SaaSCarLogRow(
     log: VehicleLog,
     vehicles: List<VehicleProfile> = emptyList(),
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: (() -> Unit)? = null,
+    onDeleteLog: (() -> Unit)? = null,
     onAssignVehicle: ((Long, String) -> Unit)? = null,
     onEditRefuel: ((VehicleLog) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(if (isSelected) androidx.compose.ui.graphics.Color(0xFFFEF2F2) else androidx.compose.ui.graphics.Color.Transparent)
             .then(
-                if (log.logType == VehicleLogType.REFUELING && onEditRefuel != null) {
-                    Modifier.clickable { onEditRefuel(log) }
-                } else {
-                    Modifier
+                when {
+                    isSelectionMode && onToggleSelect != null -> Modifier.clickable { onToggleSelect() }
+                    log.logType == VehicleLogType.REFUELING && onEditRefuel != null -> Modifier.clickable { onEditRefuel(log) }
+                    else -> Modifier
                 }
             )
             .padding(horizontal = Spacing.xl, vertical = Spacing.md),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (isSelectionMode && onToggleSelect != null) {
+            Checkbox(
+                checked = isSelected,
+                onCheckedChange = { onToggleSelect() },
+                colors = CheckboxDefaults.colors(checkedColor = androidx.compose.ui.graphics.Color(0xFFDC2626)),
+                modifier = Modifier.padding(end = 8.dp)
+            )
+        }
+
         val isToWork = log.note?.contains("출근") == true && log.note?.contains("출퇴근") != true
         val isToHome = log.note?.contains("퇴근") == true && log.note?.contains("출퇴근") != true
         val isCommuteRound = log.note?.contains("출퇴근") == true
         val isGolf = log.note?.contains("골프") == true || log.note?.contains("라운딩") == true || log.note?.contains("CC") == true
         val isCustom = log.isCustomFuel()
+        val isOneTimeEdited = log.note?.contains("[one_time_edit:true]") == true
         val explicitUnitPrice = log.getExplicitUnitPrice()
 
         val assignedVehicleId = log.getAssignedVehicleId()
@@ -779,6 +884,14 @@ fun SaaSCarLogRow(
                         else -> Slate100
                     }
                 )
+
+                if (isOneTimeEdited) {
+                    MetricBadge(
+                        text = "1회성",
+                        textColor = Amber700,
+                        backgroundColor = Amber50
+                    )
+                }
 
                 if (log.logType == VehicleLogType.REFUELING) {
                     if (isCustom) {
@@ -865,22 +978,22 @@ fun SaaSCarLogRow(
                 ) {
                     val assignedId = log.getAssignedVehicleId()
                     vehicles.forEach { v ->
-                        val isSelected = assignedId == v.id
+                        val isSelectedVehicle = assignedId == v.id
                         val shortName = v.name.split(" ").firstOrNull() ?: v.name
                         androidx.compose.material3.Surface(
                             onClick = { onAssignVehicle(log.id, v.id) },
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isSelected) MenuColors.carLedgerBg else Slate100,
+                            color = if (isSelectedVehicle) MenuColors.carLedgerBg else Slate100,
                             border = androidx.compose.foundation.BorderStroke(
                                 1.dp,
-                                if (isSelected) MenuColors.carLedger else Slate300
+                                if (isSelectedVehicle) MenuColors.carLedger else Slate300
                             )
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
-                                if (isSelected) {
+                                if (isSelectedVehicle) {
                                     Icon(
                                         Icons.Default.Check,
                                         contentDescription = null,
@@ -892,8 +1005,8 @@ fun SaaSCarLogRow(
                                 Text(
                                     text = shortName,
                                     fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MenuColors.carLedger else Slate600
+                                    fontWeight = if (isSelectedVehicle) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelectedVehicle) MenuColors.carLedger else Slate600
                                 )
                             }
                         }
@@ -937,21 +1050,37 @@ fun SaaSCarLogRow(
                 }
             }
         } else {
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = "%.1f km".format(log.tripDistanceKm),
-                    style = AppTypography.h2.copy(color = Slate800, fontWeight = FontWeight.SemiBold)
-                )
-                Text(
-                    text = when {
-                        isToWork -> "출근 편도"
-                        isToHome -> "퇴근 편도"
-                        isCommuteRound -> "출퇴근 왕복"
-                        isGolf -> "골프장 이동"
-                        else -> "일반 주행"
-                    },
-                    style = AppTypography.captionMuted
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "%.1f km".format(log.tripDistanceKm),
+                        style = AppTypography.h2.copy(color = Slate800, fontWeight = FontWeight.SemiBold)
+                    )
+                    Text(
+                        text = when {
+                            isToWork -> "출근 편도"
+                            isToHome -> "퇴근 편도"
+                            isCommuteRound -> "출퇴근 왕복"
+                            isGolf -> "골프장 이동"
+                            else -> "일반 주행"
+                        },
+                        style = AppTypography.captionMuted
+                    )
+                }
+                if (onDeleteLog != null) {
+                    Spacer(modifier = Modifier.width(Spacing.xs))
+                    IconButton(
+                        onClick = onDeleteLog,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "주행 기록 삭제",
+                            tint = Slate400,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
             }
         }
     }
@@ -1062,11 +1191,13 @@ fun RefuelDetailEditDialog(
     log: VehicleLog,
     vehicles: List<VehicleProfile>,
     onDismiss: () -> Unit,
-    onSave: (logId: Long, stationName: String, vehicleId: String, cost: Long, liters: Double?, unitPrice: Double?) -> Unit
+    onSave: (logId: Long, stationName: String, vehicleId: String, cost: Long, liters: Double?, unitPrice: Double?, isOneTimeSave: Boolean) -> Unit,
+    onDelete: (logId: Long) -> Unit = {}
 ) {
     var stationNameText by remember(log.id) { mutableStateOf(log.gasStationName ?: "주유소") }
     var selectedVehicleId by remember(log.id) { mutableStateOf(log.getAssignedVehicleId()) }
     var costText by remember(log.id) { mutableStateOf(if (log.fuelCost > 0) log.fuelCost.toString() else "") }
+    var isOneTimeSave by remember(log.id) { mutableStateOf(log.note?.contains("[one_time_edit:true]") == true) }
     var unitPriceText by remember(log.id) {
         mutableStateOf(
             log.getExplicitUnitPrice()?.let { "%.1f".format(Locale.US, it) } ?: ""
@@ -1125,19 +1256,67 @@ fun RefuelDetailEditDialog(
 
                     Spacer(modifier = Modifier.height(Spacing.sm))
 
-                    // 안내 뱃지
+                    // 저장 방식 선택 (자동치환 vs 1회성 저장)
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = MenuColors.carLedgerBg,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder),
+                        color = if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFFFFBEB) else MenuColors.carLedgerBg,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFFDE68A) else MenuColors.carLedgerBorder
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Info, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(Spacing.xs))
+                        Column(
+                            modifier = Modifier.padding(Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Surface(
+                                    onClick = { isOneTimeSave = false },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (!isOneTimeSave) MenuColors.carLedger else androidx.compose.ui.graphics.Color.White,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (!isOneTimeSave) MenuColors.carLedger else Slate300),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "동일 주유소 자동치환",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (!isOneTimeSave) androidx.compose.ui.graphics.Color.White else Slate700,
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                                Surface(
+                                    onClick = { isOneTimeSave = true },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFD97706) else androidx.compose.ui.graphics.Color.White,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFB45309) else Slate300),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "이번 내역만 1회성 저장",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isOneTimeSave) androidx.compose.ui.graphics.Color.White else Slate700,
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
                             Text(
-                                text = "결제명(주유소명)을 한 번 수정하면 같은 결제처의 기존·신규 내역이 자동으로 치환됩니다.",
-                                style = AppTypography.caption.copy(color = MenuColors.carLedger, fontSize = 11.sp)
+                                text = if (isOneTimeSave) {
+                                    "이번 주유 건만 단독으로 수정되며, 다른 주유소 내역에 영향을 주지 않고 고정 보호됩니다."
+                                } else {
+                                    "결제명(주유소명)을 수정하면 같은 결제처의 기존·신규 내역이 자동으로 치환됩니다."
+                                },
+                                style = AppTypography.caption.copy(
+                                    color = if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFB45309) else MenuColors.carLedger,
+                                    fontSize = 10.5.sp
+                                )
                             )
                         }
                     }
@@ -1316,25 +1495,47 @@ fun RefuelDetailEditDialog(
 
                     Spacer(modifier = Modifier.height(Spacing.xl))
 
-                    // 저장 및 취소 버튼
+                    // 삭제, 1회성 저장, 저장 버튼
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        AutoLogueDangerButton(
+                            text = "삭제",
+                            onClick = { onDelete(log.id) }
+                        )
                         AutoLogueSecondaryButton(
                             text = "취소",
-                            modifier = Modifier.weight(1f),
                             onClick = onDismiss
                         )
+                        Surface(
+                            onClick = {
+                                val finalStation = stationNameText.trim().ifBlank { log.gasStationName ?: "주유소" }
+                                val cost = costText.toLongOrNull() ?: log.fuelCost
+                                val unitPrice = unitPriceText.toDoubleOrNull()
+                                val liters = litersText.toDoubleOrNull()
+                                onSave(log.id, finalStation, selectedVehicleId, cost, liters, unitPrice, true)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = androidx.compose.ui.graphics.Color(0xFFD97706)
+                        ) {
+                            Text(
+                                text = "1회성 저장",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                            )
+                        }
                         AutoLoguePrimaryButton(
-                            text = "저장 및 연비 반영",
+                            text = if (isOneTimeSave) "저장(1회)" else "저장",
                             modifier = Modifier.weight(1f),
                             onClick = {
                                 val finalStation = stationNameText.trim().ifBlank { log.gasStationName ?: "주유소" }
                                 val cost = costText.toLongOrNull() ?: log.fuelCost
                                 val unitPrice = unitPriceText.toDoubleOrNull()
                                 val liters = litersText.toDoubleOrNull()
-                                onSave(log.id, finalStation, selectedVehicleId, cost, liters, unitPrice)
+                                onSave(log.id, finalStation, selectedVehicleId, cost, liters, unitPrice, isOneTimeSave)
                             }
                         )
                     }

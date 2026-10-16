@@ -61,7 +61,9 @@ data class CarLedgerUiState(
     val showPasteSmsDialog: Boolean = false,
     val syncResultMessage: String? = null,
     val totalRefuelCount: Int = 0,
-    val totalDrivingCount: Int = 0
+    val totalDrivingCount: Int = 0,
+    val isSelectionMode: Boolean = false,
+    val selectedLogIds: Set<Long> = emptySet()
 ) {
     val filteredLogs: List<VehicleLog>
         get() = when (logFilterMode) {
@@ -268,6 +270,58 @@ class CarLedgerViewModel @Inject constructor(
         loadData()
     }
 
+    fun toggleSelectionMode() {
+        val next = !_uiState.value.isSelectionMode
+        _uiState.value = _uiState.value.copy(
+            isSelectionMode = next,
+            selectedLogIds = if (next) _uiState.value.selectedLogIds else emptySet()
+        )
+    }
+
+    fun toggleSelectLog(logId: Long) {
+        val current = _uiState.value.selectedLogIds.toMutableSet()
+        if (current.contains(logId)) {
+            current.remove(logId)
+        } else {
+            current.add(logId)
+        }
+        _uiState.value = _uiState.value.copy(selectedLogIds = current)
+    }
+
+    fun selectAllVisibleLogs() {
+        val visibleIds = _uiState.value.filteredLogs.map { it.id }.toSet()
+        val current = _uiState.value.selectedLogIds
+        val next = if (visibleIds.isNotEmpty() && current.containsAll(visibleIds)) {
+            current - visibleIds
+        } else {
+            current + visibleIds
+        }
+        _uiState.value = _uiState.value.copy(selectedLogIds = next)
+    }
+
+    fun deleteSelectedLogs() {
+        val ids = _uiState.value.selectedLogIds.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val count = vehicleRepository.deleteVehicleLogs(ids)
+            _uiState.value = _uiState.value.copy(
+                isSelectionMode = false,
+                selectedLogIds = emptySet(),
+                syncResultMessage = "선택한 차계부 기록(주유/주행) ${count}건을 영구 삭제했습니다. (자동 동기화 시 재등록 차단)"
+            )
+        }
+    }
+
+    fun deleteSingleLog(logId: Long) {
+        viewModelScope.launch {
+            vehicleRepository.deleteVehicleLog(logId)
+            _uiState.value = _uiState.value.copy(
+                editingRefuelLog = null,
+                syncResultMessage = "해당 기록을 영구 삭제했습니다. (자동 동기화 시 재등록 차단)"
+            )
+        }
+    }
+
     fun assignVehicleToFuelLog(logId: Long, targetVehicleId: String) {
         viewModelScope.launch {
             val log = vehicleRepository.getVehicleLogById(logId) ?: return@launch
@@ -295,7 +349,8 @@ class CarLedgerViewModel @Inject constructor(
         targetVehicleId: String,
         fuelCost: Long,
         explicitLiters: Double?,
-        unitPrice: Double?
+        unitPrice: Double?,
+        isOneTimeSave: Boolean = false
     ) {
         viewModelScope.launch {
             val log = vehicleRepository.getVehicleLogById(logId) ?: return@launch
@@ -312,11 +367,15 @@ class CarLedgerViewModel @Inject constructor(
                 vehicleShortName = vName,
                 unitPrice = unitPrice,
                 isCustom = isCustom
-            )
-            val updatedNote = if (isStationRenamed && !baseUpdatedNote.contains("[custom_name:true]")) {
+            ).replace("[one_time_edit:true]", "").trim()
+
+            var updatedNote = if (isStationRenamed && !baseUpdatedNote.contains("[custom_name:true]")) {
                 "$baseUpdatedNote [custom_name:true]".trim()
             } else {
                 baseUpdatedNote
+            }
+            if (isOneTimeSave) {
+                updatedNote = "$updatedNote [one_time_edit:true]".trim()
             }
 
             val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
@@ -334,7 +393,11 @@ class CarLedgerViewModel @Inject constructor(
             )
             vehicleRepository.updateVehicleLog(updatedLog)
 
-            if (isStationRenamed && oldStationName.isNotBlank() && oldStationName != "주유소") {
+            if (isOneTimeSave) {
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = "주유 내역을 1회성 저장했습니다. (동일 주유소의 다른 내역에는 영향을 주지 않으며 고정 보호됩니다)"
+                )
+            } else if (isStationRenamed && oldStationName.isNotBlank() && oldStationName != "주유소") {
                 val fuelRenamed = vehicleRepository.renameGasStationGlobally(
                     oldStationName = oldStationName,
                     newStationName = finalStationName

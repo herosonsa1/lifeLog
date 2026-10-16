@@ -17,6 +17,7 @@ enum class ExpenseCategory(val displayName: String, val iconRes: String) {
     SHOPPING("쇼핑", "shopping_cart"),
     TRANSPORT("교통", "directions_transit"),
     LIVING("생활/마트", "store"),
+    MEDICAL("병원/약제", "local_hospital"),
     INCOME("수입/입금", "arrow_downward"),
     TRANSFER("이체/출금", "sync_alt"),
     ETC("기타", "more_horiz")

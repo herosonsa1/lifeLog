@@ -1,5 +1,6 @@
 package com.autologue.app.data.export
 
+import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.domain.model.DiaryEntry
 import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.Transaction
@@ -21,7 +22,8 @@ object XlsxExporter {
         transactions: List<Transaction>,
         vehicleLogs: List<VehicleLog>,
         golfRounds: List<GolfRound>,
-        outputStream: OutputStream
+        outputStream: OutputStream,
+        expenseCustomMetaPreferences: ExpenseCustomMetaPreferences? = null
     ) {
         ZipOutputStream(outputStream).use { zip ->
             // 1. [Content_Types].xml
@@ -41,7 +43,7 @@ object XlsxExporter {
 
             // 6. Sheets
             addZipEntry(zip, "xl/worksheets/sheet1.xml", buildDiarySheetXml(diaryEntries))
-            addZipEntry(zip, "xl/worksheets/sheet2.xml", buildExpenseSheetXml(transactions))
+            addZipEntry(zip, "xl/worksheets/sheet2.xml", buildExpenseSheetXml(transactions, expenseCustomMetaPreferences))
             addZipEntry(zip, "xl/worksheets/sheet3.xml", buildCarSheetXml(vehicleLogs))
             addZipEntry(zip, "xl/worksheets/sheet4.xml", buildGolfSheetXml(golfRounds))
         }
@@ -167,29 +169,59 @@ object XlsxExporter {
         return sb.toString()
     }
 
-    private fun buildExpenseSheetXml(transactions: List<Transaction>): String {
+    private fun buildExpenseSheetXml(
+        transactions: List<Transaction>,
+        expenseCustomMetaPreferences: ExpenseCustomMetaPreferences?
+    ): String {
         val sb = StringBuilder()
         sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
 """)
         // Header
-        sb.append(makeRow(1, listOf("일시", "가맹점 / 내용", "결제 금액(원)", "지출 카테고리", "결제 수단", "카드 / 은행명", "메모 / 비고", "자동 분류")))
+        sb.append(
+            makeRow(
+                1,
+                listOf(
+                    "일시",
+                    "가맹점 / 내용",
+                    "결제 금액(원)",
+                    "지출 카테고리",
+                    "사용자 분류",
+                    "카드 / 은행명",
+                    "법인 / 개인 구분",
+                    "결제 수단",
+                    "메모 / 비고",
+                    "자동 분류"
+                )
+            )
+        )
 
         transactions.forEachIndexed { idx, tx ->
-            sb.append(makeRow(
-                idx + 2,
-                listOf(
-                    tx.timestamp.format(DATE_FORMATTER),
-                    tx.merchantName,
-                    tx.amount,
-                    tx.category.displayName,
-                    tx.paymentMethod.name,
-                    tx.cardOrBankName ?: "-",
-                    tx.transferMemo ?: "-",
-                    if (tx.isAutoCategorized) "자동" else "수동"
+            val categoryLabel = expenseCustomMetaPreferences?.resolveEffectiveCategoryDisplayName(tx)
+                ?: tx.category.displayName
+            val userClassLabel = expenseCustomMetaPreferences?.resolveUserClassification(tx)?.name ?: "-"
+            val isCorp = expenseCustomMetaPreferences?.isCorporateTransaction(tx)
+                ?: tx.cardOrBankName.contains("법인")
+            val corpLabel = if (isCorp) "법인카드" else "개인카드"
+
+            sb.append(
+                makeRow(
+                    idx + 2,
+                    listOf(
+                        tx.timestamp.format(DATE_FORMATTER),
+                        tx.merchantName,
+                        tx.amount,
+                        categoryLabel,
+                        userClassLabel,
+                        tx.cardOrBankName.ifBlank { "-" },
+                        corpLabel,
+                        tx.paymentMethod.name,
+                        tx.transferMemo ?: "-",
+                        if (tx.isAutoCategorized) "자동" else "수동"
+                    )
                 )
-            ))
+            )
         }
 
         sb.append("""  </sheetData>

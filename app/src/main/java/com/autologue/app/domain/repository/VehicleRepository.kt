@@ -25,4 +25,6 @@ interface VehicleRepository {
         newStationName: String,
         rawOriginalStationName: String? = null
     ): Int = 0
+    suspend fun deleteVehicleLog(id: Long) {}
+    suspend fun deleteVehicleLogs(ids: Collection<Long>): Int = 0
 }

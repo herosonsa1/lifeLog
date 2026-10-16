@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import com.autologue.app.data.export.XlsxExporter
+import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
@@ -35,7 +36,8 @@ class ExportAllDataToExcelUseCase @Inject constructor(
     private val diaryRepository: DiaryRepository,
     private val transactionRepository: TransactionRepository,
     private val vehicleRepository: VehicleRepository,
-    private val golfRepository: GolfRepository
+    private val golfRepository: GolfRepository,
+    private val expenseCustomMetaPreferences: ExpenseCustomMetaPreferences
 ) {
 
     suspend operator fun invoke(): ExportResult = withContext(Dispatchers.IO) {
@@ -55,7 +57,8 @@ class ExportAllDataToExcelUseCase @Inject constructor(
                 transactions = transactions,
                 vehicleLogs = vehicleLogs,
                 golfRounds = golfRounds,
-                outputStream = fos
+                outputStream = fos,
+                expenseCustomMetaPreferences = expenseCustomMetaPreferences
             )
         }
 

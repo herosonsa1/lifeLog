@@ -1,9 +1,13 @@
 package com.autologue.app.presentation.expense
 
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
+import com.autologue.app.data.preferences.ManagedCategoryItem
 import com.autologue.app.data.preferences.UserAccount
 import com.autologue.app.data.preferences.UserAccountPreferences
+import com.autologue.app.data.preferences.UserClassificationItem
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.Transaction
@@ -12,6 +16,7 @@ import com.autologue.app.domain.model.isSelfTransfer
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.usecase.expense.ManageTransactionRulesUseCase
 import com.autologue.app.domain.usecase.expense.RecurringExpenseDetector
+import com.autologue.app.domain.usecase.export.ExportAllDataToExcelUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +40,8 @@ data class ExpenseUiState(
     val allTransactions: List<Transaction> = emptyList(),
     val transactions: List<Transaction> = emptyList(),
     val selectedCategory: ExpenseCategory? = null,
+    val selectedCustomCategoryName: String? = null,
+    val selectedUserClassification: String? = null,
     val rules: List<TransactionRule> = emptyList(),
     val totalExpense: Long = 0L,
     val totalIncome: Long = 0L,
@@ -52,6 +59,19 @@ data class ExpenseUiState(
     // 내 계좌 관리 상태
     val userAccounts: List<UserAccount> = emptyList(),
     val isAccountManageDialogOpen: Boolean = false,
+    // 카테고리 관리 및 사용자 분류 관리 상태
+    val managedCategories: List<ManagedCategoryItem> = emptyList(),
+    val isCategoryManageDialogOpen: Boolean = false,
+    val userClassifications: List<UserClassificationItem> = emptyList(),
+    val isUserClassificationManageDialogOpen: Boolean = false,
+    val userClassByTxId: Map<Long, UserClassificationItem> = emptyMap(),
+    val customCategoryByTxId: Map<Long, String> = emptyMap(),
+    val corporateByTxId: Map<Long, Boolean> = emptyMap(),
+    val oneTimeEditedIds: Set<Long> = emptySet(),
+    val metaVersion: Long = 0L,
+    // 선택적 일괄 삭제 모드 상태
+    val isSelectionMode: Boolean = false,
+    val selectedTransactionIds: Set<Long> = emptySet(),
     // 정기지출 상태
     val recurringTransactionIds: Set<Long> = emptySet(),
     val isRecurringFilterOnly: Boolean = false,
@@ -65,8 +85,13 @@ data class ExpenseUiState(
             var list = transactions
             if (isRecurringFilterOnly) {
                 list = list.filter { it.id in recurringTransactionIds }
+            } else if (!selectedCustomCategoryName.isNullOrBlank()) {
+                list = list.filter { customCategoryByTxId[it.id] == selectedCustomCategoryName }
             } else if (selectedCategory != null) {
                 list = list.filter { it.category == selectedCategory }
+            }
+            if (!selectedUserClassification.isNullOrBlank()) {
+                list = list.filter { userClassByTxId[it.id]?.name == selectedUserClassification }
             }
             return list
         }
@@ -86,6 +111,8 @@ class ExpenseViewModel @Inject constructor(
     private val manageTransactionRulesUseCase: ManageTransactionRulesUseCase,
     private val userAccountPreferences: UserAccountPreferences,
     private val merchantAliasPreferences: com.autologue.app.data.preferences.MerchantAliasPreferences,
+    val expenseCustomMetaPreferences: ExpenseCustomMetaPreferences,
+    private val exportAllDataToExcelUseCase: ExportAllDataToExcelUseCase,
     private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase,
     private val importer: com.autologue.app.data.sync.HistoricalDataImporter
 ) : ViewModel() {
@@ -98,6 +125,7 @@ class ExpenseViewModel @Inject constructor(
     init {
         loadData()
         observeUserAccounts()
+        observeCustomMeta()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { transactionRepository.cleanDuplicates() }
             cleanCorruptedTransferRecords()
@@ -105,10 +133,30 @@ class ExpenseViewModel @Inject constructor(
         }
     }
 
+    private fun observeCustomMeta() {
+        viewModelScope.launch {
+            expenseCustomMetaPreferences.managedCategoriesFlow.collectLatest { cats ->
+                _uiState.value = _uiState.value.copy(managedCategories = cats)
+            }
+        }
+        viewModelScope.launch {
+            expenseCustomMetaPreferences.userClassificationsFlow.collectLatest { ucs ->
+                _uiState.value = _uiState.value.copy(userClassifications = ucs)
+            }
+        }
+        viewModelScope.launch {
+            expenseCustomMetaPreferences.metaVersionFlow.collectLatest { ver ->
+                _uiState.value = _uiState.value.copy(metaVersion = ver)
+                recalculateFilteredTransactions()
+            }
+        }
+    }
+
     private suspend fun autoScanDeviceMessagesOnInit() {
         runCatching {
             val scanResult = importer.scanHistoricalSmsDetailed(appContext, daysBack = 365, limit = 5000)
             for (tx in scanResult.transactions) {
+                if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
                 runCatching { processTransactionUseCase(tx) }
             }
             transactionRepository.cleanDuplicates()
@@ -131,6 +179,7 @@ class ExpenseViewModel @Inject constructor(
     private suspend fun cleanCorruptedTransferRecords() {
         val all = transactionRepository.getAllTransactionsFlow().first()
         for (tx in all) {
+            if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) continue
             if (merchantAliasPreferences.isKnownAliasTarget(tx.merchantName)) continue
 
             var updated = tx
@@ -243,13 +292,33 @@ class ExpenseViewModel @Inject constructor(
             .sortedByDescending { it.second }
             .toMap()
 
+        val uClassMap = mutableMapOf<Long, UserClassificationItem>()
+        val cCatMap = mutableMapOf<Long, String>()
+        val corpMap = mutableMapOf<Long, Boolean>()
+        val oneTimeSet = mutableSetOf<Long>()
+
+        for (tx in dedupedAll) {
+            expenseCustomMetaPreferences.resolveUserClassification(tx)?.let { uClassMap[tx.id] = it }
+            expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx)?.let { cCatMap[tx.id] = it }
+            if (expenseCustomMetaPreferences.isCorporateTransaction(tx)) {
+                corpMap[tx.id] = true
+            }
+            if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
+                oneTimeSet.add(tx.id)
+            }
+        }
+
         _uiState.value = state.copy(
             transactions = filtered,
             totalExpense = totalExp,
             totalIncome = totalInc,
             categoryTotals = byCat,
             recurringTransactionIds = recurringIds,
-            recurringExpenseTotal = recurringExp
+            recurringExpenseTotal = recurringExp,
+            userClassByTxId = uClassMap,
+            customCategoryByTxId = cCatMap,
+            corporateByTxId = corpMap,
+            oneTimeEditedIds = oneTimeSet
         )
     }
 
@@ -362,25 +431,57 @@ class ExpenseViewModel @Inject constructor(
         amount: Long,
         category: ExpenseCategory,
         cardOrBankName: String,
-        memo: String?
+        memo: String?,
+        isCorporate: Boolean = false,
+        customCategoryName: String? = null,
+        userClassificationName: String? = null
     ) {
         viewModelScope.launch {
             val isFuel = category == ExpenseCategory.FUEL ||
                 com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(merchantName)
             val finalCategory = if (isFuel) ExpenseCategory.FUEL else category
+            val formattedCard = expenseCustomMetaPreferences.formatCardDesignation(
+                cardOrBankName.ifBlank { "직접 입력" },
+                isCorporate
+            )
 
             val tx = Transaction(
                 amount = amount,
                 merchantName = merchantName,
                 originalText = "[직접 입력] $merchantName %,d원".format(amount),
                 timestamp = LocalDateTime.now(),
-                paymentMethod = if (cardOrBankName.contains("체크")) PaymentMethod.CHECK_CARD else PaymentMethod.CREDIT_CARD,
+                paymentMethod = if (formattedCard.contains("체크")) PaymentMethod.CHECK_CARD else PaymentMethod.CREDIT_CARD,
                 category = finalCategory,
-                cardOrBankName = cardOrBankName.ifBlank { "직접 입력" },
+                cardOrBankName = formattedCard,
                 transferMemo = memo?.ifBlank { null },
                 isAutoCategorized = false
             )
-            transactionRepository.insertTransaction(tx)
+            val insertedId = transactionRepository.insertTransaction(tx)
+            if (insertedId > 0L) {
+                expenseCustomMetaPreferences.setTransactionCardDesignation(
+                    txId = insertedId,
+                    merchantName = merchantName,
+                    cardCompany = cardOrBankName.ifBlank { "직접 입력" },
+                    isCorporate = isCorporate,
+                    applyToMerchantRule = false
+                )
+                if (!customCategoryName.isNullOrBlank()) {
+                    expenseCustomMetaPreferences.assignCustomCategory(
+                        txId = insertedId,
+                        merchantName = merchantName,
+                        customCategoryName = customCategoryName,
+                        applyToMerchantRule = false
+                    )
+                }
+                if (!userClassificationName.isNullOrBlank()) {
+                    expenseCustomMetaPreferences.assignUserClassification(
+                        txId = insertedId,
+                        merchantName = merchantName,
+                        userClassificationName = userClassificationName,
+                        applyToMerchantRule = false
+                    )
+                }
+            }
 
             if (isFuel && amount > 0) {
                 val lastFuel = vehicleRepository.getLatestRefuelingLog()
@@ -409,13 +510,19 @@ class ExpenseViewModel @Inject constructor(
         category: ExpenseCategory,
         memo: String?,
         makeGlobalRule: Boolean = false,
-        merchantKeyword: String? = null
+        merchantKeyword: String? = null,
+        cardCompany: String? = null,
+        isCorporate: Boolean = false,
+        customCategoryName: String? = null,
+        userClassificationName: String? = null,
+        isOneTimeSave: Boolean = false
     ) {
         viewModelScope.launch {
             val currentTx = _uiState.value.allTransactions.find { it.id == transactionId } ?: return@launch
             val oldMerchantName = currentTx.merchantName.trim()
             val finalMerchantName = newMerchantName.trim().ifBlank { oldMerchantName }
             val isMerchantRenamed = finalMerchantName.isNotBlank() && finalMerchantName != oldMerchantName
+            val applyToMerchantRule = !isOneTimeSave
 
             val isManual = currentTx.originalText.startsWith("[직접 입력]") || currentTx.originalText.startsWith("[차계부 직접 입력]")
             val rawParsedName = if (!isManual && currentTx.originalText.isNotBlank()) {
@@ -432,15 +539,48 @@ class ExpenseViewModel @Inject constructor(
                 (category == currentTx.category && wasFuel) ||
                 com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(finalMerchantName)
 
+            val formattedCard = if (cardCompany != null) {
+                expenseCustomMetaPreferences.setTransactionCardDesignation(
+                    txId = transactionId,
+                    merchantName = finalMerchantName,
+                    cardCompany = cardCompany,
+                    isCorporate = isCorporate,
+                    applyToMerchantRule = applyToMerchantRule
+                )
+            } else {
+                currentTx.cardOrBankName
+            }
+
+            expenseCustomMetaPreferences.assignCustomCategory(
+                txId = transactionId,
+                merchantName = finalMerchantName,
+                customCategoryName = customCategoryName,
+                applyToMerchantRule = applyToMerchantRule
+            )
+            expenseCustomMetaPreferences.assignUserClassification(
+                txId = transactionId,
+                merchantName = finalMerchantName,
+                userClassificationName = userClassificationName,
+                applyToMerchantRule = applyToMerchantRule
+            )
+
             val updatedTx = currentTx.copy(
                 merchantName = finalMerchantName,
                 category = if (isNowFuel && category == currentTx.category) ExpenseCategory.FUEL else category,
+                cardOrBankName = formattedCard,
                 transferMemo = memo?.ifBlank { null }
             )
+
+            if (isOneTimeSave) {
+                expenseCustomMetaPreferences.markOneTimeEdited(updatedTx)
+            } else {
+                expenseCustomMetaPreferences.clearOneTimeEdited(updatedTx)
+            }
+
             transactionRepository.updateTransaction(updatedTx)
 
             var globalRenamedCount = 0
-            if (isMerchantRenamed) {
+            if (!isOneTimeSave && isMerchantRenamed) {
                 val genericPlaceholders = setOf("출금 내역", "계좌 이체", "카드 가맹점", "가맹점", "직접 추가 지출")
                 val effectiveOldKey = if (oldMerchantName !in genericPlaceholders) {
                     oldMerchantName
@@ -472,6 +612,11 @@ class ExpenseViewModel @Inject constructor(
                     java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), updatedTx.timestamp.toLocalDate()).toInt()
                 } else null
 
+                val noteTag = if (isOneTimeSave) {
+                    "가계부 지출 카테고리 변경 연동 [custom_name:true] [one_time_edit:true]"
+                } else {
+                    "가계부 지출 카테고리 변경 연동 [custom_name:true]"
+                }
                 val vehicleLog = com.autologue.app.domain.model.VehicleLog(
                     timestamp = updatedTx.timestamp,
                     logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
@@ -479,7 +624,7 @@ class ExpenseViewModel @Inject constructor(
                     fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", updatedTx.amount / 1650.0).toDouble(),
                     daysSinceLastFuel = daysSince,
                     gasStationName = updatedTx.merchantName,
-                    note = "가계부 지출 카테고리 변경 연동 [custom_name:true]"
+                    note = noteTag
                 )
                 vehicleRepository.insertVehicleLog(vehicleLog)
             } else if (wasFuel && updatedTx.category != ExpenseCategory.FUEL) {
@@ -490,7 +635,7 @@ class ExpenseViewModel @Inject constructor(
                 )
             }
 
-            if (makeGlobalRule && !merchantKeyword.isNullOrBlank()) {
+            if (!isOneTimeSave && makeGlobalRule && !merchantKeyword.isNullOrBlank()) {
                 manageTransactionRulesUseCase.addRule(
                     TransactionRule(
                         keywordPattern = merchantKeyword.trim(),
@@ -499,7 +644,13 @@ class ExpenseViewModel @Inject constructor(
                 )
             }
 
-            if (isMerchantRenamed) {
+            recalculateFilteredTransactions()
+
+            if (isOneTimeSave) {
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = "'$finalMerchantName' 내역 1건을 1회성으로 저장했습니다. (동일 결제처의 다른 내역은 변경되지 않습니다)"
+                )
+            } else if (isMerchantRenamed) {
                 val extraMsg = if (globalRenamedCount > 0) " (기존 동일 결제처 ${globalRenamedCount}건 추가 치환 완료)" else ""
                 _uiState.value = _uiState.value.copy(
                     syncResultMessage = "결제명을 '$finalMerchantName'(으)로 변경했습니다. 앞으로 같은 결제처 항목은 자동으로 치환됩니다.$extraMsg"
@@ -513,6 +664,7 @@ class ExpenseViewModel @Inject constructor(
         viewModelScope.launch {
             val currentTx = _uiState.value.allTransactions.find { it.id == transactionId }
             if (currentTx != null) {
+                expenseCustomMetaPreferences.markTransactionDeleted(currentTx)
                 val isFuel = currentTx.category == ExpenseCategory.FUEL ||
                     com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName)
                 if (isFuel) {
@@ -525,6 +677,157 @@ class ExpenseViewModel @Inject constructor(
             }
             transactionRepository.deleteTransaction(transactionId)
             closeEditDialog()
+        }
+    }
+
+    // 선택적 일괄 삭제 모드 제어
+    fun toggleSelectionMode() {
+        val current = _uiState.value.isSelectionMode
+        _uiState.value = _uiState.value.copy(
+            isSelectionMode = !current,
+            selectedTransactionIds = emptySet()
+        )
+    }
+
+    fun exitSelectionMode() {
+        _uiState.value = _uiState.value.copy(
+            isSelectionMode = false,
+            selectedTransactionIds = emptySet()
+        )
+    }
+
+    fun toggleSelectTransaction(id: Long) {
+        val currentSet = _uiState.value.selectedTransactionIds.toMutableSet()
+        if (id in currentSet) {
+            currentSet.remove(id)
+        } else {
+            currentSet.add(id)
+        }
+        _uiState.value = _uiState.value.copy(selectedTransactionIds = currentSet)
+    }
+
+    fun selectAllFilteredTransactions() {
+        val allFilteredIds = _uiState.value.filteredTransactions.map { it.id }.toSet()
+        val currentSet = _uiState.value.selectedTransactionIds
+        val nextSet = if (currentSet.size == allFilteredIds.size && allFilteredIds.isNotEmpty()) {
+            emptySet()
+        } else {
+            allFilteredIds
+        }
+        _uiState.value = _uiState.value.copy(selectedTransactionIds = nextSet)
+    }
+
+    fun deleteSelectedTransactions() {
+        val selectedIds = _uiState.value.selectedTransactionIds.toSet()
+        if (selectedIds.isEmpty()) return
+        viewModelScope.launch {
+            val targets = _uiState.value.allTransactions.filter { it.id in selectedIds }
+            expenseCustomMetaPreferences.markTransactionsDeleted(targets)
+            for (tx in targets) {
+                val isFuel = tx.category == ExpenseCategory.FUEL ||
+                    com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(tx.merchantName)
+                if (isFuel) {
+                    vehicleRepository.deleteRefuelingLogByTransaction(
+                        amount = tx.amount,
+                        date = tx.timestamp.toLocalDate(),
+                        merchantName = tx.merchantName
+                    )
+                }
+                transactionRepository.deleteTransaction(tx.id)
+            }
+            _uiState.value = _uiState.value.copy(
+                isSelectionMode = false,
+                selectedTransactionIds = emptySet(),
+                syncResultMessage = "선택한 결제 기록 ${targets.size}건을 영구 삭제했습니다. (자동 동기화 시 재등록되지 않습니다)"
+            )
+        }
+    }
+
+    // 카테고리 관리 제어
+    fun openCategoryManageDialog() {
+        _uiState.value = _uiState.value.copy(isCategoryManageDialogOpen = true)
+    }
+
+    fun closeCategoryManageDialog() {
+        _uiState.value = _uiState.value.copy(isCategoryManageDialogOpen = false)
+    }
+
+    fun addCustomCategoryPermanent(name: String): Boolean {
+        return expenseCustomMetaPreferences.addCustomCategory(name)
+    }
+
+    fun updateManagedCategoryName(item: ManagedCategoryItem, newName: String) {
+        expenseCustomMetaPreferences.updateCategoryName(item, newName)
+    }
+
+    fun deleteManagedCategory(item: ManagedCategoryItem) {
+        expenseCustomMetaPreferences.deleteCategory(item)
+    }
+
+    fun restoreDefaultCategories() {
+        expenseCustomMetaPreferences.restoreDefaultCategories()
+    }
+
+    // 사용자 분류 관리 제어
+    fun openUserClassificationManageDialog() {
+        _uiState.value = _uiState.value.copy(isUserClassificationManageDialogOpen = true)
+    }
+
+    fun closeUserClassificationManageDialog() {
+        _uiState.value = _uiState.value.copy(isUserClassificationManageDialogOpen = false)
+    }
+
+    fun addUserClassification(name: String, colorIndex: Int) {
+        expenseCustomMetaPreferences.addOrGetUserClassification(name, colorIndex)
+    }
+
+    fun updateUserClassification(oldName: String, newName: String, colorIndex: Int) {
+        expenseCustomMetaPreferences.updateUserClassification(oldName, newName, colorIndex)
+        if (_uiState.value.selectedUserClassification?.equals(oldName, ignoreCase = true) == true) {
+            _uiState.value = _uiState.value.copy(selectedUserClassification = newName.trim())
+        }
+    }
+
+    fun deleteUserClassification(name: String) {
+        expenseCustomMetaPreferences.deleteUserClassification(name)
+        if (_uiState.value.selectedUserClassification?.equals(name, ignoreCase = true) == true) {
+            _uiState.value = _uiState.value.copy(selectedUserClassification = null)
+        }
+    }
+
+    fun toggleUserClassificationFilter(name: String?) {
+        val current = _uiState.value.selectedUserClassification
+        _uiState.value = _uiState.value.copy(
+            selectedUserClassification = if (name == null || current == name) null else name
+        )
+    }
+
+    fun getEffectiveCategoryDisplayName(tx: Transaction): String {
+        return expenseCustomMetaPreferences.resolveEffectiveCategoryDisplayName(tx)
+    }
+
+    // 엑셀 내보내기 (사용자 분류, 커스텀 카테고리, 카드/법인 여부 포함)
+    fun exportToExcel(context: android.content.Context) {
+        viewModelScope.launch {
+            runCatching {
+                val result = exportAllDataToExcelUseCase()
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = "엑셀 파일이 다운로드 폴더에 저장되었습니다: ${result.fileName} (사용자 분류 · 카드/법인 구분 포함)"
+                )
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    putExtra(Intent.EXTRA_STREAM, result.fileUri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                val chooser = Intent.createChooser(shareIntent, "가계부 엑셀 파일 내보내기").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
+            }.onFailure { e ->
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = "엑셀 내보내기 중 오류가 발생했습니다: ${e.localizedMessage}"
+                )
+            }
         }
     }
 
@@ -547,7 +850,8 @@ class ExpenseViewModel @Inject constructor(
         val current = _uiState.value.isRecurringFilterOnly
         _uiState.value = _uiState.value.copy(
             isRecurringFilterOnly = !current,
-            selectedCategory = if (!current) null else _uiState.value.selectedCategory
+            selectedCategory = if (!current) null else _uiState.value.selectedCategory,
+            selectedCustomCategoryName = null
         )
     }
 
@@ -556,6 +860,7 @@ class ExpenseViewModel @Inject constructor(
         val current = _uiState.value.selectedCategory
         _uiState.value = _uiState.value.copy(
             selectedCategory = if (current == category) null else category,
+            selectedCustomCategoryName = null,
             isRecurringFilterOnly = false
         )
     }
@@ -563,6 +868,15 @@ class ExpenseViewModel @Inject constructor(
     fun setCategoryFilter(category: ExpenseCategory?) {
         _uiState.value = _uiState.value.copy(
             selectedCategory = category,
+            selectedCustomCategoryName = null,
+            isRecurringFilterOnly = false
+        )
+    }
+
+    fun setCustomCategoryFilter(customCategoryName: String?) {
+        _uiState.value = _uiState.value.copy(
+            selectedCategory = if (customCategoryName != null) ExpenseCategory.ETC else null,
+            selectedCustomCategoryName = customCategoryName,
             isRecurringFilterOnly = false
         )
     }
@@ -645,6 +959,7 @@ class ExpenseViewModel @Inject constructor(
             val scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
             var newCount = 0
             for (tx in scanResult.transactions) {
+                if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
                 runCatching {
                     processTransactionUseCase(tx)
                     newCount++

@@ -2,6 +2,7 @@ package com.autologue.app.data.repository
 
 import com.autologue.app.data.local.db.dao.TransactionDao
 import com.autologue.app.data.local.entity.TransactionEntity
+import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.data.preferences.MerchantAliasPreferences
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
@@ -16,10 +17,14 @@ import javax.inject.Inject
 
 class TransactionRepositoryImpl @Inject constructor(
     private val transactionDao: TransactionDao,
-    private val merchantAliasPreferences: MerchantAliasPreferences
+    private val merchantAliasPreferences: MerchantAliasPreferences,
+    private val expenseCustomMetaPreferences: ExpenseCustomMetaPreferences
 ) : TransactionRepository {
 
-    constructor(transactionDao: TransactionDao) : this(transactionDao, MerchantAliasPreferences())
+    constructor(
+        transactionDao: TransactionDao,
+        merchantAliasPreferences: MerchantAliasPreferences = MerchantAliasPreferences()
+    ) : this(transactionDao, merchantAliasPreferences, ExpenseCustomMetaPreferences())
 
     private fun resolveMerchantWithAlias(merchantName: String, originalText: String, cardOrBankName: String?, timestamp: LocalDateTime): String {
         val directResolved = merchantAliasPreferences.resolveAlias(merchantName)
@@ -55,24 +60,38 @@ class TransactionRepositoryImpl @Inject constructor(
     }
 
     override suspend fun insertTransaction(transaction: Transaction): Long = withContext(Dispatchers.IO) {
-        val resolvedMerchantName = resolveMerchantWithAlias(
-            merchantName = transaction.merchantName,
-            originalText = transaction.originalText,
-            cardOrBankName = transaction.cardOrBankName,
-            timestamp = transaction.timestamp
-        )
-        val aliasedTransaction = if (resolvedMerchantName != transaction.merchantName) {
-            transaction.copy(merchantName = resolvedMerchantName)
-        } else {
-            transaction
+        val isManual = transaction.originalText.startsWith("[직접 입력]") || transaction.originalText.startsWith("[차계부 직접 입력]")
+        // 사용자가 선택 삭제한 자동등록 결제 내역은 재동기화 시 삽입을 원천 차단
+        if (!isManual && expenseCustomMetaPreferences.isTransactionDeleted(transaction)) {
+            return@withContext -1L
         }
+
+        val resolvedMerchantName = if (expenseCustomMetaPreferences.isOneTimeEdited(transaction)) {
+            transaction.merchantName
+        } else {
+            resolveMerchantWithAlias(
+                merchantName = transaction.merchantName,
+                originalText = transaction.originalText,
+                cardOrBankName = transaction.cardOrBankName,
+                timestamp = transaction.timestamp
+            )
+        }
+        val savedCardDesignation = if (!expenseCustomMetaPreferences.isOneTimeEdited(transaction)) {
+            expenseCustomMetaPreferences.resolveMerchantCardDesignation(resolvedMerchantName)
+        } else null
+
+        val aliasedTransaction = transaction.copy(
+            merchantName = resolvedMerchantName,
+            cardOrBankName = savedCardDesignation ?: transaction.cardOrBankName
+        )
 
         val timestampMillis = aliasedTransaction.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
         if (aliasedTransaction.originalText.isNotBlank()) {
             val existingByText = transactionDao.findByOriginalText(aliasedTransaction.originalText)
             if (existingByText != null) {
-                if (existingByText.merchantName != aliasedTransaction.merchantName &&
+                if (!expenseCustomMetaPreferences.isOneTimeEditedId(existingByText.id) &&
+                    existingByText.merchantName != aliasedTransaction.merchantName &&
                     merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName)
                 ) {
                     transactionDao.updateTransaction(existingByText.copy(merchantName = aliasedTransaction.merchantName))
@@ -101,7 +120,8 @@ class TransactionRepositoryImpl @Inject constructor(
         }
 
         if (duplicate != null) {
-            if (duplicate.merchantName != aliasedTransaction.merchantName &&
+            if (!expenseCustomMetaPreferences.isOneTimeEditedId(duplicate.id) &&
+                duplicate.merchantName != aliasedTransaction.merchantName &&
                 merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName)
             ) {
                 transactionDao.updateTransaction(duplicate.copy(merchantName = aliasedTransaction.merchantName))
@@ -138,6 +158,9 @@ class TransactionRepositoryImpl @Inject constructor(
         val all = transactionDao.getAllTransactionsSync()
         var updatedCount = 0
         for (tx in all) {
+            // 1회성 저장으로 보호된 내역은 일괄 치환에서 제외
+            if (expenseCustomMetaPreferences.isOneTimeEdited(tx.toDomain())) continue
+
             val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
             val rawParsed = if (!isManual && tx.originalText.isNotBlank()) {
                 com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, tx.originalText, tx.timestamp)?.merchantName
@@ -166,6 +189,10 @@ class TransactionRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteTransaction(id: Long) = withContext(Dispatchers.IO) {
+        val target = transactionDao.getAllTransactionsSync().firstOrNull { it.id == id }
+        if (target != null) {
+            expenseCustomMetaPreferences.markTransactionDeleted(target.toDomain())
+        }
         transactionDao.deleteTransactionById(id)
     }
 
@@ -183,6 +210,17 @@ class TransactionRepositoryImpl @Inject constructor(
         for (rawTx in all) {
             val raw = rawTx.originalText
             val isManual = raw.startsWith("[직접 입력]") || raw.startsWith("[차계부 직접 입력]")
+            val domainRawTx = rawTx.toDomain()
+
+            if (!isManual && expenseCustomMetaPreferences.isTransactionDeleted(domainRawTx)) {
+                toDeleteIds.add(rawTx.id)
+                continue
+            }
+
+            // 1회성 저장으로 수정된 항목은 가맹점명/카테고리/카드명 자동 치환 및 재분류에서 완전히 보호
+            if (expenseCustomMetaPreferences.isOneTimeEdited(domainRawTx)) {
+                continue
+            }
 
             // 1-0. 사용자가 등록한 결제처 별칭(자동 치환 규칙)이 있으면 최우선 반영
             val aliasedMerchant = resolveMerchantWithAlias(rawTx.merchantName, raw, rawTx.cardOrBankName, rawTx.timestamp)
