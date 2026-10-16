@@ -98,8 +98,15 @@ class DailyRouteAggregator @Inject constructor(
             )
         }
 
-        // 2. Map Transactions (입출금·송금·계좌이체는 지역 이동 및 방문 장소와 무관하므로 동선 및 타임라인에서 완전 제외)
-        val validExpenseTxs = transactions.filter { !isFinancialIncomeOrTransfer(it) }
+        // 2. Map Transactions (입출금·송금·계좌이체 및 누적이용금액/결제예정금액/총사용금액 오인입 내역은 동선 및 타임라인에서 완전 제외)
+        val validExpenseTxs = transactions.filter {
+            !isFinancialIncomeOrTransfer(it) &&
+                !com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
+                    it.merchantName,
+                    it.cardOrBankName,
+                    it.originalText
+                )
+        }
         for (tx in validExpenseTxs) {
             val desc = buildString {
                 append("%,d원 결제".format(tx.amount))
@@ -129,9 +136,11 @@ class DailyRouteAggregator @Inject constructor(
             )
         }
 
-        // 기존 routeSteps에 이미 존재하는 TRANSACTION 스텝도 누락되지 않도록 보존 (deduplicateRouteSteps에서 중복 자동 병합)
+        // 기존 routeSteps에 이미 존재하는 유효 TRANSACTION 스텝만 보존 (deduplicateRouteSteps에서 중복 자동 병합)
         val existingTxSteps = existingRouteSteps.filter {
-            it.stepType == RouteStepType.TRANSACTION && !isIncomeOrTransferStep(it)
+            it.stepType == RouteStepType.TRANSACTION &&
+                !isIncomeOrTransferStep(it) &&
+                !isInvalidTransactionStep(it)
         }
         steps.addAll(existingTxSteps)
 
@@ -223,9 +232,10 @@ class DailyRouteAggregator @Inject constructor(
             }
         }
 
-        // 5. 지능형 중복 제거 및 시간순 정렬 (중간 주행 경유지, 허위/더미 골프 스텝 및 금융 입출금 스텝 제외)
+        // 5. 지능형 중복 제거 및 시간순 정렬 (중간 주행 경유지, 허위/더미 골프 스텝, 금융 입출금 및 누적/예정/총사용 오인입 스텝 제외)
         val validSteps = steps.filter {
             !isIncomeOrTransferStep(it) &&
+            !isInvalidTransactionStep(it) &&
             !isInvalidOrDummyGolfStep(it) &&
             !isIntermediateDrivingStep(it)
         }.map { normalizeDrivingStep(it) }
@@ -396,10 +406,15 @@ class DailyRouteAggregator @Inject constructor(
         /**
          * RouteStep 리스트 내 결제(TRANSACTION) 스텝들의 유효 지출 합계를 계산합니다.
          * step.amount가 있으면 우선 사용하고, 혹시 null이거나 0이면 description(예: "523,500원 결제")에서 금액을 추출합니다.
+         * 누적이용금액, 결제예정금액, 총사용금액, '금액' 등 오인입 스텝은 합산에서 제외합니다.
          */
         fun calculateRouteStepsExpense(steps: List<RouteStep>): Long {
             return steps
-                .filter { it.stepType == RouteStepType.TRANSACTION && !isIncomeOrTransferStep(it) }
+                .filter {
+                    it.stepType == RouteStepType.TRANSACTION &&
+                        !isIncomeOrTransferStep(it) &&
+                        !isInvalidTransactionStep(it)
+                }
                 .sumOf { step ->
                     val amt = step.amount ?: 0L
                     if (amt > 0L) {
@@ -410,6 +425,25 @@ class DailyRouteAggregator @Inject constructor(
                         match?.groupValues?.get(1)?.replace(",", "")?.toLongOrNull() ?: 0L
                     }
                 }
+        }
+
+        /**
+         * RouteStep이 누적이용금액, 결제예정금액, 총사용금액 또는 '금액' 등 비실사용 오인입 결제 스텝인지 판별합니다.
+         */
+        fun isInvalidTransactionStep(step: RouteStep): Boolean {
+            if (step.stepType != RouteStepType.TRANSACTION) return false
+            if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(step.title)) return true
+            val desc = step.description.orEmpty()
+            if (desc.contains("((결제)") ||
+                desc.contains("([결제]") ||
+                desc.contains("누적이용금액") ||
+                desc.contains("결제예정금액") ||
+                desc.contains("총사용금액") ||
+                desc.contains("총이용금액")
+            ) {
+                return true
+            }
+            return false
         }
 
         /**
@@ -551,14 +585,14 @@ class DailyRouteAggregator @Inject constructor(
         /**
          * RouteStep 리스트의 중복(동일 사진, 동일 위치/시간대, 동일 결제/주행/골프)을
          * 지능적으로 통합 및 제거하여 단일 정제 리스트로 반환합니다.
-         * 차량 주행 중 중간 경유(주행 경유) 스텝은 이 단계에서 원천 배제됩니다.
+         * 차량 주행 중 중간 경유(주행 경유) 스텝 및 누적이용금액/결제예정금액/총사용금액 오인입 스텝은 원천 배제됩니다.
          */
         fun deduplicateRouteSteps(steps: List<RouteStep>): List<RouteStep> {
             if (steps.isEmpty()) return emptyList()
 
             val result = mutableListOf<RouteStep>()
             for (rawStep in steps) {
-                if (isIntermediateDrivingStep(rawStep)) continue
+                if (isIntermediateDrivingStep(rawStep) || isInvalidTransactionStep(rawStep)) continue
                 val step = normalizeDrivingStep(rawStep)
                 val matchIndex = result.indexOfFirst { existing -> isDuplicateStep(existing, step) }
                 if (matchIndex >= 0) {

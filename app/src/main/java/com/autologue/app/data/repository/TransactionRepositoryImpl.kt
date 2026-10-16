@@ -61,8 +61,16 @@ class TransactionRepositoryImpl @Inject constructor(
 
     override suspend fun insertTransaction(transaction: Transaction): Long = withContext(Dispatchers.IO) {
         val isManual = transaction.originalText.startsWith("[직접 입력]") || transaction.originalText.startsWith("[차계부 직접 입력]")
-        // 사용자가 선택 삭제한 자동등록 결제 내역은 재동기화 시 삽입을 원천 차단
-        if (!isManual && expenseCustomMetaPreferences.isTransactionDeleted(transaction)) {
+        // 사용자가 선택 삭제한 자동등록 결제 내역 또는 누적이용금액/결제예정금액/총사용금액 비실사용 내역은 삽입을 원천 차단
+        if (!isManual && (
+                expenseCustomMetaPreferences.isTransactionDeleted(transaction) ||
+                com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
+                    transaction.merchantName,
+                    transaction.cardOrBankName,
+                    transaction.originalText
+                )
+            )
+        ) {
             return@withContext -1L
         }
 
@@ -206,13 +214,34 @@ class TransactionRepositoryImpl @Inject constructor(
         val all = transactionDao.getAllTransactionsSync()
         val toDeleteIds = mutableSetOf<Long>()
 
-        // 1. 기존 DB 내 오분류된 카드 승인, 비결제 스팸/시황 문자('제목' 등), 주유 내역 자가 치유 및 결제명 자동 치환
+        // 1. 기존 DB 내 오분류된 카드 승인, 비결제 스팸/시황/누적이용금액/결제예정금액/총사용금액 문자('금액' 등), 주유 내역 자가 치유 및 결제명 자동 치환
         for (rawTx in all) {
             val raw = rawTx.originalText
             val isManual = raw.startsWith("[직접 입력]") || raw.startsWith("[차계부 직접 입력]")
             val domainRawTx = rawTx.toDomain()
 
             if (!isManual && expenseCustomMetaPreferences.isTransactionDeleted(domainRawTx)) {
+                toDeleteIds.add(rawTx.id)
+                continue
+            }
+
+            // 누적이용금액, 결제예정금액, 총사용금액 또는 '금액' 오탐 레코드는 즉시 삭제 대상에 추가
+            val rawMerchant = rawTx.merchantName.trim()
+            val rawCard = rawTx.cardOrBankName.trim()
+            val isAccumOrScheduledGhost = !isManual && (
+                rawMerchant == "금액" ||
+                rawMerchant.contains("누적이용금액") ||
+                rawMerchant.contains("누적금액") ||
+                rawMerchant.contains("결제예정금액") ||
+                rawMerchant.contains("결제예정") ||
+                rawMerchant.contains("총사용금액") ||
+                rawMerchant.contains("총이용금액") ||
+                rawMerchant.contains("신용(,") ||
+                rawCard.startsWith("(결제)") ||
+                rawCard.startsWith("[결제]") ||
+                Regex("""[\d,]+원""").containsMatchIn(rawCard)
+            )
+            if (isAccumOrScheduledGhost) {
                 toDeleteIds.add(rawTx.id)
                 continue
             }
@@ -233,15 +262,14 @@ class TransactionRepositoryImpl @Inject constructor(
             }
             val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(tx.merchantName)
 
-            // 1-1. 비결제 문자(주식 시황, 광고, 뉴스 등) 또는 '제목' 오탐 레코드 정리
+            // 1-1. 비결제 문자(주식 시황, 광고, 뉴스, 누적/결제예정/총사용 안내 등) 또는 무효 가맹점명 레코드 정리
             if (!isManual && (
                     com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(raw) ||
                     (!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName))
                 )
             ) {
-                val reparsed = com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
-                    ?: com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
-                if (reparsed != null && !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(reparsed.merchantName)) {
+                val reparsed = com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
+                if (reparsed != null && !com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(reparsed.merchantName, reparsed.cardOrBankName, raw)) {
                     val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp)
                     val healed = tx.copy(
                         amount = reparsed.amount,

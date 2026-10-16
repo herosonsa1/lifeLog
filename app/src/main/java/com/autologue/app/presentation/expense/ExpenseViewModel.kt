@@ -302,11 +302,22 @@ class ExpenseViewModel @Inject constructor(
 
     private fun recalculateFilteredTransactions() {
         var state = _uiState.value
-        // [중복 방어 안전망] 동일한 분, 동일 금액, 동일 가맹점(공백 제외)의 중복 항목은 화면 및 합계에서 1건만 유지
-        val dedupedAll = state.allTransactions.distinctBy { tx ->
-            val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
-            "${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "")}"
-        }
+        // [중복 방어 및 비실사용 내역 차단 안전망]
+        // 누적이용금액, 결제예정금액, 총사용금액, '금액' 등 비실사용 내역을 즉시 제외하고,
+        // 동일한 분, 동일 금액, 동일 가맹점(공백 제외)의 중복 항목은 화면 및 합계에서 1건만 유지
+        val dedupedAll = state.allTransactions
+            .filterNot { tx ->
+                val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+                !isManual && com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
+                    tx.merchantName,
+                    tx.cardOrBankName,
+                    tx.originalText
+                )
+            }
+            .distinctBy { tx ->
+                val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
+                "${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "")}"
+            }
 
         // [월 변경 자동 포커싱] 최초 진입 시 현재 월(예: 10월)에 내역이 0건이고 이전 월(예: 9월)에 거래 내역이 존재하면
         // 가장 최근 거래가 있는 연월(YearMonth)로 자동 포커싱하여 0원 빈 화면 노출 방지

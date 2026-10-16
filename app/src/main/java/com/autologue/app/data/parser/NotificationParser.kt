@@ -39,7 +39,10 @@ object NotificationParser {
     }
 
     fun parse(packageName: String, title: String, text: String): ParsedNotificationResult? {
-        val combined = "$title $text".trim()
+        val combined = "$title\n$text".trim()
+        if (SmsParser.isNonPaymentMessage(combined)) {
+            return null
+        }
 
         // 0. 삼성 메시지 / 구글 메시지 / 문자 RCS / 카드사 앱 실시간 알림 파싱 (채팅+ 기업 메시지 포함)
         val isMessagingOrCardApp = packageName.contains("messaging") ||
@@ -47,19 +50,52 @@ object NotificationParser {
             packageName == "com.samsung.android.messaging" ||
             packageName == "com.google.android.apps.messaging" ||
             packageName.contains("card") ||
-            packageName.contains("paybooc")
+            packageName.contains("paybooc") ||
+            packageName.contains("hana")
 
-        if (isMessagingOrCardApp || combined.contains("[Web발신]") || SmsParser.isCardApprovalMessage(combined) || (combined.contains("승인") && combined.contains("원"))) {
-            val parsedTx = SmsParser.parse(title, text) ?: SmsParser.parse(null, combined)
-            if (parsedTx != null) {
+        if (isMessagingOrCardApp || combined.contains("[Web발신]") || SmsParser.isCardApprovalMessage(combined) || (combined.contains("승인") && combined.contains("원")) || (combined.contains("결제") && combined.contains("원"))) {
+            val titleHasPaymentAmountOrAction = title.contains("원") ||
+                title.contains("결제") ||
+                title.contains("승인") ||
+                title.contains("취소") ||
+                title.contains("출금") ||
+                title.contains("입금")
+            val parsedTx = if (titleHasPaymentAmountOrAction) {
+                SmsParser.parse(null, combined)
+            } else {
+                SmsParser.parse(title, text) ?: SmsParser.parse(null, combined)
+            }
+            if (parsedTx != null && !SmsParser.isNonUsageOrCorruptedTransaction(parsedTx.merchantName, parsedTx.cardOrBankName, parsedTx.originalText)) {
                 return ParsedNotificationResult.TxResult(parsedTx)
             }
         }
 
+        // 4. 골프존 예약/스코어 푸시 (비금융 알림이므로 금액 여부와 무관하게 우선 처리)
+        if (packageName.contains("golfzon") || combined.contains("골프존")) {
+            val golfMatcher = GOLFZON_PATTERN.matcher(combined)
+            if (golfMatcher.find()) {
+                val store = golfMatcher.group("store") ?: golfMatcher.group("store2") ?: "골프존파크"
+                val score = golfMatcher.group("score")?.toIntOrNull()
+                return ParsedNotificationResult.GolfzonResult(store.trim(), score)
+            }
+        }
+
+        // 5. TMAP 주행 완료 푸시 (비금융 알림이므로 금액 여부와 무관하게 우선 처리)
+        if (packageName.contains("skt.tmap") || combined.contains("TMAP") || combined.contains("티맵")) {
+            val tmapMatcher = TMAP_DRIVING_PATTERN.matcher(combined)
+            if (tmapMatcher.find()) {
+                val distance = tmapMatcher.group("distance")?.toDoubleOrNull() ?: 0.0
+                return ParsedNotificationResult.TmapResult(distance)
+            }
+        }
+
+        val cleanCombined = SmsParser.stripNonUsageAmounts(combined)
+        if (!cleanCombined.contains("원")) return null
+
         // 1. 카카오톡 / 카카오페이 푸시 알림
-        if (packageName.contains("kakaopay") || packageName.contains("kakao.talk") || combined.contains("카카오페이")) {
+        if (packageName.contains("kakaopay") || packageName.contains("kakao.talk") || cleanCombined.contains("카카오페이")) {
             for (pattern in KAKAO_PAY_SEND_PATTERNS) {
-                val sendMatcher = pattern.matcher(combined)
+                val sendMatcher = pattern.matcher(cleanCombined)
                 if (sendMatcher.find()) {
                     val amount = sendMatcher.group("amount")?.replace(",", "")?.toLongOrNull() ?: 0L
                     if (amount <= 0) continue
@@ -84,13 +120,13 @@ object NotificationParser {
             }
 
             for (pattern in KAKAO_PAY_PAY_PATTERNS) {
-                val payMatcher = pattern.matcher(combined)
+                val payMatcher = pattern.matcher(cleanCombined)
                 if (payMatcher.find()) {
                     val amount = payMatcher.group("amount")?.replace(",", "")?.toLongOrNull() ?: 0L
                     if (amount <= 0) continue
                     var merchant = payMatcher.group("merchant")?.trim() ?: "카카오페이 가맹점"
-                    merchant = merchant.replace("결제", "").replace("완료", "").replace("승인", "").trim()
-                    if (merchant.isBlank()) merchant = "카카오페이 가맹점"
+                    merchant = SmsParser.cleanMerchantName(merchant)
+                    if (SmsParser.isInvalidMerchantName(merchant)) continue
                     val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = combined)
 
                     return ParsedNotificationResult.TxResult(
@@ -110,15 +146,17 @@ object NotificationParser {
         }
 
         // 2. 토스 푸시 알림
-        if (packageName.contains("viva.republica.toss") || combined.contains("토스")) {
+        if (packageName.contains("viva.republica.toss") || cleanCombined.contains("토스")) {
             for (pattern in TOSS_PATTERNS) {
-                val tossMatcher = pattern.matcher(combined)
+                val tossMatcher = pattern.matcher(cleanCombined)
                 if (tossMatcher.find()) {
                     val amount = tossMatcher.group("amount")?.replace(",", "")?.toLongOrNull() ?: 0L
                     if (amount <= 0) continue
-                    val merchant = runCatching { tossMatcher.group("merchant")?.trim() }.getOrNull()
+                    val rawMerchant = runCatching { tossMatcher.group("merchant")?.trim() }.getOrNull()
                         ?: runCatching { tossMatcher.group("receiver")?.trim() }.getOrNull()
                         ?: "토스 결제/송금"
+                    val merchant = SmsParser.cleanMerchantName(rawMerchant)
+                    if (SmsParser.isInvalidMerchantName(merchant)) continue
                     val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = combined)
 
                     return ParsedNotificationResult.TxResult(
@@ -138,14 +176,14 @@ object NotificationParser {
         }
 
         // 3. 은행 계좌 이체/출금 전용 정밀 파싱 (단, 카드 승인 알림은 절대 가로채지 않도록 방어)
-        val isCardApproval = SmsParser.isCardApprovalMessage(combined)
+        val isCardApproval = SmsParser.isCardApprovalMessage(cleanCombined)
         val isBankTransferNotice = !isCardApproval && (
-            combined.contains("출금") || combined.contains("송금") ||
-                combined.contains("이체") || combined.contains("잔액") ||
-                Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(combined)
+            cleanCombined.contains("출금") || cleanCombined.contains("송금") ||
+                cleanCombined.contains("이체") || cleanCombined.contains("잔액") ||
+                Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(cleanCombined)
             )
         if (isBankTransferNotice) {
-            val transferTx = parseBankTransferNotification(packageName, combined)
+            val transferTx = parseBankTransferNotification(packageName, cleanCombined)
             if (transferTx != null) {
                 return ParsedNotificationResult.TxResult(transferTx)
             }
@@ -153,18 +191,19 @@ object NotificationParser {
 
         // 3-2. 일반 은행/카드사 공식 앱 결제 알림
         for (pattern in BANK_APP_PATTERNS) {
-            val bankMatcher = pattern.matcher(combined)
+            val bankMatcher = pattern.matcher(cleanCombined)
             if (bankMatcher.find()) {
                 val amount = bankMatcher.group("amount")?.replace(",", "")?.toLongOrNull() ?: 0L
                 if (amount <= 0) continue
                 val bank = runCatching { bankMatcher.group("bank")?.trim() }.getOrNull() ?: "카드/은행 알림"
                 var merchant = runCatching { bankMatcher.group("merchant")?.trim() }.getOrNull() ?: "가맹점"
-                merchant = merchant.replace("승인", "").replace("완료", "").replace("출금", "").trim()
-                val parsedDateTime = extractDateTime(combined)
+                merchant = SmsParser.cleanMerchantName(merchant)
+                if (SmsParser.isInvalidMerchantName(merchant) || merchant == "가맹점") continue
+                val parsedDateTime = extractDateTime(cleanCombined)
                 val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = combined)
-                val isCard = isCardApproval || bank.contains("카드") || combined.contains("카드") || combined.contains("승인")
+                val isCard = isCardApproval || bank.contains("카드") || cleanCombined.contains("카드") || cleanCombined.contains("승인")
                 val paymentMethod = when {
-                    combined.contains("체크") -> PaymentMethod.CHECK_CARD
+                    cleanCombined.contains("체크") -> PaymentMethod.CHECK_CARD
                     isCard -> PaymentMethod.CREDIT_CARD
                     else -> PaymentMethod.BANK_TRANSFER
                 }
@@ -181,25 +220,6 @@ object NotificationParser {
                         isAutoCategorized = category != ExpenseCategory.ETC
                     )
                 )
-            }
-        }
-
-        // 4. 골프존 예약/스코어 푸시
-        if (packageName.contains("golfzon") || combined.contains("골프존")) {
-            val golfMatcher = GOLFZON_PATTERN.matcher(combined)
-            if (golfMatcher.find()) {
-                val store = golfMatcher.group("store") ?: golfMatcher.group("store2") ?: "골프존파크"
-                val score = golfMatcher.group("score")?.toIntOrNull()
-                return ParsedNotificationResult.GolfzonResult(store.trim(), score)
-            }
-        }
-
-        // 5. TMAP 주행 완료 푸시
-        if (packageName.contains("skt.tmap") || combined.contains("TMAP") || combined.contains("티맵")) {
-            val tmapMatcher = TMAP_DRIVING_PATTERN.matcher(combined)
-            if (tmapMatcher.find()) {
-                val distance = tmapMatcher.group("distance")?.toDoubleOrNull() ?: 0.0
-                return ParsedNotificationResult.TmapResult(distance)
             }
         }
 

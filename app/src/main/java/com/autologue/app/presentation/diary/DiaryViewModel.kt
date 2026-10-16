@@ -93,6 +93,7 @@ class DiaryViewModel @Inject constructor(
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            runCatching { transactionRepository.cleanDuplicates() }
             diaryRepository.cleanDuplicates()
         }
         observeData()
@@ -128,14 +129,15 @@ class DiaryViewModel @Inject constructor(
                 rawEntries = list.map { entry ->
                     var current = entry
                     val hadIntermediateDriving = current.routeSteps.any { DailyRouteAggregator.isIntermediateDrivingStep(it) }
+                    val hadInvalidTx = current.routeSteps.any { DailyRouteAggregator.isInvalidTransactionStep(it) }
                     val cleanedSteps = current.routeSteps
-                        .filterNot { DailyRouteAggregator.isIntermediateDrivingStep(it) }
+                        .filterNot { DailyRouteAggregator.isIntermediateDrivingStep(it) || DailyRouteAggregator.isInvalidTransactionStep(it) }
                         .map { DailyRouteAggregator.normalizeDrivingStep(it) }
                     if (cleanedSteps != current.routeSteps) {
                         current = current.copy(routeSteps = cleanedSteps)
                     }
                     val stepsExpense = DailyRouteAggregator.calculateRouteStepsExpense(current.routeSteps)
-                    if (current.totalExpense < stepsExpense) {
+                    if (hadInvalidTx || current.totalExpense < stepsExpense) {
                         current = current.copy(totalExpense = stepsExpense)
                     }
                     if (current.drivingDistanceKm <= 0.0) {

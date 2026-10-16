@@ -180,10 +180,13 @@ class DiaryRepositoryImpl @Inject constructor(
                     excludedPhotoPreferences.excludePhoto(uri)
                 }
 
-                // 2. 내부 중복 데이터(routeSteps, photoUris, tags) 및 스크린샷 정리
+                // 2. 내부 중복 데이터(routeSteps, photoUris, tags) 및 스크린샷/비실사용 결제 스텝 정리
                 val cleanPhotos = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) }
                 val cleanTags = entry.tags.distinct().toMutableList()
-                var stepsContentChanged = false
+                val hadInvalidTransactionSteps = entry.routeSteps.any {
+                    com.autologue.app.data.sync.DailyRouteAggregator.isInvalidTransactionStep(it)
+                } || entry.summary.contains("누적이용금액") || entry.summary.contains("결제예정금액") || entry.summary.contains("총사용금액")
+                var stepsContentChanged = hadInvalidTransactionSteps
                 val cleanSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
                     val stepPhotos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
                     // 사진 전용 스텝인데 사진이 0장이 된 경우(스크린샷만 있던 스텝 등) 스텝 자체 제거
@@ -191,6 +194,9 @@ class DiaryRepositoryImpl @Inject constructor(
                         stepsContentChanged = true
                         null
                     } else if (step.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isInvalidOrDummyGolfStep(step)) {
+                        stepsContentChanged = true
+                        null
+                    } else if (step.stepType == RouteStepType.TRANSACTION && com.autologue.app.data.sync.DailyRouteAggregator.isInvalidTransactionStep(step)) {
                         stepsContentChanged = true
                         null
                     } else {
@@ -235,11 +241,17 @@ class DiaryRepositoryImpl @Inject constructor(
                     }
                 }
 
-                // 3. routeSteps 내 실제 결제 금액 합산으로 totalExpense 0원 누락 복원
+                // 3. routeSteps 내 실제 결제 금액 합산 (비실사용 오인입 내역이 제거된 경우 stepsExpense로 즉시 정정)
                 val stepsExpense = com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(cleanSteps)
-                val resolvedExpense = maxOf(entry.totalExpense, stepsExpense)
+                val resolvedExpense = if (hadInvalidTransactionSteps || cleanSteps.any { it.stepType == RouteStepType.TRANSACTION }) {
+                    stepsExpense
+                } else {
+                    maxOf(entry.totalExpense, stepsExpense)
+                }
                 if (resolvedExpense > 0L && "지출기록" !in cleanTags) {
                     cleanTags.add("지출기록")
+                } else if (resolvedExpense <= 0L) {
+                    cleanTags.remove("지출기록")
                 }
 
                 // 4. 실제 골프 라운드 스텝 유무 확인 및 병원 영수증/중간 주행 경유지로 오염된 메모·동선 자가치유
@@ -267,7 +279,7 @@ class DiaryRepositoryImpl @Inject constructor(
 
                 val isBogusScorecardMemo = entry.summary.contains("스코어카드 자동 분석") && !hasRealGolf
                 val isLegacyPeriodicGpsMemo = entry.summary.contains("10분 주기 GPS")
-                val rawSummary = if (isBogusScorecardMemo || isLegacyPeriodicGpsMemo || hadIntermediateDrivingSteps) {
+                val rawSummary = if (isBogusScorecardMemo || isLegacyPeriodicGpsMemo || hadIntermediateDrivingSteps || hadInvalidTransactionSteps) {
                     com.autologue.app.data.sync.DailyRouteAggregator.buildSummaryNarrative(
                         date = d,
                         steps = cleanSteps,
