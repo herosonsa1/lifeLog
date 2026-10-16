@@ -195,4 +195,104 @@ class ExpenseCustomMetaFeaturesTest {
         assertTrue("엑셀 데이터에 사용자 분류 '가족' 및 '업무/법인'이 표기되어야 합니다.", sheet2Xml.contains("가족") && sheet2Xml.contains("업무/법인"))
         assertTrue("엑셀 데이터에 '법인카드' 및 '개인카드' 구분이 표기되어야 합니다.", sheet2Xml.contains("법인카드") && sheet2Xml.contains("개인카드"))
     }
+
+    @Test
+    fun `조회조건 필터에서 사용자별 및 카테고리별(기본_커스텀) 필터링과 합계 금액 산출이 정확히 동작하는지 검증`() {
+        val txFoodSelf = Transaction(
+            id = 1L,
+            amount = 15000L,
+            merchantName = "강남교자",
+            originalText = "강남교자 15,000원",
+            timestamp = LocalDateTime.of(2026, 10, 10, 12, 0),
+            paymentMethod = PaymentMethod.CREDIT_CARD,
+            category = ExpenseCategory.FOOD,
+            cardOrBankName = "신한카드"
+        )
+        val txMedicalFamily = Transaction(
+            id = 2L,
+            amount = 42000L,
+            merchantName = "서울아산병원",
+            originalText = "서울아산병원 42,000원",
+            timestamp = LocalDateTime.of(2026, 10, 11, 15, 0),
+            paymentMethod = PaymentMethod.CREDIT_CARD,
+            category = ExpenseCategory.MEDICAL,
+            cardOrBankName = "KB국민카드"
+        )
+        val txCustomCorp = Transaction(
+            id = 3L,
+            amount = 88000L,
+            merchantName = "동물메디컬센터",
+            originalText = "동물메디컬센터 88,000원",
+            timestamp = LocalDateTime.of(2026, 10, 12, 18, 0),
+            paymentMethod = PaymentMethod.CREDIT_CARD,
+            category = ExpenseCategory.ETC,
+            cardOrBankName = "현대카드(법인)"
+        )
+        val txEtcUnassigned = Transaction(
+            id = 4L,
+            amount = 12000L,
+            merchantName = "동네문구점",
+            originalText = "동네문구점 12,000원",
+            timestamp = LocalDateTime.of(2026, 10, 13, 10, 0),
+            paymentMethod = PaymentMethod.CHECK_CARD,
+            category = ExpenseCategory.ETC,
+            cardOrBankName = "우리카드"
+        )
+
+        val userClassMap = mapOf(
+            1L to com.autologue.app.data.preferences.UserClassificationItem("본인", 0),
+            2L to com.autologue.app.data.preferences.UserClassificationItem("가족", 1),
+            3L to com.autologue.app.data.preferences.UserClassificationItem("가족", 1)
+        )
+        val customCatMap = mapOf(3L to "반려동물")
+        val corpMap = mapOf(3L to true)
+
+        val baseState = com.autologue.app.presentation.expense.ExpenseUiState(
+            transactions = listOf(txFoodSelf, txMedicalFamily, txCustomCorp, txEtcUnassigned),
+            userClassByTxId = userClassMap,
+            customCategoryByTxId = customCatMap,
+            corporateByTxId = corpMap
+        )
+
+        // 1. 사용자별 필터: "가족" 선택 시 2건(42,000 + 88,000 = 130,000원)
+        val familyState = baseState.copy(selectedUserClassification = "가족")
+        assertEquals(2, familyState.filteredTransactions.size)
+        assertEquals(130000L, familyState.filteredExpenseTotal)
+        assertTrue(familyState.hasActiveSubFilter)
+
+        // 2. 사용자별 필터: "미지정" 선택 시 1건(12,000원)
+        val unassignedState = baseState.copy(
+            selectedUserClassification = com.autologue.app.presentation.expense.UNASSIGNED_USER_FILTER
+        )
+        assertEquals(1, unassignedState.filteredTransactions.size)
+        assertEquals(12000L, unassignedState.filteredExpenseTotal)
+
+        // 3. 카테고리별 필터: 커스텀 카테고리 "반려동물" 선택 시 1건(88,000원)
+        val customCatState = baseState.copy(
+            selectedCategory = ExpenseCategory.ETC,
+            selectedCustomCategoryName = "반려동물"
+        )
+        assertEquals(1, customCatState.filteredTransactions.size)
+        assertEquals(88000L, customCatState.filteredExpenseTotal)
+
+        // 4. 기본 "기타(ETC)" 선택 시 커스텀 카테고리가 아닌 순수 기타 내역 1건(12,000원)만 조회
+        val pureEtcState = baseState.copy(
+            selectedCategory = ExpenseCategory.ETC,
+            selectedCustomCategoryName = null
+        )
+        assertEquals(1, pureEtcState.filteredTransactions.size)
+        assertEquals(12000L, pureEtcState.filteredExpenseTotal)
+
+        // 5. 사용자별("가족") + 카테고리별("병원/약제") 복합 조회 시 1건(42,000원)
+        val combinedState = baseState.copy(
+            selectedUserClassification = "가족",
+            selectedCategory = ExpenseCategory.MEDICAL
+        )
+        assertEquals(1, combinedState.filteredTransactions.size)
+        assertEquals(42000L, combinedState.filteredExpenseTotal)
+        assertEquals(
+            "카테고리: 병원/약제 · 사용자: 가족",
+            combinedState.buildActiveFilterLabel { it.displayName }
+        )
+    }
 }

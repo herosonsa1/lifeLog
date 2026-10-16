@@ -36,16 +36,27 @@ enum class ExpenseDateFilterMode {
     CUSTOM_RANGE    // 특정 기간 직접 지정 조회
 }
 
+enum class ExpenseBreakdownMode {
+    BY_CATEGORY,    // 카테고리별 지출 보기
+    BY_USER         // 사용자별 지출 보기
+}
+
+const val UNASSIGNED_USER_FILTER = "__UNASSIGNED__"
+
 data class ExpenseUiState(
     val allTransactions: List<Transaction> = emptyList(),
     val transactions: List<Transaction> = emptyList(),
     val selectedCategory: ExpenseCategory? = null,
     val selectedCustomCategoryName: String? = null,
     val selectedUserClassification: String? = null,
+    val selectedCorporateFilter: Boolean? = null,
+    val breakdownMode: ExpenseBreakdownMode = ExpenseBreakdownMode.BY_CATEGORY,
     val rules: List<TransactionRule> = emptyList(),
     val totalExpense: Long = 0L,
     val totalIncome: Long = 0L,
     val categoryTotals: Map<ExpenseCategory, Long> = emptyMap(),
+    val effectiveCategoryTotals: Map<String, Long> = emptyMap(),
+    val userClassificationTotals: Map<String, Long> = emptyMap(),
     val isAddDialogOpen: Boolean = false,
     val editingTransaction: Transaction? = null,
     // 날짜 필터링 상태
@@ -88,13 +99,56 @@ data class ExpenseUiState(
             } else if (!selectedCustomCategoryName.isNullOrBlank()) {
                 list = list.filter { customCategoryByTxId[it.id] == selectedCustomCategoryName }
             } else if (selectedCategory != null) {
-                list = list.filter { it.category == selectedCategory }
+                list = list.filter { tx ->
+                    if (selectedCategory == ExpenseCategory.ETC) {
+                        tx.category == ExpenseCategory.ETC && customCategoryByTxId[tx.id].isNullOrBlank()
+                    } else {
+                        tx.category == selectedCategory
+                    }
+                }
             }
             if (!selectedUserClassification.isNullOrBlank()) {
-                list = list.filter { userClassByTxId[it.id]?.name == selectedUserClassification }
+                list = if (selectedUserClassification == UNASSIGNED_USER_FILTER) {
+                    list.filter { userClassByTxId[it.id] == null }
+                } else {
+                    list.filter { userClassByTxId[it.id]?.name == selectedUserClassification }
+                }
+            }
+            if (selectedCorporateFilter != null) {
+                list = list.filter { (corporateByTxId[it.id] == true) == selectedCorporateFilter }
             }
             return list
         }
+
+    val hasActiveSubFilter: Boolean
+        get() = isRecurringFilterOnly ||
+            selectedCategory != null ||
+            !selectedCustomCategoryName.isNullOrBlank() ||
+            !selectedUserClassification.isNullOrBlank() ||
+            selectedCorporateFilter != null
+
+    val filteredExpenseTotal: Long
+        get() = filteredTransactions
+            .filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
+            .sumOf { it.amount }
+
+    fun buildActiveFilterLabel(getBuiltInName: (ExpenseCategory) -> String): String {
+        val parts = mutableListOf<String>()
+        if (isRecurringFilterOnly) parts.add("정기지출")
+        if (!selectedCustomCategoryName.isNullOrBlank()) {
+            parts.add("카테고리: $selectedCustomCategoryName")
+        } else if (selectedCategory != null) {
+            parts.add("카테고리: ${getBuiltInName(selectedCategory)}")
+        }
+        if (!selectedUserClassification.isNullOrBlank()) {
+            val uLabel = if (selectedUserClassification == UNASSIGNED_USER_FILTER) "미지정" else selectedUserClassification
+            parts.add("사용자: $uLabel")
+        }
+        if (selectedCorporateFilter != null) {
+            parts.add(if (selectedCorporateFilter) "법인카드" else "개인결제")
+        }
+        return parts.joinToString(" · ")
+    }
 
     val dateDisplayTitle: String
         get() = when (filterMode) {
@@ -137,11 +191,13 @@ class ExpenseViewModel @Inject constructor(
         viewModelScope.launch {
             expenseCustomMetaPreferences.managedCategoriesFlow.collectLatest { cats ->
                 _uiState.value = _uiState.value.copy(managedCategories = cats)
+                recalculateFilteredTransactions()
             }
         }
         viewModelScope.launch {
             expenseCustomMetaPreferences.userClassificationsFlow.collectLatest { ucs ->
                 _uiState.value = _uiState.value.copy(userClassifications = ucs)
+                recalculateFilteredTransactions()
             }
         }
         viewModelScope.launch {
@@ -285,13 +341,6 @@ class ExpenseViewModel @Inject constructor(
         val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
         val recurringExp = expenseOnly.filter { it.id in recurringIds }.sumOf { it.amount }
 
-        val byCat = expenseOnly.groupBy { it.category }
-            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
-            .filter { it.value > 0L }
-            .toList()
-            .sortedByDescending { it.second }
-            .toMap()
-
         val uClassMap = mutableMapOf<Long, UserClassificationItem>()
         val cCatMap = mutableMapOf<Long, String>()
         val corpMap = mutableMapOf<Long, Boolean>()
@@ -308,11 +357,44 @@ class ExpenseViewModel @Inject constructor(
             }
         }
 
+        val byCat = expenseOnly.groupBy { it.category }
+            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+            .filter { it.value > 0L }
+            .toList()
+            .sortedByDescending { it.second }
+            .toMap()
+
+        val byEffectiveCat = expenseOnly
+            .groupBy { tx -> cCatMap[tx.id] ?: expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(tx.category) }
+            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+            .filter { it.value > 0L }
+            .toList()
+            .sortedByDescending { it.second }
+            .toMap()
+
+        val rawByUser = expenseOnly
+            .groupBy { tx -> uClassMap[tx.id]?.name ?: UNASSIGNED_USER_FILTER }
+            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+
+        val allKnownUsers = (state.userClassifications.map { it.name } + rawByUser.keys.filter { it != UNASSIGNED_USER_FILTER }).distinct()
+        val sortedUserPairs = allKnownUsers
+            .map { uName -> uName to (rawByUser[uName] ?: 0L) }
+            .sortedByDescending { it.second }
+            .toMutableList()
+
+        val unassignedAmt = rawByUser[UNASSIGNED_USER_FILTER] ?: 0L
+        if (unassignedAmt > 0L || sortedUserPairs.isEmpty()) {
+            sortedUserPairs.add(UNASSIGNED_USER_FILTER to unassignedAmt)
+        }
+        val byUserClass = sortedUserPairs.toMap()
+
         _uiState.value = state.copy(
             transactions = filtered,
             totalExpense = totalExp,
             totalIncome = totalInc,
             categoryTotals = byCat,
+            effectiveCategoryTotals = byEffectiveCat,
+            userClassificationTotals = byUserClass,
             recurringTransactionIds = recurringIds,
             recurringExpenseTotal = recurringExp,
             userClassByTxId = uClassMap,
@@ -802,6 +884,50 @@ class ExpenseViewModel @Inject constructor(
         )
     }
 
+    fun setUserClassificationFilter(name: String?) {
+        _uiState.value = _uiState.value.copy(selectedUserClassification = name)
+    }
+
+    fun setCorporateFilter(isCorporate: Boolean?) {
+        val current = _uiState.value.selectedCorporateFilter
+        _uiState.value = _uiState.value.copy(
+            selectedCorporateFilter = if (isCorporate == null || current == isCorporate) null else isCorporate
+        )
+    }
+
+    fun setBreakdownMode(mode: ExpenseBreakdownMode) {
+        _uiState.value = _uiState.value.copy(breakdownMode = mode)
+    }
+
+    fun clearAllSubFilters() {
+        _uiState.value = _uiState.value.copy(
+            selectedCategory = null,
+            selectedCustomCategoryName = null,
+            selectedUserClassification = null,
+            selectedCorporateFilter = null,
+            isRecurringFilterOnly = false
+        )
+    }
+
+    fun toggleEffectiveCategoryByName(displayName: String) {
+        val state = _uiState.value
+        val customMatch = state.managedCategories.firstOrNull { !it.isBuiltIn && it.displayName == displayName }
+            ?: state.customCategoryByTxId.values.firstOrNull { it == displayName }?.let {
+                ManagedCategoryItem("CUSTOM_$it", it, ExpenseCategory.ETC, false)
+            }
+        if (customMatch != null) {
+            val isCurrentlySelected = state.selectedCustomCategoryName == customMatch.displayName
+            setCustomCategoryFilter(if (isCurrentlySelected) null else customMatch.displayName)
+            return
+        }
+        val builtInMatch = ExpenseCategory.values().firstOrNull {
+            expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(it) == displayName || it.displayName == displayName
+        }
+        if (builtInMatch != null) {
+            toggleCategoryFilter(builtInMatch)
+        }
+    }
+
     fun getEffectiveCategoryDisplayName(tx: Transaction): String {
         return expenseCustomMetaPreferences.resolveEffectiveCategoryDisplayName(tx)
     }
@@ -858,8 +984,10 @@ class ExpenseViewModel @Inject constructor(
     // 카테고리 필터 토글 시 정기지출 모아보기는 해제
     fun toggleCategoryFilter(category: ExpenseCategory) {
         val current = _uiState.value.selectedCategory
+        val currentCustom = _uiState.value.selectedCustomCategoryName
+        val isSameBuiltIn = current == category && currentCustom == null
         _uiState.value = _uiState.value.copy(
-            selectedCategory = if (current == category) null else category,
+            selectedCategory = if (isSameBuiltIn) null else category,
             selectedCustomCategoryName = null,
             isRecurringFilterOnly = false
         )

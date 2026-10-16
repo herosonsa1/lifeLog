@@ -217,11 +217,11 @@ fun ExpenseScreen(
 
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                             AutoLogueActionChipButton(
-                                text = "기간 설정",
+                                text = if (uiState.hasActiveSubFilter) "조회조건 필터 (적용중)" else "조회조건 필터",
                                 icon = Icons.Default.CalendarMonth,
                                 onClick = { viewModel.openDateRangeDialog() },
-                                containerColor = Color(0xFFEFF6FF),
-                                borderColor = Color(0xFFBFDBFE),
+                                containerColor = if (uiState.hasActiveSubFilter) Color(0xFFDBEAFE) else Color(0xFFEFF6FF),
+                                borderColor = if (uiState.hasActiveSubFilter) Color(0xFF3B82F6) else Color(0xFFBFDBFE),
                                 contentColor = Color(0xFF1D4ED8)
                             )
                         }
@@ -272,37 +272,93 @@ fun ExpenseScreen(
                 HairlineDivider()
             }
 
-            // Level 1: Monthly Total Spending & Income KPI
+            // Level 1: Monthly Total Spending & Income KPI (+ Active Filter Summary)
             item {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Bottom
+                        .padding(horizontal = Spacing.xl, vertical = Spacing.lg)
                 ) {
-                    Column {
-                        Text(
-                            text = "${uiState.dateDisplayTitle} 총 지출",
-                            style = AppTypography.caption
-                        )
-                        Spacer(modifier = Modifier.height(Spacing.xxs))
-                        Text(
-                            text = "%,d원".format(uiState.totalExpense),
-                            style = AppTypography.display
-                        )
-                    }
-                    if (uiState.totalIncome > 0L) {
-                        Column(horizontalAlignment = Alignment.End) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        Column {
                             Text(
-                                text = "${uiState.dateDisplayTitle} 총 수입/입금",
+                                text = "${uiState.dateDisplayTitle} 총 지출",
                                 style = AppTypography.caption
                             )
                             Spacer(modifier = Modifier.height(Spacing.xxs))
                             Text(
-                                text = "+%,d원".format(uiState.totalIncome),
-                                style = AppTypography.h2.copy(color = Slate600)
+                                text = "%,d원".format(uiState.totalExpense),
+                                style = AppTypography.display
                             )
+                        }
+                        if (uiState.totalIncome > 0L) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "${uiState.dateDisplayTitle} 총 수입/입금",
+                                    style = AppTypography.caption
+                                )
+                                Spacer(modifier = Modifier.height(Spacing.xxs))
+                                Text(
+                                    text = "+%,d원".format(uiState.totalIncome),
+                                    style = AppTypography.h2.copy(color = Slate600)
+                                )
+                            }
+                        }
+                    }
+
+                    // 활성화된 조회조건(사용자별 / 카테고리별 / 법인카드 등) 요약 배너
+                    if (uiState.hasActiveSubFilter) {
+                        val activeLabel = uiState.buildActiveFilterLabel { cat ->
+                            viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFFEFF6FF),
+                            border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "조회조건: $activeLabel",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF1E40AF)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "조건 해당 지출 합계: %,d원 (${uiState.filteredTransactions.size}건)".format(uiState.filteredExpenseTotal),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF1D4ED8)
+                                    )
+                                }
+                                Surface(
+                                    onClick = { viewModel.clearAllSubFilters() },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = PureWhite,
+                                    border = BorderStroke(1.dp, Color(0xFF93C5FD))
+                                ) {
+                                    Text(
+                                        text = "조건 해제 ✕",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF1D4ED8),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -397,8 +453,8 @@ fun ExpenseScreen(
                 }
             }
 
-            // Level 2: Category Breakdown with subtle proportion bar
-            if (uiState.categoryTotals.isNotEmpty()) {
+            // Level 2: Category Breakdown vs User Classification Breakdown (Segmented Switch)
+            if (uiState.transactions.isNotEmpty() || uiState.userClassifications.isNotEmpty()) {
                 item {
                     Row(
                         modifier = Modifier
@@ -407,76 +463,203 @@ fun ExpenseScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "카테고리별 지출",
-                            style = AppTypography.caption
-                        )
-                        if (uiState.selectedCategory != null) {
+                        // [카테고리별 지출] / [사용자별 지출] 전환 탭
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Slate100,
+                            border = BorderStroke(1.dp, Slate200)
+                        ) {
+                            Row(modifier = Modifier.padding(2.dp)) {
+                                val isByCat = uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY
+                                Surface(
+                                    onClick = { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_CATEGORY) },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isByCat) PureWhite else Color.Transparent,
+                                    shadowElevation = if (isByCat) 1.dp else 0.dp
+                                ) {
+                                    Text(
+                                        text = "카테고리별 지출",
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isByCat) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isByCat) Slate900 else Slate600,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                                Surface(
+                                    onClick = { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_USER) },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (!isByCat) PureWhite else Color.Transparent,
+                                    shadowElevation = if (!isByCat) 1.dp else 0.dp
+                                ) {
+                                    Text(
+                                        text = "사용자별 지출",
+                                        fontSize = 12.sp,
+                                        fontWeight = if (!isByCat) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (!isByCat) Slate900 else Slate600,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (uiState.hasActiveSubFilter) {
                             Text(
                                 text = "필터 해제 ✕",
                                 style = AppTypography.caption.copy(color = AppColors.primary, fontWeight = FontWeight.Bold),
-                                modifier = Modifier.clickable { viewModel.setCategoryFilter(null) }
+                                modifier = Modifier.clickable { viewModel.clearAllSubFilters() }
                             )
                         }
                     }
                 }
 
                 val totalExp = uiState.totalExpense.coerceAtLeast(1L)
-                val categoryEntries = uiState.categoryTotals.entries.toList()
-                val totalCount = categoryEntries.size
 
-                itemsIndexed(categoryEntries) { index, (category, amount) ->
-                    val isSelected = uiState.selectedCategory == category && uiState.selectedCustomCategoryName == null
-                    val barColor = getRainbowUsageColor(index, totalCount)
-                    val displayCatName = viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(category)
+                if (uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY) {
+                    val effectiveEntries = uiState.effectiveCategoryTotals.entries.toList()
+                    val totalCount = effectiveEntries.size.coerceAtLeast(1)
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.toggleCategoryFilter(category) }
-                            .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                    itemsIndexed(effectiveEntries) { index, (catDisplayName, amount) ->
+                        val selectedBuiltInName = uiState.selectedCategory?.let {
+                            viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(it)
+                        }
+                        val isSelected = when {
+                            !uiState.selectedCustomCategoryName.isNullOrBlank() ->
+                                uiState.selectedCustomCategoryName == catDisplayName
+                            uiState.selectedCategory != null ->
+                                selectedBuiltInName == catDisplayName
+                            else -> false
+                        }
+                        val barColor = getRainbowUsageColor(index, totalCount)
+                        val pct = (amount.toFloat() / totalExp * 100f)
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (isSelected) Color(0xFFEFF6FF) else Color.Transparent)
+                                .clickable { viewModel.toggleEffectiveCategoryByName(catDisplayName) }
+                                .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(barColor, CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(Spacing.xs))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(barColor, CircleShape)
+                                    )
+                                    Spacer(modifier = Modifier.width(Spacing.xs))
+                                    Text(
+                                        text = catDisplayName,
+                                        style = AppTypography.body,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) AppColors.primary else AppColors.textPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "%.1f%%".format(pct),
+                                        fontSize = 11.sp,
+                                        color = Slate500
+                                    )
+                                }
                                 Text(
-                                    text = displayCatName,
-                                    style = AppTypography.body,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    text = "%,d원".format(amount),
+                                    style = AppTypography.h3,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                                     color = if (isSelected) AppColors.primary else AppColors.textPrimary
                                 )
                             }
-                            Text(
-                                text = "%,d원".format(amount),
-                                style = AppTypography.h3,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                color = if (isSelected) AppColors.primary else AppColors.textPrimary
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(Spacing.xxs))
-                        val proportion = (amount.toFloat() / totalExp).coerceIn(0f, 1f)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(3.dp)
-                                .clip(RoundedCornerShape(1.5.dp))
-                                .background(Slate100)
-                        ) {
+                            Spacer(modifier = Modifier.height(Spacing.xxs))
+                            val proportion = (amount.toFloat() / totalExp).coerceIn(0f, 1f)
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth(proportion)
-                                    .fillMaxHeight()
-                                    .background(barColor)
-                            )
+                                    .fillMaxWidth()
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(1.5.dp))
+                                    .background(Slate100)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(proportion)
+                                        .fillMaxHeight()
+                                        .background(barColor)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    val userEntries = uiState.userClassificationTotals.entries.toList()
+                    itemsIndexed(userEntries) { index, (userKey, amount) ->
+                        val isUnassigned = userKey == UNASSIGNED_USER_FILTER
+                        val displayUserName = if (isUnassigned) "미지정 (분류 전)" else userKey
+                        val matchedUc = uiState.userClassifications.firstOrNull { it.name == userKey }
+                        val (fgColor, bgColor) = if (matchedUc != null) {
+                            getUserClassificationBadgeColors(matchedUc.colorIndex)
+                        } else if (isUnassigned) {
+                            Slate600 to Slate100
+                        } else {
+                            getUserClassificationBadgeColors(index)
+                        }
+                        val isSelected = uiState.selectedUserClassification == userKey
+                        val txCount = if (isUnassigned) {
+                            uiState.transactions.count { uiState.userClassByTxId[it.id] == null }
+                        } else {
+                            uiState.transactions.count { uiState.userClassByTxId[it.id]?.name == userKey }
+                        }
+                        val pct = if (uiState.totalExpense > 0L) (amount.toFloat() / totalExp * 100f) else 0f
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (isSelected) bgColor.copy(alpha = 0.5f) else Color.Transparent)
+                                .clickable { viewModel.toggleUserClassificationFilter(userKey) }
+                                .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    MetricBadge(
+                                        text = displayUserName,
+                                        textColor = fgColor,
+                                        backgroundColor = bgColor
+                                    )
+                                    Text(
+                                        text = "${txCount}건 · %.1f%%".format(pct),
+                                        fontSize = 11.sp,
+                                        color = Slate500
+                                    )
+                                }
+                                Text(
+                                    text = "%,d원".format(amount),
+                                    style = AppTypography.h3,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSelected) fgColor else AppColors.textPrimary
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(Spacing.xxs))
+                            val proportion = if (uiState.totalExpense > 0L) (amount.toFloat() / totalExp).coerceIn(0f, 1f) else 0f
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(1.5.dp))
+                                    .background(Slate100)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(proportion)
+                                        .fillMaxHeight()
+                                        .background(fgColor)
+                                )
+                            }
                         }
                     }
                 }
@@ -487,7 +670,7 @@ fun ExpenseScreen(
                 }
             }
 
-            // Level 3: Transaction List Header with Selective Delete & Quick Filter Chips
+            // Level 3: Transaction List Header with Selective Delete & Quick Filter Chips (Category & User)
             item {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
@@ -497,41 +680,73 @@ fun ExpenseScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = when {
-                                uiState.isRecurringFilterOnly -> "정기지출 내역 (${uiState.filteredTransactions.size}건)"
-                                !uiState.selectedCustomCategoryName.isNullOrBlank() -> "${uiState.selectedCustomCategoryName} (${uiState.filteredTransactions.size}건)"
-                                uiState.selectedCategory != null -> "${viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(uiState.selectedCategory!!)} (${uiState.filteredTransactions.size}건)"
-                                !uiState.selectedUserClassification.isNullOrBlank() -> "사용자: ${uiState.selectedUserClassification} (${uiState.filteredTransactions.size}건)"
-                                else -> "결제 내역 (${uiState.filteredTransactions.size}건)"
-                            },
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
-                        )
-
-                        // 선택 삭제 토글 버튼
-                        Surface(
-                            onClick = { viewModel.toggleSelectionMode() },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (uiState.isSelectionMode) Color(0xFFFEE2E2) else Slate100,
-                            border = BorderStroke(1.dp, if (uiState.isSelectionMode) Color(0xFFFCA5A5) else Slate300)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (uiState.isSelectionMode) Icons.Default.Close else Icons.Default.Delete,
-                                    contentDescription = "선택 삭제",
-                                    tint = if (uiState.isSelectionMode) Color(0xFFDC2626) else Slate700,
-                                    modifier = Modifier.size(13.dp)
-                                )
+                        val activeLabel = uiState.buildActiveFilterLabel { cat ->
+                            viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (activeLabel.isNotBlank()) {
+                                    "$activeLabel (${uiState.filteredTransactions.size}건)"
+                                } else {
+                                    "결제 내역 (${uiState.filteredTransactions.size}건)"
+                                },
+                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                            )
+                            if (uiState.hasActiveSubFilter) {
                                 Text(
-                                    text = if (uiState.isSelectionMode) "선택 취소" else "선택 삭제",
+                                    text = "선택 조건 지출 합계: %,d원".format(uiState.filteredExpenseTotal),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppColors.primary
+                                )
+                            }
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 조회조건 필터 모달 열기 버튼
+                            Surface(
+                                onClick = { viewModel.openDateRangeDialog() },
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (uiState.hasActiveSubFilter) Color(0xFFDBEAFE) else Slate100,
+                                border = BorderStroke(1.dp, if (uiState.hasActiveSubFilter) Color(0xFF93C5FD) else Slate300)
+                            ) {
+                                Text(
+                                    text = "상세 필터",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (uiState.isSelectionMode) Color(0xFFDC2626) else Slate700
+                                    color = if (uiState.hasActiveSubFilter) Color(0xFF1D4ED8) else Slate700,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
+                            }
+
+                            // 선택 삭제 토글 버튼
+                            Surface(
+                                onClick = { viewModel.toggleSelectionMode() },
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (uiState.isSelectionMode) Color(0xFFFEE2E2) else Slate100,
+                                border = BorderStroke(1.dp, if (uiState.isSelectionMode) Color(0xFFFCA5A5) else Slate300)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (uiState.isSelectionMode) Icons.Default.Close else Icons.Default.Delete,
+                                        contentDescription = "선택 삭제",
+                                        tint = if (uiState.isSelectionMode) Color(0xFFDC2626) else Slate700,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = if (uiState.isSelectionMode) "선택 취소" else "선택 삭제",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (uiState.isSelectionMode) Color(0xFFDC2626) else Slate700
+                                    )
+                                }
                             }
                         }
                     }
@@ -590,30 +805,37 @@ fun ExpenseScreen(
                         }
                     }
 
-                    // Horizontal Quick Category Filter Chips
+                    // [1단] 카테고리별 조회 필터 칩 바
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState())
                             .padding(horizontal = Spacing.xl, vertical = Spacing.xxs),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val isAllSelected = uiState.selectedCategory == null &&
+                        Text(
+                            text = "카테고리별:",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Slate500
+                        )
+                        val isAllCatSelected = uiState.selectedCategory == null &&
                             uiState.selectedCustomCategoryName == null &&
                             !uiState.isRecurringFilterOnly
                         Surface(
                             onClick = { viewModel.setCategoryFilter(null) },
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isAllSelected) AppColors.primary else Slate50,
-                            shadowElevation = if (isAllSelected) 2.dp else 1.dp,
-                            border = BorderStroke(1.dp, if (isAllSelected) AppColors.primaryDark else Slate200)
+                            color = if (isAllCatSelected) AppColors.primary else Slate50,
+                            shadowElevation = if (isAllCatSelected) 2.dp else 1.dp,
+                            border = BorderStroke(1.dp, if (isAllCatSelected) AppColors.primaryDark else Slate200)
                         ) {
                             Text(
                                 text = "전체 (${uiState.transactions.size})",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (isAllSelected) PureWhite else Slate700,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                color = if (isAllCatSelected) PureWhite else Slate700,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                             )
                         }
 
@@ -631,15 +853,24 @@ fun ExpenseScreen(
                                 fontSize = 11.sp,
                                 fontWeight = if (uiState.isRecurringFilterOnly) FontWeight.Bold else FontWeight.Medium,
                                 color = if (uiState.isRecurringFilterOnly) PureWhite else Color(0xFF4338CA),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                             )
                         }
 
-                        uiState.categoryTotals.keys.forEach { cat ->
+                        // 기본 카테고리 필터 칩 (지출 내역이 있거나 등록된 모든 기본 카테고리 표시)
+                        val builtInCatsToShow = (uiState.categoryTotals.keys +
+                            uiState.managedCategories.filter { it.isBuiltIn }.map { it.baseCategory }).distinct()
+                        builtInCatsToShow.forEach { cat ->
                             val isSelected = uiState.selectedCategory == cat &&
                                 uiState.selectedCustomCategoryName == null &&
                                 !uiState.isRecurringFilterOnly
-                            val count = uiState.transactions.count { it.category == cat }
+                            val count = uiState.transactions.count { tx ->
+                                if (cat == ExpenseCategory.ETC) {
+                                    tx.category == ExpenseCategory.ETC && uiState.customCategoryByTxId[tx.id].isNullOrBlank()
+                                } else {
+                                    tx.category == cat
+                                }
+                            }
                             val displayCat = viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
                             Surface(
                                 onClick = { viewModel.toggleCategoryFilter(cat) },
@@ -653,7 +884,7 @@ fun ExpenseScreen(
                                     fontSize = 11.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                     color = if (isSelected) PureWhite else Slate700,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                 )
                             }
                         }
@@ -677,62 +908,94 @@ fun ExpenseScreen(
                                     fontSize = 11.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                     color = if (isSelected) PureWhite else Color(0xFF0F766E),
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                 )
                             }
                         }
                     }
 
-                    // 사용자 분류 필터 칩 바
-                    if (uiState.userClassifications.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = Spacing.xl, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    // [2단] 사용자별 조회 필터 칩 바 (항상 표시)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = Spacing.xl, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "사용자별:",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Slate500
+                        )
+                        val isAllUsers = uiState.selectedUserClassification == null
+                        Surface(
+                            onClick = { viewModel.toggleUserClassificationFilter(null) },
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isAllUsers) Slate800 else Slate50,
+                            border = BorderStroke(1.dp, if (isAllUsers) Slate900 else Slate200)
                         ) {
                             Text(
-                                text = "사용자 분류:",
+                                text = "전체 (${uiState.transactions.size})",
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Slate500
+                                fontWeight = FontWeight.Bold,
+                                color = if (isAllUsers) PureWhite else Slate600,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
-                            val isAllUsers = uiState.selectedUserClassification == null
+                        }
+                        uiState.userClassifications.forEach { uc ->
+                            val isSel = uiState.selectedUserClassification == uc.name
+                            val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
+                            val count = uiState.transactions.count { uiState.userClassByTxId[it.id]?.name == uc.name }
                             Surface(
-                                onClick = { viewModel.toggleUserClassificationFilter(null) },
+                                onClick = { viewModel.toggleUserClassificationFilter(uc.name) },
                                 shape = RoundedCornerShape(6.dp),
-                                color = if (isAllUsers) Slate800 else Slate50,
-                                border = BorderStroke(1.dp, if (isAllUsers) Slate900 else Slate200)
+                                color = if (isSel) fg else bg,
+                                border = BorderStroke(1.dp, fg)
                             ) {
                                 Text(
-                                    text = "전체",
+                                    text = "${uc.name} ($count)",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isAllUsers) PureWhite else Slate600,
+                                    color = if (isSel) PureWhite else fg,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }
-                            uiState.userClassifications.forEach { uc ->
-                                val isSel = uiState.selectedUserClassification == uc.name
-                                val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
-                                val count = uiState.transactions.count { uiState.userClassByTxId[it.id]?.name == uc.name }
-                                Surface(
-                                    onClick = { viewModel.toggleUserClassificationFilter(uc.name) },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isSel) fg else bg,
-                                    border = BorderStroke(1.dp, fg)
-                                ) {
-                                    Text(
-                                        text = "${uc.name} ($count)",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSel) PureWhite else fg,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
+                        }
+                        // 미지정(사용자 미분류) 필터 칩
+                        val unassignedCount = uiState.transactions.count { uiState.userClassByTxId[it.id] == null }
+                        val isUnassignedSel = uiState.selectedUserClassification == UNASSIGNED_USER_FILTER
+                        Surface(
+                            onClick = { viewModel.toggleUserClassificationFilter(UNASSIGNED_USER_FILTER) },
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isUnassignedSel) Slate700 else Slate100,
+                            border = BorderStroke(1.dp, if (isUnassignedSel) Slate800 else Slate300)
+                        ) {
+                            Text(
+                                text = "미지정 ($unassignedCount)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isUnassignedSel) PureWhite else Slate600,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        // 법인카드 빠른 필터 칩
+                        val corpCount = uiState.transactions.count { uiState.corporateByTxId[it.id] == true }
+                        val isCorpSelected = uiState.selectedCorporateFilter == true
+                        Surface(
+                            onClick = { viewModel.setCorporateFilter(true) },
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isCorpSelected) Color(0xFFB45309) else Color(0xFFFEF3C7),
+                            border = BorderStroke(1.dp, Color(0xFFF59E0B))
+                        ) {
+                            Text(
+                                text = "법인카드 ($corpCount)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isCorpSelected) PureWhite else Color(0xFFB45309),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
                         }
                     }
 
@@ -791,17 +1054,38 @@ fun ExpenseScreen(
         }
     }
 
-    // Date Range & Period Filter Dialog
+    // Date Range & Comprehensive Filter Dialog (기간 + 사용자별 + 카테고리별 + 카드구분)
     if (uiState.isDateRangePickerOpen) {
         DateRangeFilterDialog(
             currentYearMonth = uiState.selectedYearMonth,
             currentMode = uiState.filterMode,
             startDate = uiState.customStartDate,
             endDate = uiState.customEndDate,
+            managedCategories = uiState.managedCategories,
+            userClassifications = uiState.userClassifications,
+            selectedCategory = uiState.selectedCategory,
+            selectedCustomCategoryName = uiState.selectedCustomCategoryName,
+            selectedUserClassification = uiState.selectedUserClassification,
+            selectedCorporateFilter = uiState.selectedCorporateFilter,
+            isRecurringFilterOnly = uiState.isRecurringFilterOnly,
             onDismiss = { viewModel.closeDateRangeDialog() },
             onSelectPreset = { preset -> viewModel.selectQuickPreset(preset) },
             onSelectMonth = { ym -> viewModel.selectYearMonth(ym) },
-            onSelectCustomRange = { s, e -> viewModel.setCustomDateRange(s, e) }
+            onSelectCustomRange = { s, e -> viewModel.setCustomDateRange(s, e) },
+            onSelectCategory = { cat -> viewModel.setCategoryFilter(cat) },
+            onSelectCustomCategory = { customName -> viewModel.setCustomCategoryFilter(customName) },
+            onToggleRecurring = { viewModel.toggleRecurringFilter() },
+            onSelectUserClassification = { uName -> viewModel.setUserClassificationFilter(uName) },
+            onSelectCorporateFilter = { isCorp -> viewModel.setCorporateFilter(isCorp) },
+            onClearAllFilters = { viewModel.clearAllSubFilters() },
+            onOpenCategoryManage = {
+                viewModel.closeDateRangeDialog()
+                viewModel.openCategoryManageDialog()
+            },
+            onOpenUserManage = {
+                viewModel.closeDateRangeDialog()
+                viewModel.openUserClassificationManageDialog()
+            }
         )
     }
 
@@ -1099,7 +1383,7 @@ fun SaaSTransactionRow(
 }
 
 /**
- * 조회 기간 설정 팝업 다이얼로그 (프리셋 & 월간 & 직접 지정)
+ * 조회조건 필터 설정 팝업 다이얼로그 (조회 기간 + 사용자별 + 카테고리별 + 카드/법인 구분)
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1108,28 +1392,274 @@ fun DateRangeFilterDialog(
     currentMode: ExpenseDateFilterMode,
     startDate: LocalDate,
     endDate: LocalDate,
+    managedCategories: List<com.autologue.app.data.preferences.ManagedCategoryItem>,
+    userClassifications: List<com.autologue.app.data.preferences.UserClassificationItem>,
+    selectedCategory: ExpenseCategory?,
+    selectedCustomCategoryName: String?,
+    selectedUserClassification: String?,
+    selectedCorporateFilter: Boolean?,
+    isRecurringFilterOnly: Boolean,
     onDismiss: () -> Unit,
     onSelectPreset: (String) -> Unit,
     onSelectMonth: (YearMonth) -> Unit,
-    onSelectCustomRange: (LocalDate, LocalDate) -> Unit
+    onSelectCustomRange: (LocalDate, LocalDate) -> Unit,
+    onSelectCategory: (ExpenseCategory?) -> Unit,
+    onSelectCustomCategory: (String?) -> Unit,
+    onToggleRecurring: () -> Unit,
+    onSelectUserClassification: (String?) -> Unit,
+    onSelectCorporateFilter: (Boolean?) -> Unit,
+    onClearAllFilters: () -> Unit,
+    onOpenCategoryManage: () -> Unit,
+    onOpenUserManage: () -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf(if (currentMode == ExpenseDateFilterMode.MONTH) 0 else 1) }
     var tempYearMonth by remember { mutableStateOf(currentYearMonth) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("조회 기간 설정", style = AppTypography.h2)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("조회조건 필터 설정", style = AppTypography.h2)
+                TextButton(
+                    onClick = onClearAllFilters,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text("조건 초기화", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
+                }
+            }
         },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Quick Presets
-                Text("빠른 기간 선택", style = AppTypography.caption)
+                // 1. 사용자별 조회 필터 섹션
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "1. 사용자별 조회",
+                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                    )
+                    Text(
+                        text = "사용자 분류 관리 →",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF6D28D9),
+                        modifier = Modifier.clickable { onOpenUserManage() }
+                    )
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val isAllUsers = selectedUserClassification == null
+                    Surface(
+                        onClick = { onSelectUserClassification(null) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isAllUsers) Slate800 else Slate50,
+                        border = BorderStroke(1.dp, if (isAllUsers) Slate900 else Slate200)
+                    ) {
+                        Text(
+                            text = "전체 사용자",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isAllUsers) PureWhite else Slate700,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    userClassifications.forEach { uc ->
+                        val isSel = selectedUserClassification == uc.name
+                        val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
+                        Surface(
+                            onClick = {
+                                onSelectUserClassification(if (isSel) null else uc.name)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSel) fg else bg,
+                            border = BorderStroke(1.dp, fg)
+                        ) {
+                            Text(
+                                text = uc.name,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSel) PureWhite else fg,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    val isUnassignedSel = selectedUserClassification == UNASSIGNED_USER_FILTER
+                    Surface(
+                        onClick = {
+                            onSelectUserClassification(if (isUnassignedSel) null else UNASSIGNED_USER_FILTER)
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isUnassignedSel) Slate700 else Slate100,
+                        border = BorderStroke(1.dp, if (isUnassignedSel) Slate800 else Slate300)
+                    ) {
+                        Text(
+                            text = "미지정",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isUnassignedSel) PureWhite else Slate600,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
+                HairlineDivider()
+
+                // 2. 카테고리별 조회 필터 섹션
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "2. 카테고리별 조회",
+                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                    )
+                    Text(
+                        text = "카테고리 관리 →",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF15803D),
+                        modifier = Modifier.clickable { onOpenCategoryManage() }
+                    )
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val isAllCat = selectedCategory == null &&
+                        selectedCustomCategoryName == null &&
+                        !isRecurringFilterOnly
+                    Surface(
+                        onClick = { onSelectCategory(null) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isAllCat) AppColors.primary else Slate50,
+                        border = BorderStroke(1.dp, if (isAllCat) AppColors.primaryDark else Slate200)
+                    ) {
+                        Text(
+                            text = "전체 카테고리",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isAllCat) PureWhite else Slate700,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    Surface(
+                        onClick = onToggleRecurring,
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isRecurringFilterOnly) Color(0xFF4338CA) else Color(0xFFEEF2FF),
+                        border = BorderStroke(1.dp, if (isRecurringFilterOnly) Color(0xFF3730A3) else Color(0xFFC7D2FE))
+                    ) {
+                        Text(
+                            text = "정기지출만",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isRecurringFilterOnly) PureWhite else Color(0xFF4338CA),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    managedCategories.filter { it.isBuiltIn }.forEach { item ->
+                        val isSel = selectedCategory == item.baseCategory &&
+                            selectedCustomCategoryName == null &&
+                            !isRecurringFilterOnly
+                        Surface(
+                            onClick = {
+                                onSelectCategory(if (isSel) null else item.baseCategory)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSel) AppColors.primary else Slate50,
+                            border = BorderStroke(1.dp, if (isSel) AppColors.primaryDark else Slate200)
+                        ) {
+                            Text(
+                                text = item.displayName,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSel) PureWhite else Slate700,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    managedCategories.filter { !it.isBuiltIn }.forEach { customItem ->
+                        val isSel = selectedCustomCategoryName == customItem.displayName
+                        Surface(
+                            onClick = {
+                                onSelectCustomCategory(if (isSel) null else customItem.displayName)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSel) Color(0xFF0D9488) else Color(0xFFF0FDFA),
+                            border = BorderStroke(1.dp, if (isSel) Color(0xFF0F766E) else Color(0xFF99F6E4))
+                        ) {
+                            Text(
+                                text = customItem.displayName,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSel) PureWhite else Color(0xFF0F766E),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                HairlineDivider()
+
+                // 3. 카드/결제 구분 조회
+                Text(
+                    text = "3. 카드/결제 구분 조회",
+                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val corpOptions = listOf(
+                        null to "전체",
+                        false to "개인결제만",
+                        true to "법인카드만"
+                    )
+                    corpOptions.forEach { (value, label) ->
+                        val isSel = selectedCorporateFilter == value
+                        Surface(
+                            onClick = { onSelectCorporateFilter(value) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSel) Color(0xFFB45309) else Slate50,
+                            border = BorderStroke(1.dp, if (isSel) Color(0xFF92400E) else Slate200)
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSel) PureWhite else Slate700,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                HairlineDivider()
+
+                // 4. 조회 기간 설정 (빠른 기간 & 월별 선택)
+                Text(
+                    text = "4. 조회 기간 선택",
+                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                )
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1141,7 +1671,7 @@ fun DateRangeFilterDialog(
                             onClick = { onSelectPreset(preset) },
                             shape = RoundedCornerShape(8.dp),
                             color = Slate50,
-                            shadowElevation = 1.5.dp,
+                            shadowElevation = 1.dp,
                             border = BorderStroke(1.dp, Slate200)
                         ) {
                             Text(
@@ -1149,16 +1679,12 @@ fun DateRangeFilterDialog(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = AppColors.primary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                             )
                         }
                     }
                 }
 
-                HairlineDivider()
-
-                // Monthly Selector
-                Text("월별 선택", style = AppTypography.caption)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1176,17 +1702,27 @@ fun DateRangeFilterDialog(
                     }
                 }
 
-                Button(
-                    onClick = { onSelectMonth(tempYearMonth) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("${tempYearMonth.year}년 ${tempYearMonth.monthValue}월 내역 조회", color = PureWhite, fontWeight = FontWeight.Bold)
+                if (tempYearMonth != currentYearMonth || currentMode != ExpenseDateFilterMode.MONTH) {
+                    Button(
+                        onClick = { onSelectMonth(tempYearMonth) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("${tempYearMonth.year}년 ${tempYearMonth.monthValue}월로 기간 변경", color = PureWhite, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("적용 완료", color = PureWhite, fontWeight = FontWeight.Bold)
+            }
+        },
         dismissButton = {
             AutoLogueSecondaryButton(text = "닫기", onClick = onDismiss)
         },
