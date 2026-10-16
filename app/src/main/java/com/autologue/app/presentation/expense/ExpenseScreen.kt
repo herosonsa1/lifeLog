@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
+import com.autologue.app.domain.model.isDepositTransaction
 import com.autologue.app.domain.model.isSelfTransfer
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
@@ -2099,6 +2100,11 @@ fun EditTransactionDialog(
     ) -> Unit,
     onDelete: () -> Unit
 ) {
+    val isDeposit = remember(transaction.id, transaction.category, transaction.originalText, transaction.transferMemo) {
+        transaction.isDepositTransaction()
+    }
+    val txDirLabel = if (isDeposit) "입금" else "출금"
+    val oppositeDirLabel = if (isDeposit) "출금" else "입금"
     var merchantName by remember(transaction.id) { mutableStateOf(transaction.merchantName) }
     var selectedCategory by remember(transaction.id) { mutableStateOf(transaction.category) }
     var selectedCustomCategoryName by remember(transaction.id) { mutableStateOf(initialCustomCategoryName) }
@@ -2146,18 +2152,33 @@ fun EditTransactionDialog(
                                     text = "%,d원".format(transaction.amount),
                                     style = AppTypography.h1.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
                                 )
-                                if (isCorporate) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
-                                        color = Color(0xFF1E293B)
+                                        color = if (isDeposit) Color(0xFFECFDF5) else Color(0xFFEFF6FF),
+                                        border = BorderStroke(1.dp, if (isDeposit) Color(0xFF6EE7B7) else Color(0xFFBFDBFE))
                                     ) {
                                         Text(
-                                            text = "법인카드",
+                                            text = "$txDirLabel 내역",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = PureWhite,
+                                            color = if (isDeposit) Color(0xFF047857) else Color(0xFF1D4ED8),
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
+                                    }
+                                    if (isCorporate) {
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFF1E293B)
+                                        ) {
+                                            Text(
+                                                text = "법인카드",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = PureWhite,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -2474,9 +2495,9 @@ fun EditTransactionDialog(
                         }
                         Text(
                             text = if (isOneTimeSave) {
-                                "이번 결제 내역만 단독 수정됩니다 (동일 결제처 다른 내역에 영향 없음)"
+                                "이번 $txDirLabel 내역만 단독 수정됩니다 (동일 결제처 다른 내역에 영향 없음)"
                             } else {
-                                "동일 결제처의 기존·신규 내역에도 수정 사항이 영구 반영됩니다"
+                                "동일 결제처의 [$txDirLabel] 내역에만 구분되어 영구 반영·치환됩니다 ([$oppositeDirLabel] 내역과는 별도 저장)"
                             },
                             fontSize = 10.sp,
                             color = if (isOneTimeSave) Color(0xFFB45309) else Color(0xFF1E40AF)

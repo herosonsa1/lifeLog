@@ -299,9 +299,9 @@ object SmsParser {
         val nhBankResult = parseNhBank(cleanBody, year, fallbackDateTime)
         if (nhBankResult != null) return nhBankResult
 
-        // 8-2. 계좌번호 또는 출금/송금/이체/잔액 패턴 기반 은행 이체 SMS 정밀 파싱 (카드 승인 문자가 아닌 경우에만 수행)
+        // 8-2. 계좌번호 또는 입금/출금/송금/이체/잔액 패턴 기반 은행 입출금 SMS 정밀 파싱 (카드 승인 문자가 아닌 경우에만 수행)
         val isBankTransferSms = !isCardApprovalMessage(cleanBody) && (
-            cleanBody.contains("출금") || cleanBody.contains("송금") ||
+            cleanBody.contains("출금") || cleanBody.contains("입금") || cleanBody.contains("송금") ||
                 cleanBody.contains("이체") || cleanBody.contains("잔액") ||
                 Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(cleanBody)
             )
@@ -565,10 +565,10 @@ object SmsParser {
             val isIncome = (txType == "입금")
             val category = if (isIncome) ExpenseCategory.INCOME else ExpenseCategory.TRANSFER
 
-            val rawMemo = m.group("memo")?.trim() ?: "출금"
+            val rawMemo = m.group("memo")?.trim() ?: txType
             val acc = m.group("acc")?.trim()
             val displayMerchant = if (rawMemo.matches(Regex("""^[\d* -]{6,}$"""))) {
-                "출금 내역"
+                if (isIncome) "입금 내역" else "출금 내역"
             } else {
                 rawMemo
             }
@@ -590,7 +590,7 @@ object SmsParser {
 
     private fun parseNhBank(body: String, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
         val pattern = Pattern.compile(
-            """농협\s*(?<type>출금|입금)(?<amount>[\d,]+)원\s*\n(?<month>\d{1,2})/(?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2}).*?\n(?<memo>[^\n\r]+)""",
+            """농협\s*(?<type>출금|입금)\s*(?<amount>[\d,]+)원\s*\n(?<month>\d{1,2})/(?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2}).*?\n(?<memo>[^\n\r]+)""",
             Pattern.DOTALL
         )
         val m = pattern.matcher(body)
@@ -606,7 +606,7 @@ object SmsParser {
             val timestamp = resolveTimestamp(fallbackDateTime, month, day, hour, minute)
 
             val rawMemo = m.group("memo")?.trim() ?: "농협계좌"
-            val cleanMemo = rawMemo.replace(Regex("""\s*잔액[\d,]+.*$"""), "").trim()
+            val cleanMemo = rawMemo.replace(Regex("""\s*잔액\s*[\d,]+.*$"""), "").trim()
 
             val isIncome = (txType == "입금")
             val category = if (isIncome) ExpenseCategory.INCOME else ExpenseCategory.TRANSFER
@@ -629,13 +629,15 @@ object SmsParser {
     private fun parseBankTransferSms(body: String, sender: String?, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
         if (isCardApprovalMessage(body)) return null
 
+        val isDeposit = body.contains("입금") && !body.contains("출금")
+
         // 잔액 정보 사전 분리 (거래 금액과 잔액 혼동 원천 차단)
         val balanceMatch = Regex("""잔액\s*(?<balance>[\d,]+)원?""").find(body)
         val balanceStr = balanceMatch?.groups?.get("balance")?.value
         val textWithoutBalance = if (balanceMatch != null) body.replace(balanceMatch.value, "") else body
 
         // 1. 거래 금액 추출
-        val amtMatch = Regex("""(?:출금|송금|이체)?\s*(?<amt>[\d,]+)원\s*(?:출금|송금|이체)?""").find(textWithoutBalance)
+        val amtMatch = Regex("""(?:출금|입금|송금|이체)?\s*(?<amt>[\d,]+)원\s*(?:출금|입금|송금|이체)?""").find(textWithoutBalance)
             ?: Regex("""\b(?<amt>[\d,]+)원\b""").find(textWithoutBalance)
         val amount = amtMatch?.groups?.get("amt")?.value?.replace(",", "")?.toLongOrNull() ?: return null
         if (amount <= 0) return null
@@ -672,31 +674,36 @@ object SmsParser {
         val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(body)
         val accNo = accMatch?.groups?.get("acc")?.value
 
-        // 5. 수취인/가맹점 추출: 잔액, 금액, 일시, 계좌번호, 특수문자 제거 후 남은 이름 추출
+        // 5. 수취인/입금자/가맹점 추출: 잔액, 금액, 일시, 계좌번호, 은행명, 특수문자 제거 후 남은 이름 추출
         var remain = body
         if (bankBracketMatch != null) remain = remain.replace(bankBracketMatch.value, "")
         if (balanceMatch != null) remain = remain.replace(balanceMatch.value, "")
         remain = remain.replace(amtMatch.value, "")
         remain = remain.replace(Regex("""\d{1,2}/\d{1,2}\s*\d{1,2}:\d{1,2}"""), "")
         if (accNo != null) remain = remain.replace(accNo, "")
-        remain = remain.replace(Regex("""(?:출금|송금|이체|결제|승인|완료|잔액|원)\b"""), "")
-        remain = remain.replace("출금", "").replace("송금", "").replace("이체", "")
+        remain = remain.replace(Regex("""(?:NH농협|농협은행|농협|KB국민은행|KB국민|국민은행|신한은행|우리은행|하나은행|카카오뱅크|토스뱅크|기업은행|IBK기업|Web발신)"""), "")
+        remain = remain.replace(Regex("""(?:출금|입금|송금|이체|결제|승인|완료|잔액|원)\b"""), "")
+        remain = remain.replace("출금", "").replace("입금", "").replace("송금", "").replace("이체", "")
         remain = remain.trim()
 
         val nameCandidateMatch = Regex("""([가-힣a-zA-Z\s]{2,10})""").find(remain)
         val receiverName = nameCandidateMatch?.value?.trim()?.takeIf { it.isNotBlank() && !it.contains("은행") && !it.contains("알림") }
 
-        // [핵심] 계좌번호는 merchantName(제목)에 절대 노출하지 않고 이민희 또는 출금 내역으로 설정
+        // [핵심] 계좌번호는 merchantName(제목)에 절대 노출하지 않고 상대방 이름 또는 입금/출금 내역으로 설정
         val merchant = if (!receiverName.isNullOrBlank()) {
             receiverName
         } else {
-            "출금 내역"
+            if (isDeposit) "입금 내역" else "출금 내역"
         }
 
         val memoParts = mutableListOf<String>()
         if (!accNo.isNullOrBlank()) memoParts.add("계좌: $accNo")
         if (!balanceStr.isNullOrBlank()) memoParts.add("잔액 ${balanceStr}원")
-        val transferMemo = if (memoParts.isNotEmpty()) memoParts.joinToString(" · ") else "이체/출금"
+        val transferMemo = if (memoParts.isNotEmpty()) {
+            memoParts.joinToString(" · ")
+        } else {
+            if (isDeposit) "입금 내역" else "이체/출금"
+        }
 
         return Transaction(
             amount = amount,
@@ -704,7 +711,7 @@ object SmsParser {
             originalText = body,
             timestamp = timestamp,
             paymentMethod = PaymentMethod.BANK_TRANSFER,
-            category = ExpenseCategory.TRANSFER,
+            category = if (isDeposit) ExpenseCategory.INCOME else ExpenseCategory.TRANSFER,
             cardOrBankName = bankName,
             transferMemo = transferMemo,
             isAutoCategorized = true

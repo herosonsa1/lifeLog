@@ -4,6 +4,7 @@ import android.content.Context
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.VehicleLog
+import com.autologue.app.domain.model.isDepositTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,10 +38,10 @@ data class ManagedCategoryItem(
 
 /**
  * 가계부·차계부 확장 메타데이터 및 영속 설정 저장소:
- * 1) 카드사 및 법인/개인 여부 지정 관리
+ * 1) 카드사 및 법인/개인 여부 지정 관리 (입금/출금 구분 포함)
  * 2) 내역 수정 시 1회성 저장 보호(One-Time Override) 관리
- * 3) 커스텀 카테고리 영구 추가 및 전체 카테고리(추가/수정/삭제) 관리
- * 4) 카테고리와 독립된 '사용자 분류'(직접 입력, 추가/수정/삭제, 배지 색상) 관리
+ * 3) 커스텀 카테고리 영구 추가 및 전체 카테고리(추가/수정/삭제) 관리 (입금/출금 구분 포함)
+ * 4) 카테고리와 독립된 '사용자 분류'(직접 입력, 추가/수정/삭제, 배지 색상) 관리 (입금/출금 구분 포함)
  * 5) 자동 등록된 결제기록·주행기록 선택 삭제 후 재동기화 부활 방지 블랙리스트(Tombstone) 관리
  */
 @Singleton
@@ -60,16 +61,17 @@ class ExpenseCustomMetaPreferences private constructor(
     private val renamedDefaultCategories = ConcurrentHashMap<String, String>()
     private val deletedDefaultCategories = ConcurrentHashMap.newKeySet<String>()
 
-    // 거래 ID별 / 가맹점별 세부(커스텀) 카테고리 매핑
+    // 거래 ID별 / (입출금구분+가맹점)별 기본 및 세부(커스텀) 카테고리 매핑
     private val txCustomCategoryMap = ConcurrentHashMap<Long, String>()
     private val merchantCustomCategoryMap = ConcurrentHashMap<String, String>()
+    private val merchantBaseCategoryMap = ConcurrentHashMap<String, String>()
 
-    // 2. 사용자 분류 목록 및 거래 ID별 / 가맹점별 사용자 분류 매핑
+    // 2. 사용자 분류 목록 및 거래 ID별 / (입출금구분+가맹점)별 사용자 분류 매핑
     private val userClassificationList = mutableListOf<UserClassificationItem>()
     private val txUserClassMap = ConcurrentHashMap<Long, String>()
     private val merchantUserClassMap = ConcurrentHashMap<String, String>()
 
-    // 3. 법인카드 여부 및 가맹점별 카드 지정 매핑
+    // 3. 법인카드 여부 및 (입출금구분+가맹점)별 카드 지정 매핑
     private val txCorporateMap = ConcurrentHashMap<Long, Boolean>()
     private val merchantCardDesignationMap = ConcurrentHashMap<String, String>()
 
@@ -93,6 +95,60 @@ class ExpenseCustomMetaPreferences private constructor(
     init {
         loadFromPrefs()
         refreshFlows()
+    }
+
+    private fun putDirectionalRule(
+        map: ConcurrentHashMap<String, String>,
+        merchantName: String,
+        isDeposit: Boolean,
+        value: String,
+        vararg extraMerchantNames: String?
+    ) {
+        val candidates = listOfNotNull(merchantName, *extraMerchantNames)
+        for (name in candidates) {
+            val key = MerchantAliasPreferences.buildDirectionalKey(name, isDeposit)
+            val baseKey = MerchantAliasPreferences.buildDirectionalBaseKey(name, isDeposit)
+            if (key.isNotBlank()) map[key] = value
+            if (baseKey.isNotBlank()) map[baseKey] = value
+        }
+    }
+
+    private fun removeDirectionalRule(
+        map: ConcurrentHashMap<String, String>,
+        merchantName: String,
+        isDeposit: Boolean,
+        vararg extraMerchantNames: String?
+    ) {
+        val candidates = listOfNotNull(merchantName, *extraMerchantNames)
+        for (name in candidates) {
+            val key = MerchantAliasPreferences.buildDirectionalKey(name, isDeposit)
+            val baseKey = MerchantAliasPreferences.buildDirectionalBaseKey(name, isDeposit)
+            if (key.isNotBlank()) map.remove(key)
+            if (baseKey.isNotBlank()) map.remove(baseKey)
+        }
+    }
+
+    private fun lookupDirectionalRule(
+        map: ConcurrentHashMap<String, String>,
+        merchantName: String?,
+        isDeposit: Boolean
+    ): String? {
+        val raw = merchantName?.trim().orEmpty()
+        if (raw.isBlank()) return null
+        val key = MerchantAliasPreferences.buildDirectionalKey(raw, isDeposit)
+        if (key.isNotBlank()) {
+            map[key]?.let { return it }
+        }
+        val baseKey = MerchantAliasPreferences.buildDirectionalBaseKey(raw, isDeposit)
+        if (baseKey.isNotBlank() && baseKey != key) {
+            map[baseKey]?.let { return it }
+        }
+        // 레거시 무접두사 키 폴백 (단, 반대 방향 전용 키가 없을 때만 허용)
+        val norm = MerchantAliasPreferences.normalizeMerchantKey(raw)
+        if (norm.isNotBlank()) {
+            map[norm]?.let { return it }
+        }
+        return null
     }
 
     @Synchronized
@@ -158,6 +214,16 @@ class ExpenseCustomMetaPreferences private constructor(
                     val k = keys.next()
                     val v = obj.optString(k).trim()
                     if (k.isNotBlank() && v.isNotBlank()) merchantCustomCategoryMap[k] = v
+                }
+            }
+
+            merchantBaseCategoryMap.clear()
+            root.optJSONObject("merchantBaseCategoryMap")?.let { obj ->
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val v = obj.optString(k).trim()
+                    if (k.isNotBlank() && v.isNotBlank()) merchantBaseCategoryMap[k] = v
                 }
             }
 
@@ -278,6 +344,10 @@ class ExpenseCustomMetaPreferences private constructor(
             merchantCustomCategoryMap.forEach { (k, v) -> merCatObj.put(k, v) }
             root.put("merchantCustomCategoryMap", merCatObj)
 
+            val merBaseCatObj = JSONObject()
+            merchantBaseCategoryMap.forEach { (k, v) -> merBaseCatObj.put(k, v) }
+            root.put("merchantBaseCategoryMap", merBaseCatObj)
+
             val ucArr = JSONArray()
             userClassificationList.forEach { item ->
                 val o = JSONObject()
@@ -357,7 +427,7 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     // =========================================================================
-    // 1. 카드 지정 (카드사 및 법인/개인 여부)
+    // 1. 카드 지정 (카드사 및 법인/개인 여부) - 입금/출금 방향 구분 포함
     // =========================================================================
 
     fun formatCardDesignation(cardCompany: String, isCorporate: Boolean): String {
@@ -384,8 +454,11 @@ class ExpenseCustomMetaPreferences private constructor(
         txCorporateMap[tx.id]?.let { return it }
         if (tx.cardOrBankName.contains("법인")) return true
         if (!isOneTimeEdited(tx)) {
-            val normMer = MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)
-            val savedCard = merchantCardDesignationMap[normMer]
+            val savedCard = lookupDirectionalRule(
+                merchantCardDesignationMap,
+                tx.merchantName,
+                tx.isDepositTransaction()
+            )
             if (savedCard != null && savedCard.contains("법인")) return true
         }
         return false
@@ -396,26 +469,29 @@ class ExpenseCustomMetaPreferences private constructor(
         merchantName: String,
         cardCompany: String,
         isCorporate: Boolean,
-        applyToMerchantRule: Boolean
+        applyToMerchantRule: Boolean,
+        isDeposit: Boolean = false,
+        vararg extraMerchantNames: String?
     ): String {
         val formatted = formatCardDesignation(cardCompany, isCorporate)
         if (txId > 0L) {
             txCorporateMap[txId] = isCorporate
         }
         if (applyToMerchantRule && merchantName.isNotBlank()) {
-            val normMer = MerchantAliasPreferences.normalizeMerchantKey(merchantName)
-            if (normMer.isNotBlank()) {
-                merchantCardDesignationMap[normMer] = formatted
-            }
+            putDirectionalRule(
+                merchantCardDesignationMap,
+                merchantName,
+                isDeposit,
+                formatted,
+                *extraMerchantNames
+            )
         }
         saveToPrefs()
         return formatted
     }
 
-    fun resolveMerchantCardDesignation(merchantName: String?): String? {
-        val norm = MerchantAliasPreferences.normalizeMerchantKey(merchantName.orEmpty())
-        if (norm.isBlank()) return null
-        return merchantCardDesignationMap[norm]
+    fun resolveMerchantCardDesignation(merchantName: String?, isDeposit: Boolean = false): String? {
+        return lookupDirectionalRule(merchantCardDesignationMap, merchantName, isDeposit)
     }
 
     // =========================================================================
@@ -532,11 +608,37 @@ class ExpenseCustomMetaPreferences private constructor(
         saveToPrefs()
     }
 
+    fun assignBaseCategory(
+        merchantName: String,
+        category: ExpenseCategory,
+        applyToMerchantRule: Boolean,
+        isDeposit: Boolean = false,
+        vararg extraMerchantNames: String?
+    ) {
+        if (applyToMerchantRule && merchantName.isNotBlank()) {
+            putDirectionalRule(
+                merchantBaseCategoryMap,
+                merchantName,
+                isDeposit,
+                category.name,
+                *extraMerchantNames
+            )
+            saveToPrefs()
+        }
+    }
+
+    fun resolveMerchantBaseCategory(merchantName: String?, isDeposit: Boolean = false): ExpenseCategory? {
+        val catName = lookupDirectionalRule(merchantBaseCategoryMap, merchantName, isDeposit) ?: return null
+        return runCatching { ExpenseCategory.valueOf(catName) }.getOrNull()
+    }
+
     fun assignCustomCategory(
         txId: Long,
         merchantName: String,
         customCategoryName: String?,
-        applyToMerchantRule: Boolean
+        applyToMerchantRule: Boolean,
+        isDeposit: Boolean = false,
+        vararg extraMerchantNames: String?
     ) {
         val cleanCat = customCategoryName?.trim().orEmpty()
         if (cleanCat.isNotBlank()) {
@@ -545,20 +647,25 @@ class ExpenseCustomMetaPreferences private constructor(
                 txCustomCategoryMap[txId] = cleanCat
             }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
-                val normMer = MerchantAliasPreferences.normalizeMerchantKey(merchantName)
-                if (normMer.isNotBlank()) {
-                    merchantCustomCategoryMap[normMer] = cleanCat
-                }
+                putDirectionalRule(
+                    merchantCustomCategoryMap,
+                    merchantName,
+                    isDeposit,
+                    cleanCat,
+                    *extraMerchantNames
+                )
             }
         } else {
             if (txId > 0L) {
                 txCustomCategoryMap.remove(txId)
             }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
-                val normMer = MerchantAliasPreferences.normalizeMerchantKey(merchantName)
-                if (normMer.isNotBlank()) {
-                    merchantCustomCategoryMap.remove(normMer)
-                }
+                removeDirectionalRule(
+                    merchantCustomCategoryMap,
+                    merchantName,
+                    isDeposit,
+                    *extraMerchantNames
+                )
             }
         }
         saveToPrefs()
@@ -569,10 +676,11 @@ class ExpenseCustomMetaPreferences private constructor(
             txCustomCategoryMap[tx.id]?.let { return it }
         }
         if (!isOneTimeEdited(tx)) {
-            val normMer = MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)
-            if (normMer.isNotBlank()) {
-                merchantCustomCategoryMap[normMer]?.let { return it }
-            }
+            lookupDirectionalRule(
+                merchantCustomCategoryMap,
+                tx.merchantName,
+                tx.isDepositTransaction()
+            )?.let { return it }
         }
         return null
     }
@@ -590,7 +698,7 @@ class ExpenseCustomMetaPreferences private constructor(
     fun getCustomCategories(): List<String> = customCategoryList.toList()
 
     // =========================================================================
-    // 4. 사용자 분류 관리 (직접입력, 추가 / 수정 / 삭제, 배지 색상)
+    // 4. 사용자 분류 관리 (직접입력, 추가 / 수정 / 삭제, 배지 색상) - 입금/출금 구분 포함
     // =========================================================================
 
     @Synchronized
@@ -647,7 +755,9 @@ class ExpenseCustomMetaPreferences private constructor(
         txId: Long,
         merchantName: String,
         userClassificationName: String?,
-        applyToMerchantRule: Boolean
+        applyToMerchantRule: Boolean,
+        isDeposit: Boolean = false,
+        vararg extraMerchantNames: String?
     ) {
         val cleanName = userClassificationName?.trim().orEmpty()
         if (cleanName.isNotBlank()) {
@@ -656,20 +766,25 @@ class ExpenseCustomMetaPreferences private constructor(
                 txUserClassMap[txId] = cleanName
             }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
-                val normMer = MerchantAliasPreferences.normalizeMerchantKey(merchantName)
-                if (normMer.isNotBlank()) {
-                    merchantUserClassMap[normMer] = cleanName
-                }
+                putDirectionalRule(
+                    merchantUserClassMap,
+                    merchantName,
+                    isDeposit,
+                    cleanName,
+                    *extraMerchantNames
+                )
             }
         } else {
             if (txId > 0L) {
                 txUserClassMap.remove(txId)
             }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
-                val normMer = MerchantAliasPreferences.normalizeMerchantKey(merchantName)
-                if (normMer.isNotBlank()) {
-                    merchantUserClassMap.remove(normMer)
-                }
+                removeDirectionalRule(
+                    merchantUserClassMap,
+                    merchantName,
+                    isDeposit,
+                    *extraMerchantNames
+                )
             }
         }
         saveToPrefs()
@@ -679,8 +794,11 @@ class ExpenseCustomMetaPreferences private constructor(
     fun resolveUserClassification(tx: Transaction): UserClassificationItem? {
         val assignedName = (if (tx.id > 0L) txUserClassMap[tx.id] else null)
             ?: (if (!isOneTimeEdited(tx)) {
-                val normMer = MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)
-                if (normMer.isNotBlank()) merchantUserClassMap[normMer] else null
+                lookupDirectionalRule(
+                    merchantUserClassMap,
+                    tx.merchantName,
+                    tx.isDepositTransaction()
+                )
             } else null)
             ?: return null
 

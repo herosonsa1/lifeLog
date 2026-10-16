@@ -175,10 +175,10 @@ object NotificationParser {
             }
         }
 
-        // 3. 은행 계좌 이체/출금 전용 정밀 파싱 (단, 카드 승인 알림은 절대 가로채지 않도록 방어)
+        // 3. 은행 계좌 이체/입출금 전용 정밀 파싱 (단, 카드 승인 알림은 절대 가로채지 않도록 방어)
         val isCardApproval = SmsParser.isCardApprovalMessage(cleanCombined)
         val isBankTransferNotice = !isCardApproval && (
-            cleanCombined.contains("출금") || cleanCombined.contains("송금") ||
+            cleanCombined.contains("출금") || cleanCombined.contains("입금") || cleanCombined.contains("송금") ||
                 cleanCombined.contains("이체") || cleanCombined.contains("잔액") ||
                 Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(cleanCombined)
             )
@@ -244,13 +244,15 @@ object NotificationParser {
     }
 
     private fun parseBankTransferNotification(packageName: String, combined: String): Transaction? {
+        val isDeposit = combined.contains("입금") && !combined.contains("출금")
+
         // 잔액 정보 사전 분리 (거래 금액과 잔액 혼동 원천 차단)
         val balanceMatch = Regex("""잔액\s*(?<balance>[\d,]+)원?""").find(combined)
         val balanceStr = balanceMatch?.groups?.get("balance")?.value
         val textWithoutBalance = if (balanceMatch != null) combined.replace(balanceMatch.value, "") else combined
 
         // 1. 거래 금액 추출
-        val amtMatch = Regex("""(?:출금|송금|이체)?\s*(?<amt>[\d,]+)원\s*(?:출금|송금|이체)?""").find(textWithoutBalance)
+        val amtMatch = Regex("""(?:출금|입금|송금|이체)?\s*(?<amt>[\d,]+)원\s*(?:출금|입금|송금|이체)?""").find(textWithoutBalance)
             ?: Regex("""\b(?<amt>[\d,]+)원\b""").find(textWithoutBalance)
         val amount = amtMatch?.groups?.get("amt")?.value?.replace(",", "")?.toLongOrNull() ?: return null
         if (amount <= 0) return null
@@ -281,15 +283,15 @@ object NotificationParser {
         val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(combined)
         val accNo = accMatch?.groups?.get("acc")?.value
 
-        // 5. 수취인/메모 추출: 계좌번호, 날짜, 금액, 잔액 등을 제외하고 남은 유효 텍스트에서 추출
+        // 5. 수취인/입금자/메모 추출: 계좌번호, 날짜, 금액, 잔액 등을 제외하고 남은 유효 텍스트에서 추출
         var remain = combined
         if (bankBracketMatch != null) remain = remain.replace(bankBracketMatch.value, "")
         if (balanceMatch != null) remain = remain.replace(balanceMatch.value, "")
         remain = remain.replace(amtMatch.value, "")
         remain = remain.replace(Regex("""\d{1,2}/\d{1,2}\s*\d{1,2}:\d{1,2}"""), "")
         if (accNo != null) remain = remain.replace(accNo, "")
-        remain = remain.replace(Regex("""(?:출금|송금|이체|결제|승인|완료|잔액|원)\b"""), "")
-        remain = remain.replace("출금", "").replace("송금", "").replace("이체", "")
+        remain = remain.replace(Regex("""(?:출금|입금|송금|이체|결제|승인|완료|잔액|원)\b"""), "")
+        remain = remain.replace("출금", "").replace("입금", "").replace("송금", "").replace("이체", "")
         remain = remain.trim()
 
         val nameCandidateMatch = Regex("""([가-힣a-zA-Z\s]{2,10})""").find(remain)
@@ -299,13 +301,17 @@ object NotificationParser {
         val merchant = if (!receiverName.isNullOrBlank()) {
             receiverName
         } else {
-            "출금 내역"
+            if (isDeposit) "입금 내역" else "출금 내역"
         }
 
         val memoParts = mutableListOf<String>()
         if (!accNo.isNullOrBlank()) memoParts.add("계좌: $accNo")
         if (!balanceStr.isNullOrBlank()) memoParts.add("잔액 ${balanceStr}원")
-        val transferMemo = if (memoParts.isNotEmpty()) memoParts.joinToString(" · ") else "이체/출금"
+        val transferMemo = if (memoParts.isNotEmpty()) {
+            memoParts.joinToString(" · ")
+        } else {
+            if (isDeposit) "입금 내역" else "이체/출금"
+        }
 
         return Transaction(
             amount = amount,
@@ -313,7 +319,7 @@ object NotificationParser {
             originalText = combined,
             timestamp = timestamp,
             paymentMethod = PaymentMethod.BANK_TRANSFER,
-            category = ExpenseCategory.TRANSFER,
+            category = if (isDeposit) ExpenseCategory.INCOME else ExpenseCategory.TRANSFER,
             cardOrBankName = bankName,
             transferMemo = transferMemo,
             isAutoCategorized = true

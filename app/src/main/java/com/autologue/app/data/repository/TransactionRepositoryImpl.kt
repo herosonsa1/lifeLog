@@ -6,6 +6,7 @@ import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.data.preferences.MerchantAliasPreferences
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
+import com.autologue.app.domain.model.isDepositTransaction
 import com.autologue.app.domain.repository.TransactionRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -26,8 +27,14 @@ class TransactionRepositoryImpl @Inject constructor(
         merchantAliasPreferences: MerchantAliasPreferences = MerchantAliasPreferences()
     ) : this(transactionDao, merchantAliasPreferences, ExpenseCustomMetaPreferences())
 
-    private fun resolveMerchantWithAlias(merchantName: String, originalText: String, cardOrBankName: String?, timestamp: LocalDateTime): String {
-        val directResolved = merchantAliasPreferences.resolveAlias(merchantName)
+    private fun resolveMerchantWithAlias(
+        merchantName: String,
+        originalText: String,
+        cardOrBankName: String?,
+        timestamp: LocalDateTime,
+        isDeposit: Boolean
+    ): String {
+        val directResolved = merchantAliasPreferences.resolveAlias(merchantName, isDeposit)
         if (directResolved.isNotBlank() && directResolved != merchantName) {
             return directResolved
         }
@@ -36,7 +43,7 @@ class TransactionRepositoryImpl @Inject constructor(
             val rawParsed = com.autologue.app.data.parser.SmsParser.parse(cardOrBankName, originalText, timestamp)?.merchantName
                 ?: com.autologue.app.data.parser.SmsParser.parse(null, originalText, timestamp)?.merchantName
             if (!rawParsed.isNullOrBlank()) {
-                val rawResolved = merchantAliasPreferences.resolveAlias(rawParsed)
+                val rawResolved = merchantAliasPreferences.resolveAlias(rawParsed, isDeposit)
                 if (rawResolved.isNotBlank() && rawResolved != rawParsed) {
                     return rawResolved
                 }
@@ -74,22 +81,33 @@ class TransactionRepositoryImpl @Inject constructor(
             return@withContext -1L
         }
 
-        val resolvedMerchantName = if (expenseCustomMetaPreferences.isOneTimeEdited(transaction)) {
+        val isDeposit = transaction.isDepositTransaction()
+        val isOneTime = expenseCustomMetaPreferences.isOneTimeEdited(transaction)
+
+        val resolvedMerchantName = if (isOneTime) {
             transaction.merchantName
         } else {
             resolveMerchantWithAlias(
                 merchantName = transaction.merchantName,
                 originalText = transaction.originalText,
                 cardOrBankName = transaction.cardOrBankName,
-                timestamp = transaction.timestamp
+                timestamp = transaction.timestamp,
+                isDeposit = isDeposit
             )
         }
-        val savedCardDesignation = if (!expenseCustomMetaPreferences.isOneTimeEdited(transaction)) {
-            expenseCustomMetaPreferences.resolveMerchantCardDesignation(resolvedMerchantName)
+        val savedCardDesignation = if (!isOneTime) {
+            expenseCustomMetaPreferences.resolveMerchantCardDesignation(resolvedMerchantName, isDeposit)
+                ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(transaction.merchantName, isDeposit)
+        } else null
+
+        val savedBaseCategory = if (!isOneTime) {
+            expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMerchantName, isDeposit)
+                ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(transaction.merchantName, isDeposit)
         } else null
 
         val aliasedTransaction = transaction.copy(
             merchantName = resolvedMerchantName,
+            category = savedBaseCategory ?: transaction.category,
             cardOrBankName = savedCardDesignation ?: transaction.cardOrBankName
         )
 
@@ -100,7 +118,7 @@ class TransactionRepositoryImpl @Inject constructor(
             if (existingByText != null) {
                 if (!expenseCustomMetaPreferences.isOneTimeEditedId(existingByText.id) &&
                     existingByText.merchantName != aliasedTransaction.merchantName &&
-                    merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName)
+                    merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName, isDeposit)
                 ) {
                     transactionDao.updateTransaction(existingByText.copy(merchantName = aliasedTransaction.merchantName))
                 }
@@ -108,7 +126,7 @@ class TransactionRepositoryImpl @Inject constructor(
             }
         }
 
-        // 5분 윈도우 기반 지능형 중복 방지 (동일 금액 + ±5분 이내 동일/유사 가맹점)
+        // 5분 윈도우 기반 지능형 중복 방지 (동일 금액 + 동일 입금/출금 방향 + ±5분 이내 동일/유사 가맹점)
         val windowMilli = 5 * 60 * 1000L
         val candidates = transactionDao.findTransactionsByAmountAndDateRange(
             amount = aliasedTransaction.amount,
@@ -117,6 +135,7 @@ class TransactionRepositoryImpl @Inject constructor(
         )
 
         val duplicate = candidates.firstOrNull { existing ->
+            if (existing.toDomain().isDepositTransaction() != isDeposit) return@firstOrNull false
             val isExactMerchant = existing.merchantName == aliasedTransaction.merchantName ||
                 existing.merchantName == transaction.merchantName
             val isSimilarMerchant = existing.merchantName.isNotBlank() && aliasedTransaction.merchantName.isNotBlank() &&
@@ -130,7 +149,7 @@ class TransactionRepositoryImpl @Inject constructor(
         if (duplicate != null) {
             if (!expenseCustomMetaPreferences.isOneTimeEditedId(duplicate.id) &&
                 duplicate.merchantName != aliasedTransaction.merchantName &&
-                merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName)
+                merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName, isDeposit)
             ) {
                 transactionDao.updateTransaction(duplicate.copy(merchantName = aliasedTransaction.merchantName))
             }
@@ -138,7 +157,7 @@ class TransactionRepositoryImpl @Inject constructor(
         }
 
         val existing = transactionDao.findExactDuplicate(aliasedTransaction.amount, aliasedTransaction.merchantName, aliasedTransaction.timestamp)
-        if (existing != null) {
+        if (existing != null && existing.toDomain().isDepositTransaction() == isDeposit) {
             return@withContext existing.id
         }
 
@@ -152,22 +171,35 @@ class TransactionRepositoryImpl @Inject constructor(
     override suspend fun renameMerchantGlobally(
         oldMerchantName: String,
         newMerchantName: String,
-        rawOriginalMerchantName: String?
+        rawOriginalMerchantName: String?,
+        isDeposit: Boolean,
+        targetCategory: ExpenseCategory?,
+        targetCardOrBankName: String?
     ): Int = withContext(Dispatchers.IO) {
         val targetName = newMerchantName.trim()
         if (targetName.isBlank()) return@withContext 0
 
-        merchantAliasPreferences.registerAlias(
-            oldName = oldMerchantName,
-            newName = targetName,
-            rawOriginalName = rawOriginalMerchantName
-        )
+        if (!oldMerchantName.equals(targetName, ignoreCase = true) ||
+            (!rawOriginalMerchantName.isNullOrBlank() && !rawOriginalMerchantName.equals(targetName, ignoreCase = true))
+        ) {
+            merchantAliasPreferences.registerAlias(
+                oldName = oldMerchantName,
+                newName = targetName,
+                rawOriginalName = rawOriginalMerchantName,
+                isDeposit = isDeposit
+            )
+        }
 
         val all = transactionDao.getAllTransactionsSync()
         var updatedCount = 0
         for (tx in all) {
+            val domainTx = tx.toDomain()
             // 1회성 저장으로 보호된 내역은 일괄 치환에서 제외
-            if (expenseCustomMetaPreferences.isOneTimeEdited(tx.toDomain())) continue
+            if (expenseCustomMetaPreferences.isOneTimeEdited(domainTx)) continue
+
+            // [핵심] 입금(isDeposit == true)과 출금(isDeposit == false)이 다른 내역은 절대 함께 치환하지 않음
+            val txIsDeposit = domainTx.isDepositTransaction()
+            if (txIsDeposit != isDeposit) continue
 
             val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
             val rawParsed = if (!isManual && tx.originalText.isNotBlank()) {
@@ -176,20 +208,43 @@ class TransactionRepositoryImpl @Inject constructor(
             } else null
 
             val isMatchedOld = merchantAliasPreferences.isSameMerchant(tx.merchantName, oldMerchantName) ||
+                merchantAliasPreferences.isSameMerchant(tx.merchantName, targetName) ||
                 (!rawOriginalMerchantName.isNullOrBlank() && merchantAliasPreferences.isSameMerchant(tx.merchantName, rawOriginalMerchantName)) ||
                 (!rawParsed.isNullOrBlank() && (
                     merchantAliasPreferences.isSameMerchant(rawParsed, oldMerchantName) ||
+                    merchantAliasPreferences.isSameMerchant(rawParsed, targetName) ||
                     (!rawOriginalMerchantName.isNullOrBlank() && merchantAliasPreferences.isSameMerchant(rawParsed, rawOriginalMerchantName))
                 ))
 
             val resolvedName = if (isMatchedOld) {
                 targetName
             } else {
-                resolveMerchantWithAlias(tx.merchantName, tx.originalText, tx.cardOrBankName, tx.timestamp)
+                resolveMerchantWithAlias(tx.merchantName, tx.originalText, tx.cardOrBankName, tx.timestamp, txIsDeposit)
             }
 
-            if (resolvedName.isNotBlank() && resolvedName != tx.merchantName) {
-                transactionDao.updateTransaction(tx.copy(merchantName = resolvedName))
+            val resolvedCategory = if (isMatchedOld && targetCategory != null) {
+                targetCategory
+            } else {
+                tx.category
+            }
+
+            val resolvedCard = if (isMatchedOld && !targetCardOrBankName.isNullOrBlank()) {
+                targetCardOrBankName
+            } else {
+                tx.cardOrBankName
+            }
+
+            if ((resolvedName.isNotBlank() && resolvedName != tx.merchantName) ||
+                resolvedCategory != tx.category ||
+                resolvedCard != tx.cardOrBankName
+            ) {
+                transactionDao.updateTransaction(
+                    tx.copy(
+                        merchantName = resolvedName.ifBlank { tx.merchantName },
+                        category = resolvedCategory,
+                        cardOrBankName = resolvedCard
+                    )
+                )
                 updatedCount++
             }
         }
@@ -251,16 +306,30 @@ class TransactionRepositoryImpl @Inject constructor(
                 continue
             }
 
-            // 1-0. 사용자가 등록한 결제처 별칭(자동 치환 규칙)이 있으면 최우선 반영
-            val aliasedMerchant = resolveMerchantWithAlias(rawTx.merchantName, raw, rawTx.cardOrBankName, rawTx.timestamp)
-            val tx = if (aliasedMerchant.isNotBlank() && aliasedMerchant != rawTx.merchantName) {
-                val updated = rawTx.copy(merchantName = aliasedMerchant)
+            val isDeposit = domainRawTx.isDepositTransaction()
+
+            // 1-0. 사용자가 등록한 결제처 별칭(입금/출금 방향별 자동 치환 규칙) 및 영구 카테고리/카드 설정 최우선 반영
+            val aliasedMerchant = resolveMerchantWithAlias(rawTx.merchantName, raw, rawTx.cardOrBankName, rawTx.timestamp, isDeposit)
+            val savedBaseCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(aliasedMerchant, isDeposit)
+                ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(rawTx.merchantName, isDeposit)
+            val savedCard = expenseCustomMetaPreferences.resolveMerchantCardDesignation(aliasedMerchant, isDeposit)
+                ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(rawTx.merchantName, isDeposit)
+
+            val tx = if ((aliasedMerchant.isNotBlank() && aliasedMerchant != rawTx.merchantName) ||
+                (savedBaseCategory != null && savedBaseCategory != rawTx.category) ||
+                (savedCard != null && savedCard != rawTx.cardOrBankName)
+            ) {
+                val updated = rawTx.copy(
+                    merchantName = aliasedMerchant.ifBlank { rawTx.merchantName },
+                    category = savedBaseCategory ?: rawTx.category,
+                    cardOrBankName = savedCard ?: rawTx.cardOrBankName
+                )
                 transactionDao.updateTransaction(updated)
                 updated
             } else {
                 rawTx
             }
-            val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(tx.merchantName)
+            val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(tx.merchantName, isDeposit) || savedBaseCategory != null
 
             // 1-1. 비결제 문자(주식 시황, 광고, 뉴스, 누적/결제예정/총사용 안내 등) 또는 무효 가맹점명 레코드 정리
             if (!isManual && (
@@ -270,7 +339,8 @@ class TransactionRepositoryImpl @Inject constructor(
             ) {
                 val reparsed = com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
                 if (reparsed != null && !com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(reparsed.merchantName, reparsed.cardOrBankName, raw)) {
-                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp)
+                    val reparsedDeposit = reparsed.isDepositTransaction()
+                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp, reparsedDeposit)
                     val healed = tx.copy(
                         amount = reparsed.amount,
                         merchantName = healedMerchant,
@@ -293,13 +363,14 @@ class TransactionRepositoryImpl @Inject constructor(
                     tx.paymentMethod == com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER ||
                     tx.category == ExpenseCategory.TRANSFER ||
                     tx.category == ExpenseCategory.ETC ||
-                    tx.merchantName in listOf("출금 내역", "계좌 이체", "카드 가맹점", "가맹점", "정선우", "정*우")
+                    tx.merchantName in listOf("출금 내역", "입금 내역", "계좌 이체", "카드 가맹점", "가맹점", "정선우", "정*우")
                 )
             ) {
                 val reparsed = com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
                     ?: com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
                 if (reparsed != null) {
-                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp)
+                    val reparsedDeposit = reparsed.isDepositTransaction()
+                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp, reparsedDeposit)
                     val healed = tx.copy(
                         amount = reparsed.amount,
                         merchantName = healedMerchant,
@@ -315,11 +386,13 @@ class TransactionRepositoryImpl @Inject constructor(
             }
 
             // 주유 키워드가 상호명(또는 별칭 원본 가맹점명)에 포함된 거래가 주유 외 카테고리로 잘못 분류된 경우 복원
-            val isAliasFromFuel = merchantAliasPreferences.getOriginalNamesForTarget(tx.merchantName)
+            val isAliasFromFuel = merchantAliasPreferences.getOriginalNamesForTarget(tx.merchantName, isDeposit)
                 .any { VehicleRepositoryImpl.isFuelMerchant(it) }
-            val isFuel = VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
+            val isFuel = !isDeposit && (
+                VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
                 isAliasFromFuel ||
                 (!isManual && isCardMsg && VehicleRepositoryImpl.isFuelMerchant(raw))
+            )
             if (isFuel && tx.category != ExpenseCategory.FUEL) {
                 val healedCategory = tx.copy(category = ExpenseCategory.FUEL, isAutoCategorized = true)
                 transactionDao.updateTransaction(healedCategory)
@@ -332,7 +405,7 @@ class TransactionRepositoryImpl @Inject constructor(
             }
 
             // 기존 '기타(ETC)'로 저장된 내역 중 병원/약제 등 신규 기본 분류 규칙에 매칭되는 내역 자동 업그레이드
-            if (tx.category == ExpenseCategory.ETC && !expenseCustomMetaPreferences.isOneTimeEditedId(tx.id)) {
+            if (tx.category == ExpenseCategory.ETC && !expenseCustomMetaPreferences.isOneTimeEditedId(tx.id) && savedBaseCategory == null) {
                 val recalcCategory = com.autologue.app.data.parser.RuleMatcherEngine.classifyMerchant(tx.merchantName, originalText = raw)
                 if (recalcCategory != ExpenseCategory.ETC) {
                     val healedCategory = tx.copy(category = recalcCategory, isAutoCategorized = true)
@@ -341,13 +414,18 @@ class TransactionRepositoryImpl @Inject constructor(
                 }
             }
 
-            // 순수 은행 이체/출금 내역만 TRANSFER로 분류 (카드 승인 문자는 제외)
-            if (!isCardMsg && tx.category == ExpenseCategory.ETC) {
+            // 순수 은행 이체/입출금 내역 분류 (카드 승인 문자는 제외)
+            if (!isCardMsg && tx.category == ExpenseCategory.ETC && savedBaseCategory == null) {
                 val fullText = "${tx.merchantName} ${tx.originalText} ${tx.transferMemo ?: ""}"
-                val hasTransferKeyword = fullText.contains("출금") || fullText.contains("송금") || fullText.contains("이체")
-                if (hasTransferKeyword) {
-                    val updated = tx.copy(category = ExpenseCategory.TRANSFER, isAutoCategorized = true)
+                if (isDeposit) {
+                    val updated = tx.copy(category = ExpenseCategory.INCOME, isAutoCategorized = true)
                     transactionDao.updateTransaction(updated)
+                } else {
+                    val hasTransferKeyword = fullText.contains("출금") || fullText.contains("송금") || fullText.contains("이체")
+                    if (hasTransferKeyword) {
+                        val updated = tx.copy(category = ExpenseCategory.TRANSFER, isAutoCategorized = true)
+                        transactionDao.updateTransaction(updated)
+                    }
                 }
             }
         }
@@ -364,6 +442,7 @@ class TransactionRepositoryImpl @Inject constructor(
                 val b = sortedList[j]
                 if (b.id in toDeleteIds) continue
                 if (a.amount != b.amount) continue
+                if (a.toDomain().isDepositTransaction() != b.toDomain().isDepositTransaction()) continue
 
                 val bMillis = b.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 val timeDiff = Math.abs(aMillis - bMillis)

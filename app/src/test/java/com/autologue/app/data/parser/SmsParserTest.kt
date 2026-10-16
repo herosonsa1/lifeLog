@@ -85,4 +85,48 @@ class SmsParserTest {
             )
         )
     }
+
+    @Test
+    fun `동일 상대방 이름이라도 입금과 출금 내역이 각각 다른 방향 구분값으로 판별 및 키 분리되어야 한다`() {
+        val depositSms = """
+            [Web발신]
+            NH농협 입금 50,000원
+            10/16 14:20 312-****-9414-21
+            이민희 잔액 433,252원
+        """.trimIndent()
+
+        val withdrawSms = """
+            [Web발신]
+            NH농협 출금 22,000원
+            10/16 15:10 312-****-9414-21
+            이민희 잔액 411,252원
+        """.trimIndent()
+
+        val depositTx = SmsParser.parse("NH농협", depositSms)
+        val withdrawTx = SmsParser.parse("NH농협", withdrawSms)
+
+        assertNotNull(depositTx)
+        assertNotNull(withdrawTx)
+
+        assertTrue(com.autologue.app.domain.model.isDepositDirection(
+            category = depositTx!!.category,
+            merchantName = depositTx.merchantName,
+            originalText = depositSms,
+            transferMemo = depositTx.transferMemo
+        ))
+        assertFalse(com.autologue.app.domain.model.isDepositDirection(
+            category = withdrawTx!!.category,
+            merchantName = withdrawTx.merchantName,
+            originalText = withdrawSms,
+            transferMemo = withdrawTx.transferMemo
+        ))
+
+        // 동일 인물("이민희")에 대해 입금 키(IN::)와 출금 키(OUT::)가 서로 달라야 함
+        val inKey = com.autologue.app.data.preferences.MerchantAliasPreferences.buildDirectionalBaseKey(depositTx.merchantName, isDeposit = true)
+        val outKey = com.autologue.app.data.preferences.MerchantAliasPreferences.buildDirectionalBaseKey(withdrawTx.merchantName, isDeposit = false)
+        assertEquals("IN::이민희", inKey)
+        assertEquals("OUT::이민희", outKey)
+        assertFalse(inKey == outKey)
+    }
 }
+

@@ -18,6 +18,9 @@ interface TransactionRepository {
     suspend fun renameMerchantGlobally(
         oldMerchantName: String,
         newMerchantName: String,
-        rawOriginalMerchantName: String? = null
+        rawOriginalMerchantName: String? = null,
+        isDeposit: Boolean = false,
+        targetCategory: ExpenseCategory? = null,
+        targetCardOrBankName: String? = null
     ): Int = 0
 }

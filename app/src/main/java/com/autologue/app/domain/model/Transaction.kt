@@ -49,3 +49,39 @@ fun Transaction.isSelfTransfer(): Boolean {
     return merchantName.contains(target) || (transferMemo?.contains(target) == true)
 }
 
+/**
+ * 해당 내역이 '입금(수입)'인지 '출금(지출/이체/결제)'인지 판별합니다.
+ * - true: 입금 (입금 문자/알림 또는 수입/입금 카테고리)
+ * - false: 출금 (출금/이체/송금 문자, 카드 승인/결제, 일반 지출)
+ */
+fun Transaction.isDepositTransaction(): Boolean {
+    return isDepositDirection(
+        category = category,
+        originalText = originalText,
+        transferMemo = transferMemo,
+        merchantName = merchantName
+    )
+}
+
+fun isDepositDirection(
+    category: ExpenseCategory? = null,
+    originalText: String? = null,
+    transferMemo: String? = null,
+    merchantName: String? = null
+): Boolean {
+    val orig = originalText.orEmpty()
+    val memo = transferMemo.orEmpty()
+    val mer = merchantName.orEmpty()
+
+    val hasExplicitWithdraw = orig.contains("출금") || orig.contains("승인") || orig.contains("결제") ||
+        memo.startsWith("출금") || mer.endsWith("(출금)") || mer == "출금 내역"
+    val hasExplicitDeposit = orig.contains("입금") || memo.startsWith("입금") ||
+        mer.endsWith("(입금)") || mer == "입금 내역"
+
+    if (hasExplicitDeposit && !hasExplicitWithdraw) return true
+    if (hasExplicitWithdraw && !hasExplicitDeposit) return false
+
+    return category == ExpenseCategory.INCOME
+}
+
+
