@@ -51,12 +51,13 @@ android {
     }
 }
 
-tasks.matching { it.name.startsWith("package") }.configureEach {
-    val taskName = name
-    val variant = taskName.removePrefix("package")
-    dependsOn(tasks.matching { it.name == "write${variant}AppMetadata" })
+tasks.matching { it.name.startsWith("package") || it.name.startsWith("assemble") }.configureEach {
+    if (name.startsWith("package")) {
+        val variant = name.removePrefix("package")
+        dependsOn(tasks.matching { it.name == "write${variant}AppMetadata" })
+    }
     doLast {
-        // 기존 app-debug.apk 잔존 파일 정리 및 프로젝트 루트에도 최신 lifeLog.apk 복사
+        // 기존 app-debug.apk 잔존 파일 정리 및 프로젝트 루트와 .\dist 폴더에 최신 lifeLog.apk 자동 복사
         val debugDir = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
         val legacyApk = File(debugDir, "app-debug.apk")
         if (legacyApk.exists()) {
@@ -65,6 +66,11 @@ tasks.matching { it.name.startsWith("package") }.configureEach {
         val builtApk = File(debugDir, "lifeLog.apk")
         if (builtApk.exists()) {
             builtApk.copyTo(File(rootProject.projectDir, "lifeLog.apk"), overwrite = true)
+            val distDir = File(rootProject.projectDir, "dist")
+            if (!distDir.exists()) {
+                distDir.mkdirs()
+            }
+            builtApk.copyTo(File(distDir, "lifeLog.apk"), overwrite = true)
         }
     }
 }
