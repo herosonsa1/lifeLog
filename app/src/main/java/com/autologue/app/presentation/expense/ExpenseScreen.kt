@@ -1097,6 +1097,9 @@ fun ExpenseScreen(
             managedCategories = uiState.managedCategories,
             userClassifications = uiState.userClassifications,
             isSaving = uiState.isSaving,
+            onResolveCardCorporate = { cardName ->
+                viewModel.expenseCustomMetaPreferences.resolveCardCorporateByCardName(cardName)
+            },
             onAddPermanentCategory = { newCat -> viewModel.addCustomCategoryPermanent(newCat) },
             onOpenCategoryManage = { viewModel.openCategoryManageDialog() },
             onOpenUserClassificationManage = { viewModel.openUserClassificationManageDialog() },
@@ -1163,7 +1166,7 @@ fun ExpenseScreen(
     if (uiState.editingTransaction != null) {
         val editingTx = uiState.editingTransaction!!
         val resolvedBaseCardOrBank = viewModel.expenseCustomMetaPreferences.extractBaseCardName(
-            viewModel.expenseCustomMetaPreferences.resolveDisplayCardOrBankName(editingTx) ?: editingTx.cardOrBankName
+            viewModel.expenseCustomMetaPreferences.resolveDisplayCardOrBankName(editingTx)
         )
         EditTransactionDialog(
             transaction = editingTx,
@@ -1176,6 +1179,13 @@ fun ExpenseScreen(
             initialIsOneTimeSave = editingTx.id in uiState.oneTimeEditedIds,
             initialIsFixedExpense = editingTx.id in uiState.recurringTransactionIds,
             isSaving = uiState.isSaving,
+            onResolveCardCorporate = { cardName ->
+                viewModel.expenseCustomMetaPreferences.resolveCardCorporateByCardName(
+                    cardCompany = cardName,
+                    rawCardOrBankName = editingTx.cardOrBankName,
+                    originalText = editingTx.originalText
+                )
+            },
             onAddPermanentCategory = { newCat -> viewModel.addCustomCategoryPermanent(newCat) },
             onUpdateCategoryName = { item, newName -> viewModel.updateManagedCategoryName(item, newName) },
             onDeleteCategory = { item -> viewModel.deleteManagedCategory(item) },
@@ -1764,6 +1774,7 @@ fun AddManualExpenseDialog(
     managedCategories: List<com.autologue.app.data.preferences.ManagedCategoryItem>,
     userClassifications: List<com.autologue.app.data.preferences.UserClassificationItem>,
     isSaving: Boolean = false,
+    onResolveCardCorporate: (String) -> Boolean? = { null },
     onAddPermanentCategory: (String) -> Boolean,
     onOpenCategoryManage: () -> Unit = {},
     onOpenUserClassificationManage: () -> Unit = {},
@@ -1788,7 +1799,7 @@ fun AddManualExpenseDialog(
     var selectedCustomCategoryName by remember { mutableStateOf<String?>(null) }
     var newPermanentCategoryInput by remember { mutableStateOf("") }
     var cardOrBankName by remember { mutableStateOf("신한카드") }
-    var isCorporate by remember { mutableStateOf(false) }
+    var isCorporate by remember { mutableStateOf(onResolveCardCorporate("신한카드") ?: false) }
     var userClassificationInput by remember { mutableStateOf("") }
     var isFixedExpense by remember { mutableStateOf(false) }
     var memo by remember { mutableStateOf("") }
@@ -1921,7 +1932,16 @@ fun AddManualExpenseDialog(
                             com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_CARD_COMPANIES.forEach { cardPreset ->
                                 val isCardSelected = cardOrBankName.trim() == cardPreset
                                 Surface(
-                                    onClick = { cardOrBankName = cardPreset },
+                                    onClick = {
+                                        cardOrBankName = cardPreset
+                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(userClassificationInput) ||
+                                            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(selectedCustomCategoryName)
+                                        ) {
+                                            isCorporate = true
+                                        } else {
+                                            onResolveCardCorporate(cardPreset)?.let { isCorporate = it }
+                                        }
+                                    },
                                     shape = RoundedCornerShape(6.dp),
                                     color = if (isCardSelected) Color(0xFFEFF6FF) else Slate50,
                                     border = BorderStroke(1.dp, if (isCardSelected) Color(0xFF2563EB) else Slate200)
@@ -1939,7 +1959,10 @@ fun AddManualExpenseDialog(
 
                         AutoLogueTextField(
                             value = cardOrBankName,
-                            onValueChange = { cardOrBankName = it },
+                            onValueChange = {
+                                cardOrBankName = it
+                                onResolveCardCorporate(it)?.let { savedCorp -> isCorporate = savedCorp }
+                            },
                             label = "카드회사 / 결제수단 직접 입력",
                             placeholder = "예: 하나카드, NH농협카드, 우리카드, 신한카드",
                             singleLine = true,
@@ -2037,6 +2060,9 @@ fun AddManualExpenseDialog(
                                     val willBeBank = nextCat == ExpenseCategory.TRANSFER || nextCat == ExpenseCategory.INCOME
                                     selectedCategory = nextCat
                                     selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
+                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
+                                        isCorporate = true
+                                    }
                                     if (!wasBank && willBeBank) {
                                         cardOrBankName = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName(cardOrBankName)
                                             ?: "NH농협은행"
@@ -2116,6 +2142,9 @@ fun AddManualExpenseDialog(
                                             if (trimmed.isNotEmpty()) {
                                                 onAddPermanentCategory(trimmed)
                                                 selectedCustomCategoryName = trimmed
+                                                if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(trimmed)) {
+                                                    isCorporate = true
+                                                }
                                                 newPermanentCategoryInput = ""
                                             }
                                         },
@@ -2181,7 +2210,12 @@ fun AddManualExpenseDialog(
                             val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
                             val isSelected = userClassificationInput.trim() == uc.name
                             Surface(
-                                onClick = { userClassificationInput = uc.name },
+                                onClick = {
+                                    userClassificationInput = uc.name
+                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
+                                        isCorporate = true
+                                    }
+                                },
                                 shape = RoundedCornerShape(6.dp),
                                 color = if (isSelected) fg else bg,
                                 border = BorderStroke(1.dp, fg)
@@ -2198,7 +2232,12 @@ fun AddManualExpenseDialog(
                     }
                     AutoLogueTextField(
                         value = userClassificationInput,
-                        onValueChange = { userClassificationInput = it },
+                        onValueChange = {
+                            userClassificationInput = it
+                            if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(it)) {
+                                isCorporate = true
+                            }
+                        },
                         label = "사용자 분류명 직접 입력 (입력 시 자동 등록)",
                         placeholder = "예: 홍길동, 가족공용, 프로젝트A, 배우자",
                         singleLine = true,
@@ -2281,6 +2320,7 @@ fun EditTransactionDialog(
     initialIsOneTimeSave: Boolean,
     initialIsFixedExpense: Boolean = false,
     isSaving: Boolean = false,
+    onResolveCardCorporate: (String) -> Boolean? = { null },
     onAddPermanentCategory: (String) -> Boolean,
     onUpdateCategoryName: (com.autologue.app.data.preferences.ManagedCategoryItem, String) -> Unit = { _, _ -> },
     onDeleteCategory: (com.autologue.app.data.preferences.ManagedCategoryItem) -> Unit = {},
@@ -2319,6 +2359,12 @@ fun EditTransactionDialog(
             transaction.originalText
         ) ?: initialBaseCardName.takeIf { it.isNotBlank() && !it.endsWith("카드") } ?: "NH농협은행"
     }
+    val extractedRawCardHint = remember(transaction.id, transaction.cardOrBankName, transaction.originalText) {
+        com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.extractRawCardHintToken(
+            transaction.cardOrBankName,
+            transaction.originalText
+        )
+    }
 
     var merchantName by remember(transaction.id) { mutableStateOf(transaction.merchantName) }
     var selectedCategory by remember(transaction.id) { mutableStateOf(transaction.category) }
@@ -2327,7 +2373,13 @@ fun EditTransactionDialog(
     var cardCompany by remember(transaction.id) {
         mutableStateOf(if (transaction.isBankAccountTransaction()) inferredBank else inferredCard)
     }
-    var isCorporate by remember(transaction.id) { mutableStateOf(initialIsCorporate) }
+    var isCorporate by remember(transaction.id) {
+        mutableStateOf(
+            initialIsCorporate ||
+                com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(initialUserClassificationName) ||
+                com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(initialCustomCategoryName)
+        )
+    }
     var userClassificationInput by remember(transaction.id) { mutableStateOf(initialUserClassificationName ?: "") }
     var isOneTimeSave by remember(transaction.id) { mutableStateOf(initialIsOneTimeSave) }
     var isFixedExpense by remember(transaction.id) { mutableStateOf(initialIsFixedExpense) }
@@ -2508,10 +2560,21 @@ fun EditTransactionDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "카드 지정 (힌트 기반 카드사 자동 선택)",
-                                    style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
-                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "카드 지정 (힌트 기반 카드사 자동 선택)",
+                                        style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
+                                    )
+                                    Text(
+                                        text = if (!extractedRawCardHint.isNullOrBlank()) {
+                                            "추출 카드정보 [$extractedRawCardHint] 기준으로 법인카드 여부가 영구저장됩니다"
+                                        } else {
+                                            "선택된 카드사 [$cardCompany] 기준으로 법인카드 여부가 영구저장됩니다"
+                                        },
+                                        fontSize = 9.5.sp,
+                                        color = Slate500
+                                    )
+                                }
                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Surface(
                                         onClick = { isCorporate = false },
@@ -2552,7 +2615,16 @@ fun EditTransactionDialog(
                                 com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_CARD_COMPANIES.forEach { cardPreset ->
                                     val isCardSelected = cardCompany.trim() == cardPreset
                                     Surface(
-                                        onClick = { cardCompany = cardPreset },
+                                        onClick = {
+                                            cardCompany = cardPreset
+                                            val isCorpSelected = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(userClassificationInput) ||
+                                                com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(selectedCustomCategoryName)
+                                            if (isCorpSelected) {
+                                                isCorporate = true
+                                            } else {
+                                                onResolveCardCorporate(cardPreset)?.let { isCorporate = it }
+                                            }
+                                        },
                                         shape = RoundedCornerShape(6.dp),
                                         color = if (isCardSelected) Color(0xFFEFF6FF) else Slate50,
                                         border = BorderStroke(1.dp, if (isCardSelected) Color(0xFF2563EB) else Slate200)
@@ -2570,7 +2642,14 @@ fun EditTransactionDialog(
 
                             AutoLogueTextField(
                                 value = cardCompany,
-                                onValueChange = { cardCompany = it },
+                                onValueChange = {
+                                    cardCompany = it
+                                    val isCorpSelected = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(userClassificationInput) ||
+                                        com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(selectedCustomCategoryName)
+                                    if (!isCorpSelected) {
+                                        onResolveCardCorporate(it)?.let { savedCorp -> isCorporate = savedCorp }
+                                    }
+                                },
                                 label = "카드회사 / 결제수단 직접 입력",
                                 placeholder = "예: 하나카드, NH농협카드, 우리카드, 신한카드",
                                 singleLine = true,
@@ -2682,6 +2761,9 @@ fun EditTransactionDialog(
                                         val willBeBank = transaction.isBankAccountTransaction(nextCat)
                                         selectedCategory = nextCat
                                         selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
+                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
+                                            isCorporate = true
+                                        }
                                         if (!wasBank && willBeBank) {
                                             cardCompany = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName(
                                                 cardCompany,
@@ -2742,6 +2824,9 @@ fun EditTransactionDialog(
                                                 onUpdateCategoryName(target, trimmed)
                                                 if (!target.isBuiltIn) {
                                                     selectedCustomCategoryName = trimmed
+                                                }
+                                                if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(trimmed)) {
+                                                    isCorporate = true
                                                 }
                                             }
                                             editingCatItemTarget = null
@@ -2862,6 +2947,9 @@ fun EditTransactionDialog(
                                                 if (trimmed.isNotEmpty()) {
                                                     onAddPermanentCategory(trimmed)
                                                     selectedCustomCategoryName = trimmed
+                                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(trimmed)) {
+                                                        isCorporate = true
+                                                    }
                                                     newPermanentCategoryInput = ""
                                                 }
                                             },
@@ -2932,6 +3020,9 @@ fun EditTransactionDialog(
                                 Surface(
                                     onClick = {
                                         userClassificationInput = uc.name
+                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
+                                            isCorporate = true
+                                        }
                                         editingUcNameTarget = null
                                     },
                                     shape = RoundedCornerShape(6.dp),
@@ -2983,6 +3074,9 @@ fun EditTransactionDialog(
                                                     if (trimmed.isNotEmpty()) {
                                                         onUpdateUserClassification(selectedUcItem.name, trimmed, selectedUcItem.colorIndex)
                                                         userClassificationInput = trimmed
+                                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(trimmed)) {
+                                                            isCorporate = true
+                                                        }
                                                     }
                                                     editingUcNameTarget = null
                                                 },
@@ -3091,7 +3185,12 @@ fun EditTransactionDialog(
 
                         AutoLogueTextField(
                             value = userClassificationInput,
-                            onValueChange = { userClassificationInput = it },
+                            onValueChange = {
+                                userClassificationInput = it
+                                if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(it)) {
+                                    isCorporate = true
+                                }
+                            },
                             label = "사용자명 직접 입력 (입력 시 자동 추가)",
                             placeholder = "예: 본인, 가족, 업무/법인, 배우자",
                             singleLine = true,
@@ -3166,9 +3265,9 @@ fun EditTransactionDialog(
                         }
                         Text(
                             text = if (isOneTimeSave) {
-                                "이번 $txDirLabel 내역만 단독 수정됩니다 (동일 결제처 다른 내역에 영향 없음)"
+                                "이번 $txDirLabel 내역만 단독 수정됩니다 (동일 결제처 및 카드 법인규칙에 영향 없음)"
                             } else {
-                                "동일 결제처의 [$txDirLabel] 내역에만 구분되어 영구 반영·치환됩니다 ([$oppositeDirLabel] 내역과는 별도 저장)"
+                                "동일 결제처 [$txDirLabel] 내역 및 추출 카드정보(${extractedRawCardHint ?: cardCompany})의 법인카드 여부가 영구 반영됩니다"
                             },
                             fontSize = 10.sp,
                             color = if (isOneTimeSave) Color(0xFFB45309) else Color(0xFF1E40AF)

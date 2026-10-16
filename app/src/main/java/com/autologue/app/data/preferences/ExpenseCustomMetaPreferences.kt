@@ -73,8 +73,9 @@ class ExpenseCustomMetaPreferences private constructor(
     private val txUserClassMap = ConcurrentHashMap<Long, String>()
     private val merchantUserClassMap = ConcurrentHashMap<String, String>()
 
-    // 3. 법인카드 여부 및 (입출금구분+가맹점)별 카드/은행 지정 매핑
+    // 3. 법인카드 여부 (거래 ID별, 추출 카드정보/카드사 기준 영구 규칙별, 입출금구분+가맹점별)
     private val txCorporateMap = ConcurrentHashMap<Long, Boolean>()
+    private val cardCorporateRuleMap = ConcurrentHashMap<String, Boolean>()
     private val merchantCardDesignationMap = ConcurrentHashMap<String, String>()
 
     // 4. 고정지출(정기지출) 지정 상태 (거래 ID별 및 가맹점 영구 규칙별)
@@ -281,6 +282,17 @@ class ExpenseCustomMetaPreferences private constructor(
                 }
             }
 
+            cardCorporateRuleMap.clear()
+            root.optJSONObject("cardCorporateRuleMap")?.let { obj ->
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next().trim()
+                    if (k.isNotBlank()) {
+                        cardCorporateRuleMap[k] = obj.optBoolean(k, false)
+                    }
+                }
+            }
+
             merchantCardDesignationMap.clear()
             root.optJSONObject("merchantCardDesignationMap")?.let { obj ->
                 val keys = obj.keys()
@@ -395,6 +407,10 @@ class ExpenseCustomMetaPreferences private constructor(
             txCorporateMap.forEach { (k, v) -> txCorpObj.put(k.toString(), v) }
             root.put("txCorporateMap", txCorpObj)
 
+            val cardCorpObj = JSONObject()
+            cardCorporateRuleMap.forEach { (k, v) -> cardCorpObj.put(k, v) }
+            root.put("cardCorporateRuleMap", cardCorpObj)
+
             val merCardObj = JSONObject()
             merchantCardDesignationMap.forEach { (k, v) -> merCardObj.put(k, v) }
             root.put("merchantCardDesignationMap", merCardObj)
@@ -460,7 +476,7 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     // =========================================================================
-    // 1. 카드사 / 은행명 힌트 자동 추출 및 지정 (입금/출금 방향 구분 포함)
+    // 1. 카드사 / 은행명 힌트 자동 추출 및 지정 (입금/출금 방향 구분 + 카드 기준 법인여부 영구저장)
     // =========================================================================
 
     fun formatCardDesignation(
@@ -502,6 +518,38 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     /**
+     * 추출 가능한 카드사 정보(원본 카드 토큰 "하나0*2*", "신용(,0*2*)" 및 표준 카드사명 "하나카드" 등)를
+     * 기준으로 영구저장된 법인카드 여부를 조회합니다.
+     */
+    fun resolveCardCorporateRule(tx: Transaction, overrideCardCompany: String? = null): Boolean? {
+        val keys = extractCardCorporateKeys(
+            cardCompany = overrideCardCompany ?: tx.cardOrBankName,
+            rawCardOrBankName = tx.cardOrBankName,
+            originalText = tx.originalText
+        )
+        for (key in keys) {
+            cardCorporateRuleMap[key]?.let { return it }
+        }
+        return null
+    }
+
+    fun resolveCardCorporateByCardName(
+        cardCompany: String?,
+        rawCardOrBankName: String? = null,
+        originalText: String? = null
+    ): Boolean? {
+        val keys = extractCardCorporateKeys(
+            cardCompany = cardCompany,
+            rawCardOrBankName = rawCardOrBankName ?: cardCompany,
+            originalText = originalText
+        )
+        for (key in keys) {
+            cardCorporateRuleMap[key]?.let { return it }
+        }
+        return null
+    }
+
+    /**
      * 거래 내역의 성격(카드 결제 vs 출금/이체/입금 계좌 거래) 및 영구저장 규칙에 맞춰
      * 화면에 표시할 최종 카드사명 또는 은행명을 반환합니다.
      */
@@ -517,8 +565,11 @@ class ExpenseCustomMetaPreferences private constructor(
                 return if (isBankTx) {
                     inferCanonicalBankName(savedRule, tx.originalText, tx.transferMemo)
                 } else {
-                    val isCorp = isCorporateTransaction(tx) || savedRule.contains("법인")
-                    formatCardDesignation(savedRule, isCorp, isBankAccountTx = false)
+                    val isCorp = isCorporateTransaction(tx)
+                    // 문자 원문에 명시적인 타 카드사 힌트가 있는 경우 해당 카드사를 유지하고 법인 여부만 반영
+                    val explicitFromOrig = extractExplicitCardCompanyFromOriginal(tx.cardOrBankName, tx.originalText)
+                    val baseCard = explicitFromOrig ?: savedRule
+                    formatCardDesignation(baseCard, isCorp, isBankAccountTx = false)
                 }
             }
         }
@@ -533,8 +584,30 @@ class ExpenseCustomMetaPreferences private constructor(
 
     fun isCorporateTransaction(tx: Transaction): Boolean {
         if (tx.isBankAccountTransaction()) return false
+        // 1회성 저장된 거래는 해당 거래의 개별 법인 여부를 최우선 적용
+        if (isOneTimeEdited(tx)) {
+            txCorporateMap[tx.id]?.let { return it }
+        }
+        // 1. 추출 가능한 카드사 정보(카드 토큰 / 표준 카드사명) 기준 영구저장된 법인카드 여부
+        resolveCardCorporateRule(tx)?.let { return it }
+
+        // 2. 카테고리 또는 사용자 분류가 '업무/법인'으로 선택된 경우 기본값은 법인카드(true)
+        val userClassName = resolveUserClassification(tx)?.name
+        val customCatName = resolveCustomCategoryLabel(tx)
+        val builtInCatName = getBuiltInCategoryDisplayName(tx.category)
+        if (isCorporateCategoryOrClassification(userClassName) ||
+            isCorporateCategoryOrClassification(customCatName) ||
+            isCorporateCategoryOrClassification(builtInCatName)
+        ) {
+            if (tx.id <= 0L || txCorporateMap[tx.id] != false) {
+                return true
+            }
+        }
+
+        // 3. 개별 거래 ID에 저장된 법인 여부
         txCorporateMap[tx.id]?.let { return it }
-        if (tx.cardOrBankName.contains("법인")) return true
+
+        // 4. 가맹점 기준 저장된 카드 지정 규칙 및 원문 '법인' 키워드
         if (!isOneTimeEdited(tx)) {
             val savedCard = lookupDirectionalRule(
                 merchantCardDesignationMap,
@@ -543,6 +616,7 @@ class ExpenseCustomMetaPreferences private constructor(
             )
             if (savedCard != null && savedCard.contains("법인")) return true
         }
+        if (tx.cardOrBankName.contains("법인") || tx.originalText.contains("법인")) return true
         return false
     }
 
@@ -554,21 +628,39 @@ class ExpenseCustomMetaPreferences private constructor(
         applyToMerchantRule: Boolean,
         isDeposit: Boolean = false,
         vararg extraMerchantNames: String?,
-        isBankAccountTx: Boolean = false
+        isBankAccountTx: Boolean = false,
+        rawCardOrBankName: String? = null,
+        originalText: String? = null
     ): String {
         val effectiveCorp = if (isBankAccountTx) false else isCorporate
         val formatted = formatCardDesignation(cardCompany, effectiveCorp, isBankAccountTx = isBankAccountTx)
         if (txId > 0L) {
             txCorporateMap[txId] = effectiveCorp
         }
-        if (applyToMerchantRule && merchantName.isNotBlank()) {
-            putDirectionalRule(
-                merchantCardDesignationMap,
-                merchantName,
-                isDeposit,
-                formatted,
-                *extraMerchantNames
-            )
+        if (applyToMerchantRule) {
+            if (!isBankAccountTx) {
+                val cardKeys = extractCardCorporateKeys(
+                    cardCompany = cardCompany,
+                    rawCardOrBankName = rawCardOrBankName ?: cardCompany,
+                    originalText = originalText
+                )
+                for (key in cardKeys) {
+                    if (key.isNotBlank()) {
+                        cardCorporateRuleMap[key] = effectiveCorp
+                    }
+                }
+                // 1회성 저장이 아닌 일반 거래들의 이전 개별 캐시를 정리하여 카드 기준 영구설정이 즉시 일괄 반영되도록 처리
+                txCorporateMap.keys.removeIf { id -> id != txId && id !in oneTimeEditedTxIds }
+            }
+            if (merchantName.isNotBlank()) {
+                putDirectionalRule(
+                    merchantCardDesignationMap,
+                    merchantName,
+                    isDeposit,
+                    formatted,
+                    *extraMerchantNames
+                )
+            }
         }
         saveToPrefs()
         return formatted
@@ -1143,6 +1235,106 @@ class ExpenseCustomMetaPreferences private constructor(
                 return cleaned
             }
             return "NH농협은행"
+        }
+
+        /**
+         * 카테고리 또는 사용자 분류 이름이 '업무/법인' 계열인지 판별합니다.
+         */
+        fun isCorporateCategoryOrClassification(name: String?): Boolean {
+            val clean = name?.trim().orEmpty()
+            if (clean.isBlank()) return false
+            return clean.equals("업무/법인", ignoreCase = true) ||
+                clean.contains("법인") ||
+                clean.equals("업무", ignoreCase = true) ||
+                clean.startsWith("업무/")
+        }
+
+        /**
+         * 문자 원문이나 원본 카드명에서 명시적인 카드사 힌트가 존재하는 경우 표준 카드사명을 반환합니다.
+         */
+        fun extractExplicitCardCompanyFromOriginal(
+            rawCardOrBankName: String?,
+            originalText: String?
+        ): String? {
+            val combined = "${rawCardOrBankName.orEmpty()} ${originalText.orEmpty()}".trim()
+            if (combined.isBlank()) return null
+            val upper = combined.uppercase()
+            return when {
+                combined.contains("하나") || upper.contains("HANA") || Regex("""(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\)""").containsMatchIn(combined) -> "하나카드"
+                upper.contains("NH") || combined.contains("농협") || combined.contains("채움") -> "NH농협카드"
+                combined.contains("우리") || upper.contains("WOORI") -> "우리카드"
+                combined.contains("신한") || upper.contains("SHINHAN") || upper.contains("SOL페이") -> "신한카드"
+                upper.contains("KB") || combined.contains("국민") || upper.contains("KOOKMIN") -> "KB국민카드"
+                combined.contains("현대") || upper.contains("HYUNDAI") -> "현대카드"
+                combined.contains("삼성") || upper.contains("SAMSUNG") -> "삼성카드"
+                combined.contains("롯데") || upper.contains("LOTTE") -> "롯데카드"
+                upper.contains("BC") || combined.contains("비씨") || combined.contains("페이북") || upper.contains("PAYBOOC") -> "BC카드"
+                combined.contains("카카오페이") || upper.contains("KAKAOPAY") -> "카카오페이"
+                combined.contains("네이버페이") || upper.contains("NAVERPAY") -> "네이버페이"
+                combined.contains("토스페이") || upper.contains("TOSS") -> "토스페이"
+                else -> null
+            }
+        }
+
+        /**
+         * 카드 결제 원문 또는 카드명에서 추출 가능한 고유 카드 토큰(예: "하나0*2*", "NH카드2*7*", "신용(,0*2*)", "삼성1844", "KB국민카드4024" 등)을 추출합니다.
+         */
+        fun extractRawCardHintToken(
+            rawCardOrBankName: String?,
+            originalText: String?
+        ): String? {
+            val orig = originalText.orEmpty()
+            val rawCard = rawCardOrBankName.orEmpty()
+                .replace(Regex("""\s*\(\s*법인(?:카드)?\s*\)"""), "")
+                .replace(Regex("""\s*\[\s*법인(?:카드)?\s*\]"""), "")
+                .trim()
+
+            // 1. "카드 하나0*2*" 형태
+            Regex("""카드\s*[:：]?\s*(?<tok>[가-힣A-Za-z0-9*(),]{3,})""").find(orig)?.groups?.get("tok")?.value?.trim()?.let { tok ->
+                if (tok.any { it.isDigit() || it == '*' }) return tok
+            }
+            // 2. "하나0*2*", "NH카드2*7*", "삼성1844", "KB국민카드4024", "우리(1234)" 형태
+            Regex("""(?<tok>(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업)(?:농협|국민)?(?:카드|체크|법인)?\s*\(?[,0-9*]{2,}\)?)""").find(orig)?.groups?.get("tok")?.value?.replace(" ", "")?.trim()?.let { tok ->
+                return tok
+            }
+            // 3. "신용(,0*2*)" 형태
+            Regex("""(?<tok>(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\))""").find(orig)?.groups?.get("tok")?.value?.replace(" ", "")?.trim()?.let { tok ->
+                return tok
+            }
+            // 4. rawCard 자체에 마스킹 번호나 숫자가 포함된 경우 (예: "하나0*2*")
+            if (rawCard.isNotBlank() && rawCard.any { it.isDigit() || it == '*' } && !rawCard.contains("원")) {
+                return rawCard
+            }
+            return null
+        }
+
+        /**
+         * 카드사 정보 및 추출된 카드 토큰을 기반으로 법인카드 여부 영구저장/조회용 키 목록(구체적인 카드번호 키 -> 표준 카드사명 키 순서)을 생성합니다.
+         */
+        fun extractCardCorporateKeys(
+            cardCompany: String?,
+            rawCardOrBankName: String? = null,
+            originalText: String? = null
+        ): List<String> {
+            val keys = mutableListOf<String>()
+            val canonicalCard = inferCanonicalCardCompany(
+                cardCompany ?: rawCardOrBankName,
+                rawCardOrBankName,
+                originalText
+            ).replace(Regex("""\s*\(\s*법인(?:카드)?\s*\)"""), "").trim()
+
+            val rawToken = extractRawCardHintToken(rawCardOrBankName ?: cardCompany, originalText)
+            if (!rawToken.isNullOrBlank()) {
+                val digitsAndMask = Regex("""[0-9*]{2,}""").find(rawToken)?.value
+                if (!digitsAndMask.isNullOrBlank() && canonicalCard.isNotBlank()) {
+                    keys.add("${canonicalCard}#${digitsAndMask}")
+                }
+                keys.add(rawToken)
+            }
+            if (canonicalCard.isNotBlank()) {
+                keys.add(canonicalCard)
+            }
+            return keys.distinct()
         }
     }
 }

@@ -170,5 +170,41 @@ class SmsParserTest {
         assertEquals("OUT::이민희", outKey)
         assertFalse(inKey == outKey)
     }
+
+    @Test
+    fun `업무 및 법인 분류 선택 시 법인카드 기본값 판별 및 추출 가능한 카드사 정보 기준 법인카드 영구저장 키 추출 검증`() {
+        // 1. 업무/법인 분류 및 카테고리 판별 검증
+        assertTrue(com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("업무/법인"))
+        assertTrue(com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("법인"))
+        assertTrue(com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("업무"))
+        assertTrue(com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("법인경비"))
+        assertFalse(com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("본인"))
+        assertFalse(com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("가족"))
+        assertFalse(com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("식비"))
+
+        // 2. 추출 가능한 카드사 정보(원본 카드 토큰 및 표준 카드사명) 기준 키 추출 검증
+        val hanaHint = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.extractRawCardHintToken(
+            rawCardOrBankName = "하나0*2*",
+            originalText = "승인 금액 4,500원 카드 하나0*2* 사용처 지에스25"
+        )
+        assertEquals("하나0*2*", hanaHint)
+
+        val hanaKeys = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.extractCardCorporateKeys(
+            cardCompany = "하나카드",
+            rawCardOrBankName = "하나0*2*",
+            originalText = "승인 금액 4,500원 카드 하나0*2* 사용처 지에스25"
+        )
+        assertTrue(hanaKeys.contains("하나0*2*"))
+        assertTrue(hanaKeys.contains("하나카드#0*2*"))
+        assertTrue(hanaKeys.contains("하나카드"))
+
+        val nhKeys = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.extractCardCorporateKeys(
+            cardCompany = null,
+            rawCardOrBankName = "NH2*7*",
+            originalText = "[Web발신] NH카드2*7* 승인 15,000원 일시불"
+        )
+        assertTrue(nhKeys.contains("NH농협카드#2*7*"))
+        assertTrue(nhKeys.contains("NH농협카드"))
+    }
 }
 

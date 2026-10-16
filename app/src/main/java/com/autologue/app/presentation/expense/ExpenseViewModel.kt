@@ -757,7 +757,9 @@ class ExpenseViewModel @Inject constructor(
                             applyToMerchantRule = applyToMerchantRule,
                             isDeposit = isDeposit,
                             extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey),
-                            isBankAccountTx = isBankTx
+                            isBankAccountTx = isBankTx,
+                            rawCardOrBankName = currentTx.cardOrBankName,
+                            originalText = currentTx.originalText
                         )
                     } else {
                         expenseCustomMetaPreferences.resolveDisplayCardOrBankName(currentTx) ?: currentTx.cardOrBankName
