@@ -327,11 +327,28 @@ class ExpenseViewModel @Inject constructor(
                     "${dirTag}_${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "")}"
                 }
                 .map { tx ->
-                    val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(tx)
-                    if (!displayCardOrBank.isNullOrBlank() && displayCardOrBank != tx.cardOrBankName) {
-                        tx.copy(cardOrBankName = displayCardOrBank)
+                    if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
+                        val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(tx)
+                        if (!displayCardOrBank.isNullOrBlank() && displayCardOrBank != tx.cardOrBankName) {
+                            tx.copy(cardOrBankName = displayCardOrBank)
+                        } else {
+                            tx
+                        }
                     } else {
-                        tx
+                        val isDeposit = tx.isDepositTransaction()
+                        val resolvedMerchant = merchantAliasPreferences.resolveAlias(tx.merchantName, isDeposit)
+                            .ifBlank { tx.merchantName }
+                        val resolvedCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMerchant, isDeposit)
+                            ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDeposit)
+                            ?: tx.category
+                        val baseAdjusted = tx.copy(
+                            merchantName = resolvedMerchant,
+                            category = resolvedCategory
+                        )
+                        val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(baseAdjusted)
+                        baseAdjusted.copy(
+                            cardOrBankName = displayCardOrBank.ifBlank { tx.cardOrBankName }
+                        )
                     }
                 }
 
@@ -674,6 +691,91 @@ class ExpenseViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 영구저장 대상 판별:
+     * 금액(amount)과 일시(timestamp)는 동일 항목 판별 기준에서 완전히 제외하고,
+     * 동일 입금/출금 방향 내에서 동일 결제처(원문 가맹점명·치환 별칭·계좌번호 토큰 포함)에 해당하는
+     * 기존 사용내역 목록을 반환합니다.
+     */
+    fun findMatchingExistingTransactions(
+        targetTx: Transaction,
+        editedMerchantName: String? = null
+    ): List<Transaction> {
+        val isDeposit = targetTx.isDepositTransaction()
+        val genericPlaceholders = setOf("출금 내역", "계좌 이체", "입금 내역", "카드 가맹점", "가맹점", "직접 추가 지출")
+        val oldMerchantName = targetTx.merchantName.trim()
+        val newMerchant = editedMerchantName?.trim().orEmpty()
+
+        val isManual = targetTx.originalText.startsWith("[직접 입력]") || targetTx.originalText.startsWith("[차계부 직접 입력]")
+        val rawParsedName = if (!isManual && targetTx.originalText.isNotBlank()) {
+            com.autologue.app.data.parser.SmsParser.parse(targetTx.cardOrBankName, targetTx.originalText, targetTx.timestamp)?.merchantName
+                ?: com.autologue.app.data.parser.SmsParser.parse(null, targetTx.originalText, targetTx.timestamp)?.merchantName
+        } else null
+
+        val candidateKeys = mutableSetOf<String>()
+        if (oldMerchantName.isNotBlank() && oldMerchantName !in genericPlaceholders) {
+            candidateKeys.add(oldMerchantName)
+        }
+        if (newMerchant.isNotBlank() && newMerchant !in genericPlaceholders) {
+            candidateKeys.add(newMerchant)
+        }
+        if (!rawParsedName.isNullOrBlank() && rawParsedName !in genericPlaceholders) {
+            candidateKeys.add(rawParsedName)
+        }
+        val aliasedOld = merchantAliasPreferences.resolveAlias(oldMerchantName, isDeposit)
+        if (aliasedOld.isNotBlank() && aliasedOld !in genericPlaceholders) {
+            candidateKeys.add(aliasedOld)
+        }
+        merchantAliasPreferences.getOriginalNamesForTarget(oldMerchantName, isDeposit).forEach {
+            if (it.isNotBlank() && it !in genericPlaceholders) candidateKeys.add(it)
+        }
+        if (newMerchant.isNotBlank()) {
+            merchantAliasPreferences.getOriginalNamesForTarget(newMerchant, isDeposit).forEach {
+                if (it.isNotBlank() && it !in genericPlaceholders) candidateKeys.add(it)
+            }
+        }
+
+        val accountRegex = Regex("""\d{3,6}-[0-9*-]{3,}|\d{10,14}""")
+        val targetAccountToken = accountRegex.find(targetTx.originalText)?.value
+            ?: targetTx.transferMemo?.let { accountRegex.find(it)?.value }
+
+        return _uiState.value.allTransactions.filter { other ->
+            if (other.id == targetTx.id) return@filter false
+            if (other.isDepositTransaction() != isDeposit) return@filter false
+            if (expenseCustomMetaPreferences.isOneTimeEdited(other)) return@filter false
+
+            if (candidateKeys.isNotEmpty()) {
+                val otherMerchant = other.merchantName.trim()
+                val otherAliased = merchantAliasPreferences.resolveAlias(otherMerchant, isDeposit)
+                val directMatch = candidateKeys.any { key ->
+                    merchantAliasPreferences.isSameMerchant(otherMerchant, key) ||
+                        merchantAliasPreferences.isSameMerchant(otherAliased, key)
+                }
+                if (directMatch) return@filter true
+
+                val otherManual = other.originalText.startsWith("[직접 입력]") || other.originalText.startsWith("[차계부 직접 입력]")
+                if (!otherManual && other.originalText.isNotBlank() &&
+                    candidateKeys.any { key -> other.originalText.contains(key, ignoreCase = true) }
+                ) {
+                    val otherRaw = com.autologue.app.data.parser.SmsParser.parse(other.cardOrBankName, other.originalText, other.timestamp)?.merchantName
+                        ?: com.autologue.app.data.parser.SmsParser.parse(null, other.originalText, other.timestamp)?.merchantName
+                    if (!otherRaw.isNullOrBlank() && candidateKeys.any { key -> merchantAliasPreferences.isSameMerchant(otherRaw, key) }) {
+                        return@filter true
+                    }
+                }
+                false
+            } else {
+                if (!targetAccountToken.isNullOrBlank()) {
+                    val otherToken = accountRegex.find(other.originalText)?.value
+                        ?: other.transferMemo?.let { accountRegex.find(it)?.value }
+                    if (otherToken == targetAccountToken) return@filter true
+                }
+                merchantAliasPreferences.isSameMerchant(other.merchantName, oldMerchantName) &&
+                    other.cardOrBankName == targetTx.cardOrBankName
+            }
+        }
+    }
+
     fun updateTransactionDetails(
         transactionId: Long,
         newMerchantName: String = "",
@@ -686,7 +788,8 @@ class ExpenseViewModel @Inject constructor(
         customCategoryName: String? = null,
         userClassificationName: String? = null,
         isOneTimeSave: Boolean = false,
-        isFixedExpense: Boolean? = null
+        isFixedExpense: Boolean? = null,
+        permanentSaveOptions: com.autologue.app.data.preferences.PermanentSaveOptions = com.autologue.app.data.preferences.PermanentSaveOptions()
     ) {
         if (_uiState.value.isSaving) return
         val currentTx = _uiState.value.allTransactions.find { it.id == transactionId } ?: return
@@ -700,7 +803,13 @@ class ExpenseViewModel @Inject constructor(
                     val isDeposit = currentTx.isDepositTransaction()
                     val oldMerchantName = currentTx.merchantName.trim()
                     val finalMerchantName = newMerchantName.trim().ifBlank { oldMerchantName }
-                    val applyToMerchantRule = !isOneTimeSave
+
+                    val applyMerchantRule = !isOneTimeSave && permanentSaveOptions.applyMerchantName
+                    val applyCategoryRule = !isOneTimeSave && permanentSaveOptions.applyCategory
+                    val applyUserClassRule = !isOneTimeSave && permanentSaveOptions.applyUserClassification
+                    val applyCardAndCorpRule = !isOneTimeSave && permanentSaveOptions.applyCardAndCorporate
+                    val applyFixedRule = !isOneTimeSave && permanentSaveOptions.applyFixedExpense
+                    val applyMemoRule = !isOneTimeSave && permanentSaveOptions.applyMemo
 
                     val isManual = currentTx.originalText.startsWith("[직접 입력]") || currentTx.originalText.startsWith("[차계부 직접 입력]")
                     val rawParsedName = if (!isManual && currentTx.originalText.isNotBlank()) {
@@ -715,6 +824,44 @@ class ExpenseViewModel @Inject constructor(
                         rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders } ?: ""
                     }
                     val effectiveRawKey = rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders }
+
+                    // 기존 사용내역 중 함께 적용할 대상 산출 (금액은 동일항목 취급 기준에서 제외)
+                    val targetExistingTxs: List<Transaction> = if (isOneTimeSave) {
+                        emptyList()
+                    } else if (permanentSaveOptions.selectedExistingTxIds != null) {
+                        val selectedIds = permanentSaveOptions.selectedExistingTxIds
+                        _uiState.value.allTransactions.filter { it.id != currentTx.id && it.id in selectedIds }
+                    } else {
+                        findMatchingExistingTransactions(currentTx, finalMerchantName)
+                    }
+                    val targetExistingIds: Set<Long> = targetExistingTxs.map { it.id }.toSet()
+
+                    // 영구 규칙에 등록할 모든 가맹점 키 수집 (현재 내역 + 선택된 기존 사용내역의 가맹점/원문 가맹점 포함)
+                    val allRuleMerchantNames = mutableSetOf<String>()
+                    if (finalMerchantName.isNotBlank()) allRuleMerchantNames.add(finalMerchantName)
+                    if (oldMerchantName.isNotBlank()) allRuleMerchantNames.add(oldMerchantName)
+                    if (!effectiveRawKey.isNullOrBlank()) allRuleMerchantNames.add(effectiveRawKey)
+                    merchantAliasPreferences.getOriginalNamesForTarget(oldMerchantName, isDeposit).forEach {
+                        if (it.isNotBlank()) allRuleMerchantNames.add(it)
+                    }
+                    merchantAliasPreferences.getOriginalNamesForTarget(finalMerchantName, isDeposit).forEach {
+                        if (it.isNotBlank()) allRuleMerchantNames.add(it)
+                    }
+                    for (exTx in targetExistingTxs) {
+                        val exName = exTx.merchantName.trim()
+                        if (exName.isNotBlank() && exName !in genericPlaceholders) {
+                            allRuleMerchantNames.add(exName)
+                        }
+                        val exManual = exTx.originalText.startsWith("[직접 입력]") || exTx.originalText.startsWith("[차계부 직접 입력]")
+                        if (!exManual && exTx.originalText.isNotBlank()) {
+                            val exRaw = com.autologue.app.data.parser.SmsParser.parse(exTx.cardOrBankName, exTx.originalText, exTx.timestamp)?.merchantName
+                                ?: com.autologue.app.data.parser.SmsParser.parse(null, exTx.originalText, exTx.timestamp)?.merchantName
+                            if (!exRaw.isNullOrBlank() && exRaw !in genericPlaceholders) {
+                                allRuleMerchantNames.add(exRaw)
+                            }
+                        }
+                    }
+                    val extraRuleKeysArray = allRuleMerchantNames.toTypedArray()
 
                     val wasFuel = currentTx.category == ExpenseCategory.FUEL ||
                         com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(oldMerchantName) ||
@@ -754,12 +901,13 @@ class ExpenseViewModel @Inject constructor(
                             merchantName = finalMerchantName,
                             cardCompany = cardCompany,
                             isCorporate = effectiveCorporate,
-                            applyToMerchantRule = applyToMerchantRule,
+                            applyToMerchantRule = applyCardAndCorpRule,
                             isDeposit = isDeposit,
-                            extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey),
+                            extraMerchantNames = extraRuleKeysArray,
                             isBankAccountTx = isBankTx,
                             rawCardOrBankName = currentTx.cardOrBankName,
-                            originalText = currentTx.originalText
+                            originalText = currentTx.originalText,
+                            targetTxIds = if (applyCardAndCorpRule) targetExistingIds else emptySet()
                         )
                     } else {
                         expenseCustomMetaPreferences.resolveDisplayCardOrBankName(currentTx) ?: currentTx.cardOrBankName
@@ -768,26 +916,28 @@ class ExpenseViewModel @Inject constructor(
                     expenseCustomMetaPreferences.assignBaseCategory(
                         merchantName = finalMerchantName,
                         category = resolvedCategory,
-                        applyToMerchantRule = applyToMerchantRule,
+                        applyToMerchantRule = applyCategoryRule,
                         isDeposit = isDeposit,
-                        extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
+                        extraMerchantNames = extraRuleKeysArray
                     )
 
                     expenseCustomMetaPreferences.assignCustomCategory(
                         txId = transactionId,
                         merchantName = finalMerchantName,
                         customCategoryName = customCategoryName,
-                        applyToMerchantRule = applyToMerchantRule,
+                        applyToMerchantRule = applyCategoryRule,
                         isDeposit = isDeposit,
-                        extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
+                        extraMerchantNames = extraRuleKeysArray,
+                        targetTxIds = if (applyCategoryRule) targetExistingIds else emptySet()
                     )
                     expenseCustomMetaPreferences.assignUserClassification(
                         txId = transactionId,
                         merchantName = finalMerchantName,
                         userClassificationName = userClassificationName,
-                        applyToMerchantRule = applyToMerchantRule,
+                        applyToMerchantRule = applyUserClassRule,
                         isDeposit = isDeposit,
-                        extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
+                        extraMerchantNames = extraRuleKeysArray,
+                        targetTxIds = if (applyUserClassRule) targetExistingIds else emptySet()
                     )
 
                     if (isFixedExpense != null) {
@@ -795,9 +945,10 @@ class ExpenseViewModel @Inject constructor(
                             txId = transactionId,
                             merchantName = finalMerchantName,
                             isFixed = isFixedExpense,
-                            applyToMerchantRule = applyToMerchantRule,
+                            applyToMerchantRule = applyFixedRule,
                             isDeposit = isDeposit,
-                            extraMerchantNames = arrayOf(oldMerchantName, effectiveRawKey)
+                            extraMerchantNames = extraRuleKeysArray,
+                            targetTxIds = if (applyFixedRule) targetExistingIds else emptySet()
                         )
                     }
 
@@ -818,26 +969,66 @@ class ExpenseViewModel @Inject constructor(
 
                     var globalRenamedCount = 0
                     if (!isOneTimeSave) {
+                        // 1. 선택된 기존 사용내역(targetExistingTxs)에 대해 사용자가 체크한 영구저장 항목들을 일괄 반영 (금액은 각 내역 고유값 유지)
+                        for (exTx in targetExistingTxs) {
+                            expenseCustomMetaPreferences.clearOneTimeEdited(exTx)
+                            val exWasVehicle = exTx.category == ExpenseCategory.FUEL || exTx.category == ExpenseCategory.CAR_MAINTENANCE
+                            val exNewMerchant = if (applyMerchantRule) finalMerchantName else exTx.merchantName
+                            val exNewCategory = if (applyCategoryRule) resolvedCategory else exTx.category
+                            val exNewCard = if (applyCardAndCorpRule) formattedCard else exTx.cardOrBankName
+                            val exNewMemo = if (applyMemoRule) memo?.ifBlank { null } else exTx.transferMemo
+
+                            if (applyMerchantRule && exTx.merchantName.isNotBlank() &&
+                                !exTx.merchantName.equals(finalMerchantName, ignoreCase = true)
+                            ) {
+                                merchantAliasPreferences.registerAlias(
+                                    oldName = exTx.merchantName,
+                                    newName = finalMerchantName,
+                                    rawOriginalName = null,
+                                    isDeposit = isDeposit
+                                )
+                            }
+
+                            val updatedEx = exTx.copy(
+                                merchantName = exNewMerchant,
+                                category = exNewCategory,
+                                cardOrBankName = exNewCard,
+                                transferMemo = exNewMemo
+                            )
+                            transactionRepository.updateTransaction(updatedEx)
+                            globalRenamedCount++
+
+                            val exIsNowVehicle = exNewCategory == ExpenseCategory.FUEL || exNewCategory == ExpenseCategory.CAR_MAINTENANCE
+                            if (exWasVehicle && !exIsNowVehicle) {
+                                vehicleRepository.deleteRefuelingLogByTransaction(
+                                    amount = exTx.amount,
+                                    date = exTx.timestamp.toLocalDate(),
+                                    merchantName = exTx.merchantName
+                                )
+                            }
+                        }
+
+                        // 2. 결제명 영구저장 선택 시 별칭 매핑 및 DB/차계부 동일 결제처 일괄 치환
                         val targetKeyForGlobal = effectiveOldKey.ifBlank { finalMerchantName }
-                        if (targetKeyForGlobal.isNotBlank()) {
-                            // 1. 가계부 내 동일 결제처 + 동일 입출금 구분(입금/출금) 기존 내역 일괄 치환 및 영구 자동 치환 규칙 등록
+                        if (targetKeyForGlobal.isNotBlank() && (applyMerchantRule || applyCategoryRule || applyCardAndCorpRule)) {
                             val txRenamed = transactionRepository.renameMerchantGlobally(
                                 oldMerchantName = targetKeyForGlobal,
-                                newMerchantName = finalMerchantName,
+                                newMerchantName = if (applyMerchantRule) finalMerchantName else targetKeyForGlobal,
                                 rawOriginalMerchantName = effectiveRawKey,
                                 isDeposit = isDeposit,
-                                targetCategory = resolvedCategory,
-                                targetCardOrBankName = formattedCard
+                                targetCategory = if (applyCategoryRule) resolvedCategory else null,
+                                targetCardOrBankName = if (applyCardAndCorpRule) formattedCard else null
                             )
-                            // 2. 출금(결제) 내역인 경우 차계부 주유/정비 내역 중 동일 결제처 항목도 동시 일괄 치환
-                            val fuelRenamed = if (!isDeposit && targetKeyForGlobal.isNotBlank()) {
+                            val fuelRenamed = if (!isDeposit && applyMerchantRule && targetKeyForGlobal.isNotBlank()) {
                                 vehicleRepository.renameGasStationGlobally(
                                     oldStationName = targetKeyForGlobal,
                                     newStationName = finalMerchantName,
                                     rawOriginalStationName = effectiveRawKey
                                 )
                             } else 0
-                            globalRenamedCount = txRenamed + fuelRenamed
+                            if (txRenamed + fuelRenamed > globalRenamedCount) {
+                                globalRenamedCount = txRenamed + fuelRenamed
+                            }
                         }
                     }
 
@@ -898,8 +1089,16 @@ class ExpenseViewModel @Inject constructor(
                     if (isOneTimeSave) {
                         "'$finalMerchantName' [$dirLabel] 내역 1건을 1회성으로 저장했습니다. (동일 결제처의 다른 내역은 변경되지 않습니다)"
                     } else {
-                        val extraMsg = if (globalRenamedCount > 0) " (동일 [$dirLabel] 내역 ${globalRenamedCount}건 추가 치환 완료)" else ""
-                        "'$finalMerchantName' [$dirLabel] 영구저장 완료! 앞으로 동일 결제처의 [$dirLabel] 항목에만 구분되어 자동 치환됩니다.$extraMsg"
+                        val appliedFields = buildList {
+                            if (applyMerchantRule) add("결제명")
+                            if (applyCategoryRule) add("카테고리")
+                            if (applyUserClassRule) add("사용자분류")
+                            if (applyCardAndCorpRule) add("카드/은행·법인")
+                            if (applyFixedRule) add("고정지출")
+                            if (applyMemoRule) add("메모")
+                        }.joinToString(", ")
+                        val extraMsg = if (globalRenamedCount > 0) " (기존 사용내역 ${globalRenamedCount}건 함께 반영 완료)" else ""
+                        "'$finalMerchantName' [$dirLabel] 영구저장 완료! [적용 항목: $appliedFields]$extraMsg"
                     }
                 }
 

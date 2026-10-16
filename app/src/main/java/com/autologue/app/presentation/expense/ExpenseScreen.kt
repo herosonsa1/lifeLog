@@ -1168,6 +1168,15 @@ fun ExpenseScreen(
         val resolvedBaseCardOrBank = viewModel.expenseCustomMetaPreferences.extractBaseCardName(
             viewModel.expenseCustomMetaPreferences.resolveDisplayCardOrBankName(editingTx)
         )
+        val sameDirectionExistingTxs = remember(editingTx.id, uiState.allTransactions) {
+            val isDep = editingTx.isDepositTransaction()
+            uiState.allTransactions
+                .filter { it.id != editingTx.id && it.isDepositTransaction() == isDep }
+                .sortedByDescending { it.timestamp }
+        }
+        val autoMatchedExistingIds = remember(editingTx.id, uiState.allTransactions) {
+            viewModel.findMatchingExistingTransactions(editingTx).map { it.id }.toSet()
+        }
         EditTransactionDialog(
             transaction = editingTx,
             managedCategories = uiState.managedCategories,
@@ -1179,6 +1188,10 @@ fun ExpenseScreen(
             initialIsOneTimeSave = editingTx.id in uiState.oneTimeEditedIds,
             initialIsFixedExpense = editingTx.id in uiState.recurringTransactionIds,
             isSaving = uiState.isSaving,
+            candidateExistingTransactions = sameDirectionExistingTxs,
+            autoMatchedExistingTxIds = autoMatchedExistingIds,
+            userClassByTxId = uiState.userClassByTxId,
+            customCategoryByTxId = uiState.customCategoryByTxId,
             onResolveCardCorporate = { cardName ->
                 viewModel.expenseCustomMetaPreferences.resolveCardCorporateByCardName(
                     cardCompany = cardName,
@@ -1196,7 +1209,7 @@ fun ExpenseScreen(
             },
             onDeleteUserClassification = { name -> viewModel.deleteUserClassification(name) },
             onDismiss = { viewModel.closeEditDialog() },
-            onSave = { newMerchantName, cat, cardCompany, isCorp, customCat, userClass, isOneTime, isFixed, memo ->
+            onSave = { newMerchantName, cat, cardCompany, isCorp, customCat, userClass, isOneTime, isFixed, memo, permanentSaveOptions ->
                 viewModel.updateTransactionDetails(
                     transactionId = editingTx.id,
                     newMerchantName = newMerchantName,
@@ -1207,7 +1220,8 @@ fun ExpenseScreen(
                     customCategoryName = customCat,
                     userClassificationName = userClass,
                     isOneTimeSave = isOneTime,
-                    isFixedExpense = isFixed
+                    isFixedExpense = isFixed,
+                    permanentSaveOptions = permanentSaveOptions
                 )
             },
             onDelete = {
@@ -2320,6 +2334,10 @@ fun EditTransactionDialog(
     initialIsOneTimeSave: Boolean,
     initialIsFixedExpense: Boolean = false,
     isSaving: Boolean = false,
+    candidateExistingTransactions: List<Transaction> = emptyList(),
+    autoMatchedExistingTxIds: Set<Long> = emptySet(),
+    userClassByTxId: Map<Long, com.autologue.app.data.preferences.UserClassificationItem> = emptyMap(),
+    customCategoryByTxId: Map<Long, String> = emptyMap(),
     onResolveCardCorporate: (String) -> Boolean? = { null },
     onAddPermanentCategory: (String) -> Boolean,
     onUpdateCategoryName: (com.autologue.app.data.preferences.ManagedCategoryItem, String) -> Unit = { _, _ -> },
@@ -2338,7 +2356,8 @@ fun EditTransactionDialog(
         userClassificationName: String?,
         isOneTimeSave: Boolean,
         isFixedExpense: Boolean,
-        memo: String?
+        memo: String?,
+        permanentSaveOptions: com.autologue.app.data.preferences.PermanentSaveOptions
     ) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -2385,6 +2404,21 @@ fun EditTransactionDialog(
     var isFixedExpense by remember(transaction.id) { mutableStateOf(initialIsFixedExpense) }
     var memo by remember(transaction.id) { mutableStateOf(transaction.transferMemo ?: "") }
 
+    // 영구저장 시 선택적으로 지정할 항목 상태 (결제명, 카테고리, 사용자 분류, 카드/은행·법인, 고정지출, 메모)
+    var applyMerchantName by remember(transaction.id) { mutableStateOf(true) }
+    var applyCategory by remember(transaction.id) { mutableStateOf(true) }
+    var applyUserClassification by remember(transaction.id) { mutableStateOf(true) }
+    var applyCardAndCorporate by remember(transaction.id) { mutableStateOf(true) }
+    var applyFixedExpense by remember(transaction.id) { mutableStateOf(true) }
+    var applyMemo by remember(transaction.id) { mutableStateOf(false) }
+
+    // 기존 사용내역 중 함께 적용할 대상 선택 상태 (기본값: 금액 무관 동일 항목 자동 매칭 전체 선택)
+    var selectedExistingTxIds by remember(transaction.id, autoMatchedExistingTxIds) {
+        mutableStateOf(autoMatchedExistingTxIds)
+    }
+    var showExistingTxSelector by remember(transaction.id) { mutableStateOf(false) }
+    var showOtherExistingTxs by remember(transaction.id) { mutableStateOf(false) }
+
     // 인라인 수정 상태 (사용자 분류명 수정 / 카테고리명 수정)
     var editingUcNameTarget by remember { mutableStateOf<String?>(null) }
     var editingUcNewName by remember { mutableStateOf("") }
@@ -2393,7 +2427,6 @@ fun EditTransactionDialog(
 
     val isBankTx = transaction.isBankAccountTransaction(selectedCategory)
     val txDirLabel = if (isDeposit) "입금" else "출금"
-    val oppositeDirLabel = if (isDeposit) "출금" else "입금"
     val txTypeBadgeLabel = when {
         isDeposit -> "입금 내역"
         isBankTx -> "출금/이체"
@@ -3215,7 +3248,7 @@ fun EditTransactionDialog(
                 HairlineDivider()
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 저장 버튼 바로 위에 배치된 [1회성 저장 / 영구저장] 선택 버튼
+                // 저장 버튼 바로 위에 배치된 [1회성 저장 / 영구저장] 선택 및 영구저장 항목 지정 카드
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = if (isOneTimeSave) Color(0xFFFFFBEB) else Color(0xFFEFF6FF),
@@ -3263,15 +3296,330 @@ fun EditTransactionDialog(
                                 )
                             }
                         }
-                        Text(
-                            text = if (isOneTimeSave) {
-                                "이번 $txDirLabel 내역만 단독 수정됩니다 (동일 결제처 및 카드 법인규칙에 영향 없음)"
-                            } else {
-                                "동일 결제처 [$txDirLabel] 내역 및 추출 카드정보(${extractedRawCardHint ?: cardCompany})의 법인카드 여부가 영구 반영됩니다"
-                            },
-                            fontSize = 10.sp,
-                            color = if (isOneTimeSave) Color(0xFFB45309) else Color(0xFF1E40AF)
-                        )
+
+                        if (isOneTimeSave) {
+                            Text(
+                                text = "이번 $txDirLabel 내역만 단독 수정됩니다 (동일 결제처 및 기존 사용내역에 영향 없음)",
+                                fontSize = 10.sp,
+                                color = Color(0xFFB45309)
+                            )
+                        } else {
+                            // 1) 영구저장할 항목(속성) 선택 섹션
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = PureWhite,
+                                border = BorderStroke(1.dp, Color(0xFFDBEAFE)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "영구저장 적용 항목 선택 (금액 제외)",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF1E3A8A)
+                                        )
+                                        val allChecked = applyMerchantName && applyCategory &&
+                                            applyUserClassification && applyCardAndCorporate &&
+                                            applyFixedExpense && applyMemo
+                                        Surface(
+                                            onClick = {
+                                                if (!isSaving) {
+                                                    if (allChecked) {
+                                                        applyMerchantName = true
+                                                        applyCategory = true
+                                                        applyUserClassification = true
+                                                        applyCardAndCorporate = true
+                                                        applyFixedExpense = true
+                                                        applyMemo = false
+                                                    } else {
+                                                        applyMerchantName = true
+                                                        applyCategory = true
+                                                        applyUserClassification = true
+                                                        applyCardAndCorporate = true
+                                                        applyFixedExpense = true
+                                                        applyMemo = true
+                                                    }
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFFEFF6FF),
+                                            border = BorderStroke(1.dp, Color(0xFFBFDBFE))
+                                        ) {
+                                            Text(
+                                                text = if (allChecked) "기본선택" else "전체선택",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF1D4ED8),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    val optionItems = listOf(
+                                        Triple("결제명", applyMerchantName) { v: Boolean -> applyMerchantName = v },
+                                        Triple("카테고리", applyCategory) { v: Boolean -> applyCategory = v },
+                                        Triple("사용자 분류", applyUserClassification) { v: Boolean -> applyUserClassification = v },
+                                        Triple(if (isBankTx) "은행 정보" else "카드·법인여부", applyCardAndCorporate) { v: Boolean -> applyCardAndCorporate = v },
+                                        Triple("고정지출", applyFixedExpense) { v: Boolean -> applyFixedExpense = v },
+                                        Triple("메모", applyMemo) { v: Boolean -> applyMemo = v }
+                                    )
+
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        optionItems.forEach { (label, checked, onToggle) ->
+                                            Surface(
+                                                onClick = { if (!isSaving) onToggle(!checked) },
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = if (checked) Color(0xFF2563EB) else Slate50,
+                                                border = BorderStroke(1.dp, if (checked) Color(0xFF1D4ED8) else Slate200)
+                                            ) {
+                                                Text(
+                                                    text = if (checked) "✓ $label" else label,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = if (checked) FontWeight.Bold else FontWeight.Medium,
+                                                    color = if (checked) PureWhite else Slate600,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 2) 기존 사용내역 포함 일괄 적용 대상 선택 섹션 (금액 무관)
+                            val autoMatchedTxs = remember(candidateExistingTransactions, autoMatchedExistingTxIds) {
+                                candidateExistingTransactions.filter { it.id in autoMatchedExistingTxIds }
+                            }
+                            val otherCandidateTxs = remember(candidateExistingTransactions, autoMatchedExistingTxIds) {
+                                candidateExistingTransactions.filter { it.id !in autoMatchedExistingTxIds }.take(30)
+                            }
+                            val txDateFmt = remember { DateTimeFormatter.ofPattern("MM.dd HH:mm", Locale.KOREA) }
+
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = PureWhite,
+                                border = BorderStroke(1.dp, Color(0xFFDBEAFE)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "기존 사용내역 일괄 적용 (${selectedExistingTxIds.size}건 선택)",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1E3A8A)
+                                            )
+                                            Text(
+                                                text = "동일 항목 기존 내역의 금액은 그대로 유지하고 선택 속성만 적용",
+                                                fontSize = 9.sp,
+                                                color = Slate500
+                                            )
+                                        }
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (autoMatchedExistingTxIds.isNotEmpty()) {
+                                                Surface(
+                                                    onClick = {
+                                                        if (!isSaving) {
+                                                            selectedExistingTxIds = if (selectedExistingTxIds.containsAll(autoMatchedExistingTxIds)) {
+                                                                selectedExistingTxIds - autoMatchedExistingTxIds
+                                                            } else {
+                                                                selectedExistingTxIds + autoMatchedExistingTxIds
+                                                            }
+                                                        }
+                                                    },
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = Color(0xFFEFF6FF),
+                                                    border = BorderStroke(1.dp, Color(0xFFBFDBFE))
+                                                ) {
+                                                    val allAutoSelected = selectedExistingTxIds.containsAll(autoMatchedExistingTxIds)
+                                                    Text(
+                                                        text = if (allAutoSelected) "동일항목 해제" else "동일항목(${autoMatchedExistingTxIds.size}건)",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = Color(0xFF1D4ED8),
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                                    )
+                                                }
+                                            }
+                                            if (candidateExistingTransactions.isNotEmpty()) {
+                                                Surface(
+                                                    onClick = { showExistingTxSelector = !showExistingTxSelector },
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = if (showExistingTxSelector) Color(0xFF1E40AF) else Slate100,
+                                                    border = BorderStroke(1.dp, if (showExistingTxSelector) Color(0xFF1E3A8A) else Slate300)
+                                                ) {
+                                                    Text(
+                                                        text = if (showExistingTxSelector) "내역 접기 ▴" else "내역 선택 ▾",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = if (showExistingTxSelector) PureWhite else Slate700,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (showExistingTxSelector) {
+                                        if (autoMatchedTxs.isEmpty()) {
+                                            Text(
+                                                text = "동일 결제처로 자동 매칭된 기존 내역이 없습니다.",
+                                                fontSize = 10.sp,
+                                                color = Slate500
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "동일 결제처 기존 내역 (${autoMatchedTxs.size}건 · 금액 무관 매칭)",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF1D4ED8)
+                                            )
+                                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                autoMatchedTxs.forEach { candTx ->
+                                                    val isChecked = candTx.id in selectedExistingTxIds
+                                                    val candCat = customCategoryByTxId[candTx.id] ?: candTx.category.displayName
+                                                    val candUcName = userClassByTxId[candTx.id]?.name
+                                                    Surface(
+                                                        onClick = {
+                                                            if (!isSaving) {
+                                                                selectedExistingTxIds = if (isChecked) {
+                                                                    selectedExistingTxIds - candTx.id
+                                                                } else {
+                                                                    selectedExistingTxIds + candTx.id
+                                                                }
+                                                            }
+                                                        },
+                                                        shape = RoundedCornerShape(5.dp),
+                                                        color = if (isChecked) Color(0xFFEFF6FF) else Slate50,
+                                                        border = BorderStroke(1.dp, if (isChecked) Color(0xFF93C5FD) else Slate200),
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Column(modifier = Modifier.weight(1f)) {
+                                                                Text(
+                                                                    text = "${if (isChecked) "✓ " else ""}${candTx.merchantName} · $candCat${if (!candUcName.isNullOrBlank()) " ($candUcName)" else ""}",
+                                                                    fontSize = 10.sp,
+                                                                    fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Medium,
+                                                                    color = if (isChecked) Color(0xFF1E3A8A) else Slate700,
+                                                                    maxLines = 1,
+                                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                                )
+                                                                Text(
+                                                                    text = "${candTx.timestamp.format(txDateFmt)} · ${"%,d".format(candTx.amount)}원 (금액 유지)",
+                                                                    fontSize = 9.sp,
+                                                                    color = Slate500
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (otherCandidateTxs.isNotEmpty()) {
+                                            Surface(
+                                                onClick = { showOtherExistingTxs = !showOtherExistingTxs },
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = Slate50,
+                                                border = BorderStroke(1.dp, Slate200),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = if (showOtherExistingTxs) {
+                                                        "다른 기존 $txDirLabel 내역 숨기기 ▴"
+                                                    } else {
+                                                        "+ 다른 기존 $txDirLabel 내역에서도 선택하기 (${otherCandidateTxs.size}건) ▾"
+                                                    },
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = Slate600,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                                )
+                                            }
+                                            if (showOtherExistingTxs) {
+                                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    otherCandidateTxs.forEach { candTx ->
+                                                        val isChecked = candTx.id in selectedExistingTxIds
+                                                        val candCat = customCategoryByTxId[candTx.id] ?: candTx.category.displayName
+                                                        val candUcName = userClassByTxId[candTx.id]?.name
+                                                        Surface(
+                                                            onClick = {
+                                                                if (!isSaving) {
+                                                                    selectedExistingTxIds = if (isChecked) {
+                                                                        selectedExistingTxIds - candTx.id
+                                                                    } else {
+                                                                        selectedExistingTxIds + candTx.id
+                                                                    }
+                                                                }
+                                                            },
+                                                            shape = RoundedCornerShape(5.dp),
+                                                            color = if (isChecked) Color(0xFFEFF6FF) else PureWhite,
+                                                            border = BorderStroke(1.dp, if (isChecked) Color(0xFF93C5FD) else Slate200),
+                                                            modifier = Modifier.fillMaxWidth()
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Column(modifier = Modifier.weight(1f)) {
+                                                                    Text(
+                                                                        text = "${if (isChecked) "✓ " else ""}${candTx.merchantName} · $candCat${if (!candUcName.isNullOrBlank()) " ($candUcName)" else ""}",
+                                                                        fontSize = 10.sp,
+                                                                        fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Medium,
+                                                                        color = if (isChecked) Color(0xFF1E3A8A) else Slate700,
+                                                                        maxLines = 1,
+                                                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                                    )
+                                                                    Text(
+                                                                        text = "${candTx.timestamp.format(txDateFmt)} · ${"%,d".format(candTx.amount)}원 (금액 유지)",
+                                                                        fontSize = 9.sp,
+                                                                        color = Slate500
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text(
+                                text = "선택한 항목들이 영구 규칙 및 선택된 기존 내역(${selectedExistingTxIds.size}건)에 동일 적용됩니다.",
+                                fontSize = 10.sp,
+                                color = Color(0xFF1E40AF)
+                            )
+                        }
                     }
                 }
             }
@@ -3303,7 +3651,16 @@ fun EditTransactionDialog(
                                 userClassificationInput.trim().ifEmpty { null },
                                 isOneTimeSave,
                                 isFixedExpense,
-                                memo
+                                memo,
+                                com.autologue.app.data.preferences.PermanentSaveOptions(
+                                    applyMerchantName = applyMerchantName,
+                                    applyCategory = applyCategory,
+                                    applyUserClassification = applyUserClassification,
+                                    applyCardAndCorporate = applyCardAndCorporate,
+                                    applyFixedExpense = applyFixedExpense,
+                                    applyMemo = applyMemo,
+                                    selectedExistingTxIds = selectedExistingTxIds
+                                )
                             )
                         }
                     },

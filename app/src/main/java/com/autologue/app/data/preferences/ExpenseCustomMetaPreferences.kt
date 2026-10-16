@@ -38,6 +38,20 @@ data class ManagedCategoryItem(
 )
 
 /**
+ * 영구저장 시 선택적으로 지정하여 저장·일괄 적용할 항목 옵션
+ * - 금액(amount)은 동일 항목 취급 기준 및 일괄 변경 대상에서 항상 제외됩니다.
+ */
+data class PermanentSaveOptions(
+    val applyMerchantName: Boolean = true,
+    val applyCategory: Boolean = true,
+    val applyUserClassification: Boolean = true,
+    val applyCardAndCorporate: Boolean = true,
+    val applyFixedExpense: Boolean = true,
+    val applyMemo: Boolean = false,
+    val selectedExistingTxIds: Set<Long>? = null
+)
+
+/**
  * 가계부·차계부 확장 메타데이터 및 영속 설정 저장소:
  * 1) 카드사/은행명 자동 힌트 추출 및 법인/개인 여부 지정 관리 (입금/출금 구분 포함)
  * 2) 내역 수정 시 1회성 저장 보호(One-Time Override) 관리
@@ -630,12 +644,18 @@ class ExpenseCustomMetaPreferences private constructor(
         vararg extraMerchantNames: String?,
         isBankAccountTx: Boolean = false,
         rawCardOrBankName: String? = null,
-        originalText: String? = null
+        originalText: String? = null,
+        targetTxIds: Collection<Long> = emptyList()
     ): String {
         val effectiveCorp = if (isBankAccountTx) false else isCorporate
         val formatted = formatCardDesignation(cardCompany, effectiveCorp, isBankAccountTx = isBankAccountTx)
         if (txId > 0L) {
             txCorporateMap[txId] = effectiveCorp
+        }
+        for (targetId in targetTxIds) {
+            if (targetId > 0L) {
+                txCorporateMap[targetId] = effectiveCorp
+            }
         }
         if (applyToMerchantRule) {
             if (!isBankAccountTx) {
@@ -650,7 +670,7 @@ class ExpenseCustomMetaPreferences private constructor(
                     }
                 }
                 // 1회성 저장이 아닌 일반 거래들의 이전 개별 캐시를 정리하여 카드 기준 영구설정이 즉시 일괄 반영되도록 처리
-                txCorporateMap.keys.removeIf { id -> id != txId && id !in oneTimeEditedTxIds }
+                txCorporateMap.keys.removeIf { id -> id != txId && id !in targetTxIds && id !in oneTimeEditedTxIds }
             }
             if (merchantName.isNotBlank()) {
                 putDirectionalRule(
@@ -680,10 +700,16 @@ class ExpenseCustomMetaPreferences private constructor(
         isFixed: Boolean,
         applyToMerchantRule: Boolean,
         isDeposit: Boolean = false,
-        vararg extraMerchantNames: String?
+        vararg extraMerchantNames: String?,
+        targetTxIds: Collection<Long> = emptyList()
     ) {
         if (txId > 0L) {
             txFixedExpenseMap[txId] = isFixed
+        }
+        for (targetId in targetTxIds) {
+            if (targetId > 0L) {
+                txFixedExpenseMap[targetId] = isFixed
+            }
         }
         if (applyToMerchantRule && merchantName.isNotBlank()) {
             putDirectionalRule(
@@ -698,15 +724,19 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     fun resolveIsFixedExpense(tx: Transaction, autoRecurringIds: Set<Long> = emptySet()): Boolean {
-        if (tx.id > 0L && txFixedExpenseMap.containsKey(tx.id)) {
-            return txFixedExpenseMap[tx.id] == true
-        }
-        if (!isOneTimeEdited(tx)) {
+        if (isOneTimeEdited(tx)) {
+            if (tx.id > 0L && txFixedExpenseMap.containsKey(tx.id)) {
+                return txFixedExpenseMap[tx.id] == true
+            }
+        } else {
             lookupDirectionalRule(
                 merchantFixedExpenseMap,
                 tx.merchantName,
                 tx.isDepositTransaction()
             )?.let { return it == "true" }
+            if (tx.id > 0L && txFixedExpenseMap.containsKey(tx.id)) {
+                return txFixedExpenseMap[tx.id] == true
+            }
         }
         return tx.id in autoRecurringIds
     }
@@ -855,13 +885,19 @@ class ExpenseCustomMetaPreferences private constructor(
         customCategoryName: String?,
         applyToMerchantRule: Boolean,
         isDeposit: Boolean = false,
-        vararg extraMerchantNames: String?
+        vararg extraMerchantNames: String?,
+        targetTxIds: Collection<Long> = emptyList()
     ) {
         val cleanCat = customCategoryName?.trim().orEmpty()
         if (cleanCat.isNotBlank()) {
             addCustomCategory(cleanCat)
             if (txId > 0L) {
                 txCustomCategoryMap[txId] = cleanCat
+            }
+            for (targetId in targetTxIds) {
+                if (targetId > 0L) {
+                    txCustomCategoryMap[targetId] = cleanCat
+                }
             }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
                 putDirectionalRule(
@@ -876,6 +912,11 @@ class ExpenseCustomMetaPreferences private constructor(
             if (txId > 0L) {
                 txCustomCategoryMap.remove(txId)
             }
+            for (targetId in targetTxIds) {
+                if (targetId > 0L) {
+                    txCustomCategoryMap.remove(targetId)
+                }
+            }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
                 removeDirectionalRule(
                     merchantCustomCategoryMap,
@@ -889,15 +930,19 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     fun resolveCustomCategoryLabel(tx: Transaction): String? {
+        if (isOneTimeEdited(tx)) {
+            if (tx.id > 0L) {
+                txCustomCategoryMap[tx.id]?.let { return it }
+            }
+            return null
+        }
+        lookupDirectionalRule(
+            merchantCustomCategoryMap,
+            tx.merchantName,
+            tx.isDepositTransaction()
+        )?.let { return it }
         if (tx.id > 0L) {
             txCustomCategoryMap[tx.id]?.let { return it }
-        }
-        if (!isOneTimeEdited(tx)) {
-            lookupDirectionalRule(
-                merchantCustomCategoryMap,
-                tx.merchantName,
-                tx.isDepositTransaction()
-            )?.let { return it }
         }
         return null
     }
@@ -974,13 +1019,19 @@ class ExpenseCustomMetaPreferences private constructor(
         userClassificationName: String?,
         applyToMerchantRule: Boolean,
         isDeposit: Boolean = false,
-        vararg extraMerchantNames: String?
+        vararg extraMerchantNames: String?,
+        targetTxIds: Collection<Long> = emptyList()
     ) {
         val cleanName = userClassificationName?.trim().orEmpty()
         if (cleanName.isNotBlank()) {
             addOrGetUserClassification(cleanName)
             if (txId > 0L) {
                 txUserClassMap[txId] = cleanName
+            }
+            for (targetId in targetTxIds) {
+                if (targetId > 0L) {
+                    txUserClassMap[targetId] = cleanName
+                }
             }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
                 putDirectionalRule(
@@ -994,6 +1045,11 @@ class ExpenseCustomMetaPreferences private constructor(
         } else {
             if (txId > 0L) {
                 txUserClassMap.remove(txId)
+            }
+            for (targetId in targetTxIds) {
+                if (targetId > 0L) {
+                    txUserClassMap.remove(targetId)
+                }
             }
             if (applyToMerchantRule && merchantName.isNotBlank()) {
                 removeDirectionalRule(
@@ -1009,15 +1065,15 @@ class ExpenseCustomMetaPreferences private constructor(
 
     @Synchronized
     fun resolveUserClassification(tx: Transaction): UserClassificationItem? {
-        val assignedName = (if (tx.id > 0L) txUserClassMap[tx.id] else null)
-            ?: (if (!isOneTimeEdited(tx)) {
-                lookupDirectionalRule(
-                    merchantUserClassMap,
-                    tx.merchantName,
-                    tx.isDepositTransaction()
-                )
-            } else null)
-            ?: return null
+        val assignedName = if (isOneTimeEdited(tx)) {
+            if (tx.id > 0L) txUserClassMap[tx.id] else null
+        } else {
+            lookupDirectionalRule(
+                merchantUserClassMap,
+                tx.merchantName,
+                tx.isDepositTransaction()
+            ) ?: (if (tx.id > 0L) txUserClassMap[tx.id] else null)
+        } ?: return null
 
         return userClassificationList.firstOrNull { it.name.equals(assignedName, ignoreCase = true) }
             ?: UserClassificationItem(assignedName, (assignedName.hashCode().and(0x7fffffff)) % BADGE_COLOR_COUNT)

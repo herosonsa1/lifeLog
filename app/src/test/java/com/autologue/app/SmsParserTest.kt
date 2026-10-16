@@ -403,4 +403,34 @@ class SmsParserTest {
         assertEquals("GS칼텍스 잠실주유소", realTx?.merchantName)
         assertEquals(ExpenseCategory.FUEL, realTx?.category)
     }
+
+    @Test
+    fun permanentSaveOptions_defaultsAndSelectiveConfig_preservesAmountsAndAppliesSelectedFields() {
+        val defaultOptions = com.autologue.app.data.preferences.PermanentSaveOptions()
+        assertEquals(true, defaultOptions.applyMerchantName)
+        assertEquals(true, defaultOptions.applyCategory)
+        assertEquals(true, defaultOptions.applyUserClassification)
+        assertEquals(true, defaultOptions.applyCardAndCorporate)
+        assertEquals(true, defaultOptions.applyFixedExpense)
+        assertEquals(false, defaultOptions.applyMemo)
+
+        val customOptions = com.autologue.app.data.preferences.PermanentSaveOptions(
+            applyMerchantName = false,
+            applyCategory = true,
+            applyUserClassification = true,
+            applyCardAndCorporate = true,
+            applyFixedExpense = false,
+            applyMemo = false,
+            selectedExistingTxIds = setOf(101L, 202L, 303L)
+        )
+        assertEquals(false, customOptions.applyMerchantName)
+        assertEquals(true, customOptions.applyCategory)
+        assertEquals(true, customOptions.applyUserClassification)
+        assertEquals(3, customOptions.selectedExistingTxIds?.size)
+        assertEquals(
+            true,
+            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification("업무/법인")
+        )
+    }
 }
+
