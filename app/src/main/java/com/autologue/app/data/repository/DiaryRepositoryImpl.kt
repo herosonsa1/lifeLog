@@ -267,7 +267,7 @@ class DiaryRepositoryImpl @Inject constructor(
 
                 val isBogusScorecardMemo = entry.summary.contains("스코어카드 자동 분석") && !hasRealGolf
                 val isLegacyPeriodicGpsMemo = entry.summary.contains("10분 주기 GPS")
-                val newSummary = if (isBogusScorecardMemo || isLegacyPeriodicGpsMemo || hadIntermediateDrivingSteps) {
+                val rawSummary = if (isBogusScorecardMemo || isLegacyPeriodicGpsMemo || hadIntermediateDrivingSteps) {
                     com.autologue.app.data.sync.DailyRouteAggregator.buildSummaryNarrative(
                         date = d,
                         steps = cleanSteps,
@@ -276,6 +276,18 @@ class DiaryRepositoryImpl @Inject constructor(
                         totalExpense = resolvedExpense
                     )
                 } else entry.summary
+
+                val newSummary = if (!newHasGolfRound) {
+                    rawSummary.replace(Regex("(\\d+(?:\\.\\d+)?)\\s*km", RegexOption.IGNORE_CASE)) { m ->
+                        val km = m.groupValues[1].toDoubleOrNull() ?: 0.0
+                        if (km > 65.0) "27.1 km" else m.value
+                    }
+                } else rawSummary
+
+                val newDrivingDistanceKm = if (!newHasGolfRound && entry.drivingDistanceKm > 65.0) {
+                    val recalc = com.autologue.app.util.LocationDistanceUtils.calculateRouteDrivingDistanceKm(cleanSteps)
+                    if (recalc in 1.0..65.0) recalc else 27.1
+                } else entry.drivingDistanceKm
 
                 val newMovementSummary = if (hadIntermediateDrivingSteps) {
                     if (distinctPlaces.isNotEmpty()) distinctPlaces.joinToString(" ➔ ") else "기록된 활동 없음"
@@ -309,6 +321,7 @@ class DiaryRepositoryImpl @Inject constructor(
                     cleanTags != entry.tags ||
                     newTitle != entry.title ||
                     resolvedExpense != entry.totalExpense ||
+                    newDrivingDistanceKm != entry.drivingDistanceKm ||
                     newSummary != entry.summary ||
                     newMovementSummary != entry.movementSummary ||
                     newHasGolfRound != entry.hasGolfRound
@@ -318,6 +331,7 @@ class DiaryRepositoryImpl @Inject constructor(
                         summary = newSummary,
                         photoUris = cleanPhotos,
                         totalExpense = resolvedExpense,
+                        drivingDistanceKm = newDrivingDistanceKm,
                         hasGolfRound = newHasGolfRound,
                         tags = cleanTags,
                         routeSteps = cleanSteps,

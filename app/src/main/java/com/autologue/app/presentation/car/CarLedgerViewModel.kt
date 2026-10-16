@@ -515,6 +515,7 @@ class CarLedgerViewModel @Inject constructor(
             val cfg = locationPreferences.config.value
             val (home, comp) = resolveCommuteNeighborhoods(cfg)
             val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
+            runCatching { vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist) }
 
             // 1. 기기 결제 문자(SMS/LMS/MMS/RCS) 최근 365일 전수 스캔 및 가계부/차계부 자동 적재
             var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), hasPerm, 0)

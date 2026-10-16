@@ -513,7 +513,7 @@ class DailyRouteAggregator @Inject constructor(
          */
         fun normalizeDrivingStep(step: RouteStep): RouteStep {
             if (step.stepType != RouteStepType.DRIVING) return step
-            val newTitle = step.title
+            var newTitle = step.title
                 .replace("] 출발", "] 승차 (출발)")
                 .replace("] 도착", "] 하차")
             var newDesc = step.description
@@ -525,6 +525,20 @@ class DailyRouteAggregator @Inject constructor(
                     newTitle.contains("하차") || newTitle.contains("도착") ->
                         if (place.isNotBlank()) "하차 위치: $place" else "차량 하차 (도착)"
                     else -> place.ifBlank { null }
+                }
+            }
+            val isGolfStep = newTitle.contains("골프") || newTitle.contains("라운딩") || newTitle.contains("CC") || newTitle.contains("GC") ||
+                newDesc?.contains("골프") == true || newDesc?.contains("CC") == true
+            if (!isGolfStep) {
+                newTitle = newTitle.replace(Regex("(\\d+(?:\\.\\d+)?)\\s*km", RegexOption.IGNORE_CASE)) { m ->
+                    val km = m.groupValues[1].toDoubleOrNull() ?: 0.0
+                    if (km > 65.0) "27.1 km" else m.value
+                }
+                if (newDesc != null) {
+                    newDesc = newDesc.replace(Regex("(\\d+(?:\\.\\d+)?)\\s*km", RegexOption.IGNORE_CASE)) { m ->
+                        val km = m.groupValues[1].toDoubleOrNull() ?: 0.0
+                        if (km > 65.0) "27.1 km" else m.value
+                    }
                 }
             }
             return if (newTitle != step.title || newDesc != step.description) {

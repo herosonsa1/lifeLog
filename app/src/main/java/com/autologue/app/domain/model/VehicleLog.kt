@@ -76,16 +76,78 @@ fun VehicleLog.buildUpdatedNote(
 }
 
 /**
+ * GPS-기지국 교차 수신(Ping-Pong) 노이즈로 인해 비정상적으로 부풀려진 주행 기록(예: 출퇴근 편도가 117.4 km로 기록된 건)을
+ * 정상 편도/주행 거리(예: 27.1 km)로 자가 치유(Self-Healing)합니다.
+ */
+fun VehicleLog.normalizeInflatedDrivingLog(defaultCommuteOneWayKm: Double = 27.1): VehicleLog {
+    if (logType != VehicleLogType.TRIP_DRIVING) return this
+    val n = note ?: return this
+
+    val isGolf = n.contains("골프") || n.contains("라운딩") || n.contains("CC") || n.contains("GC") || n.contains("C.C") || n.contains("G.C")
+    if (isGolf) return this
+
+    val isCommuteRoute = (n.contains("출근") && !n.contains("출퇴근")) ||
+        (n.contains("퇴근") && !n.contains("출퇴근")) ||
+        (n.contains("영등포동") && (n.contains("학암동") || n.contains("위례동")))
+
+    val refOneWayKm = if (defaultCommuteOneWayKm > 0.0) {
+        Math.round(defaultCommuteOneWayKm * 10.0) / 10.0
+    } else 27.1
+
+    val durationMin = Regex("(\\d+)\\s*분\\s*운행").find(n)?.groupValues?.get(1)?.toIntOrNull()
+    val gpsPointCount = Regex("GPS\\s*(\\d+)\\s*개\\s*지점").find(n)?.groupValues?.get(1)?.toIntOrNull()
+
+    val isInflatedCommute = isCommuteRoute && tripDistanceKm > refOneWayKm * 1.35
+    val isInflatedByDuration = durationMin != null && durationMin > 0 && tripDistanceKm > durationMin * 1.15
+    val isInflatedByPingPongPoints = gpsPointCount != null && durationMin != null && gpsPointCount > durationMin * 4 && tripDistanceKm > 40.0
+
+    if (!isInflatedCommute && !isInflatedByDuration && !isInflatedByPingPongPoints) {
+        return this
+    }
+
+    val healedKm = when {
+        isCommuteRoute -> refOneWayKm
+        durationMin != null && durationMin > 0 -> Math.round((durationMin * 0.35).coerceIn(1.5, 45.0) * 10.0) / 10.0
+        else -> refOneWayKm
+    }
+
+    var healedNote = n.replace(Regex("((?:출근\\s*|퇴근\\s*)?)\\d+(?:\\.\\d+)?\\s*km", RegexOption.IGNORE_CASE)) { m ->
+        val prefix = m.groupValues[1]
+        String.format(java.util.Locale.US, "%s%.1f km", prefix, healedKm)
+    }
+
+    if (gpsPointCount != null && durationMin != null && gpsPointCount > durationMin * 4) {
+        val normalPoints = (durationMin / 2).coerceAtLeast(2)
+        healedNote = healedNote.replace(Regex("GPS\\s*\\d+\\s*개\\s*지점"), "GPS ${normalPoints}개 지점")
+    }
+
+    return copy(
+        tripDistanceKm = healedKm,
+        note = healedNote
+    )
+}
+
+private fun syncRouteTitleDistance(rawTitle: String, tripDistanceKm: Double): String {
+    if (tripDistanceKm <= 0.0) return rawTitle
+    return rawTitle.replace(Regex("((?:출근\\s*|퇴근\\s*)?)\\d+(?:\\.\\d+)?\\s*km", RegexOption.IGNORE_CASE)) { m ->
+        val prefix = m.groupValues[1]
+        String.format(java.util.Locale.US, "%s%.1f km", prefix, tripDistanceKm)
+    }
+}
+
+/**
  * 주행 기록에서 메인 타이틀로 표시할 시작지점 ➔ 종료지점 경로 문자열 추출
  */
 fun VehicleLog.getDrivingRouteTitle(): String? {
     if (logType != VehicleLogType.TRIP_DRIVING) return null
-    val n = note ?: return null
+    val normalized = normalizeInflatedDrivingLog()
+    val n = normalized.note ?: return null
+    val distKm = normalized.tripDistanceKm
 
     // 1. 신규 포맷: "[출발지 ➔ 도착지 (거리 km)]" 대괄호 패턴 검색
     val routeBracketMatch = Regex("\\[([^\\]]+➔[^\\]]+)\\]").find(n)
     if (routeBracketMatch != null) {
-        return routeBracketMatch.groupValues[1].trim()
+        return syncRouteTitleDistance(routeBracketMatch.groupValues[1].trim(), distKm)
     }
 
     // 1-1. 차량/단가 시스템 태그를 제외한 경로/주행 대괄호 타이틀 (예: "[서울 송파구 잠실동 주변 주행 (5.2 km)]")
@@ -102,7 +164,7 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
             inside.contains("도착") ||
             inside.contains("km", ignoreCase = true)
         if (!isSystemTag && hasRouteKeyword && inside.isNotBlank()) {
-            return inside
+            return syncRouteTitleDistance(inside, distKm)
         }
     }
 
@@ -110,17 +172,17 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
     val arrowMatch = Regex("([^(\\[]+➔[^)\\]]+)").find(n)
     if (arrowMatch != null) {
         val title = arrowMatch.groupValues[1].trim()
-        return if (tripDistanceKm > 0.0 && !title.contains("km")) {
-            "$title (%.1f km)".format(tripDistanceKm)
-        } else title
+        return if (distKm > 0.0 && !title.contains("km")) {
+            "$title (%.1f km)".format(distKm)
+        } else syncRouteTitleDistance(title, distKm)
     }
 
     // 3. 기존 출퇴근 패턴
     if (n.contains("출근")) {
-        return if (tripDistanceKm > 0.0) "출근 주행 (%.1f km)".format(tripDistanceKm) else "출근 주행"
+        return if (distKm > 0.0) "출근 주행 (%.1f km)".format(distKm) else "출근 주행"
     }
     if (n.contains("퇴근")) {
-        return if (tripDistanceKm > 0.0) "퇴근 주행 (%.1f km)".format(tripDistanceKm) else "퇴근 주행"
+        return if (distKm > 0.0) "퇴근 주행 (%.1f km)".format(distKm) else "퇴근 주행"
     }
 
     // 3-1. 골프장 라운딩 왕복 주행 패턴 (예: "월송리 CC 라운딩 왕복 주행", "오크밸리 CC 라운딩 왕복 주행")
@@ -129,12 +191,12 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
         val clubName = clubMatch?.value?.trim() ?: run {
             n.substringBefore("라운딩").substringBefore("골프").trim().ifBlank { null }
         } ?: "골프장"
-        return if (tripDistanceKm > 0.0) "$clubName 왕복 주행 (%.1f km)".format(tripDistanceKm) else "$clubName 왕복 주행"
+        return if (distKm > 0.0) "$clubName 왕복 주행 (%.1f km)".format(distKm) else "$clubName 왕복 주행"
     }
 
     // 4. 레거시 포맷 폴백
-    if (tripDistanceKm > 0.0) {
-        return "자동 주행 (%.1f km)".format(tripDistanceKm)
+    if (distKm > 0.0) {
+        return "자동 주행 (%.1f km)".format(distKm)
     }
 
     return "차량 주행 완료"
@@ -145,7 +207,7 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
  */
 fun VehicleLog.getDrivingDetailSubtitle(): String? {
     if (logType != VehicleLogType.TRIP_DRIVING) return null
-    val n = note ?: return null
+    val n = normalizeInflatedDrivingLog().note ?: return null
 
     // 소괄호 안의 운행시간/GPS 지점 정보 추출
     val parenMatch = Regex("\\(([0-9]+분 운행[^)]*)\\)").find(n)
@@ -175,5 +237,6 @@ fun VehicleLog.displayTitle(): String {
         VehicleLogType.PARKING -> note ?: "주차 기록"
     }
 }
+
 
 

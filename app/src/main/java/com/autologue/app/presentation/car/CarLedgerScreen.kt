@@ -848,7 +848,7 @@ fun SaaSCarLogRow(
         val isCar2 = assignedVehicleId == "car_2"
         val drivingSubtitle = log.getDrivingDetailSubtitle()
 
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f).padding(end = Spacing.sm)) {
             // 상단 뱃지 영역: 차량 식별 뱃지 + 주행/주유 유형 뱃지
             Row(
                 verticalAlignment = Alignment.CenterVertically,

@@ -481,19 +481,42 @@ class CarDrivingTrackingService : Service() {
                     }
                 }
 
-                // 3. 주행거리 정밀 산출: 실시간 누적거리, 궤적 누적거리, 출발-도착 도로거리 중 최대값 채택
+                // 3. 주행거리 정밀 산출: 스파이크가 제거된 궤적 누적거리(calculatedDistanceKm)와 출발-도착 도로거리(directDistanceKm) 대조
                 val calculatedDistanceKm = LocationDistanceUtils.calculateWaypointsDistanceKm(validWaypoints)
                 val directDistanceKm = if (startLat != 0.0 && endLat != 0.0 && (startLat != endLat || startLng != endLng)) {
                     LocationDistanceUtils.calculateDrivingDistanceKm(startLat, startLng, endLat, endLng)
                 } else 0.0
 
-                var finalTripKm = maxOf(cumulativeDistanceKm, calculatedDistanceKm, directDistanceKm)
-                finalTripKm = Math.round(finalTripKm * 10.0) / 10.0
+                val rawTrajectoryKm = if (calculatedDistanceKm > 0.0) calculatedDistanceKm else cumulativeDistanceKm
 
-                // 출퇴근 주행 시 등록된 편도 거리가 있고 측정 거리가 부족한 경우 등록된 편도 거리 우선 반영
-                if ((isToWorkCommute || isToHomeCommute) && config.commuteOneWayKm > 0.0 && finalTripKm < config.commuteOneWayKm * 0.6) {
-                    finalTripKm = config.commuteOneWayKm
+                var finalTripKm = if (isToWorkCommute || isToHomeCommute) {
+                    val refCommuteKm = when {
+                        config.commuteOneWayKm > 0.0 -> config.commuteOneWayKm
+                        directDistanceKm > 0.0 -> directDistanceKm
+                        else -> 27.1
+                    }
+                    when {
+                        // 궤적 거리가 기준 출퇴근 편도 거리의 정상 오차 범위(75% ~ 125%) 내이면 실측 궤적 채택
+                        rawTrajectoryKm in (refCommuteKm * 0.75)..(refCommuteKm * 1.25) -> rawTrajectoryKm
+                        // 출발-도착 도로거리가 정상 범위 내이면 출발-도착 도로거리 채택
+                        directDistanceKm in (refCommuteKm * 0.75)..(refCommuteKm * 1.25) -> directDistanceKm
+                        // 그 외(기지국 핑퐁으로 과다 누적되었거나 지하주차장 음영으로 부족한 경우) 기준 편도 거리 채택
+                        else -> refCommuteKm
+                    }
+                } else {
+                    var candidateKm = maxOf(rawTrajectoryKm, directDistanceKm)
+                    // 단일 편도 이동(출발지 != 도착지)에서 GPS/기지국 노이즈로 직선 기반 도로거리 대비 1.35배를 초과한 경우 보정
+                    if (directDistanceKm >= 2.0 && distanceMeter(startLat, startLng, endLat, endLng) >= 1500.0 && candidateKm > directDistanceKm * 1.35) {
+                        candidateKm = directDistanceKm
+                    }
+                    // 운행 시간 대비 물리적으로 불가능한 도심 과속 누적치(분당 1.1km 초과) 상한 방어
+                    val maxByDurationKm = (durationMin * 1.1).coerceAtLeast(directDistanceKm)
+                    if (durationMin > 0 && candidateKm > maxByDurationKm && directDistanceKm > 0.0) {
+                        candidateKm = directDistanceKm
+                    }
+                    candidateKm
                 }
+                finalTripKm = Math.round(finalTripKm * 10.0) / 10.0
 
                 // [안전망] 3분 이상 운행했으나 GPS 음영(지하 등)으로 0.0km인 경우, 시내 평균속도 기준 최소 주행거리 추정 반영
                 if (finalTripKm == 0.0 && durationMin >= 3) {
@@ -978,16 +1001,32 @@ class CarDrivingTrackingService : Service() {
             }
         }
 
-        // 3. 실시간 주행 거리 누적 (이전 유효 위치 대비 이동 거리)
+        // 3. 실시간 주행 거리 누적 (고정밀 위치 및 정상 속도 범위인 경우에만 누적)
         val locAccuracy = if (loc?.hasAccuracy() == true) loc.accuracy else 100f
-        lastValidLocation?.let { prevLoc ->
-            val distMeters = distanceMeter(prevLoc.latitude, prevLoc.longitude, lat, lng)
-            if (locAccuracy <= 400f && distMeters >= 15.0 && distMeters < 5000.0) { // 15m 이상, 5km 미만(순간 텔레포트 오차 배제)
-                cumulativeDistanceKm += (distMeters / 1000.0) * 1.25 // 실제 도로 굴곡 보정계수 1.25 반영
-                Log.d(TAG, "Waypoint 이동 거리 실시간 누적: +${String.format(java.util.Locale.US, "%.2f", distMeters / 1000.0 * 1.25)} km (누적: ${String.format(java.util.Locale.US, "%.2f", cumulativeDistanceKm)} km)")
+        val isNetworkProvider = loc?.provider == LocationManager.NETWORK_PROVIDER
+        if (!isNetworkProvider && locAccuracy <= 65f) {
+            lastValidLocation?.let { prevLoc ->
+                val distMeters = distanceMeter(prevLoc.latitude, prevLoc.longitude, lat, lng)
+                val deltaSec = ((System.currentTimeMillis() - prevLoc.time).coerceAtLeast(1000L)) / 1000.0
+                val speedMps = distMeters / deltaSec
+                if (distMeters >= 25.0 && distMeters < 3000.0 && speedMps <= 42.0) {
+                    val factor = if (distMeters < 800.0) 1.0 else LocationDistanceUtils.DEFAULT_ROAD_CURVE_FACTOR
+                    cumulativeDistanceKm += (distMeters / 1000.0) * factor
+                    lastValidLocation = loc ?: Location("").apply {
+                        latitude = lat
+                        longitude = lng
+                        time = System.currentTimeMillis()
+                    }
+                    Log.d(TAG, "Waypoint 이동 거리 실시간 누적: +${String.format(java.util.Locale.US, "%.2f", (distMeters / 1000.0) * factor)} km (누적: ${String.format(java.util.Locale.US, "%.2f", cumulativeDistanceKm)} km)")
+                }
+            } ?: run {
+                lastValidLocation = loc ?: Location("").apply {
+                    latitude = lat
+                    longitude = lng
+                    time = System.currentTimeMillis()
+                }
             }
         }
-        lastValidLocation = loc ?: Location("").apply { latitude = lat; longitude = lng }
 
         lastRecordedLat = lat
         lastRecordedLng = lng
@@ -1014,10 +1053,10 @@ class CarDrivingTrackingService : Service() {
         runCatching {
             val elapsedMin = ((System.currentTimeMillis() - startTimeMillis) / 60000).coerceAtLeast(1)
             val waypointDist = LocationDistanceUtils.calculateWaypointsDistanceKm(waypoints.toList())
-            val currentDist = maxOf(cumulativeDistanceKm, waypointDist)
+            val currentDist = if (waypointDist > 0.0) waypointDist else cumulativeDistanceKm
             val carPlatePrefix = if (activeLicensePlate.isNotBlank()) " ($activeLicensePlate)" else ""
             val content = if (currentDist > 0.0) {
-                "실시간 주행 중 · %.1f km (운행 ${elapsedMin}분, %d개 지점 수집)".format(currentDist, waypoints.size)
+                "실시간 주행 중 · %.1f km (운행 ${elapsedMin}분)".format(currentDist)
             } else if (elapsedMin >= 3 && waypoints.size >= 2) {
                 // 수집된 지점이 있으나 미세 정체 구간일 때 최소 추정치 표시
                 val estimatedKm = (elapsedMin * 0.3).coerceIn(0.1, 15.0)
@@ -1119,7 +1158,7 @@ class CarDrivingTrackingService : Service() {
 
         val listener = android.location.LocationListener { loc ->
             if (!LocationDistanceUtils.isValidCoordinate(loc.latitude, loc.longitude)) return@LocationListener
-            // 지하주차장 및 기지국/Wi-Fi 대략 위치(200m~1,500m)를 버리지 않고 동네명/거점 판별에 활용 (2.5km 초과만 무시)
+            // 지하주차장 및 기지국/Wi-Fi 대략 위치(200m~1,500m)를 버리지 않고 출발/도착 동네명 판별에 활용 (2.5km 초과만 무시)
             if (loc.hasAccuracy() && loc.accuracy > 2500f) {
                 Log.d(TAG, "초저정밀(${loc.accuracy}m) 위치 신호 무시")
                 return@LocationListener
@@ -1128,12 +1167,15 @@ class CarDrivingTrackingService : Service() {
             latestLocation = loc
             val now = System.currentTimeMillis()
             val locAccuracy = if (loc.hasAccuracy()) loc.accuracy else 100f
+            val isNetworkProvider = loc.provider == LocationManager.NETWORK_PROVIDER
 
             // 1. 최초 유효 좌표가 들어왔을 때, 출발 지점으로 등록되지 않았다면 즉시 출발지(isDeparture = true)로 확정 등록
             if (!firstDeparturePointRecorded) {
                 firstDeparturePointRecorded = true
                 departureAccuracyMeters = locAccuracy
-                lastValidLocation = loc
+                if (!isNetworkProvider && locAccuracy <= 65f) {
+                    lastValidLocation = loc
+                }
                 lastRecordedLat = loc.latitude
                 lastRecordedLng = loc.longitude
                 lastRecordedWaypointTime = now
@@ -1181,29 +1223,37 @@ class CarDrivingTrackingService : Service() {
                 return@LocationListener
             }
 
-            // 3. 실시간 주행 거리 즉각 누적: 정확도 400m 이내이고 이전 유효 위치 대비 15m 이상 이동 시
-            if (locAccuracy <= 400f) {
-                lastValidLocation?.let { prevLoc ->
-                    val distMeters = distanceMeter(prevLoc.latitude, prevLoc.longitude, loc.latitude, loc.longitude)
-                    if (distMeters >= 15.0 && distMeters < 5000.0) { // 15m 이상 5km 미만(순간 이상치 방어)
-                        cumulativeDistanceKm += (distMeters / 1000.0) * 1.25
-                        lastValidLocation = loc
-                        saveWaypointsToPrefs()
-                        updateOngoingNotification()
-                    }
-                } ?: run {
-                    lastValidLocation = loc
-                }
+            // 주행 중 중간 궤적 및 거리 누적은 기지국(NETWORK_PROVIDER) 및 저정밀(accuracy > 65m) 신호를 원천 배제하여
+            // GPS↔기지국 교차 수신에 의한 100~300m 핑퐁 거리 부풀림(예: 27.1km가 117.4km로 뻥튀기되는 현상)을 원천 차단
+            if (isNetworkProvider || locAccuracy > 65f) {
+                return@LocationListener
             }
 
-            // 4. 실시간 궤적 누적: 이전 기록 위치 대비 30m 이상 이동했거나, 마지막 기록 후 3분 경과 시(15m 이상 이동) 기록
+            // 3. 실시간 주행 거리 즉각 누적: 고정밀(65m 이내) 위치이고 이전 유효 위치 대비 35m 이상 & 정상 속도 범위 내 이동 시
+            lastValidLocation?.let { prevLoc ->
+                val distMeters = distanceMeter(prevLoc.latitude, prevLoc.longitude, loc.latitude, loc.longitude)
+                val deltaSec = ((now - prevLoc.time).coerceAtLeast(1000L)) / 1000.0
+                val speedMps = distMeters / deltaSec
+                if (distMeters >= 35.0 && distMeters < 3000.0 && speedMps <= 42.0) {
+                    val factor = if (distMeters < 800.0) 1.0 else LocationDistanceUtils.DEFAULT_ROAD_CURVE_FACTOR
+                    cumulativeDistanceKm += (distMeters / 1000.0) * factor
+                    lastValidLocation = loc
+                    saveWaypointsToPrefs()
+                    updateOngoingNotification()
+                }
+            } ?: run {
+                lastValidLocation = loc
+            }
+
+            // 4. 실시간 궤적 누적: 이전 기록 위치 대비 50m 이상 이동했거나, 마지막 기록 후 3분 경과 시(35m 이상 이동) 기록
             val distFromLast = if (lastRecordedLat != 0.0 && lastRecordedLng != 0.0) {
                 distanceMeter(lastRecordedLat, lastRecordedLng, loc.latitude, loc.longitude)
             } else 9999.0
 
-            val timeSinceLast = now - lastRecordedWaypointTime
+            val timeSinceLast = (now - lastRecordedWaypointTime).coerceAtLeast(1000L)
+            val speedFromLastMps = distFromLast / (timeSinceLast / 1000.0)
 
-            if (distFromLast >= 30.0 || (timeSinceLast >= 3 * 60 * 1000L && distFromLast >= 15.0)) {
+            if (speedFromLastMps <= 42.0 && (distFromLast >= 50.0 || (timeSinceLast >= 3 * 60 * 1000L && distFromLast >= 35.0))) {
                 lastRecordedLat = loc.latitude
                 lastRecordedLng = loc.longitude
                 lastRecordedWaypointTime = now

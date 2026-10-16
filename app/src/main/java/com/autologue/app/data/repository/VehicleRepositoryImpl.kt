@@ -6,6 +6,7 @@ import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.data.preferences.MerchantAliasPreferences
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
+import com.autologue.app.domain.model.normalizeInflatedDrivingLog
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.util.LocationDistanceUtils
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +48,9 @@ class VehicleRepositoryImpl @Inject constructor(
     }
 
     override fun getAllVehicleLogsFlow(): Flow<List<VehicleLog>> {
-        return vehicleLogDao.getAllVehicleLogs().map { it.map { e -> e.toDomain() } }
+        return vehicleLogDao.getAllVehicleLogs().map { list ->
+            list.map { e -> e.toDomain().normalizeInflatedDrivingLog() }
+        }
     }
 
     override fun getRefuelingLogsFlow(): Flow<List<VehicleLog>> {
@@ -595,6 +598,19 @@ class VehicleRepositoryImpl @Inject constructor(
                     val durationMin = minMatch?.groupValues?.get(1)?.toDoubleOrNull() ?: 10.0
                     val estimatedKm = (durationMin * 0.3).coerceIn(1.2, 35.0)
                     healedDistance = Math.round(estimatedKm * 10.0) / 10.0
+                    needsUpdate = true
+                }
+
+                // 6-1. GPS↔기지국 교차 수신(Ping-Pong) 노이즈로 비정상 부풀려진 주행거리(예: 퇴근 117.4 km) 자가 치유
+                val refOneWayKm = if (commuteDistanceKm > 0.0) {
+                    Math.round((commuteDistanceKm / 2.0) * 10.0) / 10.0
+                } else 27.1
+                val normalizedDomain = log.copy(note = healedNote, tripDistanceKm = healedDistance)
+                    .toDomain()
+                    .normalizeInflatedDrivingLog(refOneWayKm)
+                if (normalizedDomain.tripDistanceKm != healedDistance || normalizedDomain.note != healedNote) {
+                    healedDistance = normalizedDomain.tripDistanceKm
+                    healedNote = normalizedDomain.note ?: healedNote
                     needsUpdate = true
                 }
 

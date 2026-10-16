@@ -144,6 +144,14 @@ class DiaryViewModel @Inject constructor(
                             GolfCourseDistanceUtils.getEstimatedRoundTripKm(current.placeName ?: "")
                         } else 0.0
                         if (finalDist > 0.0) current = current.copy(drivingDistanceKm = finalDist)
+                    } else if (!current.hasGolfRound && current.drivingDistanceKm > 65.0) {
+                        val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
+                        val healedDist = if (calculated in 1.0..65.0) calculated else 27.1
+                        val healedSummary = current.summary.replace(Regex("(\\d+(?:\\.\\d+)?)\\s*km", RegexOption.IGNORE_CASE)) { m ->
+                            val km = m.groupValues[1].toDoubleOrNull() ?: 0.0
+                            if (km > 65.0) "27.1 km" else m.value
+                        }
+                        current = current.copy(drivingDistanceKm = healedDist, summary = healedSummary)
                     }
                     if (hadIntermediateDriving) {
                         val validPlaces = current.routeSteps
