@@ -51,7 +51,16 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
                 val dayRefuel = monthVehicles.any { it.timestamp.toLocalDate() == curr && it.logType == com.autologue.app.domain.model.VehicleLogType.REFUELING }
                 val dayEntries = entries.filter { it.date.toLocalDate() == curr }
                 val photoCount = dayEntries.sumOf { it.photoUris.size }
-                val expenseSum = dayTxs.sumOf { it.amount }
+                val dayEntriesExpense = dayEntries.sumOf { entry ->
+                    maxOf(
+                        entry.totalExpense,
+                        com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(entry.routeSteps)
+                    )
+                }
+                val expenseSum = maxOf(
+                    dayTxs.filter { !com.autologue.app.data.sync.DailyRouteAggregator.isFinancialIncomeOrTransfer(it) }.sumOf { it.amount },
+                    dayEntriesExpense
+                )
                 val dayVehicleDist = monthVehicles.filter { it.timestamp.toLocalDate() == curr }.sumOf { it.tripDistanceKm }
                 val dayEntriesDist = dayEntries.sumOf { entry ->
                     if (entry.drivingDistanceKm > 0.0) entry.drivingDistanceKm
@@ -80,7 +89,7 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
 
             MonthlySummary(
                 yearMonth = yearMonth,
-                totalExpense = monthTxs.sumOf { it.amount },
+                totalExpense = daysMap.values.sumOf { it.totalExpense },
                 totalGolfRounds = monthGolf.size,
                 totalDistanceKm = Math.round(totalMonthDistance * 10.0) / 10.0,
                 days = daysMap

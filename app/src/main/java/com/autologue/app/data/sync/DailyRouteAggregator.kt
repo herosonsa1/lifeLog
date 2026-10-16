@@ -129,6 +129,12 @@ class DailyRouteAggregator @Inject constructor(
             )
         }
 
+        // 기존 routeSteps에 이미 존재하는 TRANSACTION 스텝도 누락되지 않도록 보존 (deduplicateRouteSteps에서 중복 자동 병합)
+        val existingTxSteps = existingRouteSteps.filter {
+            it.stepType == RouteStepType.TRANSACTION && !isIncomeOrTransferStep(it)
+        }
+        steps.addAll(existingTxSteps)
+
         // 3. Map Golf Rounds (실제 유효한 골프장명을 가진 라운드만 스텝으로 등록)
         val validGolfRounds = golfRounds.filter { isRealGolfClub(it.clubName) }
         for (golf in validGolfRounds) {
@@ -229,7 +235,8 @@ class DailyRouteAggregator @Inject constructor(
 
         // Extract All Photos, Companions, Tags (시간순 정렬 사진 보장)
         val allPhotoUris = sortedPhotos.map { it.uri }.distinct()
-        val totalExpense = validExpenseTxs.sumOf { it.amount }
+        val stepsExpenseSum = calculateRouteStepsExpense(uniqueSteps)
+        val totalExpense = maxOf(validExpenseTxs.sumOf { it.amount }, stepsExpenseSum)
         val vehicleLogDistance = vehicleLogs.sumOf { it.tripDistanceKm }
         val estimatedRouteDistance = LocationDistanceUtils.calculateRouteDrivingDistanceKm(uniqueSteps)
         var totalDistance = if (vehicleLogDistance > 0) vehicleLogDistance else estimatedRouteDistance
@@ -290,53 +297,80 @@ class DailyRouteAggregator @Inject constructor(
         places: List<String>,
         photoCount: Int,
         totalExpense: Long
-    ): String {
-        if (steps.isEmpty()) {
-            return "${date.monthValue}월 ${date.dayOfMonth}일에 기록된 활동 내역이 없습니다."
-        }
-
-        val timeFmt = DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA)
-        val parts = mutableListOf<String>()
-
-        val firstStep = steps.first()
-        parts.add("${firstStep.time.format(timeFmt)} ${firstStep.title}")
-
-        val middleSteps = steps.drop(1).dropLast(1)
-        if (middleSteps.isNotEmpty()) {
-            val keyMiddle = middleSteps.filter { it.stepType == RouteStepType.GOLF || it.amount != null || it.photoUris.isNotEmpty() }
-            if (keyMiddle.isNotEmpty()) {
-                val midDesc = keyMiddle.joinToString(", ") { "${it.time.format(timeFmt)} ${it.title}" }
-                parts.add(midDesc)
-            }
-        }
-
-        if (steps.size > 1) {
-            val lastStep = steps.last()
-            parts.add("${lastStep.time.format(timeFmt)} ${lastStep.title}")
-        }
-
-        val routeText = parts.distinct().joinToString(" ➔ ")
-
-        val statText = buildString {
-            if (places.isNotEmpty()) append("방문 장소 ${places.size}곳")
-            if (totalExpense > 0) {
-                if (isNotEmpty()) append(", ")
-                append("총 지출 %,d원".format(totalExpense))
-            }
-            if (photoCount > 0) {
-                if (isNotEmpty()) append(", ")
-                append("사진 ${photoCount}장")
-            }
-        }
-
-        return if (statText.isNotBlank()) {
-            "$routeText ($statText)"
-        } else {
-            routeText
-        }
-    }
+    ): String = Companion.buildSummaryNarrative(date, steps, places, photoCount, totalExpense)
 
     companion object {
+        fun buildSummaryNarrative(
+            date: LocalDate,
+            steps: List<RouteStep>,
+            places: List<String>,
+            photoCount: Int,
+            totalExpense: Long
+        ): String {
+            if (steps.isEmpty()) {
+                return "${date.monthValue}월 ${date.dayOfMonth}일에 기록된 활동 내역이 없습니다."
+            }
+
+            val timeFmt = DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA)
+            val parts = mutableListOf<String>()
+
+            val firstStep = steps.first()
+            parts.add("${firstStep.time.format(timeFmt)} ${firstStep.title}")
+
+            val middleSteps = steps.drop(1).dropLast(1)
+            if (middleSteps.isNotEmpty()) {
+                val keyMiddle = middleSteps.filter { it.stepType == RouteStepType.GOLF || it.amount != null || it.photoUris.isNotEmpty() }
+                if (keyMiddle.isNotEmpty()) {
+                    val midDesc = keyMiddle.joinToString(", ") { "${it.time.format(timeFmt)} ${it.title}" }
+                    parts.add(midDesc)
+                }
+            }
+
+            if (steps.size > 1) {
+                val lastStep = steps.last()
+                parts.add("${lastStep.time.format(timeFmt)} ${lastStep.title}")
+            }
+
+            val routeText = parts.distinct().joinToString(" ➔ ")
+
+            val statText = buildString {
+                if (places.isNotEmpty()) append("방문 장소 ${places.size}곳")
+                if (totalExpense > 0) {
+                    if (isNotEmpty()) append(", ")
+                    append("총 지출 %,d원".format(totalExpense))
+                }
+                if (photoCount > 0) {
+                    if (isNotEmpty()) append(", ")
+                    append("사진 ${photoCount}장")
+                }
+            }
+
+            return if (statText.isNotBlank()) {
+                "$routeText ($statText)"
+            } else {
+                routeText
+            }
+        }
+
+        /**
+         * RouteStep 리스트 내 결제(TRANSACTION) 스텝들의 유효 지출 합계를 계산합니다.
+         * step.amount가 있으면 우선 사용하고, 혹시 null이거나 0이면 description(예: "523,500원 결제")에서 금액을 추출합니다.
+         */
+        fun calculateRouteStepsExpense(steps: List<RouteStep>): Long {
+            return steps
+                .filter { it.stepType == RouteStepType.TRANSACTION && !isIncomeOrTransferStep(it) }
+                .sumOf { step ->
+                    val amt = step.amount ?: 0L
+                    if (amt > 0L) {
+                        amt
+                    } else {
+                        val desc = step.description ?: ""
+                        val match = Regex("([0-9,]+)\\s*원").find(desc)
+                        match?.groupValues?.get(1)?.replace(",", "")?.toLongOrNull() ?: 0L
+                    }
+                }
+        }
+
         /**
          * 입금, 출금, 이체, 송금 등 비이동성 금융 거래 여부 판별.
          * 지역 이동 및 방문 장소와 무관하므로 다이어리 동선 및 타임라인에서 제외함.

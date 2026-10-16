@@ -217,9 +217,11 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 val transactions = importer.scanHistoricalSms(context, daysBack = smsDaysBack, limit = 5000)
                 for (tx in transactions) {
                     runCatching {
-                        processTransactionUseCase(tx)
-                        savedTransactions.add(tx)
-                        txCount++
+                        val txId = processTransactionUseCase(tx)
+                        if (txId > 0L) {
+                            savedTransactions.add(tx)
+                            txCount++
+                        }
                     }
                 }
                 runCatching { transactionRepository.cleanDuplicates() }
@@ -312,9 +314,13 @@ class SyncHistoricalDataUseCase @Inject constructor(
                     golfRepository.getAllGolfRoundsList()
                 }.getOrDefault(emptyList())
 
+                val allDbTxs = runCatching {
+                    transactionRepository.getAllTransactionsFlow().first()
+                }.getOrDefault(savedTransactions)
+
                 val diaryEntries = importer.generateIntegratedDiaries(
                     photos = photos,
-                    transactions = savedTransactions,
+                    transactions = allDbTxs.ifEmpty { savedTransactions },
                     golfRounds = allGolfRounds
                 )
 

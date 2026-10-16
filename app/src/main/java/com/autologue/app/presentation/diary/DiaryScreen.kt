@@ -564,7 +564,11 @@ fun NaturalSummaryHeader(
 ) {
     // [M-04] 무거운 집계 연산을 remember(entries)로 캐싱
     //   entries가 변경될 때만 재계산되고, 부모 리컴포지션 시에는 캐시된 값을 재사용합니다.
-    val totalExpense = remember(entries) { entries.sumOf { it.totalExpense } }
+    val totalExpense = remember(entries) {
+        entries.sumOf { entry ->
+            maxOf(entry.totalExpense, com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(entry.routeSteps))
+        }
+    }
     val totalDistance = remember(entries) {
         entries.sumOf {
             if (it.drivingDistanceKm > 0) it.drivingDistanceKm
@@ -629,6 +633,10 @@ fun SaaSTimelineRow(
     onPhotoClick: (String) -> Unit,
     onMapClick: (() -> Unit)? = null
 ) {
+    val displayExpense = remember(entry.totalExpense, entry.routeSteps) {
+        maxOf(entry.totalExpense, com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(entry.routeSteps))
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -648,9 +656,9 @@ fun SaaSTimelineRow(
                 modifier = Modifier.weight(1f)
             )
 
-            if (entry.totalExpense > 0) {
+            if (displayExpense > 0) {
                 Text(
-                    text = "-%,d원".format(entry.totalExpense),
+                    text = "-%,d원".format(displayExpense),
                     style = AppTypography.h3
                 )
             } else if (entry.hasGolfRound) {
@@ -869,6 +877,9 @@ fun DiaryDetailDialog(
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
                     // Quick Stats Row
+                    val displayExpense = remember(entry.totalExpense, entry.routeSteps) {
+                        maxOf(entry.totalExpense, com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(entry.routeSteps))
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -879,7 +890,7 @@ fun DiaryDetailDialog(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("지출 금액", style = AppTypography.caption)
-                            Text("%,d원".format(entry.totalExpense), style = AppTypography.h3.copy(color = if (entry.totalExpense > 0) AppColors.errorText else AppColors.textPrimary))
+                            Text("%,d원".format(displayExpense), style = AppTypography.h3.copy(color = if (displayExpense > 0) AppColors.errorText else AppColors.textPrimary))
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("방문 장소", style = AppTypography.caption)

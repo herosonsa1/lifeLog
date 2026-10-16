@@ -303,6 +303,16 @@ class TransactionRepositoryImpl @Inject constructor(
                 continue
             }
 
+            // 기존 '기타(ETC)'로 저장된 내역 중 병원/약제 등 신규 기본 분류 규칙에 매칭되는 내역 자동 업그레이드
+            if (tx.category == ExpenseCategory.ETC && !expenseCustomMetaPreferences.isOneTimeEditedId(tx.id)) {
+                val recalcCategory = com.autologue.app.data.parser.RuleMatcherEngine.classifyMerchant(tx.merchantName, originalText = raw)
+                if (recalcCategory != ExpenseCategory.ETC) {
+                    val healedCategory = tx.copy(category = recalcCategory, isAutoCategorized = true)
+                    transactionDao.updateTransaction(healedCategory)
+                    continue
+                }
+            }
+
             // 순수 은행 이체/출금 내역만 TRANSFER로 분류 (카드 승인 문자는 제외)
             if (!isCardMsg && tx.category == ExpenseCategory.ETC) {
                 val fullText = "${tx.merchantName} ${tx.originalText} ${tx.transferMemo ?: ""}"

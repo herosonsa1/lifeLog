@@ -69,17 +69,35 @@ class DiaryRepositoryImpl @Inject constructor(
                     step.copy(photoUris = photos)
                 }
             }
+            val stepsExpense = com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(mergedSteps)
+            val resolvedExpense = maxOf(entry.totalExpense, existing.totalExpense, stepsExpense)
+            val hasRealGolf = (entry.hasGolfRound || existing.hasGolfRound) &&
+                mergedSteps.any { it.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.locationName ?: it.title) }
+            val isBogusScorecardSummary = existing.summary.contains("스코어카드 자동 분석") && !hasRealGolf
+            val resolvedSummary = when {
+                isBogusScorecardSummary && entry.summary.isNotBlank() && !entry.summary.contains("스코어카드 자동 분석") -> entry.summary
+                isBogusScorecardSummary -> com.autologue.app.data.sync.DailyRouteAggregator.buildSummaryNarrative(
+                    date = date,
+                    steps = mergedSteps,
+                    places = emptyList(),
+                    photoCount = mergedPhotos.size,
+                    totalExpense = resolvedExpense
+                )
+                existing.summary.isNotBlank() -> existing.summary
+                else -> entry.summary
+            }
+
             val merged = existing.copy(
                 title = if (isUserCustomTitle) existing.title else entry.title,
-                summary = if (existing.summary.isNotBlank()) existing.summary else entry.summary,
+                summary = resolvedSummary,
                 placeName = entry.placeName ?: existing.placeName,
                 address = entry.address ?: existing.address,
                 latitude = entry.latitude ?: existing.latitude,
                 longitude = entry.longitude ?: existing.longitude,
                 photoUris = mergedPhotos,
-                totalExpense = entry.totalExpense,
+                totalExpense = resolvedExpense,
                 drivingDistanceKm = if (entry.drivingDistanceKm > 0) entry.drivingDistanceKm else existing.drivingDistanceKm,
-                hasGolfRound = entry.hasGolfRound || existing.hasGolfRound,
+                hasGolfRound = hasRealGolf,
                 tags = (existing.tags + entry.tags).distinct(),
                 routeSteps = mergedSteps,
                 movementSummary = entry.movementSummary ?: existing.movementSummary
@@ -87,33 +105,45 @@ class DiaryRepositoryImpl @Inject constructor(
             diaryDao.updateEntry(merged)
             return@withContext existing.id
         }
+        val cleanSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
+            val photos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
+            if (step.stepType == RouteStepType.PHOTO && photos.isEmpty()) {
+                null
+            } else {
+                step.copy(photoUris = photos)
+            }
+        }
+        val initialExpense = maxOf(
+            entry.totalExpense,
+            com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(cleanSteps)
+        )
         val cleanEntry = entry.copy(
             photoUris = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) },
+            totalExpense = initialExpense,
             tags = entry.tags.distinct(),
-            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
-                val photos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
-                if (step.stepType == RouteStepType.PHOTO && photos.isEmpty()) {
-                    null
-                } else {
-                    step.copy(photoUris = photos)
-                }
-            }
+            routeSteps = cleanSteps
         )
         diaryDao.insertEntry(cleanEntry.toEntity())
     }
 
     override suspend fun updateDiaryEntry(entry: DiaryEntry) = withContext(Dispatchers.IO) {
+        val cleanSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
+            val photos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
+            if (step.stepType == RouteStepType.PHOTO && photos.isEmpty()) {
+                null
+            } else {
+                step.copy(photoUris = photos)
+            }
+        }
+        val resolvedExpense = maxOf(
+            entry.totalExpense,
+            com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(cleanSteps)
+        )
         val cleanEntry = entry.copy(
             photoUris = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) },
+            totalExpense = resolvedExpense,
             tags = entry.tags.distinct(),
-            routeSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
-                val photos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
-                if (step.stepType == RouteStepType.PHOTO && photos.isEmpty()) {
-                    null
-                } else {
-                    step.copy(photoUris = photos)
-                }
-            }
+            routeSteps = cleanSteps
         )
         diaryDao.updateEntry(cleanEntry.toEntity())
     }
@@ -126,6 +156,11 @@ class DiaryRepositoryImpl @Inject constructor(
         val all = diaryDao.getAllEntriesSync()
         val seen = mutableSetOf<LocalDate>()
         val today = LocalDate.now()
+        val medicalKeywords = listOf(
+            "병원", "의원", "약국", "치과", "한의원", "내과", "외과", "정형외과",
+            "피부과", "안과", "이비인후과", "산부인과", "소아과", "비뇨기과", "신경외과",
+            "재활의학과", "마취통증", "검진센터", "메디컬", "클리닉"
+        )
         var modifiedCount = 0
         for (entry in all) {
             val d = entry.date.toLocalDate()
@@ -147,11 +182,16 @@ class DiaryRepositoryImpl @Inject constructor(
 
                 // 2. 내부 중복 데이터(routeSteps, photoUris, tags) 및 스크린샷 정리
                 val cleanPhotos = entry.photoUris.distinct().filterNot { excludedPhotoPreferences.isExcluded(it) }
-                val cleanTags = entry.tags.distinct()
+                val cleanTags = entry.tags.distinct().toMutableList()
+                var stepsContentChanged = false
                 val cleanSteps = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(entry.routeSteps).mapNotNull { step ->
                     val stepPhotos = step.photoUris.filterNot { excludedPhotoPreferences.isExcluded(it) }
                     // 사진 전용 스텝인데 사진이 0장이 된 경우(스크린샷만 있던 스텝 등) 스텝 자체 제거
                     if (step.stepType == RouteStepType.PHOTO && stepPhotos.isEmpty()) {
+                        stepsContentChanged = true
+                        null
+                    } else if (step.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isInvalidOrDummyGolfStep(step)) {
+                        stepsContentChanged = true
                         null
                     } else {
                         val lat = step.latitude
@@ -167,19 +207,65 @@ class DiaryRepositoryImpl @Inject constructor(
                             step.title == "서울 방이동" && step.stepType == RouteStepType.PHOTO -> targetLocationName ?: "사진 기록"
                             else -> step.title
                         }
+                        val isMedicalTx = step.stepType == RouteStepType.TRANSACTION &&
+                            medicalKeywords.any { step.title.contains(it) }
+                        val newCategory = if (isMedicalTx && (step.category == null || step.category == "기타")) {
+                            stepsContentChanged = true
+                            "병원/약제"
+                        } else step.category
+                        val newDesc = when {
+                            step.stepType == RouteStepType.PHOTO -> "사진 ${stepPhotos.size}장 촬영"
+                            isMedicalTx && step.description?.contains("· 기타") == true -> {
+                                stepsContentChanged = true
+                                step.description.replace("· 기타", "· 병원/약제")
+                            }
+                            else -> step.description
+                        }
+                        if (newTitle != step.title || targetLocationName != step.locationName || stepPhotos.size != step.photoUris.size) {
+                            stepsContentChanged = true
+                        }
                         step.copy(
                             title = newTitle,
                             locationName = targetLocationName,
                             address = targetAddress,
                             photoUris = stepPhotos,
-                            description = if (step.stepType == RouteStepType.PHOTO) {
-                                "사진 ${stepPhotos.size}장 촬영"
-                            } else step.description
+                            category = newCategory,
+                            description = newDesc
                         )
                     }
                 }
 
-                // 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동', 비정상 UI 단어 및 문정동 타이틀 자가치유 보정
+                // 3. routeSteps 내 실제 결제 금액 합산으로 totalExpense 0원 누락 복원
+                val stepsExpense = com.autologue.app.data.sync.DailyRouteAggregator.calculateRouteStepsExpense(cleanSteps)
+                val resolvedExpense = maxOf(entry.totalExpense, stepsExpense)
+                if (resolvedExpense > 0L && "지출기록" !in cleanTags) {
+                    cleanTags.add("지출기록")
+                }
+
+                // 4. 실제 골프 라운드 스텝 유무 확인 및 병원 영수증 등으로 오탐된 '스코어카드 자동 분석' 메모 자가치유
+                val hasRealGolf = cleanSteps.any {
+                    it.stepType == RouteStepType.GOLF && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.locationName ?: it.title)
+                }
+                val newHasGolfRound = entry.hasGolfRound && hasRealGolf
+                if (!newHasGolfRound) {
+                    cleanTags.removeAll { it == "골프" || it.startsWith("⛳") }
+                }
+                val isBogusScorecardMemo = entry.summary.contains("스코어카드 자동 분석") && !hasRealGolf
+                val newSummary = if (isBogusScorecardMemo) {
+                    val distinctPlaces = cleanSteps
+                        .filter { it.stepType != RouteStepType.TRANSACTION }
+                        .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") && !t.contains("사진") } }
+                        .distinct()
+                    com.autologue.app.data.sync.DailyRouteAggregator.buildSummaryNarrative(
+                        date = d,
+                        steps = cleanSteps,
+                        places = distinctPlaces,
+                        photoCount = cleanPhotos.size,
+                        totalExpense = resolvedExpense
+                    )
+                } else entry.summary
+
+                // 5. 스크린샷 제거 후 다이어리 제목에 잔존하던 '서울 방이동', 비정상 UI 단어 및 문정동 타이틀 자가치유 보정
                 var newTitle = entry.title
                 val isCorruptedTitle = newTitle.contains("기록 삭제") || newTitle.contains("저장하기") ||
                         newTitle.contains("상세 기록") || newTitle.contains("FIELD") ||
@@ -199,13 +285,20 @@ class DiaryRepositoryImpl @Inject constructor(
                 }
 
                 if (cleanSteps.size != entry.routeSteps.size ||
+                    stepsContentChanged ||
                     cleanPhotos.size != entry.photoUris.size ||
-                    cleanTags.size != entry.tags.size ||
-                    newTitle != entry.title
+                    cleanTags != entry.tags ||
+                    newTitle != entry.title ||
+                    resolvedExpense != entry.totalExpense ||
+                    newSummary != entry.summary ||
+                    newHasGolfRound != entry.hasGolfRound
                 ) {
                     val updated = entry.copy(
                         title = newTitle,
+                        summary = newSummary,
                         photoUris = cleanPhotos,
+                        totalExpense = resolvedExpense,
+                        hasGolfRound = newHasGolfRound,
                         tags = cleanTags,
                         routeSteps = cleanSteps
                     )

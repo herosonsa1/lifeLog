@@ -127,6 +127,10 @@ class DiaryViewModel @Inject constructor(
             diaryRepository.getDiaryEntriesFlow().collectLatest { list ->
                 rawEntries = list.map { entry ->
                     var current = entry
+                    val stepsExpense = DailyRouteAggregator.calculateRouteStepsExpense(current.routeSteps)
+                    if (current.totalExpense < stepsExpense) {
+                        current = current.copy(totalExpense = stepsExpense)
+                    }
                     if (current.drivingDistanceKm <= 0.0) {
                         val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
                         val finalDist = if (calculated > 0.0) calculated else if (current.hasGolfRound) {
@@ -219,11 +223,15 @@ class DiaryViewModel @Inject constructor(
 
             // 원자적(CAS) StateFlow.update를 사용하여 백그라운드 동기화 완료 상태(isAutoSyncing=false)가 덮어씌워지는 경쟁 조건 원천 차단
             _uiState.update { current ->
+                val refreshedDetail = current.selectedDiaryDetail?.let { detail ->
+                    rawEntries.firstOrNull { it.id == detail.id } ?: detail
+                }
                 current.copy(
                     entries = filtered,
                     allEntries = rawEntries,
                     mapRouteSteps = activeMapSteps,
                     selectedMapStep = if (activeMapSteps.contains(current.selectedMapStep)) current.selectedMapStep else activeMapSteps.firstOrNull { it.latitude != null } ?: activeMapSteps.firstOrNull(),
+                    selectedDiaryDetail = refreshedDetail,
                     isLoading = false,
                     loadingMessage = ""
                 )
@@ -261,7 +269,10 @@ class DiaryViewModel @Inject constructor(
                     val hasGolfZeroDistance = entry.hasGolfRound && entry.drivingDistanceKm <= 0.0
                     val hasCorruptedMunjeong = (entry.title.contains("문정동") || entry.placeName?.contains("문정동") == true || entry.summary.contains("문정동") || entry.movementSummary?.contains("문정동") == true || entry.routeSteps.any { it.locationName?.contains("문정동") == true }) &&
                         entry.routeSteps.any { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 }
-                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps || hasCorruptedGolfTitle || hasCorruptedMovement || hasGolfZeroDistance || hasCorruptedMunjeong
+                    val stepsExpense = DailyRouteAggregator.calculateRouteStepsExpense(entry.routeSteps)
+                    val hasZeroOrUnderExpenseWithTxSteps = stepsExpense > 0L && entry.totalExpense < stepsExpense
+                    val hasBogusScorecardMemo = dayGolf.isEmpty() && entry.summary.contains("스코어카드 자동 분석")
+                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps || hasCorruptedGolfTitle || hasCorruptedMovement || hasGolfZeroDistance || hasCorruptedMunjeong || hasZeroOrUnderExpenseWithTxSteps || hasBogusScorecardMemo
 
                     if (needsUpgrade) {
                         val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }
@@ -327,7 +338,7 @@ class DiaryViewModel @Inject constructor(
                         ).copy(
                             id = entry.id,
                             hasGolfRound = dayGolf.isNotEmpty(),
-                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장") || hasCorruptedGolfTitle || hasCorruptedMunjeong) "" else entry.summary
+                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장") || hasCorruptedGolfTitle || hasCorruptedMunjeong || hasBogusScorecardMemo) "" else entry.summary
                         )
 
                         val finalUpgraded = if (upgraded.summary.isBlank()) {
