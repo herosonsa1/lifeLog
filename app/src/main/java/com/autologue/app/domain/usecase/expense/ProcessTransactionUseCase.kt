@@ -1,5 +1,6 @@
 package com.autologue.app.domain.usecase.expense
 
+import com.autologue.app.data.preferences.MerchantAliasPreferences
 import com.autologue.app.domain.model.*
 import com.autologue.app.domain.repository.*
 import kotlinx.coroutines.flow.first
@@ -10,14 +11,25 @@ class ProcessTransactionUseCase @Inject constructor(
     private val transactionRepository: TransactionRepository,
     private val ruleRepository: TransactionRuleRepository,
     private val vehicleRepository: VehicleRepository,
-    private val golfRepository: GolfRepository
+    private val golfRepository: GolfRepository,
+    private val merchantAliasPreferences: MerchantAliasPreferences
 ) {
+    constructor(
+        transactionRepository: TransactionRepository,
+        ruleRepository: TransactionRuleRepository,
+        vehicleRepository: VehicleRepository,
+        golfRepository: GolfRepository
+    ) : this(transactionRepository, ruleRepository, vehicleRepository, golfRepository, MerchantAliasPreferences())
+
     suspend operator fun invoke(transaction: Transaction): Long {
+        val rawMerchant = transaction.merchantName.trim()
+        val aliasedMerchant = merchantAliasPreferences.resolveAlias(rawMerchant).ifBlank { rawMerchant }
+
         val rules = ruleRepository.getAllRules()
         var finalCategory = transaction.category
         var matchedRuleId: Long? = null
 
-        val targetSearchText = "${transaction.merchantName} ${transaction.transferMemo ?: ""}".trim()
+        val targetSearchText = "$aliasedMerchant $rawMerchant ${transaction.transferMemo ?: ""}".trim()
 
         for (rule in rules) {
             val matched = if (rule.isRegex) {
@@ -35,6 +47,7 @@ class ProcessTransactionUseCase @Inject constructor(
         }
 
         val enrichedTx = transaction.copy(
+            merchantName = aliasedMerchant,
             category = finalCategory,
             ruleIdApplied = matchedRuleId,
             isAutoCategorized = matchedRuleId != null || finalCategory != ExpenseCategory.ETC
@@ -44,8 +57,12 @@ class ProcessTransactionUseCase @Inject constructor(
         val txId = transactionRepository.insertTransaction(enrichedTx)
 
         val isFuel = finalCategory == ExpenseCategory.FUEL ||
+            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(rawMerchant) ||
             com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(enrichedTx.merchantName) ||
-            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(enrichedTx.originalText)
+            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(enrichedTx.originalText) ||
+            merchantAliasPreferences.getOriginalNamesForTarget(enrichedTx.merchantName).any {
+                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(it)
+            }
 
         if (isFuel) {
             if (enrichedTx.category != ExpenseCategory.FUEL) {

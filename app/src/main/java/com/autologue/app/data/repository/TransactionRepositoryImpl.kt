@@ -2,6 +2,7 @@ package com.autologue.app.data.repository
 
 import com.autologue.app.data.local.db.dao.TransactionDao
 import com.autologue.app.data.local.entity.TransactionEntity
+import com.autologue.app.data.preferences.MerchantAliasPreferences
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.repository.TransactionRepository
@@ -14,8 +15,30 @@ import java.time.ZoneId
 import javax.inject.Inject
 
 class TransactionRepositoryImpl @Inject constructor(
-    private val transactionDao: TransactionDao
+    private val transactionDao: TransactionDao,
+    private val merchantAliasPreferences: MerchantAliasPreferences
 ) : TransactionRepository {
+
+    constructor(transactionDao: TransactionDao) : this(transactionDao, MerchantAliasPreferences())
+
+    private fun resolveMerchantWithAlias(merchantName: String, originalText: String, cardOrBankName: String?, timestamp: LocalDateTime): String {
+        val directResolved = merchantAliasPreferences.resolveAlias(merchantName)
+        if (directResolved.isNotBlank() && directResolved != merchantName) {
+            return directResolved
+        }
+        val isManual = originalText.startsWith("[직접 입력]") || originalText.startsWith("[차계부 직접 입력]")
+        if (!isManual && originalText.isNotBlank()) {
+            val rawParsed = com.autologue.app.data.parser.SmsParser.parse(cardOrBankName, originalText, timestamp)?.merchantName
+                ?: com.autologue.app.data.parser.SmsParser.parse(null, originalText, timestamp)?.merchantName
+            if (!rawParsed.isNullOrBlank()) {
+                val rawResolved = merchantAliasPreferences.resolveAlias(rawParsed)
+                if (rawResolved.isNotBlank() && rawResolved != rawParsed) {
+                    return rawResolved
+                }
+            }
+        }
+        return directResolved.ifBlank { merchantName }
+    }
 
     override fun getAllTransactionsFlow(): Flow<List<Transaction>> {
         return transactionDao.getAllTransactions().map { entities -> entities.map { it.toDomain() } }
@@ -32,11 +55,28 @@ class TransactionRepositoryImpl @Inject constructor(
     }
 
     override suspend fun insertTransaction(transaction: Transaction): Long = withContext(Dispatchers.IO) {
-        val timestampMillis = transaction.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val resolvedMerchantName = resolveMerchantWithAlias(
+            merchantName = transaction.merchantName,
+            originalText = transaction.originalText,
+            cardOrBankName = transaction.cardOrBankName,
+            timestamp = transaction.timestamp
+        )
+        val aliasedTransaction = if (resolvedMerchantName != transaction.merchantName) {
+            transaction.copy(merchantName = resolvedMerchantName)
+        } else {
+            transaction
+        }
 
-        if (transaction.originalText.isNotBlank()) {
-            val existingByText = transactionDao.findByOriginalText(transaction.originalText)
+        val timestampMillis = aliasedTransaction.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+        if (aliasedTransaction.originalText.isNotBlank()) {
+            val existingByText = transactionDao.findByOriginalText(aliasedTransaction.originalText)
             if (existingByText != null) {
+                if (existingByText.merchantName != aliasedTransaction.merchantName &&
+                    merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName)
+                ) {
+                    transactionDao.updateTransaction(existingByText.copy(merchantName = aliasedTransaction.merchantName))
+                }
                 return@withContext existingByText.id
             }
         }
@@ -44,15 +84,16 @@ class TransactionRepositoryImpl @Inject constructor(
         // 5분 윈도우 기반 지능형 중복 방지 (동일 금액 + ±5분 이내 동일/유사 가맹점)
         val windowMilli = 5 * 60 * 1000L
         val candidates = transactionDao.findTransactionsByAmountAndDateRange(
-            amount = transaction.amount,
+            amount = aliasedTransaction.amount,
             start = timestampMillis - windowMilli,
             end = timestampMillis + windowMilli
         )
 
         val duplicate = candidates.firstOrNull { existing ->
-            val isExactMerchant = existing.merchantName == transaction.merchantName
-            val isSimilarMerchant = existing.merchantName.isNotBlank() && transaction.merchantName.isNotBlank() &&
-                    (existing.merchantName.contains(transaction.merchantName) || transaction.merchantName.contains(existing.merchantName))
+            val isExactMerchant = existing.merchantName == aliasedTransaction.merchantName ||
+                existing.merchantName == transaction.merchantName
+            val isSimilarMerchant = existing.merchantName.isNotBlank() && aliasedTransaction.merchantName.isNotBlank() &&
+                    (existing.merchantName.contains(aliasedTransaction.merchantName) || aliasedTransaction.merchantName.contains(existing.merchantName))
             val existingMillis = existing.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
             val timeDiff = Math.abs(existingMillis - timestampMillis)
 
@@ -60,19 +101,68 @@ class TransactionRepositoryImpl @Inject constructor(
         }
 
         if (duplicate != null) {
+            if (duplicate.merchantName != aliasedTransaction.merchantName &&
+                merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName)
+            ) {
+                transactionDao.updateTransaction(duplicate.copy(merchantName = aliasedTransaction.merchantName))
+            }
             return@withContext duplicate.id
         }
 
-        val existing = transactionDao.findExactDuplicate(transaction.amount, transaction.merchantName, transaction.timestamp)
+        val existing = transactionDao.findExactDuplicate(aliasedTransaction.amount, aliasedTransaction.merchantName, aliasedTransaction.timestamp)
         if (existing != null) {
             return@withContext existing.id
         }
 
-        transactionDao.insertTransaction(transaction.toEntity())
+        transactionDao.insertTransaction(aliasedTransaction.toEntity())
     }
 
     override suspend fun updateTransaction(transaction: Transaction) = withContext(Dispatchers.IO) {
         transactionDao.updateTransaction(transaction.toEntity())
+    }
+
+    override suspend fun renameMerchantGlobally(
+        oldMerchantName: String,
+        newMerchantName: String,
+        rawOriginalMerchantName: String?
+    ): Int = withContext(Dispatchers.IO) {
+        val targetName = newMerchantName.trim()
+        if (targetName.isBlank()) return@withContext 0
+
+        merchantAliasPreferences.registerAlias(
+            oldName = oldMerchantName,
+            newName = targetName,
+            rawOriginalName = rawOriginalMerchantName
+        )
+
+        val all = transactionDao.getAllTransactionsSync()
+        var updatedCount = 0
+        for (tx in all) {
+            val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+            val rawParsed = if (!isManual && tx.originalText.isNotBlank()) {
+                com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, tx.originalText, tx.timestamp)?.merchantName
+                    ?: com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)?.merchantName
+            } else null
+
+            val isMatchedOld = merchantAliasPreferences.isSameMerchant(tx.merchantName, oldMerchantName) ||
+                (!rawOriginalMerchantName.isNullOrBlank() && merchantAliasPreferences.isSameMerchant(tx.merchantName, rawOriginalMerchantName)) ||
+                (!rawParsed.isNullOrBlank() && (
+                    merchantAliasPreferences.isSameMerchant(rawParsed, oldMerchantName) ||
+                    (!rawOriginalMerchantName.isNullOrBlank() && merchantAliasPreferences.isSameMerchant(rawParsed, rawOriginalMerchantName))
+                ))
+
+            val resolvedName = if (isMatchedOld) {
+                targetName
+            } else {
+                resolveMerchantWithAlias(tx.merchantName, tx.originalText, tx.cardOrBankName, tx.timestamp)
+            }
+
+            if (resolvedName.isNotBlank() && resolvedName != tx.merchantName) {
+                transactionDao.updateTransaction(tx.copy(merchantName = resolvedName))
+                updatedCount++
+            }
+        }
+        updatedCount
     }
 
     override suspend fun deleteTransaction(id: Long) = withContext(Dispatchers.IO) {
@@ -89,23 +179,35 @@ class TransactionRepositoryImpl @Inject constructor(
         val all = transactionDao.getAllTransactionsSync()
         val toDeleteIds = mutableSetOf<Long>()
 
-        // 1. 기존 DB 내 오분류된 카드 승인, 비결제 스팸/시황 문자('제목' 등), 주유 내역 자가 치유 (Self-Healing)
-        for (tx in all) {
-            val raw = tx.originalText
+        // 1. 기존 DB 내 오분류된 카드 승인, 비결제 스팸/시황 문자('제목' 등), 주유 내역 자가 치유 및 결제명 자동 치환
+        for (rawTx in all) {
+            val raw = rawTx.originalText
             val isManual = raw.startsWith("[직접 입력]") || raw.startsWith("[차계부 직접 입력]")
+
+            // 1-0. 사용자가 등록한 결제처 별칭(자동 치환 규칙)이 있으면 최우선 반영
+            val aliasedMerchant = resolveMerchantWithAlias(rawTx.merchantName, raw, rawTx.cardOrBankName, rawTx.timestamp)
+            val tx = if (aliasedMerchant.isNotBlank() && aliasedMerchant != rawTx.merchantName) {
+                val updated = rawTx.copy(merchantName = aliasedMerchant)
+                transactionDao.updateTransaction(updated)
+                updated
+            } else {
+                rawTx
+            }
+            val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(tx.merchantName)
 
             // 1-1. 비결제 문자(주식 시황, 광고, 뉴스 등) 또는 '제목' 오탐 레코드 정리
             if (!isManual && (
                     com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(raw) ||
-                    com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName)
+                    (!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName))
                 )
             ) {
                 val reparsed = com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
                     ?: com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
                 if (reparsed != null && !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(reparsed.merchantName)) {
+                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp)
                     val healed = tx.copy(
                         amount = reparsed.amount,
-                        merchantName = reparsed.merchantName,
+                        merchantName = healedMerchant,
                         paymentMethod = reparsed.paymentMethod,
                         category = reparsed.category,
                         cardOrBankName = reparsed.cardOrBankName ?: tx.cardOrBankName,
@@ -121,7 +223,7 @@ class TransactionRepositoryImpl @Inject constructor(
 
             val isCardMsg = !isManual && com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(raw)
 
-            if (isCardMsg && (
+            if (isCardMsg && !isUserAliased && (
                     tx.paymentMethod == com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER ||
                     tx.category == ExpenseCategory.TRANSFER ||
                     tx.category == ExpenseCategory.ETC ||
@@ -131,9 +233,10 @@ class TransactionRepositoryImpl @Inject constructor(
                 val reparsed = com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
                     ?: com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
                 if (reparsed != null) {
+                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp)
                     val healed = tx.copy(
                         amount = reparsed.amount,
-                        merchantName = reparsed.merchantName,
+                        merchantName = healedMerchant,
                         paymentMethod = reparsed.paymentMethod,
                         category = reparsed.category,
                         cardOrBankName = reparsed.cardOrBankName ?: tx.cardOrBankName,
@@ -145,14 +248,17 @@ class TransactionRepositoryImpl @Inject constructor(
                 }
             }
 
-            // 주유 키워드가 상호명에 포함된 거래가 주유 외 카테고리로 잘못 분류된 경우 복원 (반대로 주유소가 아닌데 주유로 오분류된 경우 정상 카테고리로 복원)
+            // 주유 키워드가 상호명(또는 별칭 원본 가맹점명)에 포함된 거래가 주유 외 카테고리로 잘못 분류된 경우 복원
+            val isAliasFromFuel = merchantAliasPreferences.getOriginalNamesForTarget(tx.merchantName)
+                .any { VehicleRepositoryImpl.isFuelMerchant(it) }
             val isFuel = VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
-                (!isManual && tx.merchantName in setOf("카드 가맹점", "가맹점") && isCardMsg && VehicleRepositoryImpl.isFuelMerchant(raw))
+                isAliasFromFuel ||
+                (!isManual && isCardMsg && VehicleRepositoryImpl.isFuelMerchant(raw))
             if (isFuel && tx.category != ExpenseCategory.FUEL) {
                 val healedCategory = tx.copy(category = ExpenseCategory.FUEL, isAutoCategorized = true)
                 transactionDao.updateTransaction(healedCategory)
                 continue
-            } else if (!isManual && !isFuel && tx.category == ExpenseCategory.FUEL) {
+            } else if (!isManual && !isFuel && tx.category == ExpenseCategory.FUEL && !isUserAliased) {
                 val recalcCategory = com.autologue.app.data.parser.RuleMatcherEngine.classifyMerchant(tx.merchantName, originalText = raw)
                 val healedCategory = tx.copy(category = recalcCategory, isAutoCategorized = true)
                 transactionDao.updateTransaction(healedCategory)

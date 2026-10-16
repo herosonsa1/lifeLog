@@ -291,6 +291,7 @@ class CarLedgerViewModel @Inject constructor(
 
     fun updateRefuelDetail(
         logId: Long,
+        gasStationName: String = "",
         targetVehicleId: String,
         fuelCost: Long,
         explicitLiters: Double?,
@@ -298,16 +299,25 @@ class CarLedgerViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             val log = vehicleRepository.getVehicleLogById(logId) ?: return@launch
+            val oldStationName = log.gasStationName?.trim().orEmpty()
+            val finalStationName = gasStationName.trim().ifBlank { oldStationName.ifBlank { "주유소" } }
+            val isStationRenamed = finalStationName.isNotBlank() && finalStationName != oldStationName
+
             val targetVehicle = _uiState.value.vehicles.find { it.id == targetVehicleId }
             val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
 
             val isCustom = (explicitLiters != null && explicitLiters > 0.0) || (unitPrice != null && unitPrice > 0.0)
-            val updatedNote = log.buildUpdatedNote(
+            val baseUpdatedNote = log.buildUpdatedNote(
                 targetVehicleId = targetVehicleId,
                 vehicleShortName = vName,
                 unitPrice = unitPrice,
                 isCustom = isCustom
             )
+            val updatedNote = if (isStationRenamed && !baseUpdatedNote.contains("[custom_name:true]")) {
+                "$baseUpdatedNote [custom_name:true]".trim()
+            } else {
+                baseUpdatedNote
+            }
 
             val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
             val finalLiters = when {
@@ -317,11 +327,28 @@ class CarLedgerViewModel @Inject constructor(
             }
 
             val updatedLog = log.copy(
+                gasStationName = finalStationName,
                 fuelCost = fuelCost,
                 fuelAmountLiters = finalLiters,
                 note = updatedNote
             )
             vehicleRepository.updateVehicleLog(updatedLog)
+
+            if (isStationRenamed && oldStationName.isNotBlank() && oldStationName != "주유소") {
+                val fuelRenamed = vehicleRepository.renameGasStationGlobally(
+                    oldStationName = oldStationName,
+                    newStationName = finalStationName
+                )
+                val txRenamed = transactionRepository.renameMerchantGlobally(
+                    oldMerchantName = oldStationName,
+                    newMerchantName = finalStationName
+                )
+                val totalRenamed = fuelRenamed + txRenamed
+                val extraMsg = if (totalRenamed > 0) " (동일 결제처 ${totalRenamed}건 일괄 치환 완료)" else ""
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = "결제명(주유소명)을 '$finalStationName'(으)로 수정했습니다. 같은 결제처 항목은 계속 자동 치환됩니다.$extraMsg"
+                )
+            }
             closeRefuelEditDialog()
         }
     }

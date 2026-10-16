@@ -2597,3 +2597,44 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **단위 테스트**: `.\gradlew.bat testDebugUnitTest` 전체 단위 테스트 100% 통과 (`BUILD SUCCESSFUL`).
 - **최종 APK 빌드**: `.\gradlew.bat assembleDebug`를 통해 `app/build/outputs/apk/debug/lifeLog.apk` 및 프로젝트 루트 `lifeLog.apk` 최신 빌드 반영 완료.
 
+---
+
+## 70. 스마트 가계부·차계부 결제명(상호/주유소명) 직접 수정 및 동일 결제처 기존·신규 항목 영구 자동 치환 시스템 구축 (2026-10-16)
+
+### 70.1. 사용자 요청 및 배경
+- **사용자 요청**:
+  - *"가계부나 차계부에서 결제내역 기록된 내용도, 결재명을 수정할 수 있게 해주고, 한번 수정하면, 같은 결제처로부터 등록된 항목은 자동으로 한번 수정했던 사항이 계속 자동치환되어 기록될 수 있게 해줘."*
+- **기존 한계점**:
+  1. 가계부 결제 내역 수정 팝업(`EditTransactionDialog`)에서 카테고리와 메모만 변경 가능하고 결제명(`merchantName`)은 읽기 전용 텍스트로 고정되어 있었음.
+  2. 차계부 주유 상세 설정 팝업(`RefuelDetailEditDialog`)에서도 차량·금액·단가·리터만 수정 가능하고 주유소/결제명(`gasStationName`)을 직접 수정할 수 없었음.
+  3. 카드 승인 문자나 은행 이체 문자에 법인 기호나 축약 상호(예: `(주)스타벅스코리아`, `GS칼텍스(주)위례점`, `쿠팡(쿠페이)`)가 찍혀 들어올 때 사용자가 원하는 직관적인 결제명으로 바꾸고 앞으로도 같은 결제처 내역을 자동으로 치환해 주는 영속 매핑 체계가 없었음.
+
+### 70.2. 핵심 설계 및 구현 내역
+1. **영구 결제처 별칭 매핑 저장소 신설 (`MerchantAliasPreferences.kt`)**:
+   - [`MerchantAliasPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/MerchantAliasPreferences.kt) (`@Singleton`, `SharedPreferences("merchant_alias_prefs")`)를 신규 구현.
+   - `registerAlias(oldName, newName, rawOriginalName)`: 수정 전 결제명(`oldName`)뿐만 아니라 SMS 원문(`originalText`)에서 추출된 원본 가맹점명(`rawOriginalName`), 공백·대소문자 무시 정규화 키(`normalizeMerchantKey`)까지 모두 새 결제명(`newName`)으로 매핑 등록.
+   - **연쇄 수정(Chained Alias) 자동 추적**: 사용자가 `A -> B`로 수정한 뒤 나중에 `B -> C`로 다시 수정하더라도 기존 `A -> B` 매핑이 자동으로 `A -> C`로 갱신되도록 구현.
+   - `getOriginalNamesForTarget(targetName)`: 주유소 결제명을 일반 별칭(예: `"우리동네 단골주유"`)으로 변경하더라도 원본 결제처가 주유소였음을 역추적하여 주유 카테고리(`FUEL`) 및 차계부 주유 기록 정합성을 완벽히 보존.
+2. **가계부·차계부 양방향 일괄 치환 및 신규 수집 자동 치환 파이프라인 (`TransactionRepositoryImpl.kt`, `VehicleRepositoryImpl.kt`, `ProcessTransactionUseCase.kt`)**:
+   - [`TransactionRepository.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/repository/TransactionRepository.kt) & [`TransactionRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt):
+     - `renameMerchantGlobally(oldMerchantName, newMerchantName, rawOriginalMerchantName)` 구현: 별칭 등록과 동시에 가계부 DB(`transactions`) 내 동일 결제처(또는 동일 원문 파싱 가맹점)의 모든 기존 내역을 즉시 새 결제명으로 일괄 치환.
+     - `insertTransaction()` 및 `cleanDuplicates()` 실행 시 항상 `resolveMerchantWithAlias()`를 거치도록 하여 실시간 SMS/MMS/RCS/푸시 알림 수신, 과거 문자 동기화, 자가 치유 시에도 수정된 결제명이 영구 유지되도록 보장.
+   - [`VehicleRepository.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/repository/VehicleRepository.kt) & [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt):
+     - `renameGasStationGlobally(oldStationName, newStationName, rawOriginalStationName)` 구현: 차계부 DB(`vehicle_logs`) 내 동일 주유소의 기존 주유 기록을 모두 새 결제명으로 일괄 치환하고 `[custom_name:true]` 보호 태그 부여.
+     - `syncRefuelingFromTransactions()` 및 `cleanDuplicatesAndCorruptedLogs()`에서 별칭 자동 치환을 수행하며, 사용자가 주유소명을 일반 별칭으로 바꾸더라도 비주유소 오판 삭제 대상에서 완벽히 보호(`isProtectedFuelStation`).
+   - [`ProcessTransactionUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/expense/ProcessTransactionUseCase.kt):
+     - 신규 결제 내역 유입 즉시 `merchantAliasPreferences.resolveAlias()`로 결제명을 자동 치환한 후 카테고리 규칙 매칭 및 DB 저장을 수행.
+3. **스마트 가계부 결제명 수정 UI 및 차계부 연동 (`ExpenseScreen.kt`, `ExpenseViewModel.kt`)**:
+   - [`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt)의 `EditTransactionDialog`에 **`결제명 (가맹점 / 결제처 이름)`** 입력 필드 및 자동 치환 안내 문구를 추가.
+   - [`ExpenseViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt)의 `updateTransactionDetails()`에서 결제명 수정 시 가계부(`renameMerchantGlobally`)와 차계부(`renameGasStationGlobally`) 양쪽의 동일 결제처 내역을 동시에 일괄 치환하고 스낵바로 치환 건수를 안내.
+4. **스마트 차계부 주유 결제명(주유소명) 수정 UI 및 가계부 연동 (`CarLedgerScreen.kt`, `CarLedgerViewModel.kt`)**:
+   - [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt)의 `RefuelDetailEditDialog`에 **`결제명 (주유소 상호명)`** 입력 필드를 추가하고, 주유 내역 행(`SaaSCarLogRow`) 전체 터치 시에도 수정 다이얼로그가 열리도록 개선.
+   - [`CarLedgerViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt)의 `updateRefuelDetail()`에서 주유소 결제명 수정 시 차계부(`renameGasStationGlobally`)와 가계부(`renameMerchantGlobally`) 양쪽의 동일 결제처 내역을 동시에 일괄 치환.
+
+### 70.3. 단위 테스트 및 빌드 검증 결과
+- **단위 테스트 추가 (`VehicleRepositoryCommuteTest.kt`)**:
+  - `merchantAliasPreferences_registersAndResolvesChainedAliases`: 별칭 등록, 공백 무시 매칭, 연쇄 수정(`(주)스타벅스코리아 -> 스타벅스 -> 단골 스벅`) 자동 치환 검증 통과.
+  - `renameGasStationGlobally_updatesExistingLogsAndAutoReplacesFutureSyncs`: 기존 주유 내역 일괄 치환, 신규 주유 문자 동기화 시 자동 치환, 정제 로직 수행 후 사용자 지정 결제명 보존 검증 통과.
+- **전체 테스트 및 APK 빌드**: `.\gradlew.bat testDebugUnitTest assembleDebug` 100% 통과 및 루트 `lifeLog.apk` 최신화 완료.
+
+

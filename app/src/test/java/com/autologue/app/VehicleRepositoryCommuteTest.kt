@@ -226,6 +226,84 @@ class VehicleRepositoryCommuteTest {
         assertEquals(16.2, result.enrichedFuelLogs.first().fuelAmountLiters, 0.01)
     }
 
+    @Test
+    fun merchantAliasPreferences_registersAndResolvesChainedAliases() {
+        val aliasPrefs = com.autologue.app.data.preferences.MerchantAliasPreferences()
+        aliasPrefs.registerAlias(
+            oldName = "(주)스타벅스코리아",
+            newName = "스타벅스",
+            rawOriginalName = "스타벅스코리아"
+        )
+        assertEquals("스타벅스", aliasPrefs.resolveAlias("(주)스타벅스코리아"))
+        assertEquals("스타벅스", aliasPrefs.resolveAlias("(주) 스타벅스 코리아"))
+        assertEquals("스타벅스", aliasPrefs.resolveAlias("스타벅스코리아"))
+
+        // 연쇄 수정 시(스타벅스 -> 단골 스벅) 최초 원본 가맹점명도 새 결제명으로 자동 치환되어야 함
+        aliasPrefs.registerAlias(
+            oldName = "스타벅스",
+            newName = "단골 스벅"
+        )
+        assertEquals("단골 스벅", aliasPrefs.resolveAlias("(주)스타벅스코리아"))
+        assertEquals("단골 스벅", aliasPrefs.resolveAlias("스타벅스"))
+        assertTrue(aliasPrefs.isKnownAliasTarget("단골 스벅"))
+    }
+
+    @Test
+    fun renameGasStationGlobally_updatesExistingLogsAndAutoReplacesFutureSyncs() = runBlocking {
+        // 기존 동일 주유소 기록 2건 삽입
+        fakeDao.insertVehicleLog(
+            createLogEntity(
+                id = 20L,
+                timestamp = LocalDateTime.of(2026, 9, 10, 18, 0),
+                logType = VehicleLogType.REFUELING,
+                fuelCost = 65000L,
+                fuelAmountLiters = 39.4,
+                gasStationName = "GS칼텍스(주)위례점",
+                note = "가계부 결제 내역 자동 분석"
+            )
+        )
+        fakeDao.insertVehicleLog(
+            createLogEntity(
+                id = 21L,
+                timestamp = LocalDateTime.of(2026, 9, 25, 19, 0),
+                logType = VehicleLogType.REFUELING,
+                fuelCost = 70000L,
+                fuelAmountLiters = 42.4,
+                gasStationName = "GS칼텍스(주)위례점",
+                note = "가계부 결제 내역 자동 분석"
+            )
+        )
+
+        // 결제명 1회 수정 -> 기존 동일 결제처 항목 일괄 치환 검증
+        val renamedCount = repository.renameGasStationGlobally(
+            oldStationName = "GS칼텍스(주)위례점",
+            newStationName = "우리동네 단골주유"
+        )
+        assertEquals(2, renamedCount)
+        assertEquals("우리동네 단골주유", fakeDao.getVehicleLogById(20L)?.gasStationName)
+        assertEquals("우리동네 단골주유", fakeDao.getVehicleLogById(21L)?.gasStationName)
+
+        // 향후 동일 결제처("GS칼텍스(주)위례점")로부터 신규 주유 거래가 동기화될 때 자동으로 "우리동네 단골주유"로 치환되어 기록되는지 검증
+        val newFuelTx = com.autologue.app.domain.model.Transaction(
+            id = 500L,
+            amount = 60000L,
+            merchantName = "GS칼텍스(주)위례점",
+            originalText = "[Web발신] 신한카드 승인 60,000원 10/15 18:20 GS칼텍스(주)위례점",
+            timestamp = LocalDateTime.of(2026, 10, 15, 18, 20),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
+            category = com.autologue.app.domain.model.ExpenseCategory.FUEL,
+            cardOrBankName = "신한카드"
+        )
+        val added = repository.syncRefuelingFromTransactions(listOf(newFuelTx))
+        assertEquals(1, added)
+        val newlySynced = fakeDao.logs.find { it.fuelCost == 60000L }
+        assertEquals("우리동네 단골주유", newlySynced?.gasStationName)
+
+        // 정제 로직(cleanDuplicatesAndCorruptedLogs) 수행 후에도 사용자 지정 결제명이 삭제되지 않고 보존되는지 검증
+        repository.cleanDuplicatesAndCorruptedLogs("우리집", "회사", 50.0)
+        assertEquals(3, fakeDao.logs.count { it.gasStationName == "우리동네 단골주유" })
+    }
+
     private class FakeVehicleLogDao : VehicleLogDao {
         val logs = mutableListOf<VehicleLogEntity>()
 

@@ -640,9 +640,10 @@ fun ExpenseScreen(
         EditTransactionDialog(
             transaction = uiState.editingTransaction!!,
             onDismiss = { viewModel.closeEditDialog() },
-            onSave = { cat, memo ->
+            onSave = { newMerchantName, cat, memo ->
                 viewModel.updateTransactionDetails(
                     transactionId = uiState.editingTransaction!!.id,
+                    newMerchantName = newMerchantName,
                     category = cat,
                     memo = memo
                 )
@@ -1018,17 +1019,18 @@ fun AddManualExpenseDialog(
 fun EditTransactionDialog(
     transaction: Transaction,
     onDismiss: () -> Unit,
-    onSave: (category: ExpenseCategory, memo: String?) -> Unit,
+    onSave: (merchantName: String, category: ExpenseCategory, memo: String?) -> Unit,
     onDelete: () -> Unit
 ) {
-    var selectedCategory by remember { mutableStateOf(transaction.category) }
-    var memo by remember { mutableStateOf(transaction.transferMemo ?: "") }
+    var merchantName by remember(transaction.id) { mutableStateOf(transaction.merchantName) }
+    var selectedCategory by remember(transaction.id) { mutableStateOf(transaction.category) }
+    var memo by remember(transaction.id) { mutableStateOf(transaction.transferMemo ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "결제 내역 수정 및 메모",
+                text = "결제 내역 및 결제명 수정",
                 style = AppTypography.h2
             )
         },
@@ -1049,11 +1051,6 @@ fun EditTransactionDialog(
                 ) {
                     Column(modifier = Modifier.padding(Spacing.md)) {
                         Text(
-                            text = transaction.merchantName,
-                            style = AppTypography.h2
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
                             text = "%,d원".format(transaction.amount),
                             style = AppTypography.h1.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
                         )
@@ -1064,6 +1061,22 @@ fun EditTransactionDialog(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(Spacing.xxs))
+
+                // 결제명 수정 입력 필드
+                AutoLogueTextField(
+                    value = merchantName,
+                    onValueChange = { merchantName = it },
+                    label = "결제명 (가맹점 / 결제처 이름)",
+                    placeholder = "결제명을 입력하세요 (예: 스타벅스, 쿠팡, 주유소명)",
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "한 번 수정하면 같은 결제처의 기존·신규 내역이 자동으로 이 결제명으로 치환됩니다.",
+                    style = AppTypography.captionMuted.copy(fontSize = 11.sp, color = AppColors.primary)
+                )
 
                 Spacer(modifier = Modifier.height(Spacing.xs))
 
@@ -1116,7 +1129,13 @@ fun EditTransactionDialog(
 
                 AutoLoguePrimaryButton(
                     text = "저장",
-                    onClick = { onSave(selectedCategory, memo) }
+                    onClick = {
+                        onSave(
+                            merchantName.trim().ifBlank { transaction.merchantName },
+                            selectedCategory,
+                            memo
+                        )
+                    }
                 )
             }
         },

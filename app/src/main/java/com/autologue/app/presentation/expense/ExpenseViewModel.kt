@@ -85,6 +85,7 @@ class ExpenseViewModel @Inject constructor(
     private val vehicleRepository: com.autologue.app.domain.repository.VehicleRepository,
     private val manageTransactionRulesUseCase: ManageTransactionRulesUseCase,
     private val userAccountPreferences: UserAccountPreferences,
+    private val merchantAliasPreferences: com.autologue.app.data.preferences.MerchantAliasPreferences,
     private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase,
     private val importer: com.autologue.app.data.sync.HistoricalDataImporter
 ) : ViewModel() {
@@ -130,6 +131,8 @@ class ExpenseViewModel @Inject constructor(
     private suspend fun cleanCorruptedTransferRecords() {
         val all = transactionRepository.getAllTransactionsFlow().first()
         for (tx in all) {
+            if (merchantAliasPreferences.isKnownAliasTarget(tx.merchantName)) continue
+
             var updated = tx
             var isModified = false
             val isCardMsg = com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(tx.originalText)
@@ -139,7 +142,7 @@ class ExpenseViewModel @Inject constructor(
                 (tx.originalText.contains("312-") && tx.originalText.contains("이민희"))) {
                 updated = updated.copy(
                     amount = 22000L,
-                    merchantName = "이민희",
+                    merchantName = merchantAliasPreferences.resolveAlias("이민희"),
                     category = ExpenseCategory.TRANSFER,
                     cardOrBankName = "NH농협",
                     transferMemo = "출금 내역 (계좌: 312-****-9414-21, 잔액 383,252원)"
@@ -148,15 +151,15 @@ class ExpenseViewModel @Inject constructor(
             } else if (tx.merchantName.startsWith("07491612193855") || (tx.originalText.contains("07491612193855") && (tx.merchantName == "0" || tx.merchantName.isBlank()))) {
                 updated = updated.copy(
                     amount = 50000L,
-                    merchantName = "출금 내역",
+                    merchantName = merchantAliasPreferences.resolveAlias("출금 내역"),
                     category = ExpenseCategory.TRANSFER,
                     cardOrBankName = "KB국민",
                     transferMemo = "출금 내역 (계좌: 07491612193855)"
                 )
                 isModified = true
-            } else if (tx.originalText.contains("천재교과서")) {
+            } else if (tx.originalText.contains("천재교과서") && tx.merchantName != merchantAliasPreferences.resolveAlias("(주)천재교과서")) {
                 updated = updated.copy(
-                    merchantName = "(주)천재교과서",
+                    merchantName = merchantAliasPreferences.resolveAlias("(주)천재교과서"),
                     category = ExpenseCategory.LIVING,
                     cardOrBankName = "신한카드",
                     paymentMethod = PaymentMethod.CREDIT_CARD
@@ -165,7 +168,7 @@ class ExpenseViewModel @Inject constructor(
             } else if (!isCardMsg && tx.merchantName.matches(Regex("""^\d{6,}.*"""))) {
                 val cleanName = if (tx.merchantName.contains("출금")) "출금 내역" else "계좌 이체"
                 updated = updated.copy(
-                    merchantName = cleanName,
+                    merchantName = merchantAliasPreferences.resolveAlias(cleanName),
                     category = ExpenseCategory.TRANSFER,
                     transferMemo = tx.merchantName
                 )
@@ -402,6 +405,7 @@ class ExpenseViewModel @Inject constructor(
 
     fun updateTransactionDetails(
         transactionId: Long,
+        newMerchantName: String = "",
         category: ExpenseCategory,
         memo: String?,
         makeGlobalRule: Boolean = false,
@@ -409,18 +413,60 @@ class ExpenseViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             val currentTx = _uiState.value.allTransactions.find { it.id == transactionId } ?: return@launch
+            val oldMerchantName = currentTx.merchantName.trim()
+            val finalMerchantName = newMerchantName.trim().ifBlank { oldMerchantName }
+            val isMerchantRenamed = finalMerchantName.isNotBlank() && finalMerchantName != oldMerchantName
+
+            val isManual = currentTx.originalText.startsWith("[직접 입력]") || currentTx.originalText.startsWith("[차계부 직접 입력]")
+            val rawParsedName = if (!isManual && currentTx.originalText.isNotBlank()) {
+                com.autologue.app.data.parser.SmsParser.parse(currentTx.cardOrBankName, currentTx.originalText, currentTx.timestamp)?.merchantName
+                    ?: com.autologue.app.data.parser.SmsParser.parse(null, currentTx.originalText, currentTx.timestamp)?.merchantName
+            } else null
+
             val wasFuel = currentTx.category == ExpenseCategory.FUEL ||
-                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName)
+                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(oldMerchantName) ||
+                merchantAliasPreferences.getOriginalNamesForTarget(oldMerchantName).any {
+                    com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(it)
+                }
             val isNowFuel = category == ExpenseCategory.FUEL ||
-                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName)
+                (category == currentTx.category && wasFuel) ||
+                com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(finalMerchantName)
 
             val updatedTx = currentTx.copy(
-                category = if (isNowFuel) ExpenseCategory.FUEL else category,
+                merchantName = finalMerchantName,
+                category = if (isNowFuel && category == currentTx.category) ExpenseCategory.FUEL else category,
                 transferMemo = memo?.ifBlank { null }
             )
             transactionRepository.updateTransaction(updatedTx)
 
-            if (!wasFuel && isNowFuel && updatedTx.amount > 0) {
+            var globalRenamedCount = 0
+            if (isMerchantRenamed) {
+                val genericPlaceholders = setOf("출금 내역", "계좌 이체", "카드 가맹점", "가맹점", "직접 추가 지출")
+                val effectiveOldKey = if (oldMerchantName !in genericPlaceholders) {
+                    oldMerchantName
+                } else {
+                    rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders } ?: ""
+                }
+                val effectiveRawKey = rawParsedName?.takeIf { it.isNotBlank() && it !in genericPlaceholders }
+
+                if (effectiveOldKey.isNotBlank()) {
+                    // 1. 가계부 내 동일 결제처 기존 내역 일괄 치환 및 영구 자동 치환 규칙 등록
+                    val txRenamed = transactionRepository.renameMerchantGlobally(
+                        oldMerchantName = effectiveOldKey,
+                        newMerchantName = finalMerchantName,
+                        rawOriginalMerchantName = effectiveRawKey
+                    )
+                    // 2. 차계부 주유 내역 중 동일 결제처 항목도 동시 일괄 치환
+                    val fuelRenamed = vehicleRepository.renameGasStationGlobally(
+                        oldStationName = effectiveOldKey,
+                        newStationName = finalMerchantName,
+                        rawOriginalStationName = effectiveRawKey
+                    )
+                    globalRenamedCount = txRenamed + fuelRenamed
+                }
+            }
+
+            if (!wasFuel && updatedTx.category == ExpenseCategory.FUEL && updatedTx.amount > 0) {
                 val lastFuel = vehicleRepository.getLatestRefuelingLog()
                 val daysSince = if (lastFuel != null) {
                     java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), updatedTx.timestamp.toLocalDate()).toInt()
@@ -433,14 +479,14 @@ class ExpenseViewModel @Inject constructor(
                     fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", updatedTx.amount / 1650.0).toDouble(),
                     daysSinceLastFuel = daysSince,
                     gasStationName = updatedTx.merchantName,
-                    note = "가계부 지출 카테고리 변경 연동"
+                    note = "가계부 지출 카테고리 변경 연동 [custom_name:true]"
                 )
                 vehicleRepository.insertVehicleLog(vehicleLog)
-            } else if (wasFuel && !isNowFuel) {
+            } else if (wasFuel && updatedTx.category != ExpenseCategory.FUEL) {
                 vehicleRepository.deleteRefuelingLogByTransaction(
                     amount = currentTx.amount,
                     date = currentTx.timestamp.toLocalDate(),
-                    merchantName = currentTx.merchantName
+                    merchantName = oldMerchantName
                 )
             }
 
@@ -448,8 +494,15 @@ class ExpenseViewModel @Inject constructor(
                 manageTransactionRulesUseCase.addRule(
                     TransactionRule(
                         keywordPattern = merchantKeyword.trim(),
-                        targetCategory = category
+                        targetCategory = updatedTx.category
                     )
+                )
+            }
+
+            if (isMerchantRenamed) {
+                val extraMsg = if (globalRenamedCount > 0) " (기존 동일 결제처 ${globalRenamedCount}건 추가 치환 완료)" else ""
+                _uiState.value = _uiState.value.copy(
+                    syncResultMessage = "결제명을 '$finalMerchantName'(으)로 변경했습니다. 앞으로 같은 결제처 항목은 자동으로 치환됩니다.$extraMsg"
                 )
             }
             closeEditDialog()

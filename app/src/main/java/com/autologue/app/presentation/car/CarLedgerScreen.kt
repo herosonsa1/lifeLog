@@ -149,8 +149,8 @@ fun CarLedgerScreen(
             log = uiState.editingRefuelLog!!,
             vehicles = uiState.vehicles,
             onDismiss = { viewModel.closeRefuelEditDialog() },
-            onSave = { logId, vId, cost, liters, unitPrice ->
-                viewModel.updateRefuelDetail(logId, vId, cost, liters, unitPrice)
+            onSave = { logId, stationName, vId, cost, liters, unitPrice ->
+                viewModel.updateRefuelDetail(logId, stationName, vId, cost, liters, unitPrice)
             }
         )
     }
@@ -712,6 +712,13 @@ fun SaaSCarLogRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (log.logType == VehicleLogType.REFUELING && onEditRefuel != null) {
+                    Modifier.clickable { onEditRefuel(log) }
+                } else {
+                    Modifier
+                }
+            )
             .padding(horizontal = Spacing.xl, vertical = Spacing.md),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -1055,16 +1062,17 @@ fun RefuelDetailEditDialog(
     log: VehicleLog,
     vehicles: List<VehicleProfile>,
     onDismiss: () -> Unit,
-    onSave: (logId: Long, vehicleId: String, cost: Long, liters: Double?, unitPrice: Double?) -> Unit
+    onSave: (logId: Long, stationName: String, vehicleId: String, cost: Long, liters: Double?, unitPrice: Double?) -> Unit
 ) {
-    var selectedVehicleId by remember { mutableStateOf(log.getAssignedVehicleId()) }
-    var costText by remember { mutableStateOf(if (log.fuelCost > 0) log.fuelCost.toString() else "") }
-    var unitPriceText by remember {
+    var stationNameText by remember(log.id) { mutableStateOf(log.gasStationName ?: "주유소") }
+    var selectedVehicleId by remember(log.id) { mutableStateOf(log.getAssignedVehicleId()) }
+    var costText by remember(log.id) { mutableStateOf(if (log.fuelCost > 0) log.fuelCost.toString() else "") }
+    var unitPriceText by remember(log.id) {
         mutableStateOf(
             log.getExplicitUnitPrice()?.let { "%.1f".format(Locale.US, it) } ?: ""
         )
     }
-    var litersText by remember {
+    var litersText by remember(log.id) {
         mutableStateOf(
             if (log.fuelAmountLiters > 0.0) "%.1f".format(Locale.US, log.fuelAmountLiters) else ""
         )
@@ -1102,11 +1110,11 @@ fun RefuelDetailEditDialog(
                     ) {
                         Column {
                             Text(
-                                text = "주유 상세 설정",
+                                text = "주유 결제명 및 상세 설정",
                                 style = AppTypography.h2
                             )
                             Text(
-                                text = log.gasStationName ?: "주유 내역",
+                                text = log.timestamp.format(DateTimeFormatter.ofPattern("yyyy.MM.dd(E) HH:mm", Locale.KOREA)),
                                 style = AppTypography.captionMuted
                             )
                         }
@@ -1128,11 +1136,24 @@ fun RefuelDetailEditDialog(
                             Icon(Icons.Default.Info, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(Spacing.xs))
                             Text(
-                                text = "L당 단가나 실제 주유량을 입력하시면 실연비가 더 정교하게 계산됩니다. (선택 사항)",
+                                text = "결제명(주유소명)을 한 번 수정하면 같은 결제처의 기존·신규 내역이 자동으로 치환됩니다.",
                                 style = AppTypography.caption.copy(color = MenuColors.carLedger, fontSize = 11.sp)
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(Spacing.md))
+
+                    // 결제명 / 주유소 상호명 수정
+                    Text("결제명 (주유소 상호명)", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                    OutlinedTextField(
+                        value = stationNameText,
+                        onValueChange = { stationNameText = it },
+                        placeholder = { Text("예: GS칼텍스 위례주유소, SK에너지 단골셀프", style = AppTypography.captionMuted) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
@@ -1309,10 +1330,11 @@ fun RefuelDetailEditDialog(
                             text = "저장 및 연비 반영",
                             modifier = Modifier.weight(1f),
                             onClick = {
+                                val finalStation = stationNameText.trim().ifBlank { log.gasStationName ?: "주유소" }
                                 val cost = costText.toLongOrNull() ?: log.fuelCost
                                 val unitPrice = unitPriceText.toDoubleOrNull()
                                 val liters = litersText.toDoubleOrNull()
-                                onSave(log.id, selectedVehicleId, cost, liters, unitPrice)
+                                onSave(log.id, finalStation, selectedVehicleId, cost, liters, unitPrice)
                             }
                         )
                     }

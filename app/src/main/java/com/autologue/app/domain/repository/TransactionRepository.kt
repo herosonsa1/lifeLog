@@ -15,4 +15,9 @@ interface TransactionRepository {
     suspend fun deleteTransaction(id: Long)
     suspend fun getTotalExpenseBetween(start: LocalDateTime, end: LocalDateTime): Long
     suspend fun cleanDuplicates(): Int
+    suspend fun renameMerchantGlobally(
+        oldMerchantName: String,
+        newMerchantName: String,
+        rawOriginalMerchantName: String? = null
+    ): Int = 0
 }

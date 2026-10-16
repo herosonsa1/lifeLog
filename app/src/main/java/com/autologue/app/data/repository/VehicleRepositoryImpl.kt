@@ -2,6 +2,7 @@ package com.autologue.app.data.repository
 
 import com.autologue.app.data.local.db.dao.VehicleLogDao
 import com.autologue.app.data.local.entity.VehicleLogEntity
+import com.autologue.app.data.preferences.MerchantAliasPreferences
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.domain.repository.VehicleRepository
@@ -15,8 +16,25 @@ import java.time.ZoneId
 import javax.inject.Inject
 
 class VehicleRepositoryImpl @Inject constructor(
-    private val vehicleLogDao: VehicleLogDao
+    private val vehicleLogDao: VehicleLogDao,
+    private val merchantAliasPreferences: MerchantAliasPreferences
 ) : VehicleRepository {
+
+    constructor(vehicleLogDao: VehicleLogDao) : this(vehicleLogDao, MerchantAliasPreferences())
+
+    private fun isProtectedFuelStation(stationName: String, note: String?): Boolean {
+        val clean = stationName.trim()
+        if (clean.isBlank()) return false
+        val noteStr = note ?: ""
+        val isManualRefuel = noteStr.contains("직접 등록") ||
+            noteStr.contains("직접 입력") ||
+            noteStr.contains("카테고리 변경 연동") ||
+            noteStr.contains("[custom_fuel:true]") ||
+            noteStr.contains("[custom_name:true]")
+        val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(clean) ||
+            merchantAliasPreferences.getOriginalNamesForTarget(clean).any { isFuelMerchant(it) }
+        return isManualRefuel || isUserAliased || isFuelMerchant(clean) || clean == "주유소"
+    }
 
     override fun getAllVehicleLogsFlow(): Flow<List<VehicleLog>> {
         return vehicleLogDao.getAllVehicleLogs().map { it.map { e -> e.toDomain() } }
@@ -27,13 +45,28 @@ class VehicleRepositoryImpl @Inject constructor(
     }
 
     override suspend fun insertVehicleLog(log: VehicleLog): Long = withContext(Dispatchers.IO) {
-        if (log.logType == VehicleLogType.REFUELING) {
-            val existing = vehicleLogDao.findExactFuelLog(log.timestamp, log.fuelCost, log.gasStationName)
+        val finalLog = if (log.logType == VehicleLogType.REFUELING && !log.gasStationName.isNullOrBlank()) {
+            val resolved = merchantAliasPreferences.resolveAlias(log.gasStationName)
+            if (resolved.isNotBlank() && resolved != log.gasStationName) {
+                log.copy(gasStationName = resolved)
+            } else {
+                log
+            }
+        } else {
+            log
+        }
+
+        if (finalLog.logType == VehicleLogType.REFUELING) {
+            val existing = vehicleLogDao.findExactFuelLog(finalLog.timestamp, finalLog.fuelCost, finalLog.gasStationName)
+                ?: vehicleLogDao.findExactFuelLog(finalLog.timestamp, finalLog.fuelCost, log.gasStationName)
             if (existing != null) {
+                if (existing.gasStationName != finalLog.gasStationName && !finalLog.gasStationName.isNullOrBlank()) {
+                    vehicleLogDao.updateVehicleLog(existing.copy(gasStationName = finalLog.gasStationName))
+                }
                 return@withContext existing.id
             }
         }
-        vehicleLogDao.insertVehicleLog(log.toEntity())
+        vehicleLogDao.insertVehicleLog(finalLog.toEntity())
     }
 
     override suspend fun getVehicleLogById(id: Long): VehicleLog? = withContext(Dispatchers.IO) {
@@ -42,6 +75,52 @@ class VehicleRepositoryImpl @Inject constructor(
 
     override suspend fun updateVehicleLog(log: VehicleLog): Unit = withContext(Dispatchers.IO) {
         vehicleLogDao.updateVehicleLog(log.toEntity())
+    }
+
+    override suspend fun renameGasStationGlobally(
+        oldStationName: String,
+        newStationName: String,
+        rawOriginalStationName: String?
+    ): Int = withContext(Dispatchers.IO) {
+        val targetName = newStationName.trim()
+        if (targetName.isBlank()) return@withContext 0
+
+        merchantAliasPreferences.registerAlias(
+            oldName = oldStationName,
+            newName = targetName,
+            rawOriginalName = rawOriginalStationName
+        )
+
+        val all = vehicleLogDao.getAllVehicleLogsSync()
+        var updatedCount = 0
+        for (entity in all) {
+            if (entity.logType != VehicleLogType.REFUELING) continue
+            val currentStation = entity.gasStationName?.trim().orEmpty()
+            val isMatchedOld = merchantAliasPreferences.isSameMerchant(currentStation, oldStationName) ||
+                (!rawOriginalStationName.isNullOrBlank() && merchantAliasPreferences.isSameMerchant(currentStation, rawOriginalStationName))
+            val resolved = if (isMatchedOld) {
+                targetName
+            } else {
+                merchantAliasPreferences.resolveAlias(currentStation)
+            }
+
+            if (resolved.isNotBlank() && resolved != currentStation) {
+                val currentNote = entity.note.orEmpty()
+                val updatedNote = if (currentNote.contains("[custom_name:true]")) {
+                    currentNote
+                } else {
+                    "$currentNote [custom_name:true]".trim()
+                }
+                vehicleLogDao.updateVehicleLog(
+                    entity.copy(
+                        gasStationName = resolved,
+                        note = updatedNote
+                    )
+                )
+                updatedCount++
+            }
+        }
+        updatedCount
     }
 
     override suspend fun getLatestRefuelingLog(): VehicleLog? = withContext(Dispatchers.IO) {
@@ -78,17 +157,32 @@ class VehicleRepositoryImpl @Inject constructor(
     override suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int = withContext(Dispatchers.IO) {
         var addedCount = 0
 
-        // 0. 기존 차계부 DB에 잘못 들어간 '제목' 등 비정상 주유 로그 선제 정리
+        // 0. 기존 차계부 DB에 잘못 들어간 '제목' 등 비정상 주유 로그 선제 정리 및 사용자 지정 별칭 자동 치환
         val initialLogs = vehicleLogDao.getAllVehicleLogsSync()
         for (entity in initialLogs) {
             if (entity.logType == VehicleLogType.REFUELING) {
-                val station = entity.gasStationName?.trim() ?: ""
-                val note = entity.note ?: ""
-                val isManualRefuel = note.contains("직접 등록") || note.contains("[custom_fuel:true]")
-                if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station) ||
-                    (!isManualRefuel && !isFuelMerchant(station))
+                val rawStation = entity.gasStationName?.trim() ?: ""
+                val resolvedStation = merchantAliasPreferences.resolveAlias(rawStation)
+                val currentEntity = if (resolvedStation.isNotBlank() && resolvedStation != rawStation) {
+                    val noteWithTag = if ((entity.note ?: "").contains("[custom_name:true]")) {
+                        entity.note
+                    } else {
+                        "${entity.note.orEmpty()} [custom_name:true]".trim()
+                    }
+                    val updated = entity.copy(gasStationName = resolvedStation, note = noteWithTag)
+                    vehicleLogDao.updateVehicleLog(updated)
+                    updated
+                } else {
+                    entity
+                }
+
+                val station = currentEntity.gasStationName?.trim() ?: ""
+                val note = currentEntity.note ?: ""
+                val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(station)
+                if ((!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station)) ||
+                    !isProtectedFuelStation(station, note)
                 ) {
-                    vehicleLogDao.deleteVehicleLogById(entity.id)
+                    vehicleLogDao.deleteVehicleLogById(currentEntity.id)
                 }
             }
         }
@@ -102,19 +196,23 @@ class VehicleRepositoryImpl @Inject constructor(
 
         val currentLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }.toMutableList()
 
-        // 2. 주유 관련 거래 필터링 (비결제/무효 상호명 원천 차단 및 실제 주유소 가맹점만 선별)
+        // 2. 주유 관련 거래 필터링 (비결제/무효 상호명 원천 차단 및 실제 주유소/별칭 매핑 주유소 가맹점 선별)
         val fuelTransactions = transactions.filter { tx ->
             val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+            val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(tx.merchantName)
             if (!isManual && (
-                    com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName) ||
+                    (!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName)) ||
                     com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(tx.originalText)
                 )
             ) {
                 return@filter false
             }
             val isCardMsg = !isManual && com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(tx.originalText)
-            val isFuel = isManual && tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
+            val isAliasFromFuel = merchantAliasPreferences.getOriginalNamesForTarget(tx.merchantName).any { isFuelMerchant(it) }
+            val isFuel = (isManual && tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL) ||
                 isFuelMerchant(tx.merchantName) ||
+                isAliasFromFuel ||
+                (tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL && (isUserAliased || isFuelMerchant(tx.originalText))) ||
                 (!isManual && tx.merchantName in setOf("카드 가맹점", "가맹점") && isCardMsg && isFuelMerchant(tx.originalText))
             isFuel && tx.amount > 0
         }
@@ -122,7 +220,7 @@ class VehicleRepositoryImpl @Inject constructor(
         // 날짜 및 상호별 그룹화하여 셀프주유소 가승인(15만원/10만원) 판별
         for (tx in fuelTransactions) {
             val txDate = tx.timestamp.toLocalDate()
-            val resolvedStationName = if (tx.merchantName in listOf("카드 가맹점", "가맹점", "출금 내역", "계좌 이체", "정선우", "정*우") || tx.merchantName.isBlank()) {
+            val baseStationName = if (tx.merchantName in listOf("카드 가맹점", "가맹점", "출금 내역", "계좌 이체", "정선우", "정*우") || tx.merchantName.isBlank()) {
                 com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)?.merchantName
                     ?.takeIf { !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(it) && isFuelMerchant(it) }
                     ?: FUEL_KEYWORDS.firstOrNull { tx.originalText.uppercase().contains(it.uppercase()) }
@@ -130,8 +228,10 @@ class VehicleRepositoryImpl @Inject constructor(
             } else {
                 tx.merchantName
             }
+            val resolvedStationName = merchantAliasPreferences.resolveAlias(baseStationName)
+            val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(resolvedStationName)
 
-            if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(resolvedStationName)) continue
+            if (!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(resolvedStationName)) continue
 
             val sameDayMerchantTxs = fuelTransactions.filter {
                 it.timestamp.toLocalDate() == txDate &&
@@ -152,13 +252,20 @@ class VehicleRepositoryImpl @Inject constructor(
                 continue
             }
 
-            val alreadyExists = currentLogs.any {
+            val existingMatchIdx = currentLogs.indexOfFirst {
                 it.logType == VehicleLogType.REFUELING &&
                 it.timestamp.toLocalDate() == txDate &&
                 it.fuelCost == tx.amount
             }
 
-            if (!alreadyExists) {
+            if (existingMatchIdx >= 0) {
+                val existingLog = currentLogs[existingMatchIdx]
+                if (existingLog.gasStationName != resolvedStationName && isUserAliased) {
+                    val updatedLog = existingLog.copy(gasStationName = resolvedStationName)
+                    vehicleLogDao.updateVehicleLog(updatedLog.toEntity())
+                    currentLogs[existingMatchIdx] = updatedLog
+                }
+            } else {
                 val lastFuel = currentLogs.filter { it.logType == VehicleLogType.REFUELING }
                     .filter { it.timestamp.isBefore(tx.timestamp) }
                     .maxByOrNull { it.timestamp }
@@ -174,7 +281,7 @@ class VehicleRepositoryImpl @Inject constructor(
                     fuelAmountLiters = String.format(java.util.Locale.US, "%.1f", tx.amount / 1650.0).toDouble(),
                     daysSinceLastFuel = daysSince,
                     gasStationName = resolvedStationName,
-                    note = "가계부 결제 내역 자동 분석"
+                    note = if (isUserAliased) "가계부 결제 내역 자동 분석 [custom_name:true]" else "가계부 결제 내역 자동 분석"
                 )
                 val insertedId = vehicleLogDao.insertVehicleLog(log.toEntity())
                 currentLogs.add(log.copy(id = insertedId))
@@ -186,11 +293,16 @@ class VehicleRepositoryImpl @Inject constructor(
 
     override suspend fun deleteRefuelingLogByTransaction(amount: Long, date: LocalDate, merchantName: String): Int = withContext(Dispatchers.IO) {
         val logs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }
+        val resolvedMerchant = merchantAliasPreferences.resolveAlias(merchantName)
         val matched = logs.filter {
             it.logType == VehicleLogType.REFUELING &&
             it.timestamp.toLocalDate() == date &&
             it.fuelCost == amount &&
-            (it.gasStationName == merchantName || it.gasStationName == null || merchantName.contains(it.gasStationName ?: ""))
+            (it.gasStationName == merchantName ||
+                it.gasStationName == resolvedMerchant ||
+                it.gasStationName == null ||
+                merchantName.contains(it.gasStationName ?: "") ||
+                resolvedMerchant.contains(it.gasStationName ?: ""))
         }
         var deletedCount = 0
         for (log in matched) {
@@ -244,15 +356,25 @@ class VehicleRepositoryImpl @Inject constructor(
             "일반 사진", "OCR 실패", "BMARTSCC나"
         )
 
-        for (log in all) {
-            val note = log.note ?: ""
+        for (rawLog in all) {
+            var log = rawLog
+            var note = log.note ?: ""
 
-            // 0. '제목' 등 비결제 MMS 제목 컬럼 오탐으로 생성된 가짜 주유 레코드 즉시 삭제
+            // 0. '제목' 등 비결제 MMS 제목 컬럼 오탐으로 생성된 가짜 주유 레코드 삭제 및 별칭 자동 치환
             if (log.logType == VehicleLogType.REFUELING) {
+                val rawStation = log.gasStationName?.trim() ?: ""
+                val resolvedStation = merchantAliasPreferences.resolveAlias(rawStation)
+                if (resolvedStation.isNotBlank() && resolvedStation != rawStation) {
+                    val updatedNote = if (note.contains("[custom_name:true]")) note else "$note [custom_name:true]".trim()
+                    log = log.copy(gasStationName = resolvedStation, note = updatedNote)
+                    note = updatedNote
+                    vehicleLogDao.updateVehicleLog(log)
+                    modifiedCount++
+                }
                 val station = log.gasStationName?.trim() ?: ""
-                val isManualRefuel = note.contains("직접 등록") || note.contains("[custom_fuel:true]")
-                if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station) ||
-                    (!isManualRefuel && !isFuelMerchant(station) && station != "주유소")
+                val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(station)
+                if ((!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station)) ||
+                    !isProtectedFuelStation(station, note)
                 ) {
                     vehicleLogDao.deleteVehicleLogById(log.id)
                     modifiedCount++
