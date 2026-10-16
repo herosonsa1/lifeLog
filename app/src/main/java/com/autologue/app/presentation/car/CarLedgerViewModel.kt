@@ -329,35 +329,53 @@ class CarLedgerViewModel @Inject constructor(
         val ids = _uiState.value.selectedLogIds.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            val count = vehicleRepository.deleteVehicleLogs(ids)
-            _uiState.value = _uiState.value.copy(
-                isSelectionMode = false,
-                selectedLogIds = emptySet(),
-                syncResultMessage = "선택한 차계부 기록(주유/주행) ${count}건을 영구 삭제했습니다. (자동 동기화 시 재등록 차단)"
-            )
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "차계부 기록 삭제 및 화면 갱신 중",
+                message = "선택한 주유/주행 기록을 삭제하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+            ) {
+                val count = vehicleRepository.deleteVehicleLogs(ids)
+                _uiState.value = _uiState.value.copy(
+                    isSelectionMode = false,
+                    selectedLogIds = emptySet(),
+                    syncResultMessage = "선택한 차계부 기록(주유/주행) ${count}건을 영구 삭제했습니다. (자동 동기화 시 재등록 차단)"
+                )
+            }
         }
     }
 
     fun deleteSingleLog(logId: Long) {
         viewModelScope.launch {
-            vehicleRepository.deleteVehicleLog(logId)
-            _uiState.value = _uiState.value.copy(
-                editingRefuelLog = null,
-                syncResultMessage = "해당 기록을 영구 삭제했습니다. (자동 동기화 시 재등록 차단)"
-            )
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "차계부 기록 삭제 및 화면 갱신 중",
+                message = "해당 기록을 삭제하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+            ) {
+                vehicleRepository.deleteVehicleLog(logId)
+                _uiState.value = _uiState.value.copy(
+                    editingRefuelLog = null,
+                    syncResultMessage = "해당 기록을 영구 삭제했습니다. (자동 동기화 시 재등록 차단)"
+                )
+            }
         }
     }
 
     fun assignVehicleToFuelLog(logId: Long, targetVehicleId: String) {
         viewModelScope.launch {
-            val log = vehicleRepository.getVehicleLogById(logId) ?: return@launch
-            val currentNote = log.note ?: ""
-            // 기존 [car_1], [car_2], [차량 1], [차량 2] 태그 제거 후 새 차량 태그 지정
-            val cleanNote = currentNote.replace(Regex("\\[(car_1|car_2|차량 1|차량 2)[^\\]]*\\]\\s*"), "").trim()
-            val targetVehicle = _uiState.value.vehicles.find { it.id == targetVehicleId }
-            val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
-            val newNote = "[$targetVehicleId: $vName] $cleanNote".trim()
-            vehicleRepository.updateVehicleLog(log.copy(note = newNote))
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "차량 지정 및 화면 갱신 중",
+                message = "선택한 차량으로 기록을 변경하고 통계를 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+            ) {
+                val log = vehicleRepository.getVehicleLogById(logId) ?: return@runWithLoading
+                val currentNote = log.note ?: ""
+                // 기존 [car_1], [car_2], [차량 1], [차량 2] 태그 제거 후 새 차량 태그 지정
+                val cleanNote = currentNote.replace(Regex("\\[(car_1|car_2|차량 1|차량 2)[^\\]]*\\]\\s*"), "").trim()
+                val targetVehicle = _uiState.value.vehicles.find { it.id == targetVehicleId }
+                val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
+                val newNote = "[$targetVehicleId: $vName] $cleanNote".trim()
+                vehicleRepository.updateVehicleLog(log.copy(note = newNote))
+            }
         }
     }
 
@@ -379,71 +397,84 @@ class CarLedgerViewModel @Inject constructor(
         isOneTimeSave: Boolean = false
     ) {
         viewModelScope.launch {
-            val log = vehicleRepository.getVehicleLogById(logId) ?: return@launch
-            val oldStationName = log.gasStationName?.trim().orEmpty()
-            val finalStationName = gasStationName.trim().ifBlank { oldStationName.ifBlank { "주유소" } }
-            val isStationRenamed = finalStationName.isNotBlank() && finalStationName != oldStationName
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "주유 내역 저장 및 화면 갱신 중",
+                message = "주유 내역 변경 사항을 반영하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+            ) {
+                val log = vehicleRepository.getVehicleLogById(logId) ?: return@runWithLoading
+                val oldStationName = log.gasStationName?.trim().orEmpty()
+                val finalStationName = gasStationName.trim().ifBlank { oldStationName.ifBlank { "주유소" } }
+                val isStationRenamed = finalStationName.isNotBlank() && finalStationName != oldStationName
 
-            val targetVehicle = _uiState.value.vehicles.find { it.id == targetVehicleId }
-            val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
+                val targetVehicle = _uiState.value.vehicles.find { it.id == targetVehicleId }
+                val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
 
-            val isCustom = (explicitLiters != null && explicitLiters > 0.0) || (unitPrice != null && unitPrice > 0.0)
-            val baseUpdatedNote = log.buildUpdatedNote(
-                targetVehicleId = targetVehicleId,
-                vehicleShortName = vName,
-                unitPrice = unitPrice,
-                isCustom = isCustom
-            ).replace("[one_time_edit:true]", "").trim()
+                val isCustom = (explicitLiters != null && explicitLiters > 0.0) || (unitPrice != null && unitPrice > 0.0)
+                val baseUpdatedNote = log.buildUpdatedNote(
+                    targetVehicleId = targetVehicleId,
+                    vehicleShortName = vName,
+                    unitPrice = unitPrice,
+                    isCustom = isCustom
+                ).replace("[one_time_edit:true]", "").trim()
 
-            var updatedNote = if (isStationRenamed && !baseUpdatedNote.contains("[custom_name:true]")) {
-                "$baseUpdatedNote [custom_name:true]".trim()
-            } else {
-                baseUpdatedNote
-            }
-            if (isOneTimeSave) {
-                updatedNote = "$updatedNote [one_time_edit:true]".trim()
-            }
+                var updatedNote = if (isStationRenamed && !baseUpdatedNote.contains("[custom_name:true]")) {
+                    "$baseUpdatedNote [custom_name:true]".trim()
+                } else {
+                    baseUpdatedNote
+                }
+                if (isOneTimeSave) {
+                    updatedNote = "$updatedNote [one_time_edit:true]".trim()
+                }
 
-            val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
-            val finalLiters = when {
-                explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
-                unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
-                else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
-            }
+                val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
+                val finalLiters = when {
+                    explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
+                    unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
+                    else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
+                }
 
-            val updatedLog = log.copy(
-                gasStationName = finalStationName,
-                fuelCost = fuelCost,
-                fuelAmountLiters = finalLiters,
-                note = updatedNote
-            )
-            vehicleRepository.updateVehicleLog(updatedLog)
-
-            if (isOneTimeSave) {
-                _uiState.value = _uiState.value.copy(
-                    syncResultMessage = "주유 내역을 1회성 저장했습니다. (동일 주유소의 다른 내역에는 영향을 주지 않으며 고정 보호됩니다)"
+                val updatedLog = log.copy(
+                    gasStationName = finalStationName,
+                    fuelCost = fuelCost,
+                    fuelAmountLiters = finalLiters,
+                    note = updatedNote
                 )
-            } else if (isStationRenamed && oldStationName.isNotBlank() && oldStationName != "주유소") {
-                val fuelRenamed = vehicleRepository.renameGasStationGlobally(
-                    oldStationName = oldStationName,
-                    newStationName = finalStationName
-                )
-                val txRenamed = transactionRepository.renameMerchantGlobally(
-                    oldMerchantName = oldStationName,
-                    newMerchantName = finalStationName
-                )
-                val totalRenamed = fuelRenamed + txRenamed
-                val extraMsg = if (totalRenamed > 0) " (동일 결제처 ${totalRenamed}건 일괄 치환 완료)" else ""
-                _uiState.value = _uiState.value.copy(
-                    syncResultMessage = "결제명(주유소명)을 '$finalStationName'(으)로 수정했습니다. 같은 결제처 항목은 계속 자동 치환됩니다.$extraMsg"
-                )
+                vehicleRepository.updateVehicleLog(updatedLog)
+
+                if (isOneTimeSave) {
+                    _uiState.value = _uiState.value.copy(
+                        syncResultMessage = "주유 내역을 1회성 저장했습니다. (동일 주유소의 다른 내역에는 영향을 주지 않으며 고정 보호됩니다)"
+                    )
+                } else if (isStationRenamed && oldStationName.isNotBlank() && oldStationName != "주유소") {
+                    val fuelRenamed = vehicleRepository.renameGasStationGlobally(
+                        oldStationName = oldStationName,
+                        newStationName = finalStationName
+                    )
+                    val txRenamed = transactionRepository.renameMerchantGlobally(
+                        oldMerchantName = oldStationName,
+                        newMerchantName = finalStationName
+                    )
+                    val totalRenamed = fuelRenamed + txRenamed
+                    val extraMsg = if (totalRenamed > 0) " (동일 결제처 ${totalRenamed}건 일괄 치환 완료)" else ""
+                    _uiState.value = _uiState.value.copy(
+                        syncResultMessage = "결제명(주유소명)을 '$finalStationName'(으)로 수정했습니다. 같은 결제처 항목은 계속 자동 치환됩니다.$extraMsg"
+                    )
+                }
+                closeRefuelEditDialog()
             }
-            closeRefuelEditDialog()
         }
     }
 
     fun setLogFilterMode(mode: LogFilterMode) {
-        _uiState.value = _uiState.value.copy(logFilterMode = mode)
+        com.autologue.app.presentation.common.GlobalLoadingRegistry.trackUiUpdate(
+            scope = viewModelScope,
+            title = "차계부 필터 전환 및 화면 갱신 중",
+            message = "선택한 조회 구분으로 기록을 갱신하고 있습니다...",
+            accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+        ) {
+            _uiState.value = _uiState.value.copy(logFilterMode = mode)
+        }
     }
 
     fun openAddRefuelDialog() {
@@ -467,56 +498,62 @@ class CarLedgerViewModel @Inject constructor(
         timestamp: LocalDateTime
     ) {
         viewModelScope.launch {
-            val targetVehicle = _uiState.value.vehicles.find { it.id == vehicleId }
-            val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (vehicleId == "car_2") "차량 2" else "차량 1"
-            val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "주유 기록 추가 및 화면 갱신 중",
+                message = "입력하신 주유 기록을 차계부와 가계부에 저장하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+            ) {
+                val targetVehicle = _uiState.value.vehicles.find { it.id == vehicleId }
+                val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (vehicleId == "car_2") "차량 2" else "차량 1"
+                val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
 
-            val finalLiters = when {
-                explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
-                unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
-                else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
+                val finalLiters = when {
+                    explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
+                    unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
+                    else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
+                }
+
+                val tags = mutableListOf<String>()
+                tags.add("[$vehicleId: $vName]")
+                if (unitPrice != null && unitPrice > 0.0) {
+                    tags.add("[unit_price: %.1f]".format(java.util.Locale.US, unitPrice))
+                }
+                tags.add("[custom_fuel:true]")
+                val noteStr = (tags.joinToString(" ") + " 차계부 직접 등록").trim()
+
+                val lastFuel = vehicleRepository.getLatestRefuelingLog()
+                val daysSince = if (lastFuel != null) {
+                    java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), timestamp.toLocalDate()).toInt()
+                } else null
+
+                // 1. 차계부 VehicleLog 등록
+                val vLog = VehicleLog(
+                    timestamp = timestamp,
+                    logType = VehicleLogType.REFUELING,
+                    fuelCost = fuelCost,
+                    fuelAmountLiters = finalLiters,
+                    daysSinceLastFuel = daysSince,
+                    gasStationName = gasStationName.ifBlank { "주유소" },
+                    note = noteStr
+                )
+                vehicleRepository.insertVehicleLog(vLog)
+
+                // 2. 가계부 Transaction 동시 등록 (데이터 일관성 유지)
+                val tx = com.autologue.app.domain.model.Transaction(
+                    amount = fuelCost,
+                    merchantName = gasStationName.ifBlank { "주유소" },
+                    originalText = "[차계부 직접 입력] $gasStationName %,d원".format(fuelCost),
+                    timestamp = timestamp,
+                    paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
+                    category = com.autologue.app.domain.model.ExpenseCategory.FUEL,
+                    cardOrBankName = "차계부 직접 입력",
+                    transferMemo = "차계부 주유 등록 연동",
+                    isAutoCategorized = true
+                )
+                transactionRepository.insertTransaction(tx)
+
+                closeAddRefuelDialog()
             }
-
-            val tags = mutableListOf<String>()
-            tags.add("[$vehicleId: $vName]")
-            if (unitPrice != null && unitPrice > 0.0) {
-                tags.add("[unit_price: %.1f]".format(java.util.Locale.US, unitPrice))
-            }
-            tags.add("[custom_fuel:true]")
-            val noteStr = (tags.joinToString(" ") + " 차계부 직접 등록").trim()
-
-            val lastFuel = vehicleRepository.getLatestRefuelingLog()
-            val daysSince = if (lastFuel != null) {
-                java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), timestamp.toLocalDate()).toInt()
-            } else null
-
-            // 1. 차계부 VehicleLog 등록
-            val vLog = VehicleLog(
-                timestamp = timestamp,
-                logType = VehicleLogType.REFUELING,
-                fuelCost = fuelCost,
-                fuelAmountLiters = finalLiters,
-                daysSinceLastFuel = daysSince,
-                gasStationName = gasStationName.ifBlank { "주유소" },
-                note = noteStr
-            )
-            vehicleRepository.insertVehicleLog(vLog)
-
-            // 2. 가계부 Transaction 동시 등록 (데이터 일관성 유지)
-            val tx = com.autologue.app.domain.model.Transaction(
-                amount = fuelCost,
-                merchantName = gasStationName.ifBlank { "주유소" },
-                originalText = "[차계부 직접 입력] $gasStationName %,d원".format(fuelCost),
-                timestamp = timestamp,
-                paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
-                category = com.autologue.app.domain.model.ExpenseCategory.FUEL,
-                cardOrBankName = "차계부 직접 입력",
-                transferMemo = "차계부 주유 등록 연동",
-                isAutoCategorized = true
-            )
-            transactionRepository.insertTransaction(tx)
-
-            closeAddRefuelDialog()
         }
     }
 
@@ -698,27 +735,43 @@ class CarLedgerViewModel @Inject constructor(
         )
         closeLocationDialog()
 
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val (homeDong, compDong) = resolveCommuteNeighborhoods(locationPreferences.config.value)
-            vehicleRepository.cleanDuplicatesAndCorruptedLogs(
-                homeName = homeDong,
-                companyName = compDong,
-                commuteDistanceKm = roundTripKm
-            )
+        viewModelScope.launch {
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "출퇴근 설정 저장 및 화면 갱신 중",
+                message = "출퇴근 거점 설정을 반영하고 주행 기록을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+            ) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val (homeDong, compDong) = resolveCommuteNeighborhoods(locationPreferences.config.value)
+                    vehicleRepository.cleanDuplicatesAndCorruptedLogs(
+                        homeName = homeDong,
+                        companyName = compDong,
+                        commuteDistanceKm = roundTripKm
+                    )
+                }
+            }
         }
     }
 
     fun recordManualCommute(isToWork: Boolean) {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val cfg = locationPreferences.config.value
-            val (homeDong, compDong) = resolveCommuteNeighborhoods(cfg)
-            val dist = if (cfg.commuteOneWayKm > 0) cfg.commuteOneWayKm else (cfg.commuteRoundTripKm / 2.0).coerceAtLeast(1.0)
-            vehicleRepository.recordCommuteTrip(
-                isToWork = isToWork,
-                homeName = homeDong,
-                companyName = compDong,
-                distanceKm = dist
-            )
+        viewModelScope.launch {
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "출퇴근 주행 기록 및 화면 갱신 중",
+                message = "출퇴근 주행 기록을 추가하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+            ) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val cfg = locationPreferences.config.value
+                    val (homeDong, compDong) = resolveCommuteNeighborhoods(cfg)
+                    val dist = if (cfg.commuteOneWayKm > 0) cfg.commuteOneWayKm else (cfg.commuteRoundTripKm / 2.0).coerceAtLeast(1.0)
+                    vehicleRepository.recordCommuteTrip(
+                        isToWork = isToWork,
+                        homeName = homeDong,
+                        companyName = compDong,
+                        distanceKm = dist
+                    )
+                }
+            }
         }
     }
 
@@ -763,18 +816,25 @@ class CarLedgerViewModel @Inject constructor(
         tireDate: String,
         tireInterval: Int
     ) {
-        maintenancePreferences.updateConfig(
-            engineOilLastKm = engineOilLastKm,
-            engineOilDate = engineOilDate,
-            engineOilInterval = engineOilInterval,
-            airconLastKm = airconLastKm,
-            airconDate = airconDate,
-            airconInterval = airconInterval,
-            tireLastKm = tireLastKm,
-            tireDate = tireDate,
-            tireInterval = tireInterval
-        )
-        closeMaintenanceDialog()
+        com.autologue.app.presentation.common.GlobalLoadingRegistry.trackUiUpdate(
+            scope = viewModelScope,
+            title = "소모품 설정 저장 및 화면 갱신 중",
+            message = "차량 소모품 관리 주기를 반영하고 화면을 갱신하고 있습니다...",
+            accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+        ) {
+            maintenancePreferences.updateConfig(
+                engineOilLastKm = engineOilLastKm,
+                engineOilDate = engineOilDate,
+                engineOilInterval = engineOilInterval,
+                airconLastKm = airconLastKm,
+                airconDate = airconDate,
+                airconInterval = airconInterval,
+                tireLastKm = tireLastKm,
+                tireDate = tireDate,
+                tireInterval = tireInterval
+            )
+            closeMaintenanceDialog()
+        }
     }
 
     fun markConsumableReplaced(itemId: String) {
@@ -808,27 +868,34 @@ class CarLedgerViewModel @Inject constructor(
     }
 
     fun saveVehicleProfiles(car1: VehicleProfile, car2: VehicleProfile) {
-        multiVehiclePreferences.updateVehicle(
-            id = car1.id,
-            name = car1.name,
-            licensePlate = car1.licensePlate,
-            fuelType = car1.fuelType,
-            bluetoothDevice = car1.bluetoothDevice,
-            initialOdometerKm = car1.initialOdometerKm,
-            targetEfficiencyKmPerL = car1.targetEfficiencyKmPerL,
-            defaultGasPrice = car1.defaultGasPrice
-        )
-        multiVehiclePreferences.updateVehicle(
-            id = car2.id,
-            name = car2.name,
-            licensePlate = car2.licensePlate,
-            fuelType = car2.fuelType,
-            bluetoothDevice = car2.bluetoothDevice,
-            initialOdometerKm = car2.initialOdometerKm,
-            targetEfficiencyKmPerL = car2.targetEfficiencyKmPerL,
-            defaultGasPrice = car2.defaultGasPrice
-        )
-        closeVehicleManageDialog()
+        com.autologue.app.presentation.common.GlobalLoadingRegistry.trackUiUpdate(
+            scope = viewModelScope,
+            title = "차량 프로필 저장 및 화면 갱신 중",
+            message = "차량 프로필 정보를 저장하고 통계를 갱신하고 있습니다...",
+            accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
+        ) {
+            multiVehiclePreferences.updateVehicle(
+                id = car1.id,
+                name = car1.name,
+                licensePlate = car1.licensePlate,
+                fuelType = car1.fuelType,
+                bluetoothDevice = car1.bluetoothDevice,
+                initialOdometerKm = car1.initialOdometerKm,
+                targetEfficiencyKmPerL = car1.targetEfficiencyKmPerL,
+                defaultGasPrice = car1.defaultGasPrice
+            )
+            multiVehiclePreferences.updateVehicle(
+                id = car2.id,
+                name = car2.name,
+                licensePlate = car2.licensePlate,
+                fuelType = car2.fuelType,
+                bluetoothDevice = car2.bluetoothDevice,
+                initialOdometerKm = car2.initialOdometerKm,
+                targetEfficiencyKmPerL = car2.targetEfficiencyKmPerL,
+                defaultGasPrice = car2.defaultGasPrice
+            )
+            closeVehicleManageDialog()
+        }
     }
 }
 

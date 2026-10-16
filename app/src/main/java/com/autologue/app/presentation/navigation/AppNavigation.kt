@@ -24,6 +24,8 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.*
 import com.autologue.app.presentation.car.CarLedgerScreen
 import com.autologue.app.presentation.common.AutoLogueLoadingOverlay
+import com.autologue.app.presentation.common.GlobalLoadingOverlayHost
+import com.autologue.app.presentation.common.GlobalLoadingRegistry
 import com.autologue.app.presentation.common.HairlineDivider
 import com.autologue.app.presentation.common.UnifiedSpeedDialFab
 import com.autologue.app.presentation.diary.DiaryScreen
@@ -38,23 +40,33 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     var pendingScreen by remember { mutableStateOf<Screen?>(null) }
-    var isMenuTransitioning by remember { mutableStateOf(false) }
+    val visitedRoutes = remember { mutableStateListOf(Screen.Diary.route) }
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     var exitToast by remember { mutableStateOf<Toast?>(null) }
 
     val effectiveRoute = pendingScreen?.route ?: currentRoute
 
-    // 메뉴 탭 클릭 시 먼저 하단 탭 선택 상태와 로딩 바를 즉시 렌더링한 뒤 네비게이션을 수행하여 멈춘 느낌 원천 해소
+    // 메뉴 탭 클릭 시 먼저 하단 탭 선택 상태와 최전방 로딩 애니메이션을 준비한 뒤 네비게이션을 수행하여 멈춘 느낌 원천 해소
     LaunchedEffect(pendingScreen) {
         val target = pendingScreen ?: return@LaunchedEffect
         if (currentRoute == target.route) {
             pendingScreen = null
-            isMenuTransitioning = false
+            GlobalLoadingRegistry.remove("app_nav_transition")
             return@LaunchedEffect
         }
-        isMenuTransitioning = true
-        // 1프레임 양보하여 하단 탭 하이라이트 및 상단 진행 바가 0ms 즉시 그려지도록 보장
+        val isFirstVisit = !visitedRoutes.contains(target.route)
+        GlobalLoadingRegistry.upsert(
+            id = "app_nav_transition",
+            title = "데이터 처리 및 화면 갱신 중",
+            message = "${target.title} 화면과 데이터를 준비하고 있습니다...",
+            accentColor = target.themeColor,
+            immediateOverlay = isFirstVisit
+        )
+        // 하단 탭 하이라이트 및 최전방(RenderThread) 로딩 오버레이가 먼저 화면에 그려지도록 프레임 양보
         withFrameNanos { }
+        if (isFirstVisit) {
+            withFrameNanos { }
+        }
         runCatching {
             navController.navigate(target.route) {
                 popUpTo(navController.graph.findStartDestination().id) {
@@ -64,9 +76,14 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                 restoreState = true
             }
         }
+        if (!visitedRoutes.contains(target.route)) {
+            visitedRoutes.add(target.route)
+        }
+        // 대상 화면의 첫 컴포지션 및 레이아웃 갱신이 완전히 끝날 때까지 프레임 대기
+        withFrameNanos { }
         withFrameNanos { }
         pendingScreen = null
-        isMenuTransitioning = false
+        GlobalLoadingRegistry.remove("app_nav_transition")
     }
 
     // 스마트 다이어리(홈) 메뉴 상태에서 뒤로가기 1회 시 토스트 알림, 2초 내 한 번 더 누르면 앱 완전 종료
@@ -94,98 +111,94 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
         Screen.Lifestyle
     )
 
-    Scaffold(
-        floatingActionButton = {
-            UnifiedSpeedDialFab(navController = navController)
-        },
-        floatingActionButtonPosition = FabPosition.End,
-        bottomBar = {
-            Column {
-                HairlineDivider()
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(AppColors.surface)
-                        .padding(top = Spacing.xs, bottom = Spacing.xxs),
-                    horizontalArrangement = Arrangement.SpaceAround,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            floatingActionButton = {
+                UnifiedSpeedDialFab(navController = navController)
+            },
+            floatingActionButtonPosition = FabPosition.End,
+            bottomBar = {
+                Column {
+                    HairlineDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(AppColors.surface)
+                            .padding(top = Spacing.xs, bottom = Spacing.xxs),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
 
-                    items.forEach { screen ->
-                        val isSelected = effectiveRoute == screen.route
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    if (effectiveRoute != screen.route) {
-                                        pendingScreen = screen
-                                    }
-                                }
-                                .padding(vertical = Spacing.xs),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                imageVector = screen.icon,
-                                contentDescription = screen.title,
-                                modifier = Modifier.size(20.dp),
-                                tint = if (isSelected) screen.themeColor else AppColors.textMuted
-                            )
-                            Spacer(modifier = Modifier.height(Spacing.xxs))
-                            Text(
-                                text = screen.title,
-                                fontSize = 10.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isSelected) screen.themeColor else AppColors.textMuted
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            // 메뉴별 고유 색상 언더라인 인디케이터
-                            Box(
+                        items.forEach { screen ->
+                            val isSelected = effectiveRoute == screen.route
+                            Column(
                                 modifier = Modifier
-                                    .height(3.dp)
-                                    .width(if (isSelected) 24.dp else 12.dp)
-                                    .clip(RoundedCornerShape(1.5.dp))
-                                    .background(
-                                        if (isSelected) screen.themeColor
-                                        else screen.themeColor.copy(alpha = 0.18f)
-                                    )
-                            )
+                                    .weight(1f)
+                                    .clickable {
+                                        if (effectiveRoute != screen.route) {
+                                            pendingScreen = screen
+                                        }
+                                    }
+                                    .padding(vertical = Spacing.xs),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = screen.icon,
+                                    contentDescription = screen.title,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = if (isSelected) screen.themeColor else AppColors.textMuted
+                                )
+                                Spacer(modifier = Modifier.height(Spacing.xxs))
+                                Text(
+                                    text = screen.title,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) screen.themeColor else AppColors.textMuted
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                // 메뉴별 고유 색상 언더라인 인디케이터
+                                Box(
+                                    modifier = Modifier
+                                        .height(3.dp)
+                                        .width(if (isSelected) 24.dp else 12.dp)
+                                        .clip(RoundedCornerShape(1.5.dp))
+                                        .background(
+                                            if (isSelected) screen.themeColor
+                                            else screen.themeColor.copy(alpha = 0.18f)
+                                        )
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
-    ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            NavHost(
-                navController = navController,
-                startDestination = Screen.Diary.route,
-                enterTransition = { fadeIn(animationSpec = tween(140)) },
-                exitTransition = { fadeOut(animationSpec = tween(100)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(140)) },
-                popExitTransition = { fadeOut(animationSpec = tween(100)) },
-                modifier = Modifier.fillMaxSize()
+        ) { paddingValues ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
             ) {
-                composable(Screen.Diary.route) { DiaryScreen() }
-                composable(Screen.Expense.route) { ExpenseScreen() }
-                composable(Screen.CarLedger.route) { CarLedgerScreen() }
-                composable(Screen.Golf.route) { GolfScreen() }
-                composable(Screen.Lifestyle.route) { LifestyleScreen() }
+                NavHost(
+                    navController = navController,
+                    startDestination = Screen.Diary.route,
+                    enterTransition = { fadeIn(animationSpec = tween(140)) },
+                    exitTransition = { fadeOut(animationSpec = tween(100)) },
+                    popEnterTransition = { fadeIn(animationSpec = tween(140)) },
+                    popExitTransition = { fadeOut(animationSpec = tween(100)) },
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    composable(Screen.Diary.route) { DiaryScreen() }
+                    composable(Screen.Expense.route) { ExpenseScreen() }
+                    composable(Screen.CarLedger.route) { CarLedgerScreen() }
+                    composable(Screen.Golf.route) { GolfScreen() }
+                    composable(Screen.Lifestyle.route) { LifestyleScreen() }
+                }
             }
-
-            val activeScreenObj = items.find { it.route == effectiveRoute } ?: Screen.Diary
-            AutoLogueLoadingOverlay(
-                isLoading = isMenuTransitioning,
-                title = "${activeScreenObj.title} 화면으로 이동 중",
-                message = "${activeScreenObj.title} 데이터를 불러오고 있습니다...",
-                accentColor = activeScreenObj.themeColor,
-                delayMillis = 500L,
-                modifier = Modifier.fillMaxSize()
-            )
         }
+
+        // 모든 화면, 상단바, 하단바, 다이얼로그보다 제일 앞(Front-most)에 표시되는 통합 로딩 오버레이 호스트
+        GlobalLoadingOverlayHost()
     }
 }
+
 

@@ -597,8 +597,14 @@ class GolfViewModel @Inject constructor(
 
     fun updateRound(round: GolfRound) {
         viewModelScope.launch {
-            golfRepository.updateGolfRound(round)
-            _uiState.value = _uiState.value.copy(selectedRound = round)
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "라운드 정보 저장 및 화면 갱신 중",
+                message = "라운드 정보를 저장하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                golfRepository.updateGolfRound(round)
+                _uiState.value = _uiState.value.copy(selectedRound = round)
+            }
         }
     }
 
@@ -621,37 +627,43 @@ class GolfViewModel @Inject constructor(
         adjustedDriveDistance: Double? = null
     ) {
         viewModelScope.launch {
-            val round = golfRepository.getGolfRoundById(roundId) ?: return@launch
-            val (officialName, coords) = resolveOfficialGolfCourse(clubName.trim())
-            val finalLat = latitude ?: coords?.first ?: round.latitude
-            val finalLng = longitude ?: coords?.second ?: round.longitude
-            val finalAdjustedDrive = adjustedDriveDistance ?: if (averageDriveDistance != null) {
-                round.getEffectiveAdjustedDriveDistance()
-            } else round.adjustedDriveDistance
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "라운드 상세 저장 및 화면 갱신 중",
+                message = "스코어 및 라운드 상세 내역을 저장하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                val round = golfRepository.getGolfRoundById(roundId) ?: return@runWithLoading
+                val (officialName, coords) = resolveOfficialGolfCourse(clubName.trim())
+                val finalLat = latitude ?: coords?.first ?: round.latitude
+                val finalLng = longitude ?: coords?.second ?: round.longitude
+                val finalAdjustedDrive = adjustedDriveDistance ?: if (averageDriveDistance != null) {
+                    round.getEffectiveAdjustedDriveDistance()
+                } else round.adjustedDriveDistance
 
-            val updated = round.copy(
-                clubName = officialName,
-                totalScore = totalScore,
-                totalPutts = totalPutts,
-                memo = memo,
-                startTime = startTime,
-                endTime = endTime,
-                companions = companions,
-                latitude = finalLat,
-                longitude = finalLng,
-                penaltyCount = penaltyCount ?: round.penaltyCount,
-                girPercentage = girPercentage ?: round.girPercentage,
-                averageDriveDistance = averageDriveDistance ?: round.averageDriveDistance,
-                adjustedDriveDistance = finalAdjustedDrive,
-                averageTempo = averageTempo ?: round.averageTempo,
-                steps = steps ?: round.steps
-            )
-            golfRepository.updateGolfRound(updated)
-            if (_uiState.value.selectedRound?.id == roundId) {
-                _uiState.value = _uiState.value.copy(selectedRound = updated)
+                val updated = round.copy(
+                    clubName = officialName,
+                    totalScore = totalScore,
+                    totalPutts = totalPutts,
+                    memo = memo,
+                    startTime = startTime,
+                    endTime = endTime,
+                    companions = companions,
+                    latitude = finalLat,
+                    longitude = finalLng,
+                    penaltyCount = penaltyCount ?: round.penaltyCount,
+                    girPercentage = girPercentage ?: round.girPercentage,
+                    averageDriveDistance = averageDriveDistance ?: round.averageDriveDistance,
+                    adjustedDriveDistance = finalAdjustedDrive,
+                    averageTempo = averageTempo ?: round.averageTempo,
+                    steps = steps ?: round.steps
+                )
+                golfRepository.updateGolfRound(updated)
+                if (_uiState.value.selectedRound?.id == roundId) {
+                    _uiState.value = _uiState.value.copy(selectedRound = updated)
+                }
+                // 위치나 시간이 변경되었으므로 날씨 즉시 강제 갱신
+                loadWeatherForRounds(listOf(updated), forceRefresh = true)
             }
-            // 위치나 시간이 변경되었으므로 날씨 즉시 강제 갱신
-            loadWeatherForRounds(listOf(updated), forceRefresh = true)
         }
     }
 
@@ -678,45 +690,63 @@ class GolfViewModel @Inject constructor(
 
     fun addPhotosToRound(roundId: Long, photoUris: List<String>) {
         viewModelScope.launch(Dispatchers.IO) {
-            val round = golfRepository.getGolfRoundById(roundId) ?: return@launch
-            // 외부 임시 URI를 앱 내부 영구 저장소로 안전 복사하여 영구 보존
-            val permanentPhotoUris = PhotoStorageManager.saveUriStringsToInternalStorage(
-                context = appContext,
-                uriStrings = photoUris,
-                subDir = "golf_photos",
-                prefix = "field"
-            )
-            val updatedPhotos = (round.matchingPhotoUris + permanentPhotoUris).distinct()
-            val updated = round.copy(matchingPhotoUris = updatedPhotos)
-            golfRepository.updateGolfRound(updated)
-            _uiState.value = _uiState.value.copy(selectedRound = updated)
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "라운드 사진 추가 및 화면 갱신 중",
+                message = "선택한 사진을 저장소에 복사하고 라운드에 반영하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                val round = golfRepository.getGolfRoundById(roundId) ?: return@runWithLoading
+                // 외부 임시 URI를 앱 내부 영구 저장소로 안전 복사하여 영구 보존
+                val permanentPhotoUris = PhotoStorageManager.saveUriStringsToInternalStorage(
+                    context = appContext,
+                    uriStrings = photoUris,
+                    subDir = "golf_photos",
+                    prefix = "field"
+                )
+                val updatedPhotos = (round.matchingPhotoUris + permanentPhotoUris).distinct()
+                val updated = round.copy(matchingPhotoUris = updatedPhotos)
+                golfRepository.updateGolfRound(updated)
+                _uiState.value = _uiState.value.copy(selectedRound = updated)
+            }
         }
     }
 
     fun removePhotoFromRound(roundId: Long, photoUri: String) {
         viewModelScope.launch {
-            val round = golfRepository.getGolfRoundById(roundId) ?: return@launch
-            val updatedPhotos = round.matchingPhotoUris.filter { it != photoUri }
-            val updatedScorecard = if (round.scorecardPhotoUri == photoUri) null else round.scorecardPhotoUri
-            val updated = round.copy(matchingPhotoUris = updatedPhotos, scorecardPhotoUri = updatedScorecard)
-            golfRepository.updateGolfRound(updated)
-            _uiState.value = _uiState.value.copy(selectedRound = updated)
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "라운드 사진 삭제 및 화면 갱신 중",
+                message = "선택한 사진을 라운드에서 삭제하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                val round = golfRepository.getGolfRoundById(roundId) ?: return@runWithLoading
+                val updatedPhotos = round.matchingPhotoUris.filter { it != photoUri }
+                val updatedScorecard = if (round.scorecardPhotoUri == photoUri) null else round.scorecardPhotoUri
+                val updated = round.copy(matchingPhotoUris = updatedPhotos, scorecardPhotoUri = updatedScorecard)
+                golfRepository.updateGolfRound(updated)
+                _uiState.value = _uiState.value.copy(selectedRound = updated)
+            }
         }
     }
 
     fun setScorecardPhoto(roundId: Long, scorecardUri: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val round = golfRepository.getGolfRoundById(roundId) ?: return@launch
-            // 외부 임시 URI를 앱 내부 영구 저장소로 안전 복사
-            val permanentUri = PhotoStorageManager.saveUriToInternalStorage(
-                context = appContext,
-                uri = Uri.parse(scorecardUri),
-                subDir = "scorecards",
-                prefix = "scorecard"
-            ).toString()
-            val updated = round.copy(scorecardPhotoUri = permanentUri)
-            golfRepository.updateGolfRound(updated)
-            _uiState.value = _uiState.value.copy(selectedRound = updated)
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "스코어카드 사진 등록 및 화면 갱신 중",
+                message = "스코어카드 이미지를 저장하고 라운드에 반영하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                val round = golfRepository.getGolfRoundById(roundId) ?: return@runWithLoading
+                // 외부 임시 URI를 앱 내부 영구 저장소로 안전 복사
+                val permanentUri = PhotoStorageManager.saveUriToInternalStorage(
+                    context = appContext,
+                    uri = Uri.parse(scorecardUri),
+                    subDir = "scorecards",
+                    prefix = "scorecard"
+                ).toString()
+                val updated = round.copy(scorecardPhotoUri = permanentUri)
+                golfRepository.updateGolfRound(updated)
+                _uiState.value = _uiState.value.copy(selectedRound = updated)
+            }
         }
     }
 
@@ -780,7 +810,14 @@ class GolfViewModel @Inject constructor(
     }
 
     fun selectStatsYear(year: Int?) {
-        _uiState.value = _uiState.value.copy(selectedStatsYear = year)
+        com.autologue.app.presentation.common.GlobalLoadingRegistry.trackUiUpdate(
+            scope = viewModelScope,
+            title = "연도별 통계 전환 및 화면 갱신 중",
+            message = "선택하신 연도의 라운드 통계를 분석하고 있습니다...",
+            accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+        ) {
+            _uiState.value = _uiState.value.copy(selectedStatsYear = year)
+        }
     }
 
     fun scanGolfLockerSlip(imageUri: Uri) {
@@ -849,33 +886,39 @@ class GolfViewModel @Inject constructor(
 
     fun deleteRound(roundId: Long) {
         viewModelScope.launch {
-            val target = golfRepository.getGolfRoundById(roundId)
-            golfRepository.deleteGolfRound(roundId)
-            _uiState.value = _uiState.value.copy(selectedRound = null)
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "라운드 삭제 및 화면 갱신 중",
+                message = "선택한 라운드 기록을 삭제하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                val target = golfRepository.getGolfRoundById(roundId)
+                golfRepository.deleteGolfRound(roundId)
+                _uiState.value = _uiState.value.copy(selectedRound = null)
 
-            // 해당 날짜 다이어리에서도 골프 스텝 동기화 삭제
-            if (target != null) {
-                val roundDay = (target.startTime ?: target.roundDate).toLocalDate()
-                val diaries = runCatching { diaryRepository.getDiaryEntriesByDateRange(roundDay, roundDay).first() }.getOrDefault(emptyList())
-                val remainingGolfRounds = golfRepository.getAllGolfRoundsFlow().first().filter { 
-                    (it.startTime ?: it.roundDate).toLocalDate() == roundDay && it.id != roundId && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.clubName)
-                }
-                for (diary in diaries) {
-                    val updatedSteps = diary.routeSteps.filter {
-                        !(it.stepType == RouteStepType.GOLF && (it.title.contains(target.clubName) || remainingGolfRounds.isEmpty()))
+                // 해당 날짜 다이어리에서도 골프 스텝 동기화 삭제
+                if (target != null) {
+                    val roundDay = (target.startTime ?: target.roundDate).toLocalDate()
+                    val diaries = runCatching { diaryRepository.getDiaryEntriesByDateRange(roundDay, roundDay).first() }.getOrDefault(emptyList())
+                    val remainingGolfRounds = golfRepository.getAllGolfRoundsFlow().first().filter { 
+                        (it.startTime ?: it.roundDate).toLocalDate() == roundDay && it.id != roundId && com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.clubName)
                     }
-                    val updatedTitle = if (diary.title.contains("골프") || diary.title.contains("라운딩")) {
-                        val place = diary.placeName
-                        if (place != null && place != "서울 방이동") "$place 일정" else "${roundDay.monthValue}월 ${roundDay.dayOfMonth}일의 다이어리"
-                    } else diary.title
+                    for (diary in diaries) {
+                        val updatedSteps = diary.routeSteps.filter {
+                            !(it.stepType == RouteStepType.GOLF && (it.title.contains(target.clubName) || remainingGolfRounds.isEmpty()))
+                        }
+                        val updatedTitle = if (diary.title.contains("골프") || diary.title.contains("라운딩")) {
+                            val place = diary.placeName
+                            if (place != null && place != "서울 방이동") "$place 일정" else "${roundDay.monthValue}월 ${roundDay.dayOfMonth}일의 다이어리"
+                        } else diary.title
 
-                    val updatedDiary = diary.copy(
-                        title = updatedTitle,
-                        hasGolfRound = remainingGolfRounds.isNotEmpty(),
-                        routeSteps = updatedSteps,
-                        tags = diary.tags.filter { !it.contains("골프") && !it.contains(target.clubName) }
-                    )
-                    diaryRepository.updateDiaryEntry(updatedDiary)
+                        val updatedDiary = diary.copy(
+                            title = updatedTitle,
+                            hasGolfRound = remainingGolfRounds.isNotEmpty(),
+                            routeSteps = updatedSteps,
+                            tags = diary.tags.filter { !it.contains("골프") && !it.contains(target.clubName) }
+                        )
+                        diaryRepository.updateDiaryEntry(updatedDiary)
+                    }
                 }
             }
         }
@@ -905,97 +948,103 @@ class GolfViewModel @Inject constructor(
         longitude: Double? = null
     ) {
         viewModelScope.launch {
-            val (officialClubName, resolvedCoords) = resolveOfficialGolfCourse(clubName.trim())
-            val finalLat = latitude ?: resolvedCoords?.first
-            val finalLng = longitude ?: resolvedCoords?.second
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "라운드 등록 및 화면 갱신 중",
+                message = "입력하신 라운드 정보를 저장하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                val (officialClubName, resolvedCoords) = resolveOfficialGolfCourse(clubName.trim())
+                val finalLat = latitude ?: resolvedCoords?.first
+                val finalLng = longitude ?: resolvedCoords?.second
 
-            val cleanCourseName = courseName.trim()
-            val formattedCourseSuffix = if (cleanCourseName.isNotBlank()) {
-                val cName = if (cleanCourseName.endsWith("코스")) cleanCourseName else "$cleanCourseName 코스"
-                " ($cName)"
-            } else ""
+                val cleanCourseName = courseName.trim()
+                val formattedCourseSuffix = if (cleanCourseName.isNotBlank()) {
+                    val cName = if (cleanCourseName.endsWith("코스")) cleanCourseName else "$cleanCourseName 코스"
+                    " ($cName)"
+                } else ""
 
-            val finalClubNameWithCourse = if (formattedCourseSuffix.isNotBlank() && !officialClubName.contains(cleanCourseName)) {
-                "$officialClubName$formattedCourseSuffix"
-            } else {
-                officialClubName
-            }
-
-            val formattedMemo = if (courseName.isNotBlank()) "[코스: $courseName] $memo".trim() else memo.trim()
-            val newRound = GolfRound(
-                clubName = finalClubNameWithCourse,
-                roundDate = roundDate,
-                golfType = GolfType.FIELD,
-                latitude = finalLat,
-                longitude = finalLng,
-                totalScore = totalScore,
-                totalPutts = totalPutts,
-                greenFeeExpense = greenFeeExpense,
-                memo = formattedMemo.ifBlank { null },
-                startTime = startTime,
-                endTime = endTime,
-                companions = companions.filter { it.isNotBlank() }
-            )
-            golfRepository.insertGolfRound(newRound)
-
-            // 다이어리 동기화 (해당 라운드 일자의 다이어리에 골프 스텝 반영)
-            val playDate = roundDate.toLocalDate()
-            val diaryList = runCatching { diaryRepository.getDiaryEntriesByDateRange(playDate, playDate).first() }.getOrDefault(emptyList())
-            val existingDiary = diaryList.firstOrNull()
-
-            val golfStep = RouteStep(
-                id = UUID.randomUUID().toString(),
-                time = startTime,
-                stepType = RouteStepType.GOLF,
-                title = "$finalClubNameWithCourse 라운드",
-                description = "티오프 ${startTime.toLocalTime()} · 스코어: ${totalScore?.let { "${it}타" } ?: "기록없음"}",
-                locationName = officialClubName,
-                address = "골프장 필드 라운드",
-                latitude = finalLat,
-                longitude = finalLng,
-                category = "골프 라운드",
-                companions = companions.filter { it.isNotBlank() }
-            )
-
-            if (existingDiary != null) {
-                val hasGolf = existingDiary.routeSteps.any { it.stepType == RouteStepType.GOLF || it.title.contains(officialClubName) }
-                val updatedSteps = if (!hasGolf) {
-                    (listOf(golfStep) + existingDiary.routeSteps).sortedBy { it.time }
+                val finalClubNameWithCourse = if (formattedCourseSuffix.isNotBlank() && !officialClubName.contains(cleanCourseName)) {
+                    "$officialClubName$formattedCourseSuffix"
                 } else {
-                    existingDiary.routeSteps.map { s ->
-                        if (s.stepType == RouteStepType.GOLF || s.title.contains(officialClubName)) {
-                            s.copy(
-                                title = "$finalClubNameWithCourse 라운드",
-                                description = "티오프 ${startTime.toLocalTime()} · 스코어: ${totalScore?.let { "${it}타" } ?: "기록없음"}",
-                                companions = (s.companions + companions.filter { it.isNotBlank() }).distinct()
-                            )
-                        } else s
-                    }
+                    officialClubName
                 }
-                val updatedDiary = existingDiary.copy(
-                    title = if (existingDiary.title.isBlank() || existingDiary.title.contains("일상") || existingDiary.title.contains("하루")) "$finalClubNameWithCourse 라운딩" else existingDiary.title,
-                    hasGolfRound = true,
-                    routeSteps = updatedSteps,
-                    tags = (existingDiary.tags + listOf("⛳ $officialClubName") + companions.filter { it.isNotBlank() }.map { "👤 $it" }).distinct()
-                )
-                diaryRepository.updateDiaryEntry(updatedDiary)
-            } else {
-                val newDiary = DiaryEntry(
-                    date = startTime,
-                    title = "$finalClubNameWithCourse 라운딩",
-                    placeName = officialClubName,
-                    summary = "티오프 ${startTime.toLocalTime()}, $finalClubNameWithCourse 라운딩 기록",
-                    hasGolfRound = true,
+
+                val formattedMemo = if (courseName.isNotBlank()) "[코스: $courseName] $memo".trim() else memo.trim()
+                val newRound = GolfRound(
+                    clubName = finalClubNameWithCourse,
+                    roundDate = roundDate,
+                    golfType = GolfType.FIELD,
                     latitude = finalLat,
                     longitude = finalLng,
-                    routeSteps = listOf(golfStep),
-                    tags = (listOf("⛳ $officialClubName") + companions.filter { it.isNotBlank() }.map { "👤 $it" }).distinct()
+                    totalScore = totalScore,
+                    totalPutts = totalPutts,
+                    greenFeeExpense = greenFeeExpense,
+                    memo = formattedMemo.ifBlank { null },
+                    startTime = startTime,
+                    endTime = endTime,
+                    companions = companions.filter { it.isNotBlank() }
                 )
-                diaryRepository.insertDiaryEntry(newDiary)
-            }
+                golfRepository.insertGolfRound(newRound)
 
-            closeDirectAddDialog()
-            loadWeatherForRounds(listOf(newRound), forceRefresh = true)
+                // 다이어리 동기화 (해당 라운드 일자의 다이어리에 골프 스텝 반영)
+                val playDate = roundDate.toLocalDate()
+                val diaryList = runCatching { diaryRepository.getDiaryEntriesByDateRange(playDate, playDate).first() }.getOrDefault(emptyList())
+                val existingDiary = diaryList.firstOrNull()
+
+                val golfStep = RouteStep(
+                    id = UUID.randomUUID().toString(),
+                    time = startTime,
+                    stepType = RouteStepType.GOLF,
+                    title = "$finalClubNameWithCourse 라운드",
+                    description = "티오프 ${startTime.toLocalTime()} · 스코어: ${totalScore?.let { "${it}타" } ?: "기록없음"}",
+                    locationName = officialClubName,
+                    address = "골프장 필드 라운드",
+                    latitude = finalLat,
+                    longitude = finalLng,
+                    category = "골프 라운드",
+                    companions = companions.filter { it.isNotBlank() }
+                )
+
+                if (existingDiary != null) {
+                    val hasGolf = existingDiary.routeSteps.any { it.stepType == RouteStepType.GOLF || it.title.contains(officialClubName) }
+                    val updatedSteps = if (!hasGolf) {
+                        (listOf(golfStep) + existingDiary.routeSteps).sortedBy { it.time }
+                    } else {
+                        existingDiary.routeSteps.map { s ->
+                            if (s.stepType == RouteStepType.GOLF || s.title.contains(officialClubName)) {
+                                s.copy(
+                                    title = "$finalClubNameWithCourse 라운드",
+                                    description = "티오프 ${startTime.toLocalTime()} · 스코어: ${totalScore?.let { "${it}타" } ?: "기록없음"}",
+                                    companions = (s.companions + companions.filter { it.isNotBlank() }).distinct()
+                                )
+                            } else s
+                        }
+                    }
+                    val updatedDiary = existingDiary.copy(
+                        title = if (existingDiary.title.isBlank() || existingDiary.title.contains("일상") || existingDiary.title.contains("하루")) "$finalClubNameWithCourse 라운딩" else existingDiary.title,
+                        hasGolfRound = true,
+                        routeSteps = updatedSteps,
+                        tags = (existingDiary.tags + listOf("⛳ $officialClubName") + companions.filter { it.isNotBlank() }.map { "👤 $it" }).distinct()
+                    )
+                    diaryRepository.updateDiaryEntry(updatedDiary)
+                } else {
+                    val newDiary = DiaryEntry(
+                        date = startTime,
+                        title = "$finalClubNameWithCourse 라운딩",
+                        placeName = officialClubName,
+                        summary = "티오프 ${startTime.toLocalTime()}, $finalClubNameWithCourse 라운딩 기록",
+                        hasGolfRound = true,
+                        latitude = finalLat,
+                        longitude = finalLng,
+                        routeSteps = listOf(golfStep),
+                        tags = (listOf("⛳ $officialClubName") + companions.filter { it.isNotBlank() }.map { "👤 $it" }).distinct()
+                    )
+                    diaryRepository.insertDiaryEntry(newDiary)
+                }
+
+                closeDirectAddDialog()
+                loadWeatherForRounds(listOf(newRound), forceRefresh = true)
+            }
         }
     }
 
@@ -1029,42 +1078,48 @@ class GolfViewModel @Inject constructor(
         longitude: Double? = null
     ) {
         viewModelScope.launch {
-            // [정규화 보정] "오크밸리", "오크밸리cc" 등 비공식 입력이 들어오더라도 공식 명칭 및 좌표로 자동 보정
-            val (officialClubName, resolvedCoords) = resolveOfficialGolfCourse(clubName.trim())
-            val finalLat = latitude ?: resolvedCoords?.first
-            val finalLng = longitude ?: resolvedCoords?.second
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "골프 예약 등록 및 화면 갱신 중",
+                message = "예약 일정을 등록하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.golf
+            ) {
+                // [정규화 보정] "오크밸리", "오크밸리cc" 등 비공식 입력이 들어오더라도 공식 명칭 및 좌표로 자동 보정
+                val (officialClubName, resolvedCoords) = resolveOfficialGolfCourse(clubName.trim())
+                val finalLat = latitude ?: resolvedCoords?.first
+                val finalLng = longitude ?: resolvedCoords?.second
 
-            // 코스명이 입력되었을 때 구장명 옆에 코스명을 결합 (예: "오크밸리 CC (잣나무 코스)")
-            val cleanCourseName = courseName.trim()
-            val formattedCourseSuffix = if (cleanCourseName.isNotBlank()) {
-                val cName = if (cleanCourseName.endsWith("코스")) cleanCourseName else "$cleanCourseName 코스"
-                " ($cName)"
-            } else ""
+                // 코스명이 입력되었을 때 구장명 옆에 코스명을 결합 (예: "오크밸리 CC (잣나무 코스)")
+                val cleanCourseName = courseName.trim()
+                val formattedCourseSuffix = if (cleanCourseName.isNotBlank()) {
+                    val cName = if (cleanCourseName.endsWith("코스")) cleanCourseName else "$cleanCourseName 코스"
+                    " ($cName)"
+                } else ""
 
-            val finalClubNameWithCourse = if (formattedCourseSuffix.isNotBlank() && !officialClubName.contains(cleanCourseName)) {
-                "$officialClubName$formattedCourseSuffix"
-            } else {
-                officialClubName
+                val finalClubNameWithCourse = if (formattedCourseSuffix.isNotBlank() && !officialClubName.contains(cleanCourseName)) {
+                    "$officialClubName$formattedCourseSuffix"
+                } else {
+                    officialClubName
+                }
+
+                val formattedMemo = if (courseName.isNotBlank()) "[코스: $courseName] $memo".trim() else memo.trim()
+                val newRound = GolfRound(
+                    clubName = finalClubNameWithCourse,
+                    roundDate = teeOffTime,
+                    golfType = GolfType.FIELD,
+                    latitude = finalLat,
+                    longitude = finalLng,
+                    greenFeeExpense = estimatedGreenFee,
+                    memo = formattedMemo.ifBlank { null },
+                    startTime = teeOffTime,
+                    endTime = teeOffTime.plusHours(5).plusMinutes(30),
+                    companions = companions.filter { it.isNotBlank() },
+                    totalScore = null
+                )
+                golfRepository.insertGolfRound(newRound)
+                closeReservationDialog()
+                // 등록 직후 최신 날씨 즉시 수집
+                loadWeatherForRounds(listOf(newRound), forceRefresh = true)
             }
-
-            val formattedMemo = if (courseName.isNotBlank()) "[코스: $courseName] $memo".trim() else memo.trim()
-            val newRound = GolfRound(
-                clubName = finalClubNameWithCourse,
-                roundDate = teeOffTime,
-                golfType = GolfType.FIELD,
-                latitude = finalLat,
-                longitude = finalLng,
-                greenFeeExpense = estimatedGreenFee,
-                memo = formattedMemo.ifBlank { null },
-                startTime = teeOffTime,
-                endTime = teeOffTime.plusHours(5).plusMinutes(30),
-                companions = companions.filter { it.isNotBlank() },
-                totalScore = null
-            )
-            golfRepository.insertGolfRound(newRound)
-            closeReservationDialog()
-            // 등록 직후 최신 날씨 즉시 수집
-            loadWeatherForRounds(listOf(newRound), forceRefresh = true)
         }
     }
 

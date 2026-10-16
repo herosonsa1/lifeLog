@@ -581,80 +581,86 @@ class DiaryViewModel @Inject constructor(
      */
     fun deletePhoto(photoUrl: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // 1. SharedPreferences 영구 제외 등록 (재동기화 시 재추가 원천 방지)
-                excludedPhotoPreferences.excludePhoto(photoUrl)
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "사진 삭제 및 화면 갱신 중",
+                message = "선택한 사진을 삭제하고 타임라인을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.diary
+            ) {
+                try {
+                    // 1. SharedPreferences 영구 제외 등록 (재동기화 시 재추가 원천 방지)
+                    excludedPhotoPreferences.excludePhoto(photoUrl)
 
-                // 2. Room DB의 모든 엔트리 중 해당 사진이 포함된 항목 탐색 및 제거
-                val entriesToUpdate = rawEntries.filter { entry ->
-                    entry.photoUris.contains(photoUrl) || entry.routeSteps.any { it.photoUris.contains(photoUrl) }
-                }
+                    // 2. Room DB의 모든 엔트리 중 해당 사진이 포함된 항목 탐색 및 제거
+                    val entriesToUpdate = rawEntries.filter { entry ->
+                        entry.photoUris.contains(photoUrl) || entry.routeSteps.any { it.photoUris.contains(photoUrl) }
+                    }
 
-                for (entry in entriesToUpdate) {
-                    val updatedPhotoUris = entry.photoUris.filter { it != photoUrl }
-                    val updatedRouteSteps = entry.routeSteps.mapNotNull { step ->
-                        if (step.photoUris.contains(photoUrl)) {
-                            val newStepPhotos = step.photoUris.filter { it != photoUrl }
-                            // 사진 전용 스텝인데 사진이 0장이 된 경우 스텝 자체 제거
-                            if (step.stepType == RouteStepType.PHOTO && newStepPhotos.isEmpty()) {
-                                null
-                            } else {
-                                step.copy(
-                                    photoUris = newStepPhotos,
-                                    description = if (step.stepType == RouteStepType.PHOTO) {
-                                        buildString {
-                                            append("사진 ${newStepPhotos.size}장 촬영")
-                                            if (step.companions.isNotEmpty()) {
-                                                append(" · 동행: ${step.companions.joinToString(", ")}")
+                    for (entry in entriesToUpdate) {
+                        val updatedPhotoUris = entry.photoUris.filter { it != photoUrl }
+                        val updatedRouteSteps = entry.routeSteps.mapNotNull { step ->
+                            if (step.photoUris.contains(photoUrl)) {
+                                val newStepPhotos = step.photoUris.filter { it != photoUrl }
+                                // 사진 전용 스텝인데 사진이 0장이 된 경우 스텝 자체 제거
+                                if (step.stepType == RouteStepType.PHOTO && newStepPhotos.isEmpty()) {
+                                    null
+                                } else {
+                                    step.copy(
+                                        photoUris = newStepPhotos,
+                                        description = if (step.stepType == RouteStepType.PHOTO) {
+                                            buildString {
+                                                append("사진 ${newStepPhotos.size}장 촬영")
+                                                if (step.companions.isNotEmpty()) {
+                                                    append(" · 동행: ${step.companions.joinToString(", ")}")
+                                                }
                                             }
-                                        }
-                                    } else step.description
-                                )
+                                        } else step.description
+                                    )
+                                }
+                            } else {
+                                step
                             }
-                        } else {
-                            step
+                        }
+
+                        val updatedEntry = entry.copy(
+                            photoUris = updatedPhotoUris,
+                            routeSteps = updatedRouteSteps
+                        )
+                        diaryRepository.updateDiaryEntry(updatedEntry)
+
+                        // 만약 현재 열려있는 바텀시트 상세 다이어리라면 실시간 동기화
+                        if (_uiState.value.selectedDiaryDetail?.id == updatedEntry.id) {
+                            _uiState.update { it.copy(selectedDiaryDetail = updatedEntry) }
                         }
                     }
 
-                    val updatedEntry = entry.copy(
-                        photoUris = updatedPhotoUris,
-                        routeSteps = updatedRouteSteps
-                    )
-                    diaryRepository.updateDiaryEntry(updatedEntry)
-
-                    // 만약 현재 열려있는 바텀시트 상세 다이어리라면 실시간 동기화
-                    if (_uiState.value.selectedDiaryDetail?.id == updatedEntry.id) {
-                        _uiState.update { it.copy(selectedDiaryDetail = updatedEntry) }
+                    // 3. 사진 프리뷰 팝업 상태 갱신
+                    val currentList = _uiState.value.photoPreviewList
+                    val updatedList = currentList.filter { it != photoUrl }
+                    if (updatedList.isEmpty()) {
+                        _uiState.update {
+                            it.copy(
+                                selectedPhotoPreviewUrl = null,
+                                photoPreviewList = emptyList(),
+                                photoPreviewIndex = 0
+                            )
+                        }
+                    } else {
+                        val currentIndex = _uiState.value.photoPreviewIndex
+                        val nextIndex = currentIndex.coerceIn(0, updatedList.size - 1)
+                        _uiState.update {
+                            it.copy(
+                                photoPreviewList = updatedList,
+                                photoPreviewIndex = nextIndex,
+                                selectedPhotoPreviewUrl = updatedList[nextIndex]
+                            )
+                        }
                     }
+
+                    // 4. 필터링된 엔트리 화면 갱신
+                    updateFilteredEntries()
+                } catch (t: Throwable) {
+                    t.printStackTrace()
                 }
-
-                // 3. 사진 프리뷰 팝업 상태 갱신
-                val currentList = _uiState.value.photoPreviewList
-                val updatedList = currentList.filter { it != photoUrl }
-                if (updatedList.isEmpty()) {
-                    _uiState.update {
-                        it.copy(
-                            selectedPhotoPreviewUrl = null,
-                            photoPreviewList = emptyList(),
-                            photoPreviewIndex = 0
-                        )
-                    }
-                } else {
-                    val currentIndex = _uiState.value.photoPreviewIndex
-                    val nextIndex = currentIndex.coerceIn(0, updatedList.size - 1)
-                    _uiState.update {
-                        it.copy(
-                            photoPreviewList = updatedList,
-                            photoPreviewIndex = nextIndex,
-                            selectedPhotoPreviewUrl = updatedList[nextIndex]
-                        )
-                    }
-                }
-
-                // 4. 필터링된 엔트리 화면 갱신
-                updateFilteredEntries()
-            } catch (t: Throwable) {
-                t.printStackTrace()
             }
         }
     }
@@ -673,47 +679,53 @@ class DiaryViewModel @Inject constructor(
 
         val target = _uiState.value.companionTargetStep ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val entry = rawEntries.find { it.routeSteps.any { s -> s.id == target.id || s.title == target.title } } ?: return@launch
-                var updatedTargetStep: RouteStep? = null
-                val updatedSteps = entry.routeSteps.map { step ->
-                    if (step.id == target.id || step.title == target.title) {
-                        val newCompanions = (step.companions + cleanName).distinct()
-                        val newDesc = if (step.stepType == RouteStepType.PHOTO) {
-                            buildString {
-                                append("사진 ${step.photoUris.size}장 촬영")
-                                if (newCompanions.isNotEmpty()) {
-                                    append(" · 동행: ${newCompanions.joinToString(", ")}")
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "동행인 추가 및 화면 갱신 중",
+                message = "동행인 정보를 저장하고 타임라인을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.diary
+            ) {
+                try {
+                    val entry = rawEntries.find { it.routeSteps.any { s -> s.id == target.id || s.title == target.title } } ?: return@runWithLoading
+                    var updatedTargetStep: RouteStep? = null
+                    val updatedSteps = entry.routeSteps.map { step ->
+                        if (step.id == target.id || step.title == target.title) {
+                            val newCompanions = (step.companions + cleanName).distinct()
+                            val newDesc = if (step.stepType == RouteStepType.PHOTO) {
+                                buildString {
+                                    append("사진 ${step.photoUris.size}장 촬영")
+                                    if (newCompanions.isNotEmpty()) {
+                                        append(" · 동행: ${newCompanions.joinToString(", ")}")
+                                    }
                                 }
-                            }
-                        } else step.description
+                            } else step.description
 
-                        val updated = step.copy(companions = newCompanions, description = newDesc)
-                        updatedTargetStep = updated
-                        updated
-                    } else {
-                        step
+                            val updated = step.copy(companions = newCompanions, description = newDesc)
+                            updatedTargetStep = updated
+                            updated
+                        } else {
+                            step
+                        }
                     }
-                }
 
-                // 일자 전체 태그에서 동행인을 제거하여 오직 해당 지점에만 귀속되도록 정제
-                val cleanTags = entry.tags.filterNot { it.startsWith("👤 ") }
-                val updatedEntry = entry.copy(
-                    routeSteps = updatedSteps,
-                    tags = cleanTags
-                )
-                diaryRepository.updateDiaryEntry(updatedEntry)
-
-                // UI 상태 실시간 동기화
-                _uiState.update { current ->
-                    current.copy(
-                        companionTargetStep = updatedTargetStep ?: current.companionTargetStep,
-                        selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                    // 일자 전체 태그에서 동행인을 제거하여 오직 해당 지점에만 귀속되도록 정제
+                    val cleanTags = entry.tags.filterNot { it.startsWith("👤 ") }
+                    val updatedEntry = entry.copy(
+                        routeSteps = updatedSteps,
+                        tags = cleanTags
                     )
+                    diaryRepository.updateDiaryEntry(updatedEntry)
+
+                    // UI 상태 실시간 동기화
+                    _uiState.update { current ->
+                        current.copy(
+                            companionTargetStep = updatedTargetStep ?: current.companionTargetStep,
+                            selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                        )
+                    }
+                    updateFilteredEntries()
+                } catch (t: Throwable) {
+                    t.printStackTrace()
                 }
-                updateFilteredEntries()
-            } catch (t: Throwable) {
-                t.printStackTrace()
             }
         }
     }
@@ -723,61 +735,73 @@ class DiaryViewModel @Inject constructor(
      */
     fun removeCompanionFromStep(stepId: String, companionName: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val entry = rawEntries.find { it.routeSteps.any { s -> s.id == stepId } } ?: return@launch
-                var updatedTargetStep: RouteStep? = null
-                val updatedSteps = entry.routeSteps.map { step ->
-                    if (step.id == stepId) {
-                        val newCompanions = step.companions.filter { it != companionName }
-                        val newDesc = if (step.stepType == RouteStepType.PHOTO) {
-                            buildString {
-                                append("사진 ${step.photoUris.size}장 촬영")
-                                if (newCompanions.isNotEmpty()) {
-                                    append(" · 동행: ${newCompanions.joinToString(", ")}")
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "동행인 삭제 및 화면 갱신 중",
+                message = "동행인 정보를 수정하고 타임라인을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.diary
+            ) {
+                try {
+                    val entry = rawEntries.find { it.routeSteps.any { s -> s.id == stepId } } ?: return@runWithLoading
+                    var updatedTargetStep: RouteStep? = null
+                    val updatedSteps = entry.routeSteps.map { step ->
+                        if (step.id == stepId) {
+                            val newCompanions = step.companions.filter { it != companionName }
+                            val newDesc = if (step.stepType == RouteStepType.PHOTO) {
+                                buildString {
+                                    append("사진 ${step.photoUris.size}장 촬영")
+                                    if (newCompanions.isNotEmpty()) {
+                                        append(" · 동행: ${newCompanions.joinToString(", ")}")
+                                    }
                                 }
-                            }
-                        } else step.description
+                            } else step.description
 
-                        val updated = step.copy(companions = newCompanions, description = newDesc)
-                        updatedTargetStep = updated
-                        updated
-                    } else {
-                        step
+                            val updated = step.copy(companions = newCompanions, description = newDesc)
+                            updatedTargetStep = updated
+                            updated
+                        } else {
+                            step
+                        }
                     }
-                }
 
-                val cleanTags = entry.tags.filterNot { it.startsWith("👤 ") }
-                val updatedEntry = entry.copy(
-                    routeSteps = updatedSteps,
-                    tags = cleanTags
-                )
-                diaryRepository.updateDiaryEntry(updatedEntry)
-
-                _uiState.update { current ->
-                    current.copy(
-                        companionTargetStep = if (current.companionTargetStep?.id == stepId) updatedTargetStep else current.companionTargetStep,
-                        selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                    val cleanTags = entry.tags.filterNot { it.startsWith("👤 ") }
+                    val updatedEntry = entry.copy(
+                        routeSteps = updatedSteps,
+                        tags = cleanTags
                     )
+                    diaryRepository.updateDiaryEntry(updatedEntry)
+
+                    _uiState.update { current ->
+                        current.copy(
+                            companionTargetStep = if (current.companionTargetStep?.id == stepId) updatedTargetStep else current.companionTargetStep,
+                            selectedDiaryDetail = if (current.selectedDiaryDetail?.id == updatedEntry.id) updatedEntry else current.selectedDiaryDetail
+                        )
+                    }
+                    updateFilteredEntries()
+                } catch (t: Throwable) {
+                    t.printStackTrace()
                 }
-                updateFilteredEntries()
-            } catch (t: Throwable) {
-                t.printStackTrace()
             }
         }
     }
 
     fun updateDiaryNote(diaryId: Long, title: String, userNotes: String) {
         viewModelScope.launch {
-            val entry = rawEntries.find { it.id == diaryId } ?: return@launch
-            val updated = entry.copy(
-                title = title.ifBlank { entry.title },
-                summary = userNotes
-            )
-            diaryRepository.updateDiaryEntry(updated)
-            _uiState.update { current ->
-                current.copy(
-                    selectedDiaryDetail = if (current.selectedDiaryDetail?.id == diaryId) updated else current.selectedDiaryDetail
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "다이어리 저장 및 화면 갱신 중",
+                message = "다이어리 제목과 메모를 저장하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.diary
+            ) {
+                val entry = rawEntries.find { it.id == diaryId } ?: return@runWithLoading
+                val updated = entry.copy(
+                    title = title.ifBlank { entry.title },
+                    summary = userNotes
                 )
+                diaryRepository.updateDiaryEntry(updated)
+                _uiState.update { current ->
+                    current.copy(
+                        selectedDiaryDetail = if (current.selectedDiaryDetail?.id == diaryId) updated else current.selectedDiaryDetail
+                    )
+                }
             }
         }
     }
