@@ -2637,4 +2637,36 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
   - `renameGasStationGlobally_updatesExistingLogsAndAutoReplacesFutureSyncs`: 기존 주유 내역 일괄 치환, 신규 주유 문자 동기화 시 자동 치환, 정제 로직 수행 후 사용자 지정 결제명 보존 검증 통과.
 - **전체 테스트 및 APK 빌드**: `.\gradlew.bat testDebugUnitTest assembleDebug` 100% 통과 및 루트 `lifeLog.apk` 최신화 완료.
 
+---
 
+## 71. `10/24` 미래 일정(`나인CC 왕복 주행 130.0 km`, 골프 라운드, 다이어리) 오탐 생성 원인 원천 차단 및 자가 치유 (2026-10-16)
+
+### 71.1. 사용자 요청 및 원인 규명
+- **사용자 요청**: *"10/24일 미래일정이 잘못 들어가 있음"* (첨부 화면: 차계부 최상단에 `10.24(토) 05:30 · 나인CC 왕복 주행 (130.0 km)` 및 연동된 `10/24` 골프/다이어리 일정이 잘못 등록됨)
+- **근본 원인 규명**:
+  1. **OCR 숫자 단순 결합 및 `'나인CC'` 오탐 (`ScorecardOcrAnalyzer.kt`, `GolfLockerSlipOcrAnalyzer.kt`)**:
+     - `ScorecardOcrAnalyzer.parse()` 657행에서 한 줄에 `"202"`가 포함되면 줄 내의 모든 숫자를 단순 결합(`digitsOnly = line.replace(Regex("[^\\d]"), "")`)하여 `20261024`(`2026-10-24`)라는 미래 날짜를 합성해 내고 있었음.
+     - 또한 `"온라인CC"` / `"9홀(나인)"` 등의 문자열에서 `"나인CC"`가 유효 구장명으로 잘못 추출되어 `2026-10-24 나인CC` 골프 라운드가 생성됨.
+  2. **`VehicleRepositoryImpl.syncAndCleanWithGolfRounds()`의 삭제 후 즉시 재삽입 버그**:
+     - `syncAndCleanWithGolfRounds()` 2단계에서 `log.timestamp.isAfter(now.plusHours(2))`로 미래 주행 로그를 삭제했음에도, 1단계 `completeRounds` 필터링에 **미래 날짜 제외 조건(`!r.roundDate.toLocalDate().isAfter(today)`) 및 실제 골프장 검증(`DailyRouteAggregator.isRealGolfClub(r.clubName)`)이 빠져 있어**, 3단계에서 `10.24 05:30 나인CC 라운딩 왕복 주행 (130.0 km)`을 매번 다시 `insertVehicleLog`로 재삽입하고 있었음.
+  3. **다이어리(`DiaryRepositoryImpl`, `HistoricalDataImporter`)의 미래 날짜 생성 허용**:
+     - `HistoricalDataImporter.generateIntegratedDiaries()` 및 `DiaryRepositoryImpl.insertDiaryEntry()`에서 오늘(`LocalDate.now()`) 이후의 미래 날짜 검증이 없어 `10/24` 다이어리 일정이 함께 생성됨.
+
+### 71.2. 핵심 수정 내역
+1. **OCR 미래 날짜 합성 버그 제거 및 `'나인CC'` 가짜 구장명 원천 차단 (`ScorecardOcrAnalyzer.kt`, `GolfLockerSlipOcrAnalyzer.kt`, `DailyRouteAggregator.kt`, `ExtractScorecardOcrUseCase.kt`, `ProcessGolfLockerSlipUseCase.kt`)**:
+   - [`ScorecardOcrAnalyzer.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/ocr/ScorecardOcrAnalyzer.kt): 줄 전체 숫자 단순 이어붙이기 로직을 제거하고 정밀 공백 구분 날짜 정규식(`spacedDateRegex`)과 `!candDate.isAfter(LocalDate.now())` 검증을 적용하여 미래 날짜 오탐을 원천 차단.
+   - [`DailyRouteAggregator.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/DailyRouteAggregator.kt): `INVALID_GOLF_UI_WORDS` 및 `isRealGolfClub()`에 `"나인CC"`, `"나인 CC"`, `"나인"`, `"온라인CC"`, `"확인CC"`, `"사인CC"`를 차단 목록으로 추가.
+   - [`ExtractScorecardOcrUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/golf/ExtractScorecardOcrUseCase.kt) & [`ProcessGolfLockerSlipUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/golf/ProcessGolfLockerSlipUseCase.kt): 미래 날짜(`isAfter(LocalDate.now())`)이거나 `!DailyRouteAggregator.isRealGolfClub()`인 경우 라운드 및 차계부 주행 기록 생성을 거부.
+2. **차계부·골프·다이어리 미래 오류 일정(`10/24` 등) 및 `'나인CC'` 재삽입 차단 & 즉시 자가 치유 (`VehicleRepositoryImpl.kt`, `DiaryRepositoryImpl.kt`, `HistoricalDataImporter.kt`, `MainActivity.kt`, `CarLedgerViewModel.kt`, `GolfViewModel.kt`, `SyncHistoricalDataUseCase.kt`)**:
+   - [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt):
+     - `cleanDuplicatesAndCorruptedLogs()`에서 `log.timestamp.toLocalDate().isAfter(today)` 또는 `log.timestamp.isAfter(now.plusHours(1))` 또는 `"나인CC"` 포함 레코드를 최우선 삭제.
+     - `syncAndCleanWithGolfRounds()`의 `completeRounds`에 `!r.roundDate.toLocalDate().isAfter(today)` 및 `DailyRouteAggregator.isRealGolfClub(r.clubName)` 조건을 추가하여 미래 날짜나 가짜 골프장 주행 기록이 절대 재생성되지 않도록 수정.
+   - [`DiaryRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/DiaryRepositoryImpl.kt) & [`HistoricalDataImporter.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/HistoricalDataImporter.kt):
+     - `insertDiaryEntry()` 및 `generateIntegratedDiaries()`에서 오늘(`LocalDate.now()`) 이후 미래 날짜 다이어리 생성을 차단하고, `cleanDuplicates()`에서 기존 미래 날짜(`10/24` 등) 및 `'나인CC'` 다이어리를 즉시 삭제.
+   - [`MainActivity.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/MainActivity.kt), [`CarLedgerViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt), [`GolfViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/golf/GolfViewModel.kt), [`SyncHistoricalDataUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/sync/SyncHistoricalDataUseCase.kt):
+     - 앱 시작 및 각 탭 진입 시 기존 DB에 저장된 `'나인CC'` 및 `10/24` 미래 오탐 골프 라운드·주행 기록·다이어리를 즉시 일괄 삭제하도록 자가 치유(Self-Healing) 연동.
+
+### 71.3. 단위 테스트 및 빌드 검증 결과
+- **단위 테스트 추가 (`VehicleRepositoryCommuteTest.kt`)**:
+  - `syncAndCleanWithGolfRounds_purgesFutureAndFakeNineCcLogsAndNeverReinsertsThem`: 미래 날짜(`10/24` 등) 및 `'나인CC'` 왕복 주행 기록이 즉시 삭제되고, 미래 라운드가 전달되더라도 절대 재삽입되지 않음을 검증 통과.
+- **전체 테스트 및 APK 빌드**: `.\gradlew.bat testDebugUnitTest assembleDebug` 통과 및 루트 `lifeLog.apk` 최신화 완료.

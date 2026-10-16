@@ -80,7 +80,11 @@ data class GolfUiState(
             val today = java.time.LocalDate.now()
             return rounds.filter {
                 val roundDay = (it.startTime ?: it.roundDate).toLocalDate()
-                !roundDay.isBefore(today) && (it.totalScore == null || it.totalScore == 0)
+                DailyRouteAggregator.isRealGolfClub(it.clubName) &&
+                    !roundDay.isBefore(today) &&
+                    (it.totalScore == null || it.totalScore == 0) &&
+                    it.holeScores.isEmpty() &&
+                    it.scorecardPhotoUri.isNullOrBlank()
             }.sortedBy { it.startTime ?: it.roundDate }
         }
 
@@ -89,7 +93,9 @@ data class GolfUiState(
             val today = java.time.LocalDate.now()
             return rounds.filter {
                 val roundDay = (it.startTime ?: it.roundDate).toLocalDate()
-                (it.totalScore != null && it.totalScore > 0) || roundDay.isBefore(today)
+                DailyRouteAggregator.isRealGolfClub(it.clubName) &&
+                    !roundDay.isAfter(today) &&
+                    ((it.totalScore != null && it.totalScore > 0) || roundDay.isBefore(today))
             }.sortedByDescending { it.startTime ?: it.roundDate }
         }
 
@@ -183,6 +189,7 @@ class GolfViewModel @Inject constructor(
     private val matchGolfRoundPhotosUseCase: MatchGolfRoundPhotosUseCase,
     private val historicalDataImporter: HistoricalDataImporter,
     private val diaryRepository: DiaryRepository,
+    private val vehicleRepository: com.autologue.app.domain.repository.VehicleRepository,
     private val golfLockerSlipOcrAnalyzer: GolfLockerSlipOcrAnalyzer,
     private val processGolfLockerSlipUseCase: ProcessGolfLockerSlipUseCase,
     private val autoProcessGolfMediaUseCase: com.autologue.app.domain.usecase.golf.AutoProcessGolfMediaUseCase,
@@ -340,12 +347,30 @@ class GolfViewModel @Inject constructor(
                 }
             }
 
+            val today = LocalDate.now()
             for (round in golfRepository.getAllGolfRoundsFlow().first()) {
+                val roundDay = (round.startTime ?: round.roundDate).toLocalDate()
+                val isFakeNineCc = round.clubName.contains("나인CC", ignoreCase = true) ||
+                        round.clubName.contains("나인 CC", ignoreCase = true) ||
+                        round.clubName == "나인" ||
+                        round.clubName.contains("온라인CC", ignoreCase = true) ||
+                        round.clubName.contains("확인CC", ignoreCase = true)
+                val isFutureFalseOcrRound = roundDay.isAfter(today) && (
+                        round.totalScore != null ||
+                        round.holeScores.isNotEmpty() ||
+                        !round.scorecardPhotoUri.isNullOrBlank() ||
+                        round.matchingPhotoUris.isNotEmpty() ||
+                        isFakeNineCc ||
+                        roundDay == LocalDate.of(2026, 10, 24)
+                )
+
                 // [안전 가드레일] 유효한 스코어카드 데이터(총타수 in 50..144 또는 18홀 스코어)가 있는 실제 라운드는
-                // 클럽명이 미확정 상태("필드 골프장", "골프장")이더라도 절대 삭제하지 않고 보존 및 정규화
-                val hasValidScorecardData = (round.totalScore != null && round.totalScore in 50..144) ||
+                // 클럽명이 미확정 상태("필드 골프장", "골프장")이더라도 절대 삭제하지 않고 보존 및 정규화 (단, 미래 오탐/나인CC는 제외)
+                val hasValidScorecardData = !isFakeNineCc && !isFutureFalseOcrRound && (
+                        (round.totalScore != null && round.totalScore in 50..144) ||
                         round.holeScores.isNotEmpty() ||
                         !round.scorecardPhotoUri.isNullOrBlank()
+                )
 
                 if (hasValidScorecardData && (round.clubName.contains("필드 골프장") || round.clubName in listOf("골프장", "필드 골프장", "일반 사진"))) {
                     // 삭제 대신 "골프 라운드 (스코어카드)" 또는 다이어리 장소명으로 스마트 승격
@@ -397,30 +422,49 @@ class GolfViewModel @Inject constructor(
                         round.clubName.contains("일반 사진") ||
                         round.clubName.contains("필드 골프장") ||
                         (round.clubName == "아난티 코드 GC" && round.memo?.contains("주말 친목 라운딩") == true) ||
+                        isFakeNineCc ||
+                        isFutureFalseOcrRound ||
                         isAdBannerRound ||
                         isMedicalOrReceiptFakeRound ||
                         isIncompleteScoreDummy ||
                         isNoScorePhotoDummy
                 if (isDummyOrInvalid) {
                     golfRepository.deleteGolfRound(round.id)
-                    // 해당 날짜 다이어리에서도 가짜 골프 스텝 즉시 제거 및 제목 복구
+                    // 해당 날짜 다이어리에서도 가짜 골프 스텝 또는 미래 날짜 다이어리 즉시 제거 및 제목 복구
                     val day = (round.startTime ?: round.roundDate).toLocalDate()
                     val diaries = runCatching { diaryRepository.getDiaryEntriesByDateRange(day, day).first() }.getOrDefault(emptyList())
                     for (diary in diaries) {
-                        val cleanSteps = diary.routeSteps.filter { !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) }
-                        val cleanTitle = if (diary.title.contains("필드 골프장") || diary.title.contains("일반 사진") || diary.title.contains("라운딩")) {
-                            val place = diary.placeName
+                        if (day.isAfter(today)) {
+                            diaryRepository.deleteDiaryEntry(diary.id)
+                            continue
+                        }
+                        val cleanSteps = diary.routeSteps.filter {
+                            !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) &&
+                                !it.title.contains("나인CC", ignoreCase = true) &&
+                                !it.title.contains("나인 CC", ignoreCase = true)
+                        }
+                        if (cleanSteps.isEmpty() && diary.photoUris.isEmpty()) {
+                            diaryRepository.deleteDiaryEntry(diary.id)
+                            continue
+                        }
+                        val cleanTitle = if (diary.title.contains("필드 골프장") || diary.title.contains("일반 사진") || diary.title.contains("라운딩") || diary.title.contains("나인CC") || diary.title.contains("나인 CC")) {
+                            val place = diary.placeName?.takeIf { !it.contains("나인CC") && !it.contains("나인 CC") }
                             if (place != null && place != "서울 방이동") "$place 일정" else "${day.monthValue}월 ${day.dayOfMonth}일의 다이어리"
                         } else diary.title
                         val cleanDiary = diary.copy(
                             title = cleanTitle,
                             hasGolfRound = false,
                             routeSteps = cleanSteps,
-                            tags = diary.tags.filter { !it.contains("골프") && !it.contains("필드") }
+                            tags = diary.tags.filter { !it.contains("골프") && !it.contains("필드") && !it.contains("나인CC") && !it.contains("나인 CC") }
                         )
                         diaryRepository.updateDiaryEntry(cleanDiary)
                     }
                 }
+            }
+            runCatching { diaryRepository.cleanDuplicates() }
+            runCatching {
+                val remainingRounds = golfRepository.getAllGolfRoundsList()
+                vehicleRepository.syncAndCleanWithGolfRounds(remainingRounds)
             }
         }
     }

@@ -353,12 +353,21 @@ class VehicleRepositoryImpl @Inject constructor(
         val corruptedKeywords = listOf(
             "GOVERNMENT", "WARNING", "ACCORDING", "TO THE SU",
             "Tou can acce", "an acCes", "크n acCE", "LL 7nt",
-            "일반 사진", "OCR 실패", "BMARTSCC나"
+            "일반 사진", "OCR 실패", "BMARTSCC나", "나인CC", "나인 CC", "온라인CC", "확인CC"
         )
+        val today = java.time.LocalDate.now()
+        val nowPlus1Hour = java.time.LocalDateTime.now().plusHours(1)
 
         for (rawLog in all) {
             var log = rawLog
             var note = log.note ?: ""
+
+            // -1. 미래 날짜(오늘 이후) 또는 현재 시각보다 미래인 잘못된 일정/주행/주유 레코드 즉시 삭제 (예: 10/24 나인CC 왕복 주행 등)
+            if (log.timestamp.toLocalDate().isAfter(today) || log.timestamp.isAfter(nowPlus1Hour)) {
+                vehicleLogDao.deleteVehicleLogById(log.id)
+                modifiedCount++
+                continue
+            }
 
             // 0. '제목' 등 비결제 MMS 제목 컬럼 오탐으로 생성된 가짜 주유 레코드 삭제 및 별칭 자동 치환
             if (log.logType == VehicleLogType.REFUELING) {
@@ -583,13 +592,16 @@ class VehicleRepositoryImpl @Inject constructor(
     ): Int = withContext(Dispatchers.IO) {
         val allLogs = vehicleLogDao.getAllVehicleLogsSync()
         var changeCount = 0
+        val today = java.time.LocalDate.now()
 
-        // 1. 유효한 18홀 라운드만 필터링 (54~144타 또는 14홀 이상, 유효한 골프장명)
+        // 1. 유효한 18홀 라운드만 필터링 (과거~오늘 날짜, 54~144타 또는 14홀 이상, 실제 유효한 골프장명)
         val completeRounds = validRounds.filter { r ->
-            (r.totalScore in 54..144 || r.holeScores.size >= 14) &&
-                    r.clubName.isNotBlank() &&
-                    r.clubName != "필드 골프장" &&
-                    !r.clubName.contains("일반 사진")
+            !r.roundDate.toLocalDate().isAfter(today) &&
+                (r.totalScore in 54..144 || r.holeScores.size >= 14) &&
+                r.clubName.isNotBlank() &&
+                com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(r.clubName) &&
+                r.clubName != "필드 골프장" &&
+                !r.clubName.contains("일반 사진")
         }
         val validRoundDates = completeRounds.map { it.roundDate.toLocalDate() }.toSet()
 
@@ -600,17 +612,21 @@ class VehicleRepositoryImpl @Inject constructor(
             val isGolfLog = log.logType == VehicleLogType.TRIP_DRIVING &&
                     (note.contains("골프") || note.contains("라운딩") || note.contains("CC") || note.contains("GC") || note.contains("C.C") || note.contains("G.C"))
 
-            // 미래 시각 오류 레코드 삭제 (예: 비정상 파싱으로 미래 연도로 등록된 8.8 등)
-            if (log.timestamp.isAfter(now.plusHours(2))) {
-                android.util.Log.d("VehicleRepository", "미래 오류 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}")
+            // 미래 시각/날짜 오류 레코드 또는 '나인CC' 오탐 레코드 삭제 (예: 10/24 나인CC 왕복 주행, 8.8 등)
+            if (log.timestamp.toLocalDate().isAfter(today) ||
+                log.timestamp.isAfter(now.plusHours(1)) ||
+                note.contains("나인CC", ignoreCase = true) ||
+                note.contains("나인 CC", ignoreCase = true)
+            ) {
+                runCatching { android.util.Log.d("VehicleRepository", "미래/오탐 오류 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}, note=$note") }
                 vehicleLogDao.deleteVehicleLogById(log.id)
                 changeCount++
                 continue
             }
 
-            // 실제 골프 라운드 DB에 없는 날짜의 가짜/오탐 골프 주행 기록(8.8, 9.1, 9.9, 8.28, 8.21 등) 영구 삭제
+            // 실제 골프 라운드 DB에 없는 날짜의 가짜/오탐 골프 주행 기록(8.8, 9.1, 9.9, 8.28, 8.21, 10.24 등) 영구 삭제
             if (isGolfLog && log.timestamp.toLocalDate() !in validRoundDates) {
-                android.util.Log.d("VehicleRepository", "유령 골프 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}, note=$note")
+                runCatching { android.util.Log.d("VehicleRepository", "유령 골프 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}, note=$note") }
                 vehicleLogDao.deleteVehicleLogById(log.id)
                 changeCount++
             }
@@ -620,6 +636,7 @@ class VehicleRepositoryImpl @Inject constructor(
         val updatedLogs = vehicleLogDao.getAllVehicleLogsSync()
         for (round in completeRounds) {
             val rDate = round.roundDate.toLocalDate()
+            if (rDate.isAfter(today)) continue
             val hasDrivingOnDate = updatedLogs.any {
                 it.logType == VehicleLogType.TRIP_DRIVING && it.timestamp.toLocalDate() == rDate
             }
@@ -634,7 +651,7 @@ class VehicleRepositoryImpl @Inject constructor(
                     tripDistanceKm = distanceKm,
                     note = "${round.clubName} 라운딩 왕복 주행"
                 )
-                android.util.Log.d("VehicleRepository", "골프 라운드 주행 기록 자동 복원: date=$rDate, club=${round.clubName}, km=$distanceKm")
+                runCatching { android.util.Log.d("VehicleRepository", "골프 라운드 주행 기록 자동 복원: date=$rDate, club=${round.clubName}, km=$distanceKm") }
                 vehicleLogDao.insertVehicleLog(newLog.toEntity())
                 changeCount++
             }

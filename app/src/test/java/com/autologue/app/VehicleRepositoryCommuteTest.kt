@@ -304,6 +304,62 @@ class VehicleRepositoryCommuteTest {
         assertEquals(3, fakeDao.logs.count { it.gasStationName == "우리동네 단골주유" })
     }
 
+    @Test
+    fun syncAndCleanWithGolfRounds_purgesFutureAndFakeNineCcLogsAndNeverReinsertsThem() = runBlocking {
+        val futureDate = java.time.LocalDate.now().plusDays(8)
+        // 1. 기존 DB에 잘못 들어가 있던 미래 날짜(예: 10/24) 나인CC 왕복 주행 기록 삽입
+        fakeDao.insertVehicleLog(
+            createLogEntity(
+                id = 30L,
+                timestamp = futureDate.atTime(5, 30),
+                logType = VehicleLogType.TRIP_DRIVING,
+                tripDistanceKm = 130.0,
+                note = "나인CC 라운딩 왕복 주행"
+            )
+        )
+
+        // 2. 가짜 구장명 '나인CC' 및 미래 날짜 골프 라운드가 전달되더라도 삭제 후 절대 재삽입되지 않아야 함
+        val fakeFutureNineCcRound = com.autologue.app.domain.model.GolfRound(
+            id = 99L,
+            clubName = "나인CC",
+            roundDate = futureDate.atTime(7, 30),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            startTime = futureDate.atTime(7, 30),
+            totalScore = 88,
+            holeScores = List(18) { 5 }
+        )
+        val futureValidClubRound = com.autologue.app.domain.model.GolfRound(
+            id = 100L,
+            clubName = "오크밸리 CC",
+            roundDate = futureDate.atTime(8, 0),
+            golfType = com.autologue.app.domain.model.GolfType.FIELD,
+            startTime = futureDate.atTime(8, 0),
+            totalScore = 90,
+            holeScores = List(18) { 5 }
+        )
+
+        assertFalse(com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub("나인CC"))
+        assertFalse(com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub("나인 CC"))
+
+        repository.syncAndCleanWithGolfRounds(listOf(fakeFutureNineCcRound, futureValidClubRound))
+
+        // 미래 날짜 주행 기록이 완전히 삭제되고 재생성되지 않았는지 검증
+        assertTrue("미래 날짜(10/24 등) 및 나인CC 주행 기록은 0건이어야 함", fakeDao.logs.isEmpty())
+
+        // cleanDuplicatesAndCorruptedLogs에서도 미래 주행 기록이 즉시 삭제되는지 검증
+        fakeDao.insertVehicleLog(
+            createLogEntity(
+                id = 31L,
+                timestamp = futureDate.atTime(5, 30),
+                logType = VehicleLogType.TRIP_DRIVING,
+                tripDistanceKm = 130.0,
+                note = "나인CC 왕복 주행"
+            )
+        )
+        repository.cleanDuplicatesAndCorruptedLogs("송파구 위례동", "영등포구 영등포동", 54.2)
+        assertTrue("cleanDuplicatesAndCorruptedLogs 수행 후에도 미래/나인CC 기록은 완전히 삭제되어야 함", fakeDao.logs.isEmpty())
+    }
+
     private class FakeVehicleLogDao : VehicleLogDao {
         val logs = mutableListOf<VehicleLogEntity>()
 

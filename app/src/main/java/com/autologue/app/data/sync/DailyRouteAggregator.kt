@@ -390,7 +390,8 @@ class DailyRouteAggregator @Inject constructor(
             "라운드", "상세", "기록", "FIELD", "Field", "field", "삭제", "취소", "저장하기", "저장",
             "공유", "수정", "뒤로", "닫기", "메뉴", "홈", "선택", "등록", "버튼", "관리", "설정",
             "동반자", "캐디", "예약", "조회", "알림", "마이페이지", "앱", "스코어", "플레이어", "사진",
-            "일정", "방문", "안내", "영수증", "진료", "병원", "약국", "전표", "명세"
+            "일정", "방문", "안내", "영수증", "진료", "병원", "약국", "전표", "명세",
+            "나인CC", "나인 CC", "온라인CC", "온라인 CC", "확인CC", "확인 CC", "사인CC", "사인 CC"
         )
 
         /**
@@ -399,7 +400,7 @@ class DailyRouteAggregator @Inject constructor(
         fun isRealGolfClub(clubName: String?): Boolean {
             if (clubName.isNullOrBlank()) return false
             val norm = clubName.trim()
-            if (norm in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패", "클럽하우스")) return false
+            if (norm in listOf("필드 골프장", "일반 사진", "골프장", "골프장 라운드", "OCR 실패", "클럽하우스", "나인CC", "나인 CC", "나인")) return false
             if (norm.contains("일반 사진") || norm.contains("필드 골프장") || norm.contains("OCR") || norm.length > 25) return false
             if (INVALID_GOLF_UI_WORDS.any { norm.contains(it, ignoreCase = true) }) return false
             return true

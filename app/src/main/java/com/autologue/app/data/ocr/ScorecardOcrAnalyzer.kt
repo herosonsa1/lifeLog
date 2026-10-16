@@ -530,12 +530,15 @@ class ScorecardOcrAnalyzer @Inject constructor(
 
             val merged = mergeResults(parsedSpatial, parsedRaw, raw)
             // 사진 EXIF/타임스탬프(fallbackDate)와의 교차 검증:
-            // 1) playDate가 null이면 fallbackDate 채택
+            // 1) playDate가 null이거나 오늘(LocalDate.now()) 이후의 미래 날짜(예: 10.24 오탐)인 경우 실제 촬영일(safeFallback) 채택
             // 2) OCR 추출일이 1일(09.01)인데 사진 날짜가 동일 월(09.11 등)인 경우, 정규식 1자리 오탐으로 판별하여 실제 촬영일(09.11)로 보정
+            val today = LocalDate.now()
+            val safeFallback = fallbackDate?.takeIf { !it.isAfter(today) } ?: today
             val verifiedDate = when {
-                merged.playDate == null -> fallbackDate
+                merged.playDate == null -> safeFallback
+                merged.playDate.isAfter(today) -> safeFallback
                 fallbackDate != null && merged.playDate.year == fallbackDate.year && merged.playDate.month == fallbackDate.month &&
-                        merged.playDate.dayOfMonth == 1 && fallbackDate.dayOfMonth > 1 -> fallbackDate
+                        merged.playDate.dayOfMonth == 1 && fallbackDate.dayOfMonth > 1 -> safeFallback
                 else -> merged.playDate
             }
             merged.copy(playDate = verifiedDate)
@@ -637,29 +640,38 @@ class ScorecardOcrAnalyzer @Inject constructor(
 
             // 1-0-A. 라운드 경기 일자 탐지 (예: "오크밸리 CC / 2026.09.11", "필로스 GC 2026.08.09", "2026-09-11", "2026/09/11", "2026.09.11(금)")
             // 2자리 일자(01~31, 1~31)를 1자리보다 우선 매칭하여 9.11이 9.01로 떨어지는 오류 원천 차단
+            // 완료된 스코어카드는 오늘(LocalDate.now()) 이후의 미래 날짜(예: 10/24 오탐)일 수 없으므로 미래 날짜는 배제
+            val today = LocalDate.now()
             val dateRegex = Regex("""\b(20\d{2})[-./년\s]+(0[1-9]|1[0-2]|[1-9])[-./월\s]+(0[1-9]|[12]\d|3[01]|[1-9])(?=[^\d]|일|$)""")
             val date8Regex = Regex("""\b(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b""")
+            val spacedDateRegex = Regex("""\b(202\d)\s*[.년/-]\s*([01]?\s*\d)\s*[.월/-]\s*([0-3]?\s*\d)\b""")
             for (line in lines.take(20)) {
                 val m = dateRegex.find(line) ?: date8Regex.find(line)
                 if (m != null) {
                     val y = m.groupValues[1].toIntOrNull()
                     val mo = m.groupValues[2].toIntOrNull()
                     val d = m.groupValues[3].toIntOrNull()
-                    if (y != null && mo != null && d != null && y in 2020..2035 && mo in 1..12 && d in 1..31) {
-                        detectedDate = runCatching { LocalDate.of(y, mo, d) }.getOrNull()
-                        if (detectedDate != null) break
+                    if (y != null && mo != null && d != null && y in 2020..today.year && mo in 1..12 && d in 1..31) {
+                        val candDate = runCatching { LocalDate.of(y, mo, d) }.getOrNull()
+                        if (candDate != null && !candDate.isAfter(today)) {
+                            detectedDate = candDate
+                            break
+                        }
                     }
                 }
-                // 공백 분리 텍스트(예: "2026 . 09 . 1 1" 또는 "2026 09 11") 대응
+                // 공백 분리 텍스트(예: "2026 . 09 . 1 1") 정밀 대응 (라인 전체 숫자 단순 결합으로 인한 20261024 미래 오탐 방지)
                 if (line.contains("202") && detectedDate == null) {
-                    val digitsOnly = line.replace(Regex("""[^\d]"""), "")
-                    if (digitsOnly.startsWith("202") && digitsOnly.length >= 8) {
-                        val y = digitsOnly.substring(0, 4).toIntOrNull()
-                        val mo = digitsOnly.substring(4, 6).toIntOrNull()
-                        val d = digitsOnly.substring(6, 8).toIntOrNull()
-                        if (y != null && mo != null && d != null && y in 2020..2035 && mo in 1..12 && d in 1..31) {
-                            detectedDate = runCatching { LocalDate.of(y, mo, d) }.getOrNull()
-                            if (detectedDate != null) break
+                    val sm = spacedDateRegex.find(line)
+                    if (sm != null) {
+                        val y = sm.groupValues[1].replace(" ", "").toIntOrNull()
+                        val mo = sm.groupValues[2].replace(" ", "").toIntOrNull()
+                        val d = sm.groupValues[3].replace(" ", "").toIntOrNull()
+                        if (y != null && mo != null && d != null && y in 2020..today.year && mo in 1..12 && d in 1..31) {
+                            val candDate = runCatching { LocalDate.of(y, mo, d) }.getOrNull()
+                            if (candDate != null && !candDate.isAfter(today)) {
+                                detectedDate = candDate
+                                break
+                            }
                         }
                     }
                 }
@@ -672,8 +684,15 @@ class ScorecardOcrAnalyzer @Inject constructor(
                 val m = clubRegex.find(targetLine) ?: clubRegex.find(line)
                 if (m != null) {
                     val rawClub = m.groupValues[1].trim()
-                    val invalidClubWords = listOf("스코어", "라커", "안내", "영수증", "계산서", "진료", "처방", "외래", "병원", "약국")
-                    if (rawClub.isNotBlank() && invalidClubWords.none { rawClub.contains(it) } && !containsMobileAppUiKeyword(rawClub)) {
+                    val invalidClubWords = listOf(
+                        "스코어", "라커", "안내", "영수증", "계산서", "진료", "처방", "외래", "병원", "약국",
+                        "나인CC", "나인 CC", "온라인", "확인", "사인"
+                    )
+                    if (rawClub.isNotBlank() &&
+                        rawClub !in listOf("나인CC", "나인 CC", "나인") &&
+                        invalidClubWords.none { rawClub.contains(it, ignoreCase = true) } &&
+                        !containsMobileAppUiKeyword(rawClub)
+                    ) {
                         detectedClubName = rawClub
                         break
                     }

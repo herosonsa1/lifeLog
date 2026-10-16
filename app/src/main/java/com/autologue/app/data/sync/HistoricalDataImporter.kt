@@ -905,6 +905,7 @@ class HistoricalDataImporter @Inject constructor(
         golfRounds: List<GolfRound> = emptyList(),
         vehicleLogs: List<VehicleLog> = emptyList()
     ): List<DiaryEntry> = withContext(Dispatchers.Default) {
+        val today = LocalDate.now()
         val allDates = mutableSetOf<LocalDate>()
         photos.forEach { allDates.add(it.time.toLocalDate()) }
         transactions.forEach { allDates.add(it.timestamp.toLocalDate()) }
@@ -912,10 +913,10 @@ class HistoricalDataImporter @Inject constructor(
         vehicleLogs.forEach { allDates.add(it.timestamp.toLocalDate()) }
 
         val entries = mutableListOf<DiaryEntry>()
-        for (date in allDates.sortedDescending()) {
+        for (date in allDates.filter { !it.isAfter(today) }.sortedDescending()) {
             val dayPhotos = photos.filter { it.time.toLocalDate() == date }
             val dayTxs = transactions.filter { it.timestamp.toLocalDate() == date }
-            val dayGolf = golfRounds.filter { it.roundDate.toLocalDate() == date }
+            val dayGolf = golfRounds.filter { it.roundDate.toLocalDate() == date && DailyRouteAggregator.isRealGolfClub(it.clubName) }
             val dayVehicles = vehicleLogs.filter { it.timestamp.toLocalDate() == date }
 
             val entry = dailyRouteAggregator.aggregateForDate(

@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var vehicleRepository: VehicleRepository
     @Inject lateinit var transactionRepository: TransactionRepository
     @Inject lateinit var golfRepository: GolfRepository
+    @Inject lateinit var diaryRepository: com.autologue.app.domain.repository.DiaryRepository
     @Inject lateinit var historicalDataImporter: HistoricalDataImporter
     @Inject lateinit var scorecardOcrAnalyzer: com.autologue.app.data.ocr.ScorecardOcrAnalyzer
     @Inject lateinit var processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
@@ -179,7 +180,31 @@ class MainActivity : ComponentActivity() {
             try {
                 Log.d("AUTOLOGUE_INIT", "Starting syncInitialData...")
 
-                // 0. 차계부 주행 기록("위치 미확인", "GPS 0개 지점" 등) 동네명 기반 즉시 자가 치유
+                // 0. 차계부 주행 기록("위치 미확인", "GPS 0개 지점", 미래 10/24 나인CC 등) 및 골프/다이어리 미래 오탐 즉시 자가 치유
+                runCatching {
+                    val today = java.time.LocalDate.now()
+                    val allRounds = golfRepository.getAllGolfRoundsList()
+                    for (r in allRounds) {
+                        val rDay = (r.startTime ?: r.roundDate).toLocalDate()
+                        val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
+                            r.clubName.contains("나인 CC", ignoreCase = true) ||
+                            r.clubName == "나인"
+                        val isFutureFalseOcr = rDay.isAfter(today) && (
+                            r.totalScore != null ||
+                            r.holeScores.isNotEmpty() ||
+                            !r.scorecardPhotoUri.isNullOrBlank() ||
+                            r.matchingPhotoUris.isNotEmpty() ||
+                            isFakeNine ||
+                            rDay == java.time.LocalDate.of(2026, 10, 24)
+                        )
+                        if (isFakeNine || isFutureFalseOcr) {
+                            golfRepository.deleteGolfRound(r.id)
+                        }
+                    }
+                    val validRounds = golfRepository.getAllGolfRoundsList()
+                    vehicleRepository.syncAndCleanWithGolfRounds(validRounds)
+                    diaryRepository.cleanDuplicates()
+                }
                 runCatching {
                     val cfg = userLocationPreferences.config.value
                     val homeHint = cfg.homeAddress.ifBlank { cfg.homeName }

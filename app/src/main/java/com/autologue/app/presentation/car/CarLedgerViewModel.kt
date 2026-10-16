@@ -466,7 +466,29 @@ class CarLedgerViewModel @Inject constructor(
                 }
             }
 
-            // 2. 실제 골프 라운드 DB(18홀 유효)와 대조하여 누락된 주행기록 자동 복원 및 유령 레코드(8.8, 9.1 등) 영구 삭제
+            // 2. 실제 골프 라운드 DB(18홀 유효)와 대조 전, 미래 오탐(10/24 등) 및 '나인CC' 가짜 라운드 우선 제거
+            val today = LocalDate.now()
+            runCatching {
+                val rawRounds = golfRepository.getAllGolfRoundsList()
+                for (r in rawRounds) {
+                    val rDay = (r.startTime ?: r.roundDate).toLocalDate()
+                    val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
+                        r.clubName.contains("나인 CC", ignoreCase = true) ||
+                        r.clubName == "나인"
+                    val isFutureFalseOcr = rDay.isAfter(today) && (
+                        r.totalScore != null ||
+                        r.holeScores.isNotEmpty() ||
+                        !r.scorecardPhotoUri.isNullOrBlank() ||
+                        r.matchingPhotoUris.isNotEmpty() ||
+                        isFakeNine ||
+                        rDay == LocalDate.of(2026, 10, 24)
+                    )
+                    if (isFakeNine || isFutureFalseOcr) {
+                        golfRepository.deleteGolfRound(r.id)
+                    }
+                }
+                diaryRepository.cleanDuplicates()
+            }
             val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
             vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
 

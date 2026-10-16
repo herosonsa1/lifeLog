@@ -18,8 +18,13 @@ class ProcessGolfLockerSlipUseCase @Inject constructor(
     private val transactionRepository: TransactionRepository
 ) {
     suspend operator fun invoke(result: GolfLockerSlipResult, photoUri: String?): GolfRound? {
-        // [유효성 검증] 유효한 라커 슬립이 아니거나 일반 사진인 경우 골프 라운드 및 다이어리 스텝 생성 거부
-        if (!result.isLockerSlip || result.clubName == "일반 사진") {
+        // [유효성 검증] 유효한 라커 슬립이 아니거나, 일반 사진/가짜 구장명('나인CC' 등), 또는 미래 날짜인 경우 생성 거부
+        val today = java.time.LocalDate.now()
+        if (!result.isLockerSlip ||
+            result.clubName == "일반 사진" ||
+            !com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(result.clubName) ||
+            result.date.isAfter(today)
+        ) {
             return null
         }
 

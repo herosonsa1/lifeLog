@@ -652,7 +652,9 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
                 }
             }
         }
-        val finalDate = parsedDate ?: (fallbackDate ?: LocalDate.now())
+        val today = LocalDate.now()
+        val safeFallback = fallbackDate?.takeIf { !it.isAfter(today) } ?: today
+        val finalDate = parsedDate?.takeIf { !it.isAfter(today) } ?: safeFallback
 
         // 6. Player Name & Gender Extraction
         // 1순위: 'OOO 고객님', 'OOO 회원님', 'OOO 님' (실제 라운더 본인 우선)
@@ -700,7 +702,10 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
                 (hasExplicitLocker && (hasGolfTerms || hasCcGc || hasKnownClub)) ||
                 (lockerNumber != null && (teeOffTime != null || hasCcGc || hasThankYouNotice || hasKnownClub))
 
-        val isLockerSlip = !isAdBanner && clubName != null && clubName != "일반 사진" && hasLockerFeature
+        val isRealClub = clubName != null &&
+                clubName != "일반 사진" &&
+                com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(clubName)
+        val isLockerSlip = !isAdBanner && isRealClub && hasLockerFeature
 
         return GolfLockerSlipResult(
             isLockerSlip = isLockerSlip,

@@ -181,7 +181,9 @@ class ExtractScorecardOcrUseCase @Inject constructor(
         targetDate: java.time.LocalDate
     ): GolfRound? {
         val totalScore = result.totalScore ?: (if (result.holeScores.isNotEmpty()) result.holeScores.sum() else null) ?: return null
-        val effectiveDate = result.playDate ?: targetDate
+        val today = java.time.LocalDate.now()
+        val safeTargetDate = if (targetDate.isAfter(today)) today else targetDate
+        val effectiveDate = result.playDate?.takeIf { !it.isAfter(today) } ?: safeTargetDate
         val existingRound = golfRepository.getGolfRoundByDate(effectiveDate)
 
         // [사용자 핵심 지침] 18홀 완전한 스코어카드가 아니면 신규 등록에서 제외
@@ -241,9 +243,13 @@ class ExtractScorecardOcrUseCase @Inject constructor(
             clubName = finalRound.clubName
         )
 
-        // [골프장 주행기록 차계부 자동 연동] 18홀 라운드 확정 시 해당 날짜의 골프 주행기록 1회 자동 생성
+        // [골프장 주행기록 차계부 자동 연동] 18홀 라운드 확정 및 유효 구장명/과거~오늘 날짜일 때만 골프 주행기록 1회 자동 생성
         val targetClub = finalRound.clubName.ifBlank { result.clubName ?: "골프장" }
-        if (targetClub != "필드 골프장" && !targetClub.contains("일반 사진")) {
+        if (!effectiveDate.isAfter(today) &&
+            com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(targetClub) &&
+            targetClub != "필드 골프장" &&
+            !targetClub.contains("일반 사진")
+        ) {
             val estimatedDist = GolfCourseDistanceUtils.getEstimatedRoundTripKm(targetClub)
             val startTime = finalRound.startTime ?: effectiveDate.atTime(8, 0)
             val drivingTime = startTime.minusHours(2)
@@ -269,11 +275,13 @@ class ExtractScorecardOcrUseCase @Inject constructor(
 
     private fun containsInvalidKeyword(text: String?): Boolean {
         if (text.isNullOrBlank()) return true
+        if (text.trim() in listOf("나인CC", "나인 CC", "나인", "온라인CC", "확인CC", "사인CC")) return true
         val invalidKeywords = listOf(
             "라운드", "상세", "기록", "FIELD", "Field", "field", "삭제", "취소", "저장하기", "저장",
             "공유", "수정", "뒤로", "닫기", "메뉴", "홈", "선택", "등록", "버튼", "관리", "설정",
             "동반자", "캐디", "예약", "조회", "알림", "마이페이지", "앱", "스코어", "플레이어", "사진",
-            "일정", "방문", "안내", "영수증", "진료", "병원", "약국", "전표", "명세", "통계", "분석"
+            "일정", "방문", "안내", "영수증", "진료", "병원", "약국", "전표", "명세", "통계", "분석",
+            "나인CC", "나인 CC", "온라인", "확인"
         )
         return invalidKeywords.any { text.contains(it, ignoreCase = true) }
     }

@@ -42,6 +42,10 @@ class DiaryRepositoryImpl @Inject constructor(
 
     override suspend fun insertDiaryEntry(entry: DiaryEntry): Long = withContext(Dispatchers.IO) {
         val date = entry.date.toLocalDate()
+        // 미래 날짜(오늘 이후)의 잘못된 일정/다이어리 생성 원천 차단 (예: 10/24 나인CC 등)
+        if (date.isAfter(LocalDate.now())) {
+            return@withContext -1L
+        }
         val startDateTime = date.atStartOfDay()
         val endDateTime = date.atTime(23, 59, 59, 999999999)
 
@@ -121,10 +125,14 @@ class DiaryRepositoryImpl @Inject constructor(
     override suspend fun cleanDuplicates(): Int = withContext(Dispatchers.IO) {
         val all = diaryDao.getAllEntriesSync()
         val seen = mutableSetOf<LocalDate>()
+        val today = LocalDate.now()
         var modifiedCount = 0
         for (entry in all) {
             val d = entry.date.toLocalDate()
-            if (d in seen) {
+            // 미래 날짜(10/24 등)에 잘못 생성된 다이어리 엔트리 또는 '나인CC' 단독 오탐 다이어리 즉시 삭제
+            val isFakeNineCcOnly = (entry.title.contains("나인CC") || entry.title.contains("나인 CC")) &&
+                entry.routeSteps.all { it.title.contains("나인CC") || it.title.contains("나인 CC") }
+            if (d.isAfter(today) || isFakeNineCcOnly || d in seen) {
                 diaryDao.deleteEntryById(entry.id)
                 modifiedCount++
             } else {

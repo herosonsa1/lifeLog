@@ -412,9 +412,26 @@ class SyncHistoricalDataUseCase @Inject constructor(
 
     private suspend fun cleanUpMedicalFakeRounds() {
         runCatching {
+            val today = java.time.LocalDate.now()
             val rounds = golfRepository.getAllGolfRoundsList()
             for (r in rounds) {
-                val isMedical = r.clubName.contains("외래") ||
+                val rDay = (r.startTime ?: r.roundDate).toLocalDate()
+                val isFakeNineCc = r.clubName.contains("나인CC", ignoreCase = true) ||
+                        r.clubName.contains("나인 CC", ignoreCase = true) ||
+                        r.clubName == "나인" ||
+                        r.clubName.contains("온라인CC", ignoreCase = true) ||
+                        r.clubName.contains("확인CC", ignoreCase = true)
+                val isFutureFalseOcr = rDay.isAfter(today) && (
+                        r.totalScore != null ||
+                        r.holeScores.isNotEmpty() ||
+                        !r.scorecardPhotoUri.isNullOrBlank() ||
+                        r.matchingPhotoUris.isNotEmpty() ||
+                        isFakeNineCc ||
+                        rDay == java.time.LocalDate.of(2026, 10, 24)
+                )
+                val isMedical = isFakeNineCc ||
+                        isFutureFalseOcr ||
+                        r.clubName.contains("외래") ||
                         r.clubName.contains("진료비") ||
                         r.clubName.contains("계산서") ||
                         r.clubName.contains("영수증") ||
@@ -431,6 +448,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                     golfRepository.deleteGolfRound(r.id)
                 }
             }
+            diaryRepository.cleanDuplicates()
         }
     }
 }
