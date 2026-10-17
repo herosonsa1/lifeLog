@@ -52,30 +52,72 @@ class TransactionRepositoryImpl @Inject constructor(
         return directResolved.ifBlank { merchantName }
     }
 
+    private fun shouldExcludeTransaction(tx: Transaction): Boolean {
+        if (tx.paymentMethod == com.autologue.app.domain.model.PaymentMethod.NAVER_PAY ||
+            com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                tx.merchantName,
+                tx.cardOrBankName,
+                tx.originalText
+            )
+        ) {
+            return true
+        }
+        if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) {
+            return true
+        }
+        val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+        if (!isManual && com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
+                tx.merchantName,
+                tx.cardOrBankName,
+                tx.originalText
+            )
+        ) {
+            return true
+        }
+        return false
+    }
+
     override fun getAllTransactionsFlow(): Flow<List<Transaction>> {
-        return transactionDao.getAllTransactions().map { entities -> entities.map { it.toDomain() } }
+        return transactionDao.getAllTransactions().map { entities ->
+            entities.map { it.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+        }
     }
 
     override fun getTransactionsByDateRange(start: LocalDateTime, end: LocalDateTime): Flow<List<Transaction>> {
         val startMilli = start.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val endMilli = end.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        return transactionDao.getTransactionsByDateRange(startMilli, endMilli).map { it.map { e -> e.toDomain() } }
+        return transactionDao.getTransactionsByDateRange(startMilli, endMilli).map { list ->
+            list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+        }
     }
 
     override fun getTransactionsByCategory(category: ExpenseCategory): Flow<List<Transaction>> {
-        return transactionDao.getTransactionsByCategory(category).map { it.map { e -> e.toDomain() } }
+        return transactionDao.getTransactionsByCategory(category).map { list ->
+            list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+        }
     }
 
     override suspend fun insertTransaction(transaction: Transaction): Long = withContext(Dispatchers.IO) {
+        // 이력 등록 제외 대상("네이버페이")은 수동/자동 구분 없이 원천 차단
+        if (transaction.paymentMethod == com.autologue.app.domain.model.PaymentMethod.NAVER_PAY ||
+            com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                transaction.merchantName,
+                transaction.cardOrBankName,
+                transaction.originalText
+            )
+        ) {
+            return@withContext -1L
+        }
+
         val isManual = transaction.originalText.startsWith("[직접 입력]") || transaction.originalText.startsWith("[차계부 직접 입력]")
-        // 사용자가 선택 삭제한 자동등록 결제 내역 또는 누적이용금액/결제예정금액/총사용금액 비실사용 내역은 삽입을 원천 차단
-        if (!isManual && (
-                expenseCustomMetaPreferences.isTransactionDeleted(transaction) ||
-                com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
-                    transaction.merchantName,
-                    transaction.cardOrBankName,
-                    transaction.originalText
-                )
+        if (isManual) {
+            expenseCustomMetaPreferences.unmarkManualTransactionDeleted(transaction)
+        } else if (
+            expenseCustomMetaPreferences.isTransactionDeleted(transaction) ||
+            com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
+                transaction.merchantName,
+                transaction.cardOrBankName,
+                transaction.originalText
             )
         ) {
             return@withContext -1L
@@ -266,11 +308,35 @@ class TransactionRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteTransaction(id: Long) = withContext(Dispatchers.IO) {
-        val target = transactionDao.getAllTransactionsSync().firstOrNull { it.id == id }
+        val all = transactionDao.getAllTransactionsSync()
+        val target = all.firstOrNull { it.id == id }
         if (target != null) {
-            expenseCustomMetaPreferences.markTransactionDeleted(target.toDomain())
+            val targetDomain = target.toDomain()
+            expenseCustomMetaPreferences.markTransactionDeleted(targetDomain)
+            val targetDate = target.timestamp.toLocalDate()
+            val targetNormMer = MerchantAliasPreferences.normalizeMerchantKey(target.merchantName)
+            val targetIsDep = targetDomain.isDepositTransaction()
+
+            val twinTargets = all.filter { other ->
+                if (other.id == id) return@filter true
+                val otherDomain = other.toDomain()
+                if (expenseCustomMetaPreferences.isTransactionDeleted(otherDomain)) return@filter true
+                if (other.amount != target.amount) return@filter false
+                if (otherDomain.isDepositTransaction() != targetIsDep) return@filter false
+                if (other.timestamp.toLocalDate() != targetDate) return@filter false
+                val otherNormMer = MerchantAliasPreferences.normalizeMerchantKey(other.merchantName)
+                val sameMer = (targetNormMer.isNotBlank() && targetNormMer == otherNormMer) ||
+                    merchantAliasPreferences.isSameMerchant(other.merchantName, target.merchantName) ||
+                    (target.originalText.isNotBlank() && target.originalText == other.originalText)
+                sameMer
+            }
+            expenseCustomMetaPreferences.markTransactionsDeleted(twinTargets.map { it.toDomain() })
+            for (twin in twinTargets) {
+                transactionDao.deleteTransactionById(twin.id)
+            }
+        } else {
+            transactionDao.deleteTransactionById(id)
         }
-        transactionDao.deleteTransactionById(id)
     }
 
     override suspend fun getTotalExpenseBetween(start: LocalDateTime, end: LocalDateTime): Long = withContext(Dispatchers.IO) {
@@ -283,13 +349,20 @@ class TransactionRepositoryImpl @Inject constructor(
         val all = transactionDao.getAllTransactionsSync()
         val toDeleteIds = mutableSetOf<Long>()
 
-        // 1. 기존 DB 내 오분류된 카드 승인, 비결제 스팸/시황/누적이용금액/결제예정금액/총사용금액 문자('금액' 등), 주유 내역 자가 치유 및 결제명 자동 치환
+        // 1. 기존 DB 내 삭제된 항목, 이력 제외 대상("네이버페이"), 비결제 스팸/시황/누적이용금액/결제예정금액/총사용금액 문자('금액' 등), 주유 내역 자가 치유 및 결제명 자동 치환
         for (rawTx in all) {
             val raw = rawTx.originalText
             val isManual = raw.startsWith("[직접 입력]") || raw.startsWith("[차계부 직접 입력]")
             val domainRawTx = rawTx.toDomain()
 
-            if (!isManual && expenseCustomMetaPreferences.isTransactionDeleted(domainRawTx)) {
+            if (rawTx.paymentMethod == com.autologue.app.domain.model.PaymentMethod.NAVER_PAY ||
+                com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                    rawTx.merchantName,
+                    rawTx.cardOrBankName,
+                    raw
+                ) ||
+                expenseCustomMetaPreferences.isTransactionDeleted(domainRawTx)
+            ) {
                 toDeleteIds.add(rawTx.id)
                 continue
             }

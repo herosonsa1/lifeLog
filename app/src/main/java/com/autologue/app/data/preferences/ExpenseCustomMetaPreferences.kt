@@ -1086,46 +1086,64 @@ class ExpenseCustomMetaPreferences private constructor(
     // 5. 선택적 항목 제거 및 자동 재등록 영구 차단 블랙리스트 (Tombstone)
     // =========================================================================
 
-    fun markTransactionDeleted(tx: Transaction) {
-        val cleanOrig = tx.originalText.trim()
-        if (cleanOrig.isNotBlank()) {
-            deletedTxSignatures.add("ORIG_${cleanOrig.hashCode()}")
-        }
-        deletedTxSignatures.add("TIME_${tx.timestamp.withSecond(0).withNano(0)}_${tx.amount}")
+    private fun addDeletedTransactionSignatureInternal(tx: Transaction) {
         if (tx.id > 0L) {
+            deletedTxSignatures.add("ID_${tx.id}")
             txCustomCategoryMap.remove(tx.id)
             txUserClassMap.remove(tx.id)
             txCorporateMap.remove(tx.id)
             txFixedExpenseMap.remove(tx.id)
             oneTimeEditedTxIds.remove(tx.id)
         }
+        val cleanOrig = tx.originalText.trim()
+        if (cleanOrig.isNotBlank()) {
+            deletedTxSignatures.add("ORIG_${cleanOrig.hashCode()}")
+        }
+        deletedTxSignatures.add("TIME_${tx.timestamp.withSecond(0).withNano(0)}_${tx.amount}")
+        val normMer = MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)
+        if (normMer.isNotBlank()) {
+            deletedTxSignatures.add("DAY_AMT_MER_${tx.timestamp.toLocalDate()}_${tx.amount}_$normMer")
+        }
+    }
+
+    fun markTransactionDeleted(tx: Transaction) {
+        addDeletedTransactionSignatureInternal(tx)
         saveToPrefs()
     }
 
     fun markTransactionsDeleted(txList: Collection<Transaction>) {
         for (tx in txList) {
-            val cleanOrig = tx.originalText.trim()
-            if (cleanOrig.isNotBlank()) {
-                deletedTxSignatures.add("ORIG_${cleanOrig.hashCode()}")
-            }
-            deletedTxSignatures.add("TIME_${tx.timestamp.withSecond(0).withNano(0)}_${tx.amount}")
-            if (tx.id > 0L) {
-                txCustomCategoryMap.remove(tx.id)
-                txUserClassMap.remove(tx.id)
-                txCorporateMap.remove(tx.id)
-                txFixedExpenseMap.remove(tx.id)
-                oneTimeEditedTxIds.remove(tx.id)
-            }
+            addDeletedTransactionSignatureInternal(tx)
+        }
+        saveToPrefs()
+    }
+
+    fun unmarkManualTransactionDeleted(tx: Transaction) {
+        val cleanOrig = tx.originalText.trim()
+        if (cleanOrig.isNotBlank()) {
+            deletedTxSignatures.remove("ORIG_${cleanOrig.hashCode()}")
+        }
+        deletedTxSignatures.remove("TIME_${tx.timestamp.withSecond(0).withNano(0)}_${tx.amount}")
+        val normMer = MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)
+        if (normMer.isNotBlank()) {
+            deletedTxSignatures.remove("DAY_AMT_MER_${tx.timestamp.toLocalDate()}_${tx.amount}_$normMer")
         }
         saveToPrefs()
     }
 
     fun isTransactionDeleted(tx: Transaction): Boolean {
+        if (tx.id > 0L && "ID_${tx.id}" in deletedTxSignatures) {
+            return true
+        }
         val cleanOrig = tx.originalText.trim()
         if (cleanOrig.isNotBlank() && "ORIG_${cleanOrig.hashCode()}" in deletedTxSignatures) {
             return true
         }
         if ("TIME_${tx.timestamp.withSecond(0).withNano(0)}_${tx.amount}" in deletedTxSignatures) {
+            return true
+        }
+        val normMer = MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)
+        if (normMer.isNotBlank() && "DAY_AMT_MER_${tx.timestamp.toLocalDate()}_${tx.amount}_$normMer" in deletedTxSignatures) {
             return true
         }
         return false
@@ -1170,7 +1188,7 @@ class ExpenseCustomMetaPreferences private constructor(
         val DEFAULT_CARD_COMPANIES = listOf(
             "신한카드", "KB국민카드", "현대카드", "삼성카드",
             "롯데카드", "우리카드", "하나카드", "NH농협카드",
-            "BC카드", "카카오페이", "네이버페이", "토스페이"
+            "BC카드", "카카오페이", "토스페이"
         )
 
         val DEFAULT_BANK_NAMES = listOf(

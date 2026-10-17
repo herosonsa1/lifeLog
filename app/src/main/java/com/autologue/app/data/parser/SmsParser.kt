@@ -105,10 +105,29 @@ object SmsParser {
             .replace(NON_USAGE_TRAIL_KEYWORD_REGEX, "")
     }
 
+    /**
+     * "네이버페이"(NAVERPAY, 네이버파이낸셜, Npay 등) 관련 항목인지 판별합니다.
+     * 사용자 요청에 따라 네이버페이 항목은 가계부 이력 등록 대상에서 원천 제외합니다.
+     */
+    fun isNaverPayExcluded(
+        merchantName: String? = null,
+        cardOrBankName: String? = null,
+        originalText: String? = null
+    ): Boolean {
+        val excludedTokens = listOf("네이버페이", "naverpay", "naver_pay", "네이버파이낸셜", "npay")
+        val mer = merchantName.orEmpty().replace(" ", "").lowercase()
+        val card = cardOrBankName.orEmpty().replace(" ", "").lowercase()
+        val orig = originalText.orEmpty().replace(" ", "").lowercase()
+        return excludedTokens.any { token ->
+            mer.contains(token) || card.contains(token) || orig.contains(token)
+        }
+    }
+
     fun isInvalidMerchantName(name: String?): Boolean {
         if (name.isNullOrBlank()) return true
         val trimmed = name.trim()
         if (trimmed.lowercase() in INVALID_MERCHANT_NAMES) return true
+        if (isNaverPayExcluded(merchantName = trimmed)) return true
         val invalidSubstrings = listOf(
             "누적이용금액", "누적사용금액", "누적결제금액", "누적금액",
             "결제예정금액", "결제예정액", "총사용금액", "총이용금액",
@@ -119,13 +138,15 @@ object SmsParser {
     }
 
     /**
-     * 이미 저장된 트랜잭션이나 파싱 후보가 누적이용금액/결제예정금액/총사용금액 등 비실사용 오인입 내역인지 판별합니다.
+     * 이미 저장된 트랜잭션이나 파싱 후보가 누적이용금액/결제예정금액/총사용금액 등 비실사용 오인입 내역이거나
+     * 이력 등록 제외 대상("네이버페이")인지 판별합니다.
      */
     fun isNonUsageOrCorruptedTransaction(
         merchantName: String?,
         cardOrBankName: String?,
         originalText: String
     ): Boolean {
+        if (isNaverPayExcluded(merchantName, cardOrBankName, originalText)) return true
         if (isInvalidMerchantName(merchantName)) return true
         val card = cardOrBankName?.trim().orEmpty()
         if (card.startsWith("(결제)") || card.startsWith("[결제]") || card.startsWith("(승인)") || Regex("""[\d,]+원""").containsMatchIn(card)) {
@@ -136,12 +157,17 @@ object SmsParser {
     }
 
     /**
-     * 주식/증권 시황 브리핑, 뉴스레터, 광고, 본인인증 및
+     * 주식/증권 시황 브리핑, 뉴스레터, 광고, 본인인증, 이력 제외 대상("네이버페이") 및
      * 누적이용금액·결제예정금액·총사용금액·명세서 안내 등 당시 사용된 결제 내역이 아닌 문자인지 판별합니다.
      */
     fun isNonPaymentMessage(body: String): Boolean {
         val clean = body.trim()
         if (clean.isBlank()) return true
+
+        // 0. 이력 등록 제외 대상("네이버페이") 즉시 차단
+        if (isNaverPayExcluded(originalText = clean)) {
+            return true
+        }
 
         // 1. 광고 / 인증 / 쿠폰·포인트 안내 문자 즉시 차단
         val spamKeywords = listOf(
@@ -247,8 +273,8 @@ object SmsParser {
         val rawTrimmed = body.trim().replace("\r\n", "\n")
         if (rawTrimmed.isBlank()) return null
 
-        // 비결제 문자(광고, 증권/주식 시황, 누적이용금액/결제예정금액/총사용금액 단독 안내 등) 최상단 원천 차단
-        if (isNonPaymentMessage(rawTrimmed)) return null
+        // 비결제 문자(광고, 증권/주식 시황, 누적이용금액/결제예정금액/총사용금액 단독 안내) 및 이력 등록 제외 대상("네이버페이") 최상단 원천 차단
+        if (isNaverPayExcluded(cardOrBankName = sender, originalText = rawTrimmed) || isNonPaymentMessage(rawTrimmed)) return null
 
         // 승인 문자 내부에 부가 정보로 포함된 누적이용금액/결제예정금액/총사용금액 구문을 금액 추출 전에 선제 제거
         val cleanBody = stripNonUsageAmounts(rawTrimmed)
@@ -858,17 +884,18 @@ object SmsParser {
     }
 
     private fun parseSimplePay(body: String, fallbackDateTime: LocalDateTime): Transaction? {
-        if (body.contains("카카오페이") || body.contains("토스") || body.contains("네이버페이")) {
+        if (isNaverPayExcluded(originalText = body)) return null
+        if (body.contains("카카오페이") || body.contains("토스")) {
             val amtPattern = Pattern.compile("""(?<amount>[\d,]+)원""")
             val m = amtPattern.matcher(body)
             if (m.find()) {
                 val amount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
                 val method = when {
                     body.contains("카카오페이") -> PaymentMethod.KAKAO_PAY
-                    body.contains("토스") -> PaymentMethod.TOSS_PAY
-                    else -> PaymentMethod.NAVER_PAY
+                    else -> PaymentMethod.TOSS_PAY
                 }
                 val merchant = extractMerchantFromPay(body)
+                if (isInvalidMerchantName(merchant)) return null
                 val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = body)
                 return Transaction(
                     amount = amount,

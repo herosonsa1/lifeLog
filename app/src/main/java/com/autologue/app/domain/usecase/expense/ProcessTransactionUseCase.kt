@@ -25,6 +25,22 @@ class ProcessTransactionUseCase @Inject constructor(
         val rawMerchant = transaction.merchantName.trim()
         val aliasedMerchant = merchantAliasPreferences.resolveAlias(rawMerchant).ifBlank { rawMerchant }
 
+        // "네이버페이" 항목은 모든 이력 등록 대상에서 원천 제외
+        if (transaction.paymentMethod == PaymentMethod.NAVER_PAY ||
+            com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                merchantName = rawMerchant,
+                cardOrBankName = transaction.cardOrBankName,
+                originalText = transaction.originalText
+            ) ||
+            com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                merchantName = aliasedMerchant,
+                cardOrBankName = transaction.cardOrBankName,
+                originalText = transaction.originalText
+            )
+        ) {
+            return -1L
+        }
+
         val rules = ruleRepository.getAllRules()
         var finalCategory = transaction.category
         var matchedRuleId: Long? = null
@@ -55,6 +71,9 @@ class ProcessTransactionUseCase @Inject constructor(
 
         val isCancellation = enrichedTx.amount < 0 || enrichedTx.transferMemo?.contains("승인취소") == true
         val txId = transactionRepository.insertTransaction(enrichedTx)
+        if (txId <= 0L) {
+            return -1L
+        }
 
         val isFuel = finalCategory == ExpenseCategory.FUEL ||
             com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(rawMerchant) ||

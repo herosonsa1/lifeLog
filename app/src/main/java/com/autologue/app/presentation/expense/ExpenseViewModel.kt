@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
@@ -181,6 +182,9 @@ class ExpenseViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ExpenseUiState())
     val uiState: StateFlow<ExpenseUiState> = _uiState.asStateFlow()
 
+    // 현재 세션에서 삭제 요청된 트랜잭션 ID 집합 (DB 비동기 반영 전에도 즉시 100% 차단)
+    private val deletedTxIdsInSession = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+
     private var hasAutoFocusedMonth = false
     private var dataLoadJob: kotlinx.coroutines.Job? = null
     private var rulesLoadJob: kotlinx.coroutines.Job? = null
@@ -198,19 +202,19 @@ class ExpenseViewModel @Inject constructor(
     private fun observeCustomMeta() {
         viewModelScope.launch {
             expenseCustomMetaPreferences.managedCategoriesFlow.collectLatest { cats ->
-                _uiState.value = _uiState.value.copy(managedCategories = cats)
+                _uiState.update { it.copy(managedCategories = cats) }
                 recalculateFilteredTransactions()
             }
         }
         viewModelScope.launch {
             expenseCustomMetaPreferences.userClassificationsFlow.collectLatest { ucs ->
-                _uiState.value = _uiState.value.copy(userClassifications = ucs)
+                _uiState.update { it.copy(userClassifications = ucs) }
                 recalculateFilteredTransactions()
             }
         }
         viewModelScope.launch {
             expenseCustomMetaPreferences.metaVersionFlow.collectLatest { ver ->
-                _uiState.value = _uiState.value.copy(metaVersion = ver)
+                _uiState.update { it.copy(metaVersion = ver) }
                 recalculateFilteredTransactions()
             }
         }
@@ -219,7 +223,7 @@ class ExpenseViewModel @Inject constructor(
     private fun observeUserAccounts() {
         viewModelScope.launch {
             userAccountPreferences.accounts.collectLatest { accList ->
-                _uiState.value = _uiState.value.copy(userAccounts = accList)
+                _uiState.update { it.copy(userAccounts = accList) }
             }
         }
     }
@@ -286,176 +290,244 @@ class ExpenseViewModel @Inject constructor(
         dataLoadJob?.cancel()
         dataLoadJob = viewModelScope.launch {
             transactionRepository.getAllTransactionsFlow().collectLatest { list ->
-                _uiState.value = _uiState.value.copy(allTransactions = list)
+                val cleanList = list.filterNot { tx ->
+                    tx.id in deletedTxIdsInSession ||
+                        expenseCustomMetaPreferences.isTransactionDeleted(tx) ||
+                        tx.paymentMethod == PaymentMethod.NAVER_PAY ||
+                        com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                            merchantName = tx.merchantName,
+                            cardOrBankName = tx.cardOrBankName,
+                            originalText = tx.originalText
+                        )
+                }
+                _uiState.update { it.copy(allTransactions = cleanList) }
                 recalculateFilteredTransactions()
             }
         }
         rulesLoadJob?.cancel()
         rulesLoadJob = viewModelScope.launch {
             manageTransactionRulesUseCase.getAllRules().collectLatest { rules ->
-                _uiState.value = _uiState.value.copy(rules = rules)
+                _uiState.update { it.copy(rules = rules) }
             }
         }
     }
 
     private var recalcJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * 주어진 baseState를 기반으로 삭제 항목·네이버페이·중복 내역을 제거하고
+     * 월간/기간 필터 및 카테고리·사용자 통계를 계산한 최신 ExpenseUiState를 반환합니다.
+     */
+    private fun computeFilteredUiState(baseState: ExpenseUiState): ExpenseUiState {
+        var state = baseState
+        val dedupedAll = state.allTransactions
+            .filterNot { tx ->
+                if (tx.id in deletedTxIdsInSession) return@filterNot true
+                if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) return@filterNot true
+                if (tx.paymentMethod == PaymentMethod.NAVER_PAY) return@filterNot true
+                if (com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                        merchantName = tx.merchantName,
+                        cardOrBankName = tx.cardOrBankName,
+                        originalText = tx.originalText
+                    )
+                ) return@filterNot true
+
+                val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+                !isManual && com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
+                    tx.merchantName,
+                    tx.cardOrBankName,
+                    tx.originalText
+                )
+            }
+            .map { tx ->
+                if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
+                    val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(tx)
+                    if (!displayCardOrBank.isNullOrBlank() && displayCardOrBank != tx.cardOrBankName) {
+                        tx.copy(cardOrBankName = displayCardOrBank)
+                    } else {
+                        tx
+                    }
+                } else {
+                    val isDeposit = tx.isDepositTransaction()
+                    val resolvedMerchant = merchantAliasPreferences.resolveAlias(tx.merchantName, isDeposit)
+                        .ifBlank { tx.merchantName }
+                    val resolvedCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMerchant, isDeposit)
+                        ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDeposit)
+                        ?: tx.category
+                    val baseAdjusted = tx.copy(
+                        merchantName = resolvedMerchant,
+                        category = resolvedCategory
+                    )
+                    val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(baseAdjusted)
+                    baseAdjusted.copy(
+                        cardOrBankName = displayCardOrBank.ifBlank { tx.cardOrBankName }
+                    )
+                }
+            }
+            .filterNot { adjustedTx ->
+                expenseCustomMetaPreferences.isTransactionDeleted(adjustedTx) ||
+                    com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                        merchantName = adjustedTx.merchantName,
+                        cardOrBankName = adjustedTx.cardOrBankName,
+                        originalText = adjustedTx.originalText
+                    )
+            }
+            .distinctBy { tx ->
+                val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
+                val dirTag = if (tx.isDepositTransaction()) "IN" else "OUT"
+                "${dirTag}_${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "").lowercase()}"
+            }
+
+        // [월 변경 자동 포커싱] 최초 진입 시 현재 월에 내역이 0건이고 이전 월에 거래 내역이 존재하면 가장 최근 거래 연월로 자동 포커싱
+        if (!hasAutoFocusedMonth && dedupedAll.isNotEmpty() && state.filterMode == ExpenseDateFilterMode.MONTH) {
+            hasAutoFocusedMonth = true
+            val hasCurrentMonthTx = dedupedAll.any { YearMonth.from(it.timestamp.toLocalDate()) == state.selectedYearMonth }
+            if (!hasCurrentMonthTx) {
+                val latestYearMonth = dedupedAll.maxOf { YearMonth.from(it.timestamp.toLocalDate()) }
+                state = state.copy(selectedYearMonth = latestYearMonth)
+            }
+        }
+
+        // 지난달 동일 금액/날짜 자동 감지 + 사용자의 고정지출 수동/영구 지정 통합 산출
+        val autoRecurringIds = RecurringExpenseDetector.detectRecurringTransactionIds(dedupedAll)
+        val recurringIds = mutableSetOf<Long>()
+
+        val uClassMap = mutableMapOf<Long, UserClassificationItem>()
+        val cCatMap = mutableMapOf<Long, String>()
+        val corpMap = mutableMapOf<Long, Boolean>()
+        val oneTimeSet = mutableSetOf<Long>()
+
+        for (tx in dedupedAll) {
+            expenseCustomMetaPreferences.resolveUserClassification(tx)?.let { uClassMap[tx.id] = it }
+            expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx)?.let { cCatMap[tx.id] = it }
+            if (expenseCustomMetaPreferences.isCorporateTransaction(tx)) {
+                corpMap[tx.id] = true
+            }
+            if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
+                oneTimeSet.add(tx.id)
+            }
+            val isFixed = expenseCustomMetaPreferences.resolveIsFixedExpense(
+                tx = tx,
+                autoRecurringIds = autoRecurringIds
+            )
+            if (isFixed) {
+                recurringIds.add(tx.id)
+            }
+        }
+
+        val filtered = when (state.filterMode) {
+            ExpenseDateFilterMode.MONTH -> {
+                dedupedAll.filter { tx ->
+                    YearMonth.from(tx.timestamp.toLocalDate()) == state.selectedYearMonth
+                }
+            }
+            ExpenseDateFilterMode.CUSTOM_RANGE -> {
+                dedupedAll.filter { tx ->
+                    val date = tx.timestamp.toLocalDate()
+                    !date.isBefore(state.customStartDate) && !date.isAfter(state.customEndDate)
+                }
+            }
+        }
+
+        val expenseOnly = filtered.filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
+        val totalExp = expenseOnly.sumOf { it.amount }
+        val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
+        val recurringExp = expenseOnly.filter { it.id in recurringIds }.sumOf { it.amount }
+
+        val byCat = expenseOnly.groupBy { it.category }
+            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+            .filter { it.value > 0L }
+            .toList()
+            .sortedByDescending { it.second }
+            .toMap()
+
+        val byEffectiveCat = expenseOnly
+            .groupBy { tx -> cCatMap[tx.id] ?: expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(tx.category) }
+            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+            .filter { it.value > 0L }
+            .toList()
+            .sortedByDescending { it.second }
+            .toMap()
+
+        val rawByUser = expenseOnly
+            .groupBy { tx -> uClassMap[tx.id]?.name ?: UNASSIGNED_USER_FILTER }
+            .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+
+        val allKnownUsers = (state.userClassifications.map { it.name } + rawByUser.keys.filter { it != UNASSIGNED_USER_FILTER }).distinct()
+        val sortedUserPairs = allKnownUsers
+            .map { uName -> uName to (rawByUser[uName] ?: 0L) }
+            .sortedByDescending { it.second }
+            .toMutableList()
+
+        val unassignedAmt = rawByUser[UNASSIGNED_USER_FILTER] ?: 0L
+        if (unassignedAmt > 0L || sortedUserPairs.isEmpty()) {
+            sortedUserPairs.add(UNASSIGNED_USER_FILTER to unassignedAmt)
+        }
+        val byUserClass = sortedUserPairs.toMap()
+
+        return state.copy(
+            selectedYearMonth = state.selectedYearMonth,
+            transactions = filtered,
+            totalExpense = totalExp,
+            totalIncome = totalInc,
+            categoryTotals = byCat,
+            effectiveCategoryTotals = byEffectiveCat,
+            userClassificationTotals = byUserClass,
+            recurringTransactionIds = recurringIds,
+            recurringExpenseTotal = recurringExp,
+            userClassByTxId = uClassMap,
+            customCategoryByTxId = cCatMap,
+            corporateByTxId = corpMap,
+            oneTimeEditedIds = oneTimeSet
+        )
+    }
+
     private fun recalculateFilteredTransactions(
         loadingTitle: String = "가계부 내역 조회 중",
         loadingMessage: String = "조건에 맞는 결제 내역과 통계를 불러오고 있습니다..."
     ) {
         recalcJob?.cancel()
-        _uiState.value = _uiState.value.copy(
-            isLoading = true,
-            loadingTitle = loadingTitle,
-            loadingMessage = loadingMessage
-        )
+        _uiState.update {
+            it.copy(
+                isLoading = true,
+                loadingTitle = loadingTitle,
+                loadingMessage = loadingMessage
+            )
+        }
         recalcJob = viewModelScope.launch(Dispatchers.Default) {
-            var state = _uiState.value
-            // [중복 방어 및 비실사용 내역 차단 안전망 + 카드/은행 표준명 정규화]
-            val dedupedAll = state.allTransactions
-                .filterNot { tx ->
-                    val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
-                    !isManual && com.autologue.app.data.parser.SmsParser.isNonUsageOrCorruptedTransaction(
-                        tx.merchantName,
-                        tx.cardOrBankName,
-                        tx.originalText
+            val snapshot = _uiState.value
+            val computed = computeFilteredUiState(snapshot)
+            _uiState.update { latest ->
+                val resolved = if (
+                    latest.allTransactions !== snapshot.allTransactions ||
+                    latest.metaVersion != snapshot.metaVersion ||
+                    latest.filterMode != snapshot.filterMode ||
+                    latest.selectedYearMonth != snapshot.selectedYearMonth ||
+                    latest.customStartDate != snapshot.customStartDate ||
+                    latest.customEndDate != snapshot.customEndDate ||
+                    latest.userClassifications != snapshot.userClassifications ||
+                    latest.managedCategories != snapshot.managedCategories
+                ) {
+                    computeFilteredUiState(latest)
+                } else {
+                    latest.copy(
+                        selectedYearMonth = computed.selectedYearMonth,
+                        transactions = computed.transactions,
+                        totalExpense = computed.totalExpense,
+                        totalIncome = computed.totalIncome,
+                        categoryTotals = computed.categoryTotals,
+                        effectiveCategoryTotals = computed.effectiveCategoryTotals,
+                        userClassificationTotals = computed.userClassificationTotals,
+                        recurringTransactionIds = computed.recurringTransactionIds,
+                        recurringExpenseTotal = computed.recurringExpenseTotal,
+                        userClassByTxId = computed.userClassByTxId,
+                        customCategoryByTxId = computed.customCategoryByTxId,
+                        corporateByTxId = computed.corporateByTxId,
+                        oneTimeEditedIds = computed.oneTimeEditedIds
                     )
                 }
-                .distinctBy { tx ->
-                    val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
-                    val dirTag = if (tx.isDepositTransaction()) "IN" else "OUT"
-                    "${dirTag}_${minuteStamp}_${tx.amount}_${tx.merchantName.replace(" ", "")}"
-                }
-                .map { tx ->
-                    if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
-                        val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(tx)
-                        if (!displayCardOrBank.isNullOrBlank() && displayCardOrBank != tx.cardOrBankName) {
-                            tx.copy(cardOrBankName = displayCardOrBank)
-                        } else {
-                            tx
-                        }
-                    } else {
-                        val isDeposit = tx.isDepositTransaction()
-                        val resolvedMerchant = merchantAliasPreferences.resolveAlias(tx.merchantName, isDeposit)
-                            .ifBlank { tx.merchantName }
-                        val resolvedCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMerchant, isDeposit)
-                            ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDeposit)
-                            ?: tx.category
-                        val baseAdjusted = tx.copy(
-                            merchantName = resolvedMerchant,
-                            category = resolvedCategory
-                        )
-                        val displayCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(baseAdjusted)
-                        baseAdjusted.copy(
-                            cardOrBankName = displayCardOrBank.ifBlank { tx.cardOrBankName }
-                        )
-                    }
-                }
-
-            // [월 변경 자동 포커싱] 최초 진입 시 현재 월에 내역이 0건이고 이전 월에 거래 내역이 존재하면 가장 최근 거래 연월로 자동 포커싱
-            if (!hasAutoFocusedMonth && dedupedAll.isNotEmpty() && state.filterMode == ExpenseDateFilterMode.MONTH) {
-                hasAutoFocusedMonth = true
-                val hasCurrentMonthTx = dedupedAll.any { YearMonth.from(it.timestamp.toLocalDate()) == state.selectedYearMonth }
-                if (!hasCurrentMonthTx) {
-                    val latestYearMonth = dedupedAll.maxOf { YearMonth.from(it.timestamp.toLocalDate()) }
-                    state = state.copy(selectedYearMonth = latestYearMonth)
-                }
+                resolved.copy(isLoading = false)
             }
-
-            // 지난달 동일 금액/날짜 자동 감지 + 사용자의 고정지출 수동/영구 지정 통합 산출
-            val autoRecurringIds = RecurringExpenseDetector.detectRecurringTransactionIds(dedupedAll)
-            val recurringIds = mutableSetOf<Long>()
-
-            val uClassMap = mutableMapOf<Long, UserClassificationItem>()
-            val cCatMap = mutableMapOf<Long, String>()
-            val corpMap = mutableMapOf<Long, Boolean>()
-            val oneTimeSet = mutableSetOf<Long>()
-
-            for (tx in dedupedAll) {
-                expenseCustomMetaPreferences.resolveUserClassification(tx)?.let { uClassMap[tx.id] = it }
-                expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx)?.let { cCatMap[tx.id] = it }
-                if (expenseCustomMetaPreferences.isCorporateTransaction(tx)) {
-                    corpMap[tx.id] = true
-                }
-                if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) {
-                    oneTimeSet.add(tx.id)
-                }
-                val isFixed = expenseCustomMetaPreferences.resolveIsFixedExpense(
-                    tx = tx,
-                    autoRecurringIds = autoRecurringIds
-                )
-                if (isFixed) {
-                    recurringIds.add(tx.id)
-                }
-            }
-
-            val filtered = when (state.filterMode) {
-                ExpenseDateFilterMode.MONTH -> {
-                    dedupedAll.filter { tx ->
-                        YearMonth.from(tx.timestamp.toLocalDate()) == state.selectedYearMonth
-                    }
-                }
-                ExpenseDateFilterMode.CUSTOM_RANGE -> {
-                    dedupedAll.filter { tx ->
-                        val date = tx.timestamp.toLocalDate()
-                        !date.isBefore(state.customStartDate) && !date.isAfter(state.customEndDate)
-                    }
-                }
-            }
-
-            val expenseOnly = filtered.filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
-            val totalExp = expenseOnly.sumOf { it.amount }
-            val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
-            val recurringExp = expenseOnly.filter { it.id in recurringIds }.sumOf { it.amount }
-
-            val byCat = expenseOnly.groupBy { it.category }
-                .mapValues { (_, txs) -> txs.sumOf { it.amount } }
-                .filter { it.value > 0L }
-                .toList()
-                .sortedByDescending { it.second }
-                .toMap()
-
-            val byEffectiveCat = expenseOnly
-                .groupBy { tx -> cCatMap[tx.id] ?: expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(tx.category) }
-                .mapValues { (_, txs) -> txs.sumOf { it.amount } }
-                .filter { it.value > 0L }
-                .toList()
-                .sortedByDescending { it.second }
-                .toMap()
-
-            val rawByUser = expenseOnly
-                .groupBy { tx -> uClassMap[tx.id]?.name ?: UNASSIGNED_USER_FILTER }
-                .mapValues { (_, txs) -> txs.sumOf { it.amount } }
-
-            val allKnownUsers = (state.userClassifications.map { it.name } + rawByUser.keys.filter { it != UNASSIGNED_USER_FILTER }).distinct()
-            val sortedUserPairs = allKnownUsers
-                .map { uName -> uName to (rawByUser[uName] ?: 0L) }
-                .sortedByDescending { it.second }
-                .toMutableList()
-
-            val unassignedAmt = rawByUser[UNASSIGNED_USER_FILTER] ?: 0L
-            if (unassignedAmt > 0L || sortedUserPairs.isEmpty()) {
-                sortedUserPairs.add(UNASSIGNED_USER_FILTER to unassignedAmt)
-            }
-            val byUserClass = sortedUserPairs.toMap()
-
-            _uiState.value = _uiState.value.copy(
-                selectedYearMonth = state.selectedYearMonth,
-                transactions = filtered,
-                totalExpense = totalExp,
-                totalIncome = totalInc,
-                categoryTotals = byCat,
-                effectiveCategoryTotals = byEffectiveCat,
-                userClassificationTotals = byUserClass,
-                recurringTransactionIds = recurringIds,
-                recurringExpenseTotal = recurringExp,
-                userClassByTxId = uClassMap,
-                customCategoryByTxId = cCatMap,
-                corporateByTxId = corpMap,
-                oneTimeEditedIds = oneTimeSet,
-                isLoading = false
-            )
         }
     }
 
@@ -577,7 +649,7 @@ class ExpenseViewModel @Inject constructor(
     }
 
     fun closeEditDialog() {
-        _uiState.value = _uiState.value.copy(editingTransaction = null, isSaving = false)
+        _uiState.update { it.copy(editingTransaction = null, isSaving = false) }
     }
 
     fun addManualTransaction(
@@ -592,7 +664,22 @@ class ExpenseViewModel @Inject constructor(
         isFixedExpense: Boolean = false
     ) {
         if (_uiState.value.isSaving) return
-        _uiState.value = _uiState.value.copy(isSaving = true)
+        if (com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                merchantName = merchantName,
+                cardOrBankName = cardOrBankName,
+                originalText = memo ?: ""
+            )
+        ) {
+            _uiState.update {
+                it.copy(
+                    isSaving = false,
+                    isAddDialogOpen = false,
+                    syncResultMessage = "'네이버페이' 항목은 이력 등록 제외 대상입니다."
+                )
+            }
+            return
+        }
+        _uiState.update { it.copy(isSaving = true) }
         viewModelScope.launch {
             com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
                 title = "지출 내역 저장 및 화면 갱신 중",
@@ -640,6 +727,7 @@ class ExpenseViewModel @Inject constructor(
                             transferMemo = memo?.ifBlank { null },
                             isAutoCategorized = false
                         )
+                        expenseCustomMetaPreferences.unmarkManualTransactionDeleted(tx)
                         val insertedId = transactionRepository.insertTransaction(tx)
                         if (insertedId > 0L) {
                             expenseCustomMetaPreferences.setTransactionCardDesignation(
@@ -710,7 +798,7 @@ class ExpenseViewModel @Inject constructor(
                         }
                     }
                 } finally {
-                    _uiState.value = _uiState.value.copy(isSaving = false, isAddDialogOpen = false)
+                    _uiState.update { it.copy(isSaving = false, isAddDialogOpen = false) }
                 }
             }
         }
@@ -1135,17 +1223,21 @@ class ExpenseViewModel @Inject constructor(
                 }
 
                 recalculateFilteredTransactions()
-                _uiState.value = _uiState.value.copy(
-                    syncResultMessage = resultMessage,
-                    editingTransaction = null,
-                    isSaving = false
-                )
+                _uiState.update {
+                    it.copy(
+                        syncResultMessage = resultMessage,
+                        editingTransaction = null,
+                        isSaving = false
+                    )
+                }
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isSaving = false,
-                    editingTransaction = null,
-                    syncResultMessage = "저장 중 오류가 발생했습니다: ${e.localizedMessage ?: "알 수 없는 오류"}"
-                )
+                _uiState.update {
+                    it.copy(
+                        isSaving = false,
+                        editingTransaction = null,
+                        syncResultMessage = "저장 중 오류가 발생했습니다: ${e.localizedMessage ?: "알 수 없는 오류"}"
+                    )
+                }
             } finally {
                 com.autologue.app.presentation.common.GlobalLoadingRegistry.awaitNextUiFrames(2)
                 com.autologue.app.presentation.common.GlobalLoadingRegistry.remove(loadingTaskId)
@@ -1153,7 +1245,97 @@ class ExpenseViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 삭제 대상 트랜잭션과 동일 일자·동일 금액·동일 입출금 방향·동일(또는 별칭 치환) 가맹점명을 가진
+     * 쌍둥이/중복 레코드를 모두 찾아 반환합니다. (.distinctBy 뒤에 숨어 있던 중복 레코드가 부활하는 현상 방지)
+     */
+    private fun findTwinTransactionsForDeletion(
+        targetTx: Transaction,
+        sourceList: List<Transaction>
+    ): List<Transaction> {
+        val targetDate = targetTx.timestamp.toLocalDate()
+        val targetIsDeposit = targetTx.isDepositTransaction()
+        val targetAliased = merchantAliasPreferences.resolveAlias(targetTx.merchantName, targetIsDeposit)
+            .ifBlank { targetTx.merchantName }
+        val targetNormRaw = targetTx.merchantName.replace(" ", "").lowercase()
+        val targetNormAliased = targetAliased.replace(" ", "").lowercase()
+        val targetMinute = "${targetTx.timestamp.year}_${targetTx.timestamp.monthValue}_${targetTx.timestamp.dayOfMonth}_${targetTx.timestamp.hour}_${targetTx.timestamp.minute}"
+
+        return sourceList.filter { other ->
+            if (other.id == targetTx.id) return@filter true
+            if (other.amount != targetTx.amount) return@filter false
+            if (other.isDepositTransaction() != targetIsDeposit) return@filter false
+            if (other.timestamp.toLocalDate() != targetDate) return@filter false
+
+            val otherAliased = merchantAliasPreferences.resolveAlias(other.merchantName, targetIsDeposit)
+                .ifBlank { other.merchantName }
+            val otherNormRaw = other.merchantName.replace(" ", "").lowercase()
+            val otherNormAliased = otherAliased.replace(" ", "").lowercase()
+            val otherMinute = "${other.timestamp.year}_${other.timestamp.monthValue}_${other.timestamp.dayOfMonth}_${other.timestamp.hour}_${other.timestamp.minute}"
+
+            otherMinute == targetMinute ||
+                otherNormRaw == targetNormRaw ||
+                otherNormAliased == targetNormAliased ||
+                otherNormRaw == targetNormAliased ||
+                otherNormAliased == targetNormRaw ||
+                merchantAliasPreferences.isSameMerchant(other.merchantName, targetTx.merchantName) ||
+                merchantAliasPreferences.isSameMerchant(otherAliased, targetAliased)
+        }
+    }
+
+    private fun buildDeleteSignatureVariants(txs: Collection<Transaction>): List<Transaction> {
+        val variants = mutableListOf<Transaction>()
+        for (tx in txs) {
+            variants.add(tx)
+            val isDeposit = tx.isDepositTransaction()
+            val aliased = merchantAliasPreferences.resolveAlias(tx.merchantName, isDeposit).trim()
+            if (aliased.isNotBlank() && aliased != tx.merchantName) {
+                variants.add(tx.copy(merchantName = aliased))
+            }
+        }
+        return variants
+    }
+
     fun deleteTransaction(transactionId: Long) {
+        val snapshot = _uiState.value
+        val currentTx = snapshot.allTransactions.find { it.id == transactionId }
+            ?: snapshot.editingTransaction?.takeIf { it.id == transactionId }
+            ?: snapshot.transactions.find { it.id == transactionId }
+
+        val twinTxs = if (currentTx != null) {
+            (findTwinTransactionsForDeletion(currentTx, snapshot.allTransactions) +
+                findTwinTransactionsForDeletion(currentTx, snapshot.transactions) +
+                listOf(currentTx)).distinctBy { it.id }
+        } else {
+            emptyList()
+        }
+
+        val targetIds = (twinTxs.map { it.id } + transactionId).toSet()
+        deletedTxIdsInSession.addAll(targetIds)
+
+        if (twinTxs.isNotEmpty()) {
+            expenseCustomMetaPreferences.markTransactionsDeleted(buildDeleteSignatureVariants(twinTxs))
+        }
+
+        // DB 비동기 삭제 완료를 기다리지 않고 인메모리 상태와 통계를 즉시 재계산하여 화면 리뉴얼 누락 원천 차단
+        recalcJob?.cancel()
+        _uiState.update { current ->
+            val remainingAll = current.allTransactions.filterNot { it.id in targetIds }
+            computeFilteredUiState(
+                current.copy(
+                    allTransactions = remainingAll,
+                    editingTransaction = null,
+                    isSaving = false,
+                    isLoading = false,
+                    selectedTransactionIds = current.selectedTransactionIds - targetIds
+                )
+            ).copy(
+                editingTransaction = null,
+                isSaving = false,
+                isLoading = false
+            )
+        }
+
         viewModelScope.launch {
             com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
                 title = "결제 내역 삭제 및 화면 갱신 중",
@@ -1161,78 +1343,7 @@ class ExpenseViewModel @Inject constructor(
                 accentColor = com.autologue.app.presentation.theme.MenuColors.expense
             ) {
                 withContext(Dispatchers.IO) {
-                    val currentTx = _uiState.value.allTransactions.find { it.id == transactionId }
-                    if (currentTx != null) {
-                        expenseCustomMetaPreferences.markTransactionDeleted(currentTx)
-                        val isVehicleRelated = currentTx.category == ExpenseCategory.FUEL ||
-                            currentTx.category == ExpenseCategory.CAR_MAINTENANCE ||
-                            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(currentTx.merchantName) ||
-                            com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(currentTx.merchantName)
-                        if (isVehicleRelated) {
-                            vehicleRepository.deleteRefuelingLogByTransaction(
-                                amount = currentTx.amount,
-                                date = currentTx.timestamp.toLocalDate(),
-                                merchantName = currentTx.merchantName
-                            )
-                        }
-                    }
-                    transactionRepository.deleteTransaction(transactionId)
-                }
-                closeEditDialog()
-            }
-        }
-    }
-
-    // 선택적 일괄 삭제 모드 제어
-    fun toggleSelectionMode() {
-        val current = _uiState.value.isSelectionMode
-        _uiState.value = _uiState.value.copy(
-            isSelectionMode = !current,
-            selectedTransactionIds = emptySet()
-        )
-    }
-
-    fun exitSelectionMode() {
-        _uiState.value = _uiState.value.copy(
-            isSelectionMode = false,
-            selectedTransactionIds = emptySet()
-        )
-    }
-
-    fun toggleSelectTransaction(id: Long) {
-        val currentSet = _uiState.value.selectedTransactionIds.toMutableSet()
-        if (id in currentSet) {
-            currentSet.remove(id)
-        } else {
-            currentSet.add(id)
-        }
-        _uiState.value = _uiState.value.copy(selectedTransactionIds = currentSet)
-    }
-
-    fun selectAllFilteredTransactions() {
-        val allFilteredIds = _uiState.value.filteredTransactions.map { it.id }.toSet()
-        val currentSet = _uiState.value.selectedTransactionIds
-        val nextSet = if (currentSet.size == allFilteredIds.size && allFilteredIds.isNotEmpty()) {
-            emptySet()
-        } else {
-            allFilteredIds
-        }
-        _uiState.value = _uiState.value.copy(selectedTransactionIds = nextSet)
-    }
-
-    fun deleteSelectedTransactions() {
-        val selectedIds = _uiState.value.selectedTransactionIds.toSet()
-        if (selectedIds.isEmpty()) return
-        viewModelScope.launch {
-            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
-                title = "선택 내역 일괄 삭제 및 화면 갱신 중",
-                message = "선택한 결제 기록 ${selectedIds.size}건을 삭제하고 화면을 갱신하고 있습니다...",
-                accentColor = com.autologue.app.presentation.theme.MenuColors.expense
-            ) {
-                val targets = _uiState.value.allTransactions.filter { it.id in selectedIds }
-                withContext(Dispatchers.IO) {
-                    expenseCustomMetaPreferences.markTransactionsDeleted(targets)
-                    for (tx in targets) {
+                    for (tx in twinTxs) {
                         val isVehicleRelated = tx.category == ExpenseCategory.FUEL ||
                             tx.category == ExpenseCategory.CAR_MAINTENANCE ||
                             com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
@@ -1244,14 +1355,125 @@ class ExpenseViewModel @Inject constructor(
                                 merchantName = tx.merchantName
                             )
                         }
-                        transactionRepository.deleteTransaction(tx.id)
+                    }
+                    for (id in targetIds) {
+                        transactionRepository.deleteTransaction(id)
                     }
                 }
-                _uiState.value = _uiState.value.copy(
+                closeEditDialog()
+            }
+        }
+    }
+
+    // 선택적 일괄 삭제 모드 제어
+    fun toggleSelectionMode() {
+        _uiState.update {
+            it.copy(
+                isSelectionMode = !it.isSelectionMode,
+                selectedTransactionIds = emptySet()
+            )
+        }
+    }
+
+    fun exitSelectionMode() {
+        _uiState.update {
+            it.copy(
+                isSelectionMode = false,
+                selectedTransactionIds = emptySet()
+            )
+        }
+    }
+
+    fun toggleSelectTransaction(id: Long) {
+        _uiState.update { current ->
+            val currentSet = current.selectedTransactionIds.toMutableSet()
+            if (id in currentSet) {
+                currentSet.remove(id)
+            } else {
+                currentSet.add(id)
+            }
+            current.copy(selectedTransactionIds = currentSet)
+        }
+    }
+
+    fun selectAllFilteredTransactions() {
+        _uiState.update { current ->
+            val allFilteredIds = current.filteredTransactions.map { it.id }.toSet()
+            val currentSet = current.selectedTransactionIds
+            val nextSet = if (currentSet.size == allFilteredIds.size && allFilteredIds.isNotEmpty()) {
+                emptySet()
+            } else {
+                allFilteredIds
+            }
+            current.copy(selectedTransactionIds = nextSet)
+        }
+    }
+
+    fun deleteSelectedTransactions() {
+        val snapshot = _uiState.value
+        val selectedIds = snapshot.selectedTransactionIds.toSet()
+        if (selectedIds.isEmpty()) return
+
+        val baseTargets = (snapshot.allTransactions.filter { it.id in selectedIds } +
+            snapshot.transactions.filter { it.id in selectedIds }).distinctBy { it.id }
+
+        val allTwinTargets = baseTargets.flatMap { target ->
+            findTwinTransactionsForDeletion(target, snapshot.allTransactions) +
+                findTwinTransactionsForDeletion(target, snapshot.transactions) +
+                listOf(target)
+        }.distinctBy { it.id }
+
+        val allTargetIds = (allTwinTargets.map { it.id } + selectedIds).toSet()
+        deletedTxIdsInSession.addAll(allTargetIds)
+
+        if (allTwinTargets.isNotEmpty()) {
+            expenseCustomMetaPreferences.markTransactionsDeleted(buildDeleteSignatureVariants(allTwinTargets))
+        }
+
+        val deletedDisplayCount = baseTargets.size.coerceAtLeast(selectedIds.size)
+        recalcJob?.cancel()
+        _uiState.update { current ->
+            val remainingAll = current.allTransactions.filterNot { it.id in allTargetIds }
+            computeFilteredUiState(
+                current.copy(
+                    allTransactions = remainingAll,
                     isSelectionMode = false,
                     selectedTransactionIds = emptySet(),
-                    syncResultMessage = "선택한 결제 기록 ${targets.size}건을 영구 삭제했습니다. (자동 동기화 시 재등록되지 않습니다)"
+                    isLoading = false,
+                    syncResultMessage = "선택한 결제 기록 ${deletedDisplayCount}건을 영구 삭제했습니다. (자동 동기화 시 재등록되지 않습니다)"
                 )
+            ).copy(
+                isSelectionMode = false,
+                selectedTransactionIds = emptySet(),
+                isLoading = false,
+                syncResultMessage = "선택한 결제 기록 ${deletedDisplayCount}건을 영구 삭제했습니다. (자동 동기화 시 재등록되지 않습니다)"
+            )
+        }
+
+        viewModelScope.launch {
+            com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
+                title = "선택 내역 일괄 삭제 및 화면 갱신 중",
+                message = "선택한 결제 기록 ${deletedDisplayCount}건을 삭제하고 화면을 갱신하고 있습니다...",
+                accentColor = com.autologue.app.presentation.theme.MenuColors.expense
+            ) {
+                withContext(Dispatchers.IO) {
+                    for (tx in allTwinTargets) {
+                        val isVehicleRelated = tx.category == ExpenseCategory.FUEL ||
+                            tx.category == ExpenseCategory.CAR_MAINTENANCE ||
+                            com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(tx.merchantName) ||
+                            com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(tx.merchantName)
+                        if (isVehicleRelated) {
+                            vehicleRepository.deleteRefuelingLogByTransaction(
+                                amount = tx.amount,
+                                date = tx.timestamp.toLocalDate(),
+                                merchantName = tx.merchantName
+                            )
+                        }
+                    }
+                    for (id in allTargetIds) {
+                        transactionRepository.deleteTransaction(id)
+                    }
+                }
             }
         }
     }
@@ -1574,40 +1796,55 @@ class ExpenseViewModel @Inject constructor(
     }
 
     fun openPasteSmsDialog() {
-        _uiState.value = _uiState.value.copy(isPasteSmsDialogOpen = true)
+        _uiState.update { it.copy(isPasteSmsDialogOpen = true) }
     }
 
     fun closePasteSmsDialog() {
-        _uiState.value = _uiState.value.copy(isPasteSmsDialogOpen = false)
+        _uiState.update { it.copy(isPasteSmsDialogOpen = false) }
     }
 
     fun dismissResultMessage() {
-        _uiState.value = _uiState.value.copy(syncResultMessage = null)
+        _uiState.update { it.copy(syncResultMessage = null) }
     }
 
     fun importPastedTransactions(transactions: List<Transaction>) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isPasteSmsDialogOpen = false,
-                isLoading = true,
-                loadingTitle = "결제 문자 등록 중",
-                loadingMessage = "붙여넣은 결제 내역을 가계부와 차계부에 반영하고 있습니다..."
-            )
-            val addedFuel = withContext(Dispatchers.IO) {
-                var addedCount = 0
-                for (tx in transactions) {
+            _uiState.update {
+                it.copy(
+                    isPasteSmsDialogOpen = false,
+                    isLoading = true,
+                    loadingTitle = "결제 문자 등록 중",
+                    loadingMessage = "붙여넣은 결제 내역을 가계부와 차계부에 반영하고 있습니다..."
+                )
+            }
+            val validTransactions = transactions.filterNot { tx ->
+                tx.paymentMethod == PaymentMethod.NAVER_PAY ||
+                    com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                        merchantName = tx.merchantName,
+                        cardOrBankName = tx.cardOrBankName,
+                        originalText = tx.originalText
+                    )
+            }
+            val (addedCount, addedFuel) = withContext(Dispatchers.IO) {
+                var insertedCount = 0
+                for (tx in validTransactions) {
                     runCatching {
-                        processTransactionUseCase(tx)
-                        addedCount++
+                        val id = processTransactionUseCase(tx)
+                        if (id > 0L) insertedCount++
                     }
                 }
                 val allTxs = transactionRepository.getAllTransactionsFlow().first()
-                vehicleRepository.syncRefuelingFromTransactions(allTxs)
+                val fuelCount = vehicleRepository.syncRefuelingFromTransactions(allTxs)
+                Pair(insertedCount, fuelCount)
             }
 
             val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
-            val msg = "결제 내역 ${transactions.size}건을 가계부에 성공적으로 등록했습니다.$fuelMsg"
-            _uiState.value = _uiState.value.copy(isLoading = false, syncResultMessage = msg)
+            val msg = if (validTransactions.isEmpty() && transactions.isNotEmpty()) {
+                "'네이버페이' 항목은 이력 등록 제외 대상입니다."
+            } else {
+                "결제 내역 ${addedCount}건을 가계부에 성공적으로 등록했습니다.$fuelMsg"
+            }
+            _uiState.update { it.copy(isLoading = false, syncResultMessage = msg) }
         }
     }
 
@@ -1619,17 +1856,21 @@ class ExpenseViewModel @Inject constructor(
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
             if (!hasPerm) {
-                _uiState.value = _uiState.value.copy(
-                    syncResultMessage = "문자(SMS) 읽기 권한이 필요합니다. 설정에서 권한을 허용해주세요."
-                )
+                _uiState.update {
+                    it.copy(
+                        syncResultMessage = "문자(SMS) 읽기 권한이 필요합니다. 설정에서 권한을 허용해주세요."
+                    )
+                }
                 return@launch
             }
 
-            _uiState.value = _uiState.value.copy(
-                isLoading = true,
-                loadingTitle = "결제 문자 동기화 중",
-                loadingMessage = "단말기 결제 문자를 분석하여 가계부를 동기화하고 있습니다..."
-            )
+            _uiState.update {
+                it.copy(
+                    isLoading = true,
+                    loadingTitle = "결제 문자 동기화 중",
+                    loadingMessage = "단말기 결제 문자를 분석하여 가계부를 동기화하고 있습니다..."
+                )
+            }
 
             val msg = withContext(Dispatchers.IO) {
                 runCatching { transactionRepository.cleanDuplicates() }
@@ -1637,9 +1878,16 @@ class ExpenseViewModel @Inject constructor(
                 var newCount = 0
                 for (tx in scanResult.transactions) {
                     if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
+                    if (tx.paymentMethod == PaymentMethod.NAVER_PAY ||
+                        com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                            merchantName = tx.merchantName,
+                            cardOrBankName = tx.cardOrBankName,
+                            originalText = tx.originalText
+                        )
+                    ) continue
                     runCatching {
-                        processTransactionUseCase(tx)
-                        newCount++
+                        val id = processTransactionUseCase(tx)
+                        if (id > 0L) newCount++
                     }
                 }
 
@@ -1660,7 +1908,7 @@ class ExpenseViewModel @Inject constructor(
                         "결제 문자 자동 동기화를 완료했습니다."
                 }
             }
-            _uiState.value = _uiState.value.copy(isLoading = false, syncResultMessage = msg)
+            _uiState.update { it.copy(isLoading = false, syncResultMessage = msg) }
         }
     }
 }

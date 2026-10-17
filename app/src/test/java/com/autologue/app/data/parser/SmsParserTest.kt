@@ -206,5 +206,73 @@ class SmsParserTest {
         assertTrue(nhKeys.contains("NH농협카드#2*7*"))
         assertTrue(nhKeys.contains("NH농협카드"))
     }
+
+    @Test
+    fun `네이버페이 관련 문자 및 알림은 모든 경로에서 이력 등록 대상에서 제외되어야 한다`() {
+        val naverPaySms1 = """
+            [Web발신]
+            네이버페이 결제완료
+            25,000원
+            10/17 14:20
+            네이버파이낸셜
+        """.trimIndent()
+        assertTrue(SmsParser.isNaverPayExcluded(originalText = naverPaySms1))
+        assertNull(SmsParser.parse("네이버페이", naverPaySms1))
+
+        val naverPayCardSms = """
+            [Web발신]
+            신한카드(1234) 승인 정*우 32,000원(일시불) 10/17 15:10 네이버페이 누적 450,000원
+        """.trimIndent()
+        assertTrue(SmsParser.isNaverPayExcluded(merchantName = "네이버페이", cardOrBankName = "신한카드", originalText = naverPayCardSms))
+        assertNull(SmsParser.parse("신한카드", naverPayCardSms))
+
+        val npayNotif = NotificationParser.parse(
+            packageName = "com.nhn.android.search",
+            title = "네이버페이 결제",
+            text = "네이버페이 19,800원 결제 완료"
+        )
+        assertNull(npayNotif)
+
+        // 일반 가맹점 결제는 정상 파싱되어야 함
+        val normalCardSms = """
+            [Web발신]
+            신한카드(1234) 승인 정*우 12,000원(일시불) 10/17 15:30 스타벅스판교점 누적 462,000원
+        """.trimIndent()
+        val normalTx = SmsParser.parse("신한카드", normalCardSms)
+        assertNotNull(normalTx)
+        assertEquals(12000L, normalTx!!.amount)
+    }
+
+    @Test
+    fun `특정 항목 삭제 시 동일 날짜 및 금액과 가맹점의 쌍둥이 레코드까지 함께 삭제 판별되어야 한다`() {
+        val prefs = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences()
+        val txPrimary = com.autologue.app.domain.model.Transaction(
+            id = 101L,
+            amount = 15000L,
+            merchantName = "스타벅스 판교점",
+            originalText = "[Web발신] 신한카드 승인 15,000원 스타벅스 판교점",
+            timestamp = LocalDateTime.of(2026, 10, 17, 12, 30, 10),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
+            category = com.autologue.app.domain.model.ExpenseCategory.CAFE,
+            cardOrBankName = "신한카드"
+        )
+        // 동일 거래가 1분 뒤 다른 원문(MMS/알림 등) 및 다른 ID로 중복 저장되어 있던 쌍둥이 레코드
+        val txTwin = com.autologue.app.domain.model.Transaction(
+            id = 102L,
+            amount = 15000L,
+            merchantName = "스타벅스판교점",
+            originalText = "(결제) 15,000원 스타벅스판교점 / 신한카드",
+            timestamp = LocalDateTime.of(2026, 10, 17, 12, 31, 5),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
+            category = com.autologue.app.domain.model.ExpenseCategory.CAFE,
+            cardOrBankName = "신한카드"
+        )
+
+        prefs.markTransactionDeleted(txPrimary)
+
+        assertTrue(prefs.isTransactionDeleted(txPrimary))
+        assertTrue(prefs.isTransactionDeleted(txTwin))
+    }
 }
+
 

@@ -41,7 +41,7 @@ object NotificationParser {
 
     fun parse(packageName: String, title: String, text: String): ParsedNotificationResult? {
         val combined = "$title\n$text".trim()
-        if (SmsParser.isNonPaymentMessage(combined)) {
+        if (SmsParser.isNaverPayExcluded(cardOrBankName = packageName, originalText = combined) || SmsParser.isNonPaymentMessage(combined)) {
             return null
         }
 
