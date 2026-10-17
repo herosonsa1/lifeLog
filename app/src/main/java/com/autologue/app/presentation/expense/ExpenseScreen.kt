@@ -45,8 +45,14 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
@@ -468,51 +474,69 @@ fun ExpenseScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // [카테고리별 지출] / [사용자별 지출] 전환 탭
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Slate100,
-                            border = BorderStroke(1.dp, Slate200)
+                        // [카테고리별 지출] / [사용자별 지출] 전환 탭 (48dp 강제 확장 없는 32dp 세그먼트 컨트롤)
+                        Row(
+                            modifier = Modifier
+                                .height(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Slate100)
+                                .border(1.dp, Slate200, RoundedCornerShape(8.dp))
+                                .padding(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(modifier = Modifier.padding(2.dp)) {
-                                val isByCat = uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY
-                                Surface(
-                                    onClick = { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_CATEGORY) },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isByCat) PureWhite else Color.Transparent,
-                                    shadowElevation = if (isByCat) 1.dp else 0.dp
-                                ) {
-                                    Text(
-                                        text = "카테고리별 지출",
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isByCat) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isByCat) Slate900 else Slate600,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                    )
-                                }
-                                Surface(
-                                    onClick = { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_USER) },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (!isByCat) PureWhite else Color.Transparent,
-                                    shadowElevation = if (!isByCat) 1.dp else 0.dp
-                                ) {
-                                    Text(
-                                        text = "사용자별 지출",
-                                        fontSize = 12.sp,
-                                        fontWeight = if (!isByCat) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (!isByCat) Slate900 else Slate600,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                    )
-                                }
+                            val isByCat = uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isByCat) PureWhite else Color.Transparent)
+                                    .clickable { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_CATEGORY) }
+                                    .padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "카테고리별 지출",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (isByCat) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isByCat) Slate900 else Slate600
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (!isByCat) PureWhite else Color.Transparent)
+                                    .clickable { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_USER) }
+                                    .padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "사용자별 지출",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (!isByCat) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (!isByCat) Slate900 else Slate600
+                                )
                             }
                         }
 
                         if (uiState.hasActiveSubFilter) {
-                            Text(
-                                text = "필터 해제 ✕",
-                                style = AppTypography.caption.copy(color = AppColors.primary, fontWeight = FontWeight.Bold),
-                                modifier = Modifier.clickable { viewModel.clearAllSubFilters() }
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .height(28.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFEFF6FF))
+                                    .border(1.dp, Color(0xFFBFDBFE), RoundedCornerShape(6.dp))
+                                    .clickable { viewModel.clearAllSubFilters() }
+                                    .padding(horizontal = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "필터 초기화 ✕",
+                                    fontSize = 11.sp,
+                                    color = AppColors.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -695,7 +719,7 @@ fun ExpenseScreen(
                                 } else {
                                     "결제 내역 (${uiState.filteredTransactions.size}건)"
                                 },
-                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800, fontSize = 13.sp)
                             )
                             if (uiState.hasActiveSubFilter) {
                                 Text(
@@ -711,31 +735,45 @@ fun ExpenseScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 조회조건 필터 모달 열기 버튼
-                            Surface(
-                                onClick = { viewModel.openDateRangeDialog() },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (uiState.hasActiveSubFilter) Color(0xFFDBEAFE) else Slate100,
-                                border = BorderStroke(1.dp, if (uiState.hasActiveSubFilter) Color(0xFF93C5FD) else Slate300)
+                            // 조회조건 필터 모달 열기 버튼 (고정 높이 30dp)
+                            Box(
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (uiState.hasActiveSubFilter) Color(0xFFDBEAFE) else Slate100)
+                                    .border(
+                                        1.dp,
+                                        if (uiState.hasActiveSubFilter) Color(0xFF60A5FA) else Slate300,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { viewModel.openDateRangeDialog() }
+                                    .padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "상세 필터",
-                                    fontSize = 11.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (uiState.hasActiveSubFilter) Color(0xFF1D4ED8) else Slate700,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    color = if (uiState.hasActiveSubFilter) Color(0xFF1D4ED8) else Slate700
                                 )
                             }
 
-                            // 선택 삭제 토글 버튼
-                            Surface(
-                                onClick = { viewModel.toggleSelectionMode() },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (uiState.isSelectionMode) Color(0xFFFEE2E2) else Slate100,
-                                border = BorderStroke(1.dp, if (uiState.isSelectionMode) Color(0xFFFCA5A5) else Slate300)
+                            // 선택 삭제 토글 버튼 (고정 높이 30dp)
+                            Box(
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (uiState.isSelectionMode) Color(0xFFFEE2E2) else Slate100)
+                                    .border(
+                                        1.dp,
+                                        if (uiState.isSelectionMode) Color(0xFFFCA5A5) else Slate300,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { viewModel.toggleSelectionMode() }
+                                    .padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
@@ -747,7 +785,7 @@ fun ExpenseScreen(
                                     )
                                     Text(
                                         text = if (uiState.isSelectionMode) "선택 취소" else "선택 삭제",
-                                        fontSize = 11.sp,
+                                        fontSize = 11.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (uiState.isSelectionMode) Color(0xFFDC2626) else Slate700
                                     )
@@ -810,197 +848,172 @@ fun ExpenseScreen(
                         }
                     }
 
-                    // [1단] 카테고리별 조회 필터 칩 바
-                    Row(
+                    // 가로폭에 맞춰 정렬된 2단 인라인 필터 패널 (좌측 라벨 고정폭 정렬 + 우측 균일 높이 칩)
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = Spacing.xl, vertical = Spacing.xxs),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = Spacing.xl, vertical = 4.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Slate50)
+                            .border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "카테고리별:",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Slate500
-                        )
-                        val isAllCatSelected = uiState.selectedCategory == null &&
-                            uiState.selectedCustomCategoryName == null &&
-                            !uiState.isRecurringFilterOnly
-                        Surface(
-                            onClick = { viewModel.setCategoryFilter(null) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isAllCatSelected) AppColors.primary else Slate50,
-                            shadowElevation = if (isAllCatSelected) 2.dp else 1.dp,
-                            border = BorderStroke(1.dp, if (isAllCatSelected) AppColors.primaryDark else Slate200)
+                        // [1단] 카테고리별 조회 필터 칩 바
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "전체 (${uiState.transactions.size})",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isAllCatSelected) PureWhite else Slate700,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                            )
-                        }
-
-                        // 정기지출 모아보기 필터 칩
-                        val currentMonthRecurringCount = uiState.transactions.count { it.id in uiState.recurringTransactionIds }
-                        Surface(
-                            onClick = { viewModel.toggleRecurringFilter() },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (uiState.isRecurringFilterOnly) Color(0xFF4338CA) else Color(0xFFEEF2FF),
-                            shadowElevation = if (uiState.isRecurringFilterOnly) 2.dp else 1.dp,
-                            border = BorderStroke(1.dp, if (uiState.isRecurringFilterOnly) Color(0xFF3730A3) else Color(0xFFC7D2FE))
-                        ) {
-                            Text(
-                                text = "정기지출 ($currentMonthRecurringCount)",
-                                fontSize = 11.sp,
-                                fontWeight = if (uiState.isRecurringFilterOnly) FontWeight.Bold else FontWeight.Medium,
-                                color = if (uiState.isRecurringFilterOnly) PureWhite else Color(0xFF4338CA),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                            )
-                        }
-
-                        // 기본 카테고리 필터 칩 (지출 내역이 있거나 등록된 모든 기본 카테고리 표시)
-                        val builtInCatsToShow = (uiState.categoryTotals.keys +
-                            uiState.managedCategories.filter { it.isBuiltIn }.map { it.baseCategory }).distinct()
-                        builtInCatsToShow.forEach { cat ->
-                            val isSelected = uiState.selectedCategory == cat &&
-                                uiState.selectedCustomCategoryName == null &&
-                                !uiState.isRecurringFilterOnly
-                            val count = uiState.transactions.count { tx ->
-                                if (cat == ExpenseCategory.ETC) {
-                                    tx.category == ExpenseCategory.ETC && uiState.customCategoryByTxId[tx.id].isNullOrBlank()
-                                } else {
-                                    tx.category == cat
-                                }
-                            }
-                            val displayCat = viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
-                            Surface(
-                                onClick = { viewModel.toggleCategoryFilter(cat) },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) AppColors.primary else Slate50,
-                                shadowElevation = if (isSelected) 2.dp else 1.dp,
-                                border = BorderStroke(1.dp, if (isSelected) AppColors.primaryDark else Slate200)
+                            Box(
+                                modifier = Modifier.width(52.dp),
+                                contentAlignment = Alignment.CenterStart
                             ) {
                                 Text(
-                                    text = "$displayCat ($count)",
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) PureWhite else Slate700,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                )
-                            }
-                        }
-
-                        // 커스텀 추가된 카테고리 필터 칩
-                        uiState.managedCategories.filter { !it.isBuiltIn }.forEach { customItem ->
-                            val count = uiState.transactions.count { uiState.customCategoryByTxId[it.id] == customItem.displayName }
-                            val isSelected = uiState.selectedCustomCategoryName == customItem.displayName
-                            Surface(
-                                onClick = {
-                                    viewModel.setCustomCategoryFilter(
-                                        if (isSelected) null else customItem.displayName
-                                    )
-                                },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) Color(0xFF0D9488) else Color(0xFFF0FDFA),
-                                border = BorderStroke(1.dp, if (isSelected) Color(0xFF0F766E) else Color(0xFF99F6E4))
-                            ) {
-                                Text(
-                                    text = "${customItem.displayName} ($count)",
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) PureWhite else Color(0xFF0F766E),
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    // [2단] 사용자별 조회 필터 칩 바 (항상 표시)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = Spacing.xl, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "사용자별:",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Slate500
-                        )
-                        val isAllUsers = uiState.selectedUserClassification == null
-                        Surface(
-                            onClick = { viewModel.toggleUserClassificationFilter(null) },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (isAllUsers) Slate800 else Slate50,
-                            border = BorderStroke(1.dp, if (isAllUsers) Slate900 else Slate200)
-                        ) {
-                            Text(
-                                text = "전체 (${uiState.transactions.size})",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isAllUsers) PureWhite else Slate600,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                        uiState.userClassifications.forEach { uc ->
-                            val isSel = uiState.selectedUserClassification == uc.name
-                            val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
-                            val count = uiState.transactions.count { uiState.userClassByTxId[it.id]?.name == uc.name }
-                            Surface(
-                                onClick = { viewModel.toggleUserClassificationFilter(uc.name) },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isSel) fg else bg,
-                                border = BorderStroke(1.dp, fg)
-                            ) {
-                                Text(
-                                    text = "${uc.name} ($count)",
+                                    text = "카테고리",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isSel) PureWhite else fg,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    color = Slate600
                                 )
                             }
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val isAllCatSelected = uiState.selectedCategory == null &&
+                                    uiState.selectedCustomCategoryName == null &&
+                                    !uiState.isRecurringFilterOnly
+                                ExpenseInlineFilterChip(
+                                    text = "전체 (${uiState.transactions.size})",
+                                    isSelected = isAllCatSelected,
+                                    onClick = { viewModel.setCategoryFilter(null) }
+                                )
+
+                                // 정기지출 모아보기 필터 칩
+                                val currentMonthRecurringCount = uiState.transactions.count { it.id in uiState.recurringTransactionIds }
+                                ExpenseInlineFilterChip(
+                                    text = "정기지출 ($currentMonthRecurringCount)",
+                                    isSelected = uiState.isRecurringFilterOnly,
+                                    onClick = { viewModel.toggleRecurringFilter() },
+                                    selectedContainerColor = Color(0xFF4338CA),
+                                    selectedBorderColor = Color(0xFF3730A3),
+                                    unselectedContainerColor = Color(0xFFEEF2FF),
+                                    unselectedBorderColor = Color(0xFFC7D2FE),
+                                    unselectedContentColor = Color(0xFF4338CA)
+                                )
+
+                                // 기본 카테고리 필터 칩
+                                val builtInCatsToShow = (uiState.categoryTotals.keys +
+                                    uiState.managedCategories.filter { it.isBuiltIn }.map { it.baseCategory }).distinct()
+                                builtInCatsToShow.forEach { cat ->
+                                    val isSelected = uiState.selectedCategory == cat &&
+                                        uiState.selectedCustomCategoryName == null &&
+                                        !uiState.isRecurringFilterOnly
+                                    val count = uiState.transactions.count { tx ->
+                                        if (cat == ExpenseCategory.ETC) {
+                                            tx.category == ExpenseCategory.ETC && uiState.customCategoryByTxId[tx.id].isNullOrBlank()
+                                        } else {
+                                            tx.category == cat
+                                        }
+                                    }
+                                    val displayCat = viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                                    ExpenseInlineFilterChip(
+                                        text = "$displayCat ($count)",
+                                        isSelected = isSelected,
+                                        onClick = { viewModel.toggleCategoryFilter(cat) }
+                                    )
+                                }
+
+                                // 커스텀 추가된 카테고리 필터 칩
+                                uiState.managedCategories.filter { !it.isBuiltIn }.forEach { customItem ->
+                                    val count = uiState.transactions.count { uiState.customCategoryByTxId[it.id] == customItem.displayName }
+                                    val isSelected = uiState.selectedCustomCategoryName == customItem.displayName
+                                    ExpenseInlineFilterChip(
+                                        text = "${customItem.displayName} ($count)",
+                                        isSelected = isSelected,
+                                        onClick = {
+                                            viewModel.setCustomCategoryFilter(
+                                                if (isSelected) null else customItem.displayName
+                                            )
+                                        },
+                                        selectedContainerColor = Color(0xFF0D9488),
+                                        selectedBorderColor = Color(0xFF0F766E)
+                                    )
+                                }
+                            }
                         }
-                        // 미지정(사용자 미분류) 필터 칩
-                        val unassignedCount = uiState.transactions.count { uiState.userClassByTxId[it.id] == null }
-                        val isUnassignedSel = uiState.selectedUserClassification == UNASSIGNED_USER_FILTER
-                        Surface(
-                            onClick = { viewModel.toggleUserClassificationFilter(UNASSIGNED_USER_FILTER) },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (isUnassignedSel) Slate700 else Slate100,
-                            border = BorderStroke(1.dp, if (isUnassignedSel) Slate800 else Slate300)
+
+                        // [2단] 사용자별 조회 필터 칩 바 (좌측 라벨 폭 52.dp 동일 고정 -> 1단과 첫 칩 시작점 100% 일치)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "미지정 ($unassignedCount)",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isUnassignedSel) PureWhite else Slate600,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                        // 법인카드 빠른 필터 칩
-                        val corpCount = uiState.transactions.count { uiState.corporateByTxId[it.id] == true }
-                        val isCorpSelected = uiState.selectedCorporateFilter == true
-                        Surface(
-                            onClick = { viewModel.setCorporateFilter(true) },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (isCorpSelected) Color(0xFFB45309) else Color(0xFFFEF3C7),
-                            border = BorderStroke(1.dp, Color(0xFFF59E0B))
-                        ) {
-                            Text(
-                                text = "법인카드 ($corpCount)",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isCorpSelected) PureWhite else Color(0xFFB45309),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
+                            Box(
+                                modifier = Modifier.width(52.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Text(
+                                    text = "사용자별",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Slate600
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val isAllUsers = uiState.selectedUserClassification == null
+                                ExpenseInlineFilterChip(
+                                    text = "전체 (${uiState.transactions.size})",
+                                    isSelected = isAllUsers,
+                                    onClick = { viewModel.toggleUserClassificationFilter(null) },
+                                    selectedContainerColor = Slate800,
+                                    selectedBorderColor = Slate900
+                                )
+
+                                uiState.userClassifications.forEach { uc ->
+                                    val isSel = uiState.selectedUserClassification == uc.name
+                                    val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
+                                    val count = uiState.transactions.count { uiState.userClassByTxId[it.id]?.name == uc.name }
+                                    ExpenseInlineFilterChip(
+                                        text = "${uc.name} ($count)",
+                                        isSelected = isSel,
+                                        onClick = { viewModel.toggleUserClassificationFilter(uc.name) },
+                                        dotColor = fg,
+                                        selectedContainerColor = fg,
+                                        selectedBorderColor = fg
+                                    )
+                                }
+
+                                // 미지정(사용자 미분류) 필터 칩
+                                val unassignedCount = uiState.transactions.count { uiState.userClassByTxId[it.id] == null }
+                                val isUnassignedSel = uiState.selectedUserClassification == UNASSIGNED_USER_FILTER
+                                ExpenseInlineFilterChip(
+                                    text = "미지정 ($unassignedCount)",
+                                    isSelected = isUnassignedSel,
+                                    onClick = { viewModel.toggleUserClassificationFilter(UNASSIGNED_USER_FILTER) },
+                                    selectedContainerColor = Slate700,
+                                    selectedBorderColor = Slate800
+                                )
+
+                                // 법인카드 빠른 필터 칩
+                                val corpCount = uiState.transactions.count { uiState.corporateByTxId[it.id] == true }
+                                val isCorpSelected = uiState.selectedCorporateFilter == true
+                                ExpenseInlineFilterChip(
+                                    text = "법인카드 ($corpCount)",
+                                    isSelected = isCorpSelected,
+                                    onClick = { viewModel.setCorporateFilter(true) },
+                                    dotColor = Color(0xFFD97706),
+                                    selectedContainerColor = Color(0xFFB45309),
+                                    selectedBorderColor = Color(0xFF92400E)
+                                )
+                            }
                         }
                     }
 
@@ -1447,7 +1460,7 @@ fun SaaSTransactionRow(
 }
 
 /**
- * 조회조건 필터 설정 팝업 다이얼로그 (조회 기간 + 사용자별 + 카테고리별 + 카드/법인 구분)
+ * 조회조건 필터 설정 팝업 다이얼로그 (가로폭 100% 정렬 그리드 + 균일 높이 칩 + 깔끔한 엔터프라이즈 라이트 테마)
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1478,321 +1491,373 @@ fun DateRangeFilterDialog(
 ) {
     var tempYearMonth by remember { mutableStateOf(currentYearMonth) }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("조회조건 필터 설정", style = AppTypography.h2)
-                TextButton(
-                    onClick = onClearAllFilters,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Text("조건 초기화", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
-                }
-            }
-        },
-        text = {
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 20.dp)
+                .heightIn(max = 680.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = PureWhite,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, Slate200)
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(horizontal = 18.dp, vertical = 16.dp)
             ) {
-                // 1. 사용자별 조회 필터 섹션
+                // 상단 헤더: 타이틀 + 조건 초기화 버튼
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "1. 사용자별 조회",
-                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
+                        text = "조회조건 필터 설정",
+                        style = AppTypography.h2.copy(fontWeight = FontWeight.Bold, color = Slate900)
                     )
-                    Text(
-                        text = "사용자 분류 관리 →",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF6D28D9),
-                        modifier = Modifier.clickable { onOpenUserManage() }
-                    )
-                }
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val isAllUsers = selectedUserClassification == null
-                    Surface(
-                        onClick = { onSelectUserClassification(null) },
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isAllUsers) Slate800 else Slate50,
-                        border = BorderStroke(1.dp, if (isAllUsers) Slate900 else Slate200)
+                    Box(
+                        modifier = Modifier
+                            .height(28.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFFFEF2F2))
+                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(6.dp))
+                            .clickable { onClearAllFilters() }
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "전체 사용자",
-                            fontSize = 12.sp,
+                            text = "조건 초기화",
+                            fontSize = 11.5.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (isAllUsers) PureWhite else Slate700,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            color = Color(0xFFDC2626)
                         )
                     }
+                }
 
-                    userClassifications.forEach { uc ->
-                        val isSel = selectedUserClassification == uc.name
-                        val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
-                        Surface(
-                            onClick = {
-                                onSelectUserClassification(if (isSel) null else uc.name)
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isSel) fg else bg,
-                            border = BorderStroke(1.dp, fg)
+                Spacer(modifier = Modifier.height(12.dp))
+                HairlineDivider()
+
+                // 중앙 스크롤 영역 (3열/4열 균등 그리드 정렬)
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // 1. 사용자별 조회 필터 섹션 (3열 균등 그리드)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = uc.name,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSel) PureWhite else fg,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                text = "1. 사용자별 조회",
+                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800, fontSize = 12.5.sp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFF5F3FF))
+                                    .border(1.dp, Color(0xFFDDD6FE), RoundedCornerShape(6.dp))
+                                    .clickable { onOpenUserManage() }
+                                    .padding(horizontal = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "사용자 분류 관리 →",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF6D28D9)
+                                )
+                            }
+                        }
+
+                        val userGridOptions = buildList {
+                            val isAllUsers = selectedUserClassification == null
+                            add(
+                                ExpenseGridOptionItem(
+                                    label = "전체 사용자",
+                                    isSelected = isAllUsers,
+                                    selectedContainerColor = Slate800,
+                                    selectedBorderColor = Slate900,
+                                    onClick = { onSelectUserClassification(null) }
+                                )
+                            )
+                            userClassifications.forEach { uc ->
+                                val isSel = selectedUserClassification == uc.name
+                                val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
+                                add(
+                                    ExpenseGridOptionItem(
+                                        label = uc.name,
+                                        isSelected = isSel,
+                                        dotColor = fg,
+                                        selectedContainerColor = fg,
+                                        selectedBorderColor = fg,
+                                        onClick = { onSelectUserClassification(if (isSel) null else uc.name) }
+                                    )
+                                )
+                            }
+                            val isUnassignedSel = selectedUserClassification == UNASSIGNED_USER_FILTER
+                            add(
+                                ExpenseGridOptionItem(
+                                    label = "미지정",
+                                    isSelected = isUnassignedSel,
+                                    selectedContainerColor = Slate700,
+                                    selectedBorderColor = Slate800,
+                                    onClick = { onSelectUserClassification(if (isUnassignedSel) null else UNASSIGNED_USER_FILTER) }
+                                )
                             )
                         }
+                        ExpenseUniformFilterGrid(
+                            options = userGridOptions,
+                            columns = 3
+                        )
                     }
 
-                    val isUnassignedSel = selectedUserClassification == UNASSIGNED_USER_FILTER
-                    Surface(
-                        onClick = {
-                            onSelectUserClassification(if (isUnassignedSel) null else UNASSIGNED_USER_FILTER)
-                        },
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isUnassignedSel) Slate700 else Slate100,
-                        border = BorderStroke(1.dp, if (isUnassignedSel) Slate800 else Slate300)
-                    ) {
-                        Text(
-                            text = "미지정",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isUnassignedSel) PureWhite else Slate600,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    HairlineDivider()
+
+                    // 2. 카테고리별 조회 필터 섹션 (3열 균등 그리드)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "2. 카테고리별 조회",
+                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800, fontSize = 12.5.sp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFF0FDF4))
+                                    .border(1.dp, Color(0xFFBBF7D0), RoundedCornerShape(6.dp))
+                                    .clickable { onOpenCategoryManage() }
+                                    .padding(horizontal = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "카테고리 관리 →",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF15803D)
+                                )
+                            }
+                        }
+
+                        val categoryGridOptions = buildList {
+                            val isAllCat = selectedCategory == null &&
+                                selectedCustomCategoryName == null &&
+                                !isRecurringFilterOnly
+                            add(
+                                ExpenseGridOptionItem(
+                                    label = "전체 카테고리",
+                                    isSelected = isAllCat,
+                                    onClick = { onSelectCategory(null) }
+                                )
+                            )
+                            add(
+                                ExpenseGridOptionItem(
+                                    label = "정기지출만",
+                                    isSelected = isRecurringFilterOnly,
+                                    selectedContainerColor = Color(0xFF4338CA),
+                                    selectedBorderColor = Color(0xFF3730A3),
+                                    unselectedContainerColor = Color(0xFFEEF2FF),
+                                    unselectedBorderColor = Color(0xFFC7D2FE),
+                                    unselectedContentColor = Color(0xFF4338CA),
+                                    onClick = onToggleRecurring
+                                )
+                            )
+                            managedCategories.filter { it.isBuiltIn }.forEach { item ->
+                                val isSel = selectedCategory == item.baseCategory &&
+                                    selectedCustomCategoryName == null &&
+                                    !isRecurringFilterOnly
+                                add(
+                                    ExpenseGridOptionItem(
+                                        label = item.displayName,
+                                        isSelected = isSel,
+                                        onClick = { onSelectCategory(if (isSel) null else item.baseCategory) }
+                                    )
+                                )
+                            }
+                            managedCategories.filter { !it.isBuiltIn }.forEach { customItem ->
+                                val isSel = selectedCustomCategoryName == customItem.displayName
+                                add(
+                                    ExpenseGridOptionItem(
+                                        label = customItem.displayName,
+                                        isSelected = isSel,
+                                        selectedContainerColor = Color(0xFF0D9488),
+                                        selectedBorderColor = Color(0xFF0F766E),
+                                        onClick = { onSelectCustomCategory(if (isSel) null else customItem.displayName) }
+                                    )
+                                )
+                            }
+                        }
+                        ExpenseUniformFilterGrid(
+                            options = categoryGridOptions,
+                            columns = 3
                         )
+                    }
+
+                    HairlineDivider()
+
+                    // 3. 카드/결제 구분 조회 (3열 균등 그리드)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "3. 카드/결제 구분 조회",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800, fontSize = 12.5.sp)
+                        )
+                        val corpGridOptions = listOf(
+                            null to "전체",
+                            false to "개인결제만",
+                            true to "법인카드만"
+                        ).map { (value, label) ->
+                            val isSel = selectedCorporateFilter == value
+                            ExpenseGridOptionItem(
+                                label = label,
+                                isSelected = isSel,
+                                selectedContainerColor = Color(0xFFB45309),
+                                selectedBorderColor = Color(0xFF92400E),
+                                onClick = { onSelectCorporateFilter(value) }
+                            )
+                        }
+                        ExpenseUniformFilterGrid(
+                            options = corpGridOptions,
+                            columns = 3
+                        )
+                    }
+
+                    HairlineDivider()
+
+                    // 4. 조회 기간 설정 (4열 균등 프리셋 + 월별 네비게이터 바)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "4. 조회 기간 선택",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800, fontSize = 12.5.sp)
+                        )
+                        val presetOptions = listOf("이번 달", "지난 달", "최근 3개월", "올해 전체").map { preset ->
+                            ExpenseGridOptionItem(
+                                label = preset,
+                                isSelected = false,
+                                unselectedContainerColor = Color(0xFFEFF6FF),
+                                unselectedBorderColor = Color(0xFFBFDBFE),
+                                unselectedContentColor = AppColors.primary,
+                                onClick = { onSelectPreset(preset) }
+                            )
+                        }
+                        ExpenseUniformFilterGrid(
+                            options = presetOptions,
+                            columns = 4,
+                            itemHeight = 34.dp,
+                            fontSize = 11.5.sp
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Slate50)
+                                .border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                                .padding(horizontal = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { tempYearMonth = tempYearMonth.minusMonths(1) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Default.ChevronLeft, contentDescription = "이전달", tint = Slate700)
+                            }
+                            Text(
+                                text = "${tempYearMonth.year}년 ${tempYearMonth.monthValue}월",
+                                style = AppTypography.h2.copy(fontWeight = FontWeight.Bold, color = Slate900)
+                            )
+                            IconButton(
+                                onClick = { tempYearMonth = tempYearMonth.plusMonths(1) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Default.ChevronRight, contentDescription = "다음달", tint = Slate700)
+                            }
+                        }
+
+                        if (tempYearMonth != currentYearMonth || currentMode != ExpenseDateFilterMode.MONTH) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(38.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(AppColors.primary)
+                                    .clickable { onSelectMonth(tempYearMonth) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "${tempYearMonth.year}년 ${tempYearMonth.monthValue}월로 기간 변경",
+                                    color = PureWhite,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
 
                 HairlineDivider()
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // 2. 카테고리별 조회 필터 섹션
+                // 하단 버튼 영역 (가로폭 100% 2열 균등 배치)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "2. 카테고리별 조회",
-                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
-                    )
-                    Text(
-                        text = "카테고리 관리 →",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF15803D),
-                        modifier = Modifier.clickable { onOpenCategoryManage() }
-                    )
-                }
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val isAllCat = selectedCategory == null &&
-                        selectedCustomCategoryName == null &&
-                        !isRecurringFilterOnly
-                    Surface(
-                        onClick = { onSelectCategory(null) },
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isAllCat) AppColors.primary else Slate50,
-                        border = BorderStroke(1.dp, if (isAllCat) AppColors.primaryDark else Slate200)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Slate100)
+                            .border(1.dp, Slate300, RoundedCornerShape(10.dp))
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "전체 카테고리",
-                            fontSize = 12.sp,
+                            text = "닫기",
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (isAllCat) PureWhite else Slate700,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            color = Slate700
                         )
                     }
-
-                    Surface(
-                        onClick = onToggleRecurring,
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isRecurringFilterOnly) Color(0xFF4338CA) else Color(0xFFEEF2FF),
-                        border = BorderStroke(1.dp, if (isRecurringFilterOnly) Color(0xFF3730A3) else Color(0xFFC7D2FE))
+                    Box(
+                        modifier = Modifier
+                            .weight(1.3f)
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(AppColors.primary)
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "정기지출만",
-                            fontSize = 12.sp,
+                            text = "적용 완료",
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (isRecurringFilterOnly) PureWhite else Color(0xFF4338CA),
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            color = PureWhite
                         )
-                    }
-
-                    managedCategories.filter { it.isBuiltIn }.forEach { item ->
-                        val isSel = selectedCategory == item.baseCategory &&
-                            selectedCustomCategoryName == null &&
-                            !isRecurringFilterOnly
-                        Surface(
-                            onClick = {
-                                onSelectCategory(if (isSel) null else item.baseCategory)
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isSel) AppColors.primary else Slate50,
-                            border = BorderStroke(1.dp, if (isSel) AppColors.primaryDark else Slate200)
-                        ) {
-                            Text(
-                                text = item.displayName,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSel) PureWhite else Slate700,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-
-                    managedCategories.filter { !it.isBuiltIn }.forEach { customItem ->
-                        val isSel = selectedCustomCategoryName == customItem.displayName
-                        Surface(
-                            onClick = {
-                                onSelectCustomCategory(if (isSel) null else customItem.displayName)
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isSel) Color(0xFF0D9488) else Color(0xFFF0FDFA),
-                            border = BorderStroke(1.dp, if (isSel) Color(0xFF0F766E) else Color(0xFF99F6E4))
-                        ) {
-                            Text(
-                                text = customItem.displayName,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSel) PureWhite else Color(0xFF0F766E),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                }
-
-                HairlineDivider()
-
-                // 3. 카드/결제 구분 조회
-                Text(
-                    text = "3. 카드/결제 구분 조회",
-                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val corpOptions = listOf(
-                        null to "전체",
-                        false to "개인결제만",
-                        true to "법인카드만"
-                    )
-                    corpOptions.forEach { (value, label) ->
-                        val isSel = selectedCorporateFilter == value
-                        Surface(
-                            onClick = { onSelectCorporateFilter(value) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isSel) Color(0xFFB45309) else Slate50,
-                            border = BorderStroke(1.dp, if (isSel) Color(0xFF92400E) else Slate200)
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSel) PureWhite else Slate700,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                }
-
-                HairlineDivider()
-
-                // 4. 조회 기간 설정 (빠른 기간 & 월별 선택)
-                Text(
-                    text = "4. 조회 기간 선택",
-                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800)
-                )
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val presets = listOf("이번 달", "지난 달", "최근 3개월", "올해 전체")
-                    presets.forEach { preset ->
-                        Surface(
-                            onClick = { onSelectPreset(preset) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = Slate50,
-                            shadowElevation = 1.dp,
-                            border = BorderStroke(1.dp, Slate200)
-                        ) {
-                            Text(
-                                text = preset,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = AppColors.primary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = { tempYearMonth = tempYearMonth.minusMonths(1) }) {
-                        Icon(Icons.Default.ChevronLeft, contentDescription = "이전달")
-                    }
-                    Text(
-                        text = "${tempYearMonth.year}년 ${tempYearMonth.monthValue}월",
-                        style = AppTypography.h2
-                    )
-                    IconButton(onClick = { tempYearMonth = tempYearMonth.plusMonths(1) }) {
-                        Icon(Icons.Default.ChevronRight, contentDescription = "다음달")
-                    }
-                }
-
-                if (tempYearMonth != currentYearMonth || currentMode != ExpenseDateFilterMode.MONTH) {
-                    Button(
-                        onClick = { onSelectMonth(tempYearMonth) },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("${tempYearMonth.year}년 ${tempYearMonth.monthValue}월로 기간 변경", color = PureWhite, fontWeight = FontWeight.Bold)
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = onDismiss,
-                colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("적용 완료", color = PureWhite, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            AutoLogueSecondaryButton(text = "닫기", onClick = onDismiss)
-        },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
-    )
+        }
+    }
 }
 
 /**
@@ -1879,29 +1944,22 @@ fun AddManualExpenseDialog(
                             text = "출금/이체 은행 선택 (계좌 거래로 카드 선택 숨김)",
                             style = AppTypography.caption.copy(color = Color(0xFF047857), fontWeight = FontWeight.SemiBold)
                         )
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_BANK_NAMES.forEach { bankPreset ->
-                                val isBankSelected = cardOrBankName.trim() == bankPreset
-                                Surface(
-                                    onClick = { cardOrBankName = bankPreset },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isBankSelected) Color(0xFFECFDF5) else Slate50,
-                                    border = BorderStroke(1.dp, if (isBankSelected) Color(0xFF059669) else Slate200)
-                                ) {
-                                    Text(
-                                        text = bankPreset,
-                                        fontSize = 10.sp,
-                                        fontWeight = if (isBankSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isBankSelected) Color(0xFF047857) else Slate700,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
+                        val bankOptions = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_BANK_NAMES.map { bankPreset ->
+                            val isBankSelected = cardOrBankName.trim() == bankPreset
+                            ExpenseGridOptionItem(
+                                label = bankPreset,
+                                isSelected = isBankSelected,
+                                selectedContainerColor = Color(0xFF059669),
+                                selectedBorderColor = Color(0xFF047857),
+                                onClick = { cardOrBankName = bankPreset }
+                            )
                         }
+                        ExpenseUniformFilterGrid(
+                            options = bankOptions,
+                            columns = 3,
+                            itemHeight = 32.dp,
+                            fontSize = 11.sp
+                        )
                         AutoLogueTextField(
                             value = cardOrBankName,
                             onValueChange = { cardOrBankName = it },
@@ -1923,69 +1981,48 @@ fun AddManualExpenseDialog(
                                 style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Surface(
+                                ExpenseInlineFilterChip(
+                                    text = "개인카드",
+                                    isSelected = !isCorporate,
                                     onClick = { isCorporate = false },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (!isCorporate) Color(0xFF2563EB) else Slate50,
-                                    border = BorderStroke(1.dp, if (!isCorporate) Color(0xFF1D4ED8) else Slate200)
-                                ) {
-                                    Text(
-                                        text = "개인카드",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (!isCorporate) PureWhite else Slate600,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                                Surface(
+                                    height = 26.dp,
+                                    fontSize = 10.5.sp
+                                )
+                                ExpenseInlineFilterChip(
+                                    text = "법인카드",
+                                    isSelected = isCorporate,
                                     onClick = { isCorporate = true },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isCorporate) Color(0xFF0F172A) else Slate50,
-                                    border = BorderStroke(1.dp, if (isCorporate) Color(0xFF0F172A) else Slate200)
-                                ) {
-                                    Text(
-                                        text = "법인카드",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isCorporate) PureWhite else Slate600,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
+                                    selectedContainerColor = Color(0xFF0F172A),
+                                    selectedBorderColor = Color(0xFF0F172A),
+                                    height = 26.dp,
+                                    fontSize = 10.5.sp
+                                )
                             }
                         }
 
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_CARD_COMPANIES.forEach { cardPreset ->
-                                val isCardSelected = cardOrBankName.trim() == cardPreset
-                                Surface(
-                                    onClick = {
-                                        cardOrBankName = cardPreset
-                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(userClassificationInput) ||
-                                            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(selectedCustomCategoryName)
-                                        ) {
-                                            isCorporate = true
-                                        } else {
-                                            onResolveCardCorporate(cardPreset)?.let { isCorporate = it }
-                                        }
-                                    },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isCardSelected) Color(0xFFEFF6FF) else Slate50,
-                                    border = BorderStroke(1.dp, if (isCardSelected) Color(0xFF2563EB) else Slate200)
-                                ) {
-                                    Text(
-                                        text = cardPreset,
-                                        fontSize = 10.sp,
-                                        fontWeight = if (isCardSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isCardSelected) Color(0xFF1D4ED8) else Slate700,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                                    )
+                        val cardOptions = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_CARD_COMPANIES.map { cardPreset ->
+                            val isCardSelected = cardOrBankName.trim() == cardPreset
+                            ExpenseGridOptionItem(
+                                label = cardPreset,
+                                isSelected = isCardSelected,
+                                onClick = {
+                                    cardOrBankName = cardPreset
+                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(userClassificationInput) ||
+                                        com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(selectedCustomCategoryName)
+                                    ) {
+                                        isCorporate = true
+                                    } else {
+                                        onResolveCardCorporate(cardPreset)?.let { isCorporate = it }
+                                    }
                                 }
-                            }
+                            )
                         }
+                        ExpenseUniformFilterGrid(
+                            options = cardOptions,
+                            columns = 3,
+                            itemHeight = 32.dp,
+                            fontSize = 11.sp
+                        )
 
                         AutoLogueTextField(
                             value = cardOrBankName,
@@ -2007,43 +2044,30 @@ fun AddManualExpenseDialog(
                         text = "고정지출 지정",
                         style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Surface(
-                            onClick = { isFixedExpense = false },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (!isFixedExpense) Slate800 else Slate50,
-                            border = BorderStroke(1.dp, if (!isFixedExpense) Slate900 else Slate200),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = "일반 지출",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (!isFixedExpense) PureWhite else Slate600,
-                                modifier = Modifier.padding(vertical = 7.dp),
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    ExpenseUniformFilterGrid(
+                        options = listOf(
+                            ExpenseGridOptionItem(
+                                label = "일반 지출",
+                                isSelected = !isFixedExpense,
+                                selectedContainerColor = Slate800,
+                                selectedBorderColor = Slate900,
+                                onClick = { isFixedExpense = false }
+                            ),
+                            ExpenseGridOptionItem(
+                                label = "고정지출로 지정",
+                                isSelected = isFixedExpense,
+                                selectedContainerColor = Color(0xFF5B21B6),
+                                selectedBorderColor = Color(0xFF4C1D95),
+                                unselectedContainerColor = Color(0xFFF5F3FF),
+                                unselectedBorderColor = Color(0xFFDDD6FE),
+                                unselectedContentColor = Color(0xFF5B21B6),
+                                onClick = { isFixedExpense = true }
                             )
-                        }
-                        Surface(
-                            onClick = { isFixedExpense = true },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (isFixedExpense) Color(0xFF5B21B6) else Color(0xFFF5F3FF),
-                            border = BorderStroke(1.dp, if (isFixedExpense) Color(0xFF4C1D95) else Color(0xFFDDD6FE)),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = "고정지출로 지정",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isFixedExpense) PureWhite else Color(0xFF5B21B6),
-                                modifier = Modifier.padding(vertical = 7.dp),
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                            )
-                        }
-                    }
+                        ),
+                        columns = 2,
+                        itemHeight = 34.dp,
+                        fontSize = 11.5.sp
+                    )
                 }
 
                 // 5. 카테고리 선택 + 관리
@@ -2057,65 +2081,58 @@ fun AddManualExpenseDialog(
                             text = "카테고리 선택",
                             style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                         )
-                        Surface(
-                            onClick = onOpenCategoryManage,
-                            shape = RoundedCornerShape(6.dp),
-                            color = Slate100,
-                            border = BorderStroke(1.dp, Slate300)
+                        Box(
+                            modifier = Modifier
+                                .height(24.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Slate100)
+                                .border(1.dp, Slate300, RoundedCornerShape(6.dp))
+                                .clickable { onOpenCategoryManage() }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "카테고리 수정/삭제",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Slate700,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                color = Slate700
                             )
                         }
                     }
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        managedCategories.forEach { item ->
-                            val isSelected = if (item.isBuiltIn) {
-                                selectedCustomCategoryName == null && selectedCategory == item.baseCategory
-                            } else {
-                                selectedCustomCategoryName == item.displayName
-                            }
-                            Surface(
-                                onClick = {
-                                    val nextCat = if (item.isBuiltIn) item.baseCategory else ExpenseCategory.ETC
-                                    val wasBank = selectedCategory == ExpenseCategory.TRANSFER || selectedCategory == ExpenseCategory.INCOME
-                                    val willBeBank = nextCat == ExpenseCategory.TRANSFER || nextCat == ExpenseCategory.INCOME
-                                    selectedCategory = nextCat
-                                    selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
-                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
-                                        isCorporate = true
-                                    }
-                                    if (!wasBank && willBeBank) {
-                                        cardOrBankName = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName(cardOrBankName)
-                                            ?: "NH농협은행"
-                                    } else if (wasBank && !willBeBank) {
-                                        cardOrBankName = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany(cardOrBankName)
-                                            ?: "신한카드"
-                                    }
-                                },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) Color(0xFF2563EB) else Slate50,
-                                shadowElevation = if (isSelected) 2.dp else 1.dp,
-                                border = BorderStroke(1.dp, if (isSelected) Color(0xFF1D4ED8) else Slate200)
-                            ) {
-                                Text(
-                                    text = item.displayName,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) PureWhite else Slate700,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                                )
-                            }
+                    val catOptions = managedCategories.map { item ->
+                        val isSelected = if (item.isBuiltIn) {
+                            selectedCustomCategoryName == null && selectedCategory == item.baseCategory
+                        } else {
+                            selectedCustomCategoryName == item.displayName
                         }
+                        ExpenseGridOptionItem(
+                            label = item.displayName,
+                            isSelected = isSelected,
+                            onClick = {
+                                val nextCat = if (item.isBuiltIn) item.baseCategory else ExpenseCategory.ETC
+                                val wasBank = selectedCategory == ExpenseCategory.TRANSFER || selectedCategory == ExpenseCategory.INCOME
+                                val willBeBank = nextCat == ExpenseCategory.TRANSFER || nextCat == ExpenseCategory.INCOME
+                                selectedCategory = nextCat
+                                selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
+                                if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
+                                    isCorporate = true
+                                }
+                                if (!wasBank && willBeBank) {
+                                    cardOrBankName = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName(cardOrBankName)
+                                        ?: "NH농협은행"
+                                } else if (wasBank && !willBeBank) {
+                                    cardOrBankName = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany(cardOrBankName)
+                                        ?: "신한카드"
+                                }
+                            }
+                        )
                     }
+                    ExpenseUniformFilterGrid(
+                        options = catOptions,
+                        columns = 3,
+                        itemHeight = 34.dp,
+                        fontSize = 11.5.sp
+                    )
 
                     if (selectedCategory == ExpenseCategory.FUEL || selectedCategory == ExpenseCategory.CAR_MAINTENANCE) {
                         Surface(
@@ -2202,64 +2219,60 @@ fun AddManualExpenseDialog(
                             text = "사용자 분류 (컬러 배지 · 엑셀 포함)",
                             style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                         )
-                        Surface(
-                            onClick = onOpenUserClassificationManage,
-                            shape = RoundedCornerShape(6.dp),
-                            color = Slate100,
-                            border = BorderStroke(1.dp, Slate300)
+                        Box(
+                            modifier = Modifier
+                                .height(24.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Slate100)
+                                .border(1.dp, Slate300, RoundedCornerShape(6.dp))
+                                .clickable { onOpenUserClassificationManage() }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "분류 수정/삭제/색상",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Slate700,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                color = Slate700
                             )
                         }
                     }
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Surface(
-                            onClick = { userClassificationInput = "" },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (userClassificationInput.isBlank()) Slate800 else Slate50,
-                            border = BorderStroke(1.dp, if (userClassificationInput.isBlank()) Slate800 else Slate200)
-                        ) {
-                            Text(
-                                text = "미지정",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (userClassificationInput.isBlank()) PureWhite else Slate600,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                    val userAddOptions = buildList {
+                        add(
+                            ExpenseGridOptionItem(
+                                label = "미지정",
+                                isSelected = userClassificationInput.isBlank(),
+                                selectedContainerColor = Slate800,
+                                selectedBorderColor = Slate900,
+                                onClick = { userClassificationInput = "" }
                             )
-                        }
+                        )
                         userClassifications.forEach { uc ->
-                            val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
+                            val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
                             val isSelected = userClassificationInput.trim() == uc.name
-                            Surface(
-                                onClick = {
-                                    userClassificationInput = uc.name
-                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
-                                        isCorporate = true
+                            add(
+                                ExpenseGridOptionItem(
+                                    label = uc.name,
+                                    isSelected = isSelected,
+                                    dotColor = fg,
+                                    selectedContainerColor = fg,
+                                    selectedBorderColor = fg,
+                                    onClick = {
+                                        userClassificationInput = uc.name
+                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
+                                            isCorporate = true
+                                        }
                                     }
-                                },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isSelected) fg else bg,
-                                border = BorderStroke(1.dp, fg)
-                            ) {
-                                Text(
-                                    text = uc.name,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) PureWhite else fg,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
-                            }
+                            )
                         }
                     }
+                    ExpenseUniformFilterGrid(
+                        options = userAddOptions,
+                        columns = 3,
+                        itemHeight = 32.dp,
+                        fontSize = 11.sp
+                    )
                     AutoLogueTextField(
                         value = userClassificationInput,
                         onValueChange = {
@@ -2569,29 +2582,22 @@ fun EditTransactionDialog(
                                 )
                             }
 
-                            FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_BANK_NAMES.forEach { bankPreset ->
-                                    val isBankSelected = cardCompany.trim() == bankPreset
-                                    Surface(
-                                        onClick = { cardCompany = bankPreset },
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (isBankSelected) Color(0xFFECFDF5) else Slate50,
-                                        border = BorderStroke(1.dp, if (isBankSelected) Color(0xFF059669) else Slate200)
-                                    ) {
-                                        Text(
-                                            text = bankPreset,
-                                            fontSize = 10.sp,
-                                            fontWeight = if (isBankSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (isBankSelected) Color(0xFF047857) else Slate700,
-                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
+                            val bankEditOptions = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_BANK_NAMES.map { bankPreset ->
+                                val isBankSelected = cardCompany.trim() == bankPreset
+                                ExpenseGridOptionItem(
+                                    label = bankPreset,
+                                    isSelected = isBankSelected,
+                                    selectedContainerColor = Color(0xFF059669),
+                                    selectedBorderColor = Color(0xFF047857),
+                                    onClick = { cardCompany = bankPreset }
+                                )
                             }
+                            ExpenseUniformFilterGrid(
+                                options = bankEditOptions,
+                                columns = 3,
+                                itemHeight = 32.dp,
+                                fontSize = 11.sp
+                            )
 
                             AutoLogueTextField(
                                 value = cardCompany,
@@ -2625,69 +2631,48 @@ fun EditTransactionDialog(
                                     )
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Surface(
+                                    ExpenseInlineFilterChip(
+                                        text = "개인카드",
+                                        isSelected = !isCorporate,
                                         onClick = { isCorporate = false },
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (!isCorporate) Color(0xFF2563EB) else Slate50,
-                                        border = BorderStroke(1.dp, if (!isCorporate) Color(0xFF1D4ED8) else Slate200)
-                                    ) {
-                                        Text(
-                                            text = "개인카드",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (!isCorporate) PureWhite else Slate600,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                    Surface(
+                                        height = 26.dp,
+                                        fontSize = 10.5.sp
+                                    )
+                                    ExpenseInlineFilterChip(
+                                        text = "법인카드",
+                                        isSelected = isCorporate,
                                         onClick = { isCorporate = true },
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (isCorporate) Color(0xFF0F172A) else Slate50,
-                                        border = BorderStroke(1.dp, if (isCorporate) Color(0xFF0F172A) else Slate200)
-                                    ) {
-                                        Text(
-                                            text = "법인카드",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isCorporate) PureWhite else Slate600,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
+                                        selectedContainerColor = Color(0xFF0F172A),
+                                        selectedBorderColor = Color(0xFF0F172A),
+                                        height = 26.dp,
+                                        fontSize = 10.5.sp
+                                    )
                                 }
                             }
 
-                            FlowRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_CARD_COMPANIES.forEach { cardPreset ->
-                                    val isCardSelected = cardCompany.trim() == cardPreset
-                                    Surface(
-                                        onClick = {
-                                            cardCompany = cardPreset
-                                            val isCorpSelected = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(userClassificationInput) ||
-                                                com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(selectedCustomCategoryName)
-                                            if (isCorpSelected) {
-                                                isCorporate = true
-                                            } else {
-                                                onResolveCardCorporate(cardPreset)?.let { isCorporate = it }
-                                            }
-                                        },
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (isCardSelected) Color(0xFFEFF6FF) else Slate50,
-                                        border = BorderStroke(1.dp, if (isCardSelected) Color(0xFF2563EB) else Slate200)
-                                    ) {
-                                        Text(
-                                            text = cardPreset,
-                                            fontSize = 10.sp,
-                                            fontWeight = if (isCardSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (isCardSelected) Color(0xFF1D4ED8) else Slate700,
-                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                                        )
+                            val cardEditOptions = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.DEFAULT_CARD_COMPANIES.map { cardPreset ->
+                                val isCardSelected = cardCompany.trim() == cardPreset
+                                ExpenseGridOptionItem(
+                                    label = cardPreset,
+                                    isSelected = isCardSelected,
+                                    onClick = {
+                                        cardCompany = cardPreset
+                                        val isCorpSelected = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(userClassificationInput) ||
+                                            com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(selectedCustomCategoryName)
+                                        if (isCorpSelected) {
+                                            isCorporate = true
+                                        } else {
+                                            onResolveCardCorporate(cardPreset)?.let { isCorporate = it }
+                                        }
                                     }
-                                }
+                                )
                             }
+                            ExpenseUniformFilterGrid(
+                                options = cardEditOptions,
+                                columns = 3,
+                                itemHeight = 32.dp,
+                                fontSize = 11.sp
+                            )
 
                             AutoLogueTextField(
                                 value = cardCompany,
@@ -2727,43 +2712,30 @@ fun EditTransactionDialog(
                                 )
                             }
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Surface(
-                                onClick = { isFixedExpense = false },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (!isFixedExpense) Slate800 else Slate50,
-                                border = BorderStroke(1.dp, if (!isFixedExpense) Slate900 else Slate200),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    text = "일반 지출",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (!isFixedExpense) PureWhite else Slate600,
-                                    modifier = Modifier.padding(vertical = 7.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        ExpenseUniformFilterGrid(
+                            options = listOf(
+                                ExpenseGridOptionItem(
+                                    label = "일반 지출",
+                                    isSelected = !isFixedExpense,
+                                    selectedContainerColor = Slate800,
+                                    selectedBorderColor = Slate900,
+                                    onClick = { isFixedExpense = false }
+                                ),
+                                ExpenseGridOptionItem(
+                                    label = "고정지출로 지정",
+                                    isSelected = isFixedExpense,
+                                    selectedContainerColor = Color(0xFF5B21B6),
+                                    selectedBorderColor = Color(0xFF4C1D95),
+                                    unselectedContainerColor = Color(0xFFF5F3FF),
+                                    unselectedBorderColor = Color(0xFFDDD6FE),
+                                    unselectedContentColor = Color(0xFF5B21B6),
+                                    onClick = { isFixedExpense = true }
                                 )
-                            }
-                            Surface(
-                                onClick = { isFixedExpense = true },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isFixedExpense) Color(0xFF5B21B6) else Color(0xFFF5F3FF),
-                                border = BorderStroke(1.dp, if (isFixedExpense) Color(0xFF4C1D95) else Color(0xFFDDD6FE)),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    text = "고정지출로 지정",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isFixedExpense) PureWhite else Color(0xFF5B21B6),
-                                    modifier = Modifier.padding(vertical = 7.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                            }
-                        }
+                            ),
+                            columns = 2,
+                            itemHeight = 34.dp,
+                            fontSize = 11.5.sp
+                        )
                     }
 
                     // 4. 카테고리 변경 + 수정/삭제 + '기타' 선택 시 추가 카테고리 영구 등록
@@ -2777,71 +2749,64 @@ fun EditTransactionDialog(
                                 text = "카테고리 변경",
                                 style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                             )
-                            Surface(
-                                onClick = onOpenCategoryManage,
-                                shape = RoundedCornerShape(6.dp),
-                                color = Slate100,
-                                border = BorderStroke(1.dp, Slate300)
+                            Box(
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Slate100)
+                                    .border(1.dp, Slate300, RoundedCornerShape(6.dp))
+                                    .clickable { onOpenCategoryManage() }
+                                    .padding(horizontal = 8.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "카테고리 수정/삭제",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Slate700,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    color = Slate700
                                 )
                             }
                         }
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            managedCategories.forEach { item ->
-                                val isSelected = if (item.isBuiltIn) {
-                                    selectedCustomCategoryName == null && selectedCategory == item.baseCategory
-                                } else {
-                                    selectedCustomCategoryName == item.displayName
-                                }
-                                Surface(
-                                    onClick = {
-                                        val nextCat = if (item.isBuiltIn) item.baseCategory else ExpenseCategory.ETC
-                                        val wasBank = transaction.isBankAccountTransaction(selectedCategory)
-                                        val willBeBank = transaction.isBankAccountTransaction(nextCat)
-                                        selectedCategory = nextCat
-                                        selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
-                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
-                                            isCorporate = true
-                                        }
-                                        if (!wasBank && willBeBank) {
-                                            cardCompany = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName(
-                                                cardCompany,
-                                                transaction.cardOrBankName,
-                                                transaction.originalText
-                                            ) ?: inferredBank
-                                        } else if (wasBank && !willBeBank) {
-                                            cardCompany = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany(
-                                                cardCompany,
-                                                transaction.cardOrBankName,
-                                                transaction.originalText
-                                            ) ?: inferredCard
-                                        }
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (isSelected) Color(0xFF2563EB) else Slate50,
-                                    shadowElevation = if (isSelected) 2.dp else 1.dp,
-                                    border = BorderStroke(1.dp, if (isSelected) Color(0xFF1D4ED8) else Slate200)
-                                ) {
-                                    Text(
-                                        text = item.displayName,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) PureWhite else Slate700,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                                    )
-                                }
+                        val editCatOptions = managedCategories.map { item ->
+                            val isSelected = if (item.isBuiltIn) {
+                                selectedCustomCategoryName == null && selectedCategory == item.baseCategory
+                            } else {
+                                selectedCustomCategoryName == item.displayName
                             }
+                            ExpenseGridOptionItem(
+                                label = item.displayName,
+                                isSelected = isSelected,
+                                onClick = {
+                                    val nextCat = if (item.isBuiltIn) item.baseCategory else ExpenseCategory.ETC
+                                    val wasBank = transaction.isBankAccountTransaction(selectedCategory)
+                                    val willBeBank = transaction.isBankAccountTransaction(nextCat)
+                                    selectedCategory = nextCat
+                                    selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
+                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
+                                        isCorporate = true
+                                    }
+                                    if (!wasBank && willBeBank) {
+                                        cardCompany = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalBankName(
+                                            cardCompany,
+                                            transaction.cardOrBankName,
+                                            transaction.originalText
+                                        ) ?: inferredBank
+                                    } else if (wasBank && !willBeBank) {
+                                        cardCompany = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.inferCanonicalCardCompany(
+                                            cardCompany,
+                                            transaction.cardOrBankName,
+                                            transaction.originalText
+                                        ) ?: inferredCard
+                                    }
+                                }
+                            )
                         }
+                        ExpenseUniformFilterGrid(
+                            options = editCatOptions,
+                            columns = 3,
+                            itemHeight = 34.dp,
+                            fontSize = 11.5.sp
+                        )
 
                         // 현재 선택된 카테고리에 대한 빠른 이름 수정 / 삭제 바
                         val currentSelectedManagedCat = managedCategories.firstOrNull { item ->
@@ -2901,40 +2866,46 @@ fun EditTransactionDialog(
                                         color = Slate500,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Surface(
-                                        onClick = {
-                                            editingCatItemTarget = currentSelectedManagedCat
-                                            editingCatNewName = currentSelectedManagedCat.displayName
-                                        },
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = Color(0xFFEFF6FF),
-                                        border = BorderStroke(1.dp, Color(0xFFBFDBFE))
+                                    Box(
+                                        modifier = Modifier
+                                            .height(22.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color(0xFFEFF6FF))
+                                            .border(1.dp, Color(0xFFBFDBFE), RoundedCornerShape(4.dp))
+                                            .clickable {
+                                                editingCatItemTarget = currentSelectedManagedCat
+                                                editingCatNewName = currentSelectedManagedCat.displayName
+                                            }
+                                            .padding(horizontal = 6.dp),
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Text(
                                             text = "이름 수정",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF2563EB),
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            color = Color(0xFF2563EB)
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Surface(
-                                        onClick = {
-                                            onDeleteCategory(currentSelectedManagedCat)
-                                            selectedCategory = ExpenseCategory.ETC
-                                            selectedCustomCategoryName = null
-                                        },
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = Color(0xFFFEF2F2),
-                                        border = BorderStroke(1.dp, Color(0xFFFECACA))
+                                    Box(
+                                        modifier = Modifier
+                                            .height(22.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color(0xFFFEF2F2))
+                                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(4.dp))
+                                            .clickable {
+                                                onDeleteCategory(currentSelectedManagedCat)
+                                                selectedCategory = ExpenseCategory.ETC
+                                                selectedCustomCategoryName = null
+                                            }
+                                            .padding(horizontal = 6.dp),
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Text(
                                             text = "항목 삭제",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFDC2626),
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            color = Color(0xFFDC2626)
                                         )
                                     }
                                 }
@@ -3026,68 +2997,64 @@ fun EditTransactionDialog(
                                 text = "사용자 분류 (컬러 배지 · 수정/삭제/색상 변경)",
                                 style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                             )
-                            Surface(
-                                onClick = onOpenUserClassificationManage,
-                                shape = RoundedCornerShape(6.dp),
-                                color = Slate100,
-                                border = BorderStroke(1.dp, Slate300)
+                            Box(
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Slate100)
+                                    .border(1.dp, Slate300, RoundedCornerShape(6.dp))
+                                    .clickable { onOpenUserClassificationManage() }
+                                    .padding(horizontal = 8.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "전체 분류 관리",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Slate700,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    color = Slate700
                                 )
                             }
                         }
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Surface(
-                                onClick = {
-                                    userClassificationInput = ""
-                                    editingUcNameTarget = null
-                                },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (userClassificationInput.isBlank()) Slate800 else Slate50,
-                                border = BorderStroke(1.dp, if (userClassificationInput.isBlank()) Slate800 else Slate200)
-                            ) {
-                                Text(
-                                    text = "미지정",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (userClassificationInput.isBlank()) PureWhite else Slate600,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                                )
-                            }
-                            userClassifications.forEach { uc ->
-                                val (fg, bg) = getUserClassificationBadgeColors(uc.colorIndex)
-                                val isSelected = userClassificationInput.trim() == uc.name
-                                Surface(
+                        val editUserOptions = buildList {
+                            add(
+                                ExpenseGridOptionItem(
+                                    label = "미지정",
+                                    isSelected = userClassificationInput.isBlank(),
+                                    selectedContainerColor = Slate800,
+                                    selectedBorderColor = Slate900,
                                     onClick = {
-                                        userClassificationInput = uc.name
-                                        if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
-                                            isCorporate = true
-                                        }
+                                        userClassificationInput = ""
                                         editingUcNameTarget = null
-                                    },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isSelected) fg else bg,
-                                    border = BorderStroke(1.dp, fg)
-                                ) {
-                                    Text(
-                                        text = uc.name,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSelected) PureWhite else fg,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    }
+                                )
+                            )
+                            userClassifications.forEach { uc ->
+                                val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
+                                val isSelected = userClassificationInput.trim() == uc.name
+                                add(
+                                    ExpenseGridOptionItem(
+                                        label = uc.name,
+                                        isSelected = isSelected,
+                                        dotColor = fg,
+                                        selectedContainerColor = fg,
+                                        selectedBorderColor = fg,
+                                        onClick = {
+                                            userClassificationInput = uc.name
+                                            if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
+                                                isCorporate = true
+                                            }
+                                            editingUcNameTarget = null
+                                        }
                                     )
-                                }
+                                )
                             }
                         }
+                        ExpenseUniformFilterGrid(
+                            options = editUserOptions,
+                            columns = 3,
+                            itemHeight = 32.dp,
+                            fontSize = 11.sp
+                        )
 
                         // 선택된 사용자 분류 항목이 있을 때 인라인 수정/삭제 및 배지 색상 즉시 변경 바 제공
                         val selectedUcItem = userClassifications.firstOrNull {
@@ -3275,43 +3242,29 @@ fun EditTransactionDialog(
                         modifier = Modifier.padding(8.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Surface(
-                                onClick = { if (!isSaving) isOneTimeSave = true },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isOneTimeSave) Color(0xFFD97706) else PureWhite,
-                                border = BorderStroke(1.dp, if (isOneTimeSave) Color(0xFFB45309) else Slate200),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    text = "1회성 저장",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isOneTimeSave) PureWhite else Slate700,
-                                    modifier = Modifier.padding(vertical = 8.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        ExpenseUniformFilterGrid(
+                            options = listOf(
+                                ExpenseGridOptionItem(
+                                    label = "1회성 저장",
+                                    isSelected = isOneTimeSave,
+                                    selectedContainerColor = Color(0xFFD97706),
+                                    selectedBorderColor = Color(0xFFB45309),
+                                    unselectedContainerColor = PureWhite,
+                                    onClick = { if (!isSaving) isOneTimeSave = true }
+                                ),
+                                ExpenseGridOptionItem(
+                                    label = "영구저장",
+                                    isSelected = !isOneTimeSave,
+                                    selectedContainerColor = Color(0xFF2563EB),
+                                    selectedBorderColor = Color(0xFF1D4ED8),
+                                    unselectedContainerColor = PureWhite,
+                                    onClick = { if (!isSaving) isOneTimeSave = false }
                                 )
-                            }
-                            Surface(
-                                onClick = { if (!isSaving) isOneTimeSave = false },
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (!isOneTimeSave) Color(0xFF2563EB) else PureWhite,
-                                border = BorderStroke(1.dp, if (!isOneTimeSave) Color(0xFF1D4ED8) else Slate200),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    text = "영구저장",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (!isOneTimeSave) PureWhite else Slate700,
-                                    modifier = Modifier.padding(vertical = 8.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                            }
-                        }
+                            ),
+                            columns = 2,
+                            itemHeight = 36.dp,
+                            fontSize = 12.sp
+                        )
 
                         if (isOneTimeSave) {
                             Text(
@@ -3345,36 +3298,39 @@ fun EditTransactionDialog(
                                         val allChecked = applyMerchantName && applyCategory &&
                                             applyUserClassification && applyCardAndCorporate &&
                                             applyFixedExpense && applyMemo
-                                        Surface(
-                                            onClick = {
-                                                if (!isSaving) {
-                                                    if (allChecked) {
-                                                        applyMerchantName = true
-                                                        applyCategory = true
-                                                        applyUserClassification = true
-                                                        applyCardAndCorporate = true
-                                                        applyFixedExpense = true
-                                                        applyMemo = false
-                                                    } else {
-                                                        applyMerchantName = true
-                                                        applyCategory = true
-                                                        applyUserClassification = true
-                                                        applyCardAndCorporate = true
-                                                        applyFixedExpense = true
-                                                        applyMemo = true
+                                        Box(
+                                            modifier = Modifier
+                                                .height(22.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color(0xFFEFF6FF))
+                                                .border(1.dp, Color(0xFFBFDBFE), RoundedCornerShape(4.dp))
+                                                .clickable {
+                                                    if (!isSaving) {
+                                                        if (allChecked) {
+                                                            applyMerchantName = true
+                                                            applyCategory = true
+                                                            applyUserClassification = true
+                                                            applyCardAndCorporate = true
+                                                            applyFixedExpense = true
+                                                            applyMemo = false
+                                                        } else {
+                                                            applyMerchantName = true
+                                                            applyCategory = true
+                                                            applyUserClassification = true
+                                                            applyCardAndCorporate = true
+                                                            applyFixedExpense = true
+                                                            applyMemo = true
+                                                        }
                                                     }
                                                 }
-                                            },
-                                            shape = RoundedCornerShape(4.dp),
-                                            color = Color(0xFFEFF6FF),
-                                            border = BorderStroke(1.dp, Color(0xFFBFDBFE))
+                                                .padding(horizontal = 6.dp),
+                                            contentAlignment = Alignment.Center
                                         ) {
                                             Text(
                                                 text = if (allChecked) "기본선택" else "전체선택",
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.SemiBold,
-                                                color = Color(0xFF1D4ED8),
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                color = Color(0xFF1D4ED8)
                                             )
                                         }
                                     }
@@ -3388,28 +3344,20 @@ fun EditTransactionDialog(
                                         Triple("메모", applyMemo) { v: Boolean -> applyMemo = v }
                                     )
 
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                        verticalArrangement = Arrangement.spacedBy(5.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        optionItems.forEach { (label, checked, onToggle) ->
-                                            Surface(
-                                                onClick = { if (!isSaving) onToggle(!checked) },
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = if (checked) Color(0xFF2563EB) else Slate50,
-                                                border = BorderStroke(1.dp, if (checked) Color(0xFF1D4ED8) else Slate200)
-                                            ) {
-                                                Text(
-                                                    text = if (checked) "✓ $label" else label,
-                                                    fontSize = 10.sp,
-                                                    fontWeight = if (checked) FontWeight.Bold else FontWeight.Medium,
-                                                    color = if (checked) PureWhite else Slate600,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                )
-                                            }
-                                        }
-                                    }
+                                    ExpenseUniformFilterGrid(
+                                        options = optionItems.map { (label, checked, onToggle) ->
+                                            ExpenseGridOptionItem(
+                                                label = if (checked) "✓ $label" else label,
+                                                isSelected = checked,
+                                                selectedContainerColor = Color(0xFF2563EB),
+                                                selectedBorderColor = Color(0xFF1D4ED8),
+                                                onClick = { if (!isSaving) onToggle(!checked) }
+                                            )
+                                        },
+                                        columns = 3,
+                                        itemHeight = 30.dp,
+                                        fontSize = 10.5.sp
+                                    )
                                 }
                             }
 
@@ -3733,3 +3681,153 @@ fun getRainbowUsageColor(rankIndex: Int, totalCount: Int): Color {
     val colorIndex = (ratio * (rainbowColors.size - 1)).toInt().coerceIn(0, rainbowColors.size - 1)
     return rainbowColors[colorIndex]
 }
+
+/**
+ * 인라인 필터 바 전용 칩 컴포넌트
+ * Material3 Surface(onClick = ...)의 48dp 강제 확장(minimumInteractiveComponentSize)을 사용하지 않고
+ * 고정 높이(기본 30.dp)와 균일한 패딩/모서리를 적용하여 줄 간격 왜곡과 좌우 들여쓰기 틀어짐을 완벽히 방지합니다.
+ */
+@Composable
+fun ExpenseInlineFilterChip(
+    text: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    dotColor: Color? = null,
+    selectedContainerColor: Color = AppColors.primary,
+    selectedBorderColor: Color = AppColors.primaryDark,
+    selectedContentColor: Color = PureWhite,
+    unselectedContainerColor: Color = PureWhite,
+    unselectedBorderColor: Color = Slate200,
+    unselectedContentColor: Color = Slate700,
+    height: Dp = 30.dp,
+    fontSize: TextUnit = 11.5.sp
+) {
+    val bgColor = if (isSelected) selectedContainerColor else unselectedContainerColor
+    val bdColor = if (isSelected) selectedBorderColor else unselectedBorderColor
+    val fgColor = if (isSelected) selectedContentColor else unselectedContentColor
+    val shape = RoundedCornerShape(8.dp)
+
+    Row(
+        modifier = modifier
+            .height(height)
+            .clip(shape)
+            .background(bgColor)
+            .border(1.dp, bdColor, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        if (dotColor != null) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .background(if (isSelected) PureWhite else dotColor, CircleShape)
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+        }
+        Text(
+            text = text,
+            fontSize = fontSize,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            color = fgColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/**
+ * 균등 그리드 필터 버튼 데이터 모델
+ */
+data class ExpenseGridOptionItem(
+    val label: String,
+    val isSelected: Boolean,
+    val dotColor: Color? = null,
+    val selectedContainerColor: Color = AppColors.primary,
+    val selectedBorderColor: Color = AppColors.primaryDark,
+    val selectedContentColor: Color = PureWhite,
+    val unselectedContainerColor: Color = Slate50,
+    val unselectedBorderColor: Color = Slate200,
+    val unselectedContentColor: Color = Slate700,
+    val onClick: () -> Unit
+)
+
+/**
+ * 가로폭 100%에 맞춰 N열 균등 분할(Modifier.weight(1f))로 정렬되는 필터 그리드 컴포넌트
+ * 글자 수(2글자~6글자)에 관계없이 모든 버튼이 동일한 가로폭과 고정 높이(기본 36.dp)를 유지하며,
+ * 마지막 행에 빈 칸이 남더라도 Spacer(Modifier.weight(1f))로 열 정렬을 완벽히 맞춥니다.
+ */
+@Composable
+fun ExpenseUniformFilterGrid(
+    options: List<ExpenseGridOptionItem>,
+    columns: Int = 3,
+    modifier: Modifier = Modifier,
+    itemHeight: Dp = 36.dp,
+    fontSize: TextUnit = 12.sp,
+    horizontalSpacing: Dp = 6.dp,
+    verticalSpacing: Dp = 6.dp
+) {
+    val rows = options.chunked(columns.coerceAtLeast(1))
+    val shape = RoundedCornerShape(8.dp)
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(verticalSpacing)
+    ) {
+        rows.forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(horizontalSpacing),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                rowItems.forEach { item ->
+                    val bgColor = if (item.isSelected) item.selectedContainerColor else item.unselectedContainerColor
+                    val bdColor = if (item.isSelected) item.selectedBorderColor else item.unselectedBorderColor
+                    val fgColor = if (item.isSelected) item.selectedContentColor else item.unselectedContentColor
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(itemHeight)
+                            .clip(shape)
+                            .background(bgColor)
+                            .border(1.dp, bdColor, shape)
+                            .clickable(onClick = item.onClick)
+                            .padding(horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        if (item.dotColor != null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(if (item.isSelected) PureWhite else item.dotColor, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                        Text(
+                            text = item.label,
+                            fontSize = fontSize,
+                            fontWeight = if (item.isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = fgColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+                val emptySlots = columns - rowItems.size
+                repeat(emptySlots) {
+                    Spacer(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(itemHeight)
+                    )
+                }
+            }
+        }
+    }
+}
+

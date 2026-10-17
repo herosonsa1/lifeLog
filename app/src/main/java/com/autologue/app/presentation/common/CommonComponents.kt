@@ -2,6 +2,7 @@ package com.autologue.app.presentation.common
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -295,7 +296,7 @@ fun AutoLogueCompactInputRow(
 }
 
 /**
- * 서브 액션 버튼 칩 (그림자 입체 효과 + 틴트 배경)
+ * 서브 액션 버튼 칩 (M3 48dp 강제 여백 없이 정확한 높이 및 가로폭 정렬 보장)
  */
 @Composable
 fun AutoLogueActionChipButton(
@@ -307,16 +308,18 @@ fun AutoLogueActionChipButton(
     contentColor: Color = Color(0xFF1D4ED8),
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = containerColor,
-        shadowElevation = 2.dp,
-        border = BorderStroke(1.dp, borderColor),
+    val shape = RoundedCornerShape(8.dp)
+    Box(
         modifier = modifier
+            .height(32.dp)
+            .clip(shape)
+            .background(containerColor, shape)
+            .border(BorderStroke(1.dp, borderColor), shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
@@ -326,9 +329,10 @@ fun AutoLogueActionChipButton(
             }
             Text(
                 text = text,
-                fontSize = 11.sp,
+                fontSize = 11.5.sp,
                 fontWeight = FontWeight.Bold,
-                color = contentColor
+                color = contentColor,
+                maxLines = 1
             )
         }
     }
@@ -445,7 +449,7 @@ fun AutoLogueDangerButton(
 }
 
 /**
- * 표준 Outlined 보조 버튼 (메뉴 테마 컬러 지원: 틴트 배경 + 테두리 + 그림자)
+ * 표준 Outlined 보조 버튼 (메뉴 테마 컬러 지원: 32dp 고정 슬림 높이)
  */
 @Composable
 fun AutoLogueOutlinedButton(
@@ -458,28 +462,33 @@ fun AutoLogueOutlinedButton(
     containerColor: Color = Color(0xFFEFF6FF),
     borderColor: Color = Color(0xFF93C5FD)
 ) {
-    Surface(
-        onClick = { if (enabled) onClick() },
-        shape = RoundedCornerShape(8.dp),
-        color = if (enabled) containerColor else Slate50,
-        shadowElevation = if (enabled) 1.5.dp else 0.dp,
-        border = BorderStroke(1.dp, if (enabled) borderColor else Slate200),
-        modifier = modifier.height(34.dp)
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = modifier
+            .height(32.dp)
+            .clip(shape)
+            .background(if (enabled) containerColor else Slate50, shape)
+            .border(BorderStroke(1.dp, if (enabled) borderColor else Slate200), shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp),
+        contentAlignment = Alignment.Center
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
         ) {
             if (icon != null) {
-                Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = if (enabled) contentColor else Slate400)
-                Spacer(modifier = Modifier.width(4.dp))
+                Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = if (enabled) contentColor else Slate400)
+                Spacer(modifier = Modifier.width(3.dp))
             }
             Text(
                 text = text,
                 style = AppTypography.caption.copy(
+                    fontSize = 11.5.sp,
                     color = if (enabled) contentColor else Slate400,
                     fontWeight = FontWeight.Bold
-                )
+                ),
+                maxLines = 1
             )
         }
     }
