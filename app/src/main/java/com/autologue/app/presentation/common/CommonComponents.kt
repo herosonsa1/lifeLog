@@ -45,13 +45,13 @@ fun HairlineDivider(
 
 /**
  * 최상단 메뉴별 고유 테마 가로 색상 띠 (Accent Bar)
- * 현재 페이지가 어떤 메뉴인지 한눈에 인지할 수 있도록 상단 뷰포트에 3.5dp의 색상 바를 표시합니다.
+ * 현재 페이지가 어떤 메뉴인지 한눈에 인지할 수 있도록 상단 뷰포트에 2.5dp의 슬림 색상 바를 표시합니다.
  */
 @Composable
 fun TopMenuAccentBar(
     color: Color,
     modifier: Modifier = Modifier,
-    height: Dp = 3.5.dp
+    height: Dp = 2.5.dp
 ) {
     Box(
         modifier = modifier
@@ -59,6 +59,40 @@ fun TopMenuAccentBar(
             .height(height)
             .background(color)
     )
+}
+
+/**
+ * 상단 컬러 라인(TopMenuAccentBar)과 하단 구분선(HairlineDivider) 사이의 불필요한 여백(기본 TopAppBar 64.dp 강제 높이)을 줄인 컴팩트 상단 바
+ */
+@Composable
+fun AutoLogueCompactTopBar(
+    title: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    containerColor: Color = AppColors.background,
+    actions: @Composable RowScope.() -> Unit = {}
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(containerColor)
+            .heightIn(min = 42.dp)
+            .padding(start = 16.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            title()
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End
+        ) {
+            actions()
+        }
+    }
 }
 
 /**

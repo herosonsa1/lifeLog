@@ -182,12 +182,12 @@ fun DiaryScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 TopMenuAccentBar(color = MenuColors.diary)
-                TopAppBar(
-                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+                com.autologue.app.presentation.common.AutoLogueCompactTopBar(
                     title = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically
@@ -196,7 +196,7 @@ fun DiaryScreen(
                                 painter = androidx.compose.ui.res.painterResource(id = com.autologue.app.R.drawable.app_logo),
                                 contentDescription = "나의일상다이어리",
                                 modifier = Modifier
-                                    .size(34.dp)
+                                    .size(32.dp)
                                     .clip(RoundedCornerShape(8.dp))
                             )
                             Spacer(modifier = Modifier.width(Spacing.sm))
@@ -206,8 +206,8 @@ fun DiaryScreen(
                                 Text(
                                     text = "나의일상",
                                     style = AppTypography.h2.copy(
-                                        fontSize = 16.sp,
-                                        lineHeight = 18.sp,
+                                        fontSize = 15.5.sp,
+                                        lineHeight = 17.sp,
                                         fontWeight = FontWeight.Black,
                                         letterSpacing = (-0.3).sp,
                                         color = AppColors.textPrimary
@@ -218,8 +218,8 @@ fun DiaryScreen(
                                     style = AppTypography.caption.copy(
                                         color = MenuColors.diary,
                                         fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 12.5.sp,
-                                        lineHeight = 14.sp,
+                                        fontSize = 11.5.sp,
+                                        lineHeight = 13.sp,
                                         letterSpacing = 0.8.sp
                                     )
                                 )
@@ -279,7 +279,7 @@ fun DiaryScreen(
 
                         Spacer(modifier = Modifier.width(Spacing.md))
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
+                    containerColor = AppColors.background
                 )
                 HairlineDivider()
             }

@@ -113,18 +113,28 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
             floatingActionButton = {
                 UnifiedSpeedDialFab(navController = navController)
             },
             floatingActionButtonPosition = FabPosition.End,
             bottomBar = {
-                Column {
+                // 3버튼 네비게이션(보통 36dp 이상)일 때는 시스템 네비게이션 높이를 반영하고,
+                // 안드로이드 스와이프 조작 홈 바 환경에서는 하단 탭 색상 라인이 가려지지 않는 수준(12.dp)으로 살짝 올려 하단 여백 부여
+                val rawNavBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                val bottomSafeMargin = if (rawNavBottom >= 32.dp) rawNavBottom else 12.dp
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(AppColors.surface)
+                ) {
                     HairlineDivider()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(AppColors.surface)
-                            .padding(top = Spacing.xs, bottom = Spacing.xxs),
+                            .padding(top = 2.dp, bottom = bottomSafeMargin),
                         horizontalArrangement = Arrangement.SpaceAround,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -139,7 +149,7 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                                             pendingScreen = screen
                                         }
                                     }
-                                    .padding(vertical = Spacing.xs),
+                                    .padding(top = 4.dp, bottom = 3.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Icon(
@@ -155,7 +165,7 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                     color = if (isSelected) screen.themeColor else AppColors.textMuted
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(3.dp))
                                 // 메뉴별 고유 색상 언더라인 인디케이터
                                 Box(
                                     modifier = Modifier
@@ -176,6 +186,7 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .statusBarsPadding()
                     .padding(paddingValues)
             ) {
                 NavHost(

@@ -212,6 +212,7 @@ fun CarLedgerScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
         snackbarHost = { AppSnackbarHost(snackbarHostState) },
         floatingActionButton = {
@@ -224,10 +225,9 @@ fun CarLedgerScreen(
             )
         },
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 TopMenuAccentBar(color = MenuColors.carLedger)
-                TopAppBar(
-                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+                AutoLogueCompactTopBar(
                     title = {
                         Column {
                             Text(
@@ -293,7 +293,7 @@ fun CarLedgerScreen(
                             borderColor = MenuColors.carLedgerBorder
                         )
                         Spacer(modifier = Modifier.width(Spacing.xs))
-                        IconButton(onClick = { viewModel.clearAllDummyLogs() }) {
+                        IconButton(onClick = { viewModel.clearAllDummyLogs() }, modifier = Modifier.size(32.dp)) {
                             Icon(
                                 imageVector = Icons.Default.DeleteOutline,
                                 contentDescription = "가상 주행기록 삭제",
@@ -302,7 +302,7 @@ fun CarLedgerScreen(
                         }
                         Spacer(modifier = Modifier.width(Spacing.xs))
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
+                    containerColor = AppColors.background
                 )
                 HairlineDivider()
             }

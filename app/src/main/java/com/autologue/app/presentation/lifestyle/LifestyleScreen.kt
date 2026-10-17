@@ -84,20 +84,28 @@ fun LifestyleScreen(
     val syncProgress by viewModel.syncProgress.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(AppColors.background)
-                .padding(horizontal = Spacing.md),
-            verticalArrangement = Arrangement.spacedBy(Spacing.md)
         ) {
-            item {
-                Spacer(modifier = Modifier.height(Spacing.xs))
+            com.autologue.app.presentation.common.TopMenuAccentBar(color = MenuColors.lifestyle)
+            Box(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 4.dp)) {
                 LifestyleHeader(
                     onSyncClick = { viewModel.syncFromDevice(context, 30) },
                     isSyncing = syncProgress?.isRunning == true
                 )
             }
+            com.autologue.app.presentation.common.HairlineDivider()
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = Spacing.md),
+                verticalArrangement = Arrangement.spacedBy(Spacing.md)
+            ) {
+                item {
+                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                }
 
             syncProgress?.let { progress ->
                 item {
@@ -131,8 +139,9 @@ fun LifestyleScreen(
                 FourPillarsBentoGrid(metrics = metrics)
             }
 
-            item {
-                Spacer(modifier = Modifier.height(Spacing.xl))
+                item {
+                    Spacer(modifier = Modifier.height(Spacing.xl))
+                }
             }
         }
 

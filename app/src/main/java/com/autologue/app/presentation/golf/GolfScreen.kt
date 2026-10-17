@@ -128,12 +128,12 @@ fun GolfScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 TopMenuAccentBar(color = MenuColors.golf)
-                TopAppBar(
-                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+                com.autologue.app.presentation.common.AutoLogueCompactTopBar(
                     title = {
                         Column {
                             Text(
@@ -161,14 +161,14 @@ fun GolfScreen(
                         )
                         Spacer(modifier = Modifier.width(Spacing.sm))
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
+                    containerColor = AppColors.background
                 )
                 // 상단 타이틀이 가려지지 않도록 액션 버튼들을 가로 스크롤 액션 바로 배치
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(start = Spacing.lg, end = Spacing.lg, bottom = Spacing.sm),
+                        .padding(start = Spacing.lg, end = Spacing.lg, bottom = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

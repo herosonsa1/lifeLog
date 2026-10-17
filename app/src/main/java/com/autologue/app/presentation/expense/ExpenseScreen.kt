@@ -101,13 +101,13 @@ fun ExpenseScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
         snackbarHost = { AppSnackbarHost(snackbarHostState) },
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 TopMenuAccentBar(color = MenuColors.expense)
-                TopAppBar(
-                    windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+                com.autologue.app.presentation.common.AutoLogueCompactTopBar(
                     title = {
                         Column {
                             Text(
@@ -165,7 +165,7 @@ fun ExpenseScreen(
                         )
                         Spacer(modifier = Modifier.width(Spacing.xs))
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background)
+                    containerColor = AppColors.background
                 )
                 HairlineDivider()
             }
