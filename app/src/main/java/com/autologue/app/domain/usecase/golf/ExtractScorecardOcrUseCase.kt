@@ -180,6 +180,10 @@ class ExtractScorecardOcrUseCase @Inject constructor(
         scorecardUri: String,
         targetDate: java.time.LocalDate
     ): GolfRound? {
+        if (!com.autologue.app.data.ocr.ScorecardOcrAnalyzer.isGenuineScorecardResult(result)) {
+            runCatching { android.util.Log.d("ExtractScorecardOcr", "진성 스코어카드 구조 미충족으로 골프 라운드 등록 거부 ($scorecardUri)") }
+            return null
+        }
         val totalScore = result.totalScore ?: (if (result.holeScores.isNotEmpty()) result.holeScores.sum() else null) ?: return null
         val today = java.time.LocalDate.now()
         val safeTargetDate = if (targetDate.isAfter(today)) today else targetDate

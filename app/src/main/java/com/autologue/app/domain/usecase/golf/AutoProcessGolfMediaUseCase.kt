@@ -39,13 +39,9 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
             val rawText = scorecardResult.recognizedRawText
             val rawUpper = rawText.uppercase()
 
-            // 2. 스코어카드 유효성 점검 (18홀 완전 스코어카드 필수 가드레일)
-            // 9홀 불완전 조각(42타, 50타 등)이나 타수 없는 단순 사진의 단독 라운드 자동 등록 원천 차단
-            val matchedCoreKeywords = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
-            val hasValidGolfKeywords = matchedCoreKeywords.isNotEmpty()
-            val hasValid18Holes = scorecardResult.holeScores.size >= 14
-            val hasValid18TotalScore = scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144
-            val isValidScorecard = hasValidGolfKeywords && (hasValid18TotalScore || hasValid18Holes)
+            // 2. 스코어카드 유효성 점검 (진성 스코어카드 테이블 구조 + 유효 타수/홀별 스코어 필수 가드레일)
+            // 웹사이트 캡처, 후기 게시판, 9홀 불완전 조각, 타수 없는 단순 사진의 단독 라운드 자동 등록 원천 차단
+            val isValidScorecard = ScorecardOcrAnalyzer.isGenuineScorecardResult(scorecardResult, rawText)
 
             // 3. 라커룸 전표 유효성 점검 (기존 추출 텍스트 재활용 — 중복 OCR 0회)
             // 스코어카드 사진이 스코어 파싱 미흡으로 인해 라커룸 전표로 둔갑하여 빈 라운드로 등록되는 부작용 방지
@@ -53,7 +49,7 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
             val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
             val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진" && !isScorecardLike
 
-            // 4. 판별 및 안전 등록
+            // 4. 판별 및 안전 등록 (오직 실제 스코어카드지 또는 실제 라커룸 안내지/영수증일 때만 필드 기록 생성)
             when {
                 isValidScorecard -> {
                     if (isValidSlip) {
@@ -76,7 +72,7 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
         val GOLF_CORE_KEYWORDS = listOf(
             "SCORE", "스코어", "PAR", "HOLE", "PUTT", "퍼트", "퍼팅", "GIR", "PENALTY", "페널티", "벌타",
             "골프", "골프장", "라운드", "라운딩", "ROUND", "클럽하우스", "그린피", "카트비", "캐디피", "티오프", "TEE OFF",
-            "라커", "락커", "LOCKER", "SMARTSCORE", "스마트스코어", "KAKAOGOLF", "카카오골프", "GOLFZON", "골프존",
+            "라커", "락커", "락카", "LOCKER", "입장번호", "SMARTSCORE", "스마트스코어", "KAKAOGOLF", "카카오골프", "GOLFZON", "골프존",
             "나의 스코어", "나의스코어", "SCORECARD"
         )
 
@@ -90,13 +86,14 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
         val GOLF_FINGERPRINTS = GOLF_CORE_KEYWORDS + GOLF_AUXILIARY_KEYWORDS
     }
 
-    // 이미 OCR 프로브를 수행하여 비-골프(또는 의료/영수증)로 확인된 사진 URI 메모리 캐시 (재동기화 시 0ms 패스)
+    // 이미 OCR 프로브를 수행하여 비-골프(또는 의료/영수증/웹후기)로 확인된 사진 URI 메모리 캐시 (재동기화 시 0ms 패스)
     private val nonGolfCheckedUris = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * 후보 사진 목록(스크린샷 및 갤러리 사진)을 2단계 고속 지문 OCR 엔진(Two-Stage Fast Fingerprint OCR Pipeline)으로 처리합니다.
      * Stage 1: 2048px 가독 비트맵으로 ML Kit 텍스트 인식만 수행하여 골프 지문이 없는 비-골프 사진은 0.08초 만에 즉시 패스.
      * Stage 2: 골프 지문이 확인된 사진만 2560px 고정밀 2D 공간 복원 및 18홀 파싱과 라커룸 전표 분석을 수행하여 DB에 라운드로 등록.
+     * Stage 3: 이미 라커룸 안내지나 스코어카드지로 확정된 골프 필드 라운드가 존재하는 날짜에 한해, 같은 날 찍은 실제 카메라 사진(스크린샷 제외)을 해당 라운드에 자동 첨부.
      * @param photos 대상 사진 목록
      * @param onProgress 진행률 콜백 (현재 처리 장수, 전체 장수, 등록된 골프 건수)
      * @return 성공적으로 등록 또는 갱신된 골프 라운드 수
@@ -141,7 +138,7 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
                     if (probeText.isBlank() || ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(probeText)) {
                         if (probeText.isNotBlank()) {
                             nonGolfCheckedUris.add(photo.uri)
-                            android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 의료/영수증 지문 감지로 즉시 제외 ($uri)")
+                            android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 의료/영수증/웹후기 지문 감지로 즉시 제외 ($uri)")
                         } else {
                             android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 텍스트 없음/디코딩 실패 건너뜀 ($uri)")
                         }
@@ -165,18 +162,13 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
                     val rawText = scorecardResult.recognizedRawText.ifBlank { probeText }
                     if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(rawText)) {
                         nonGolfCheckedUris.add(photo.uri)
-                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] Deep Analysis 중 의료/영수증 지문 감지로 배제 ($uri)")
+                        android.util.Log.d("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] Deep Analysis 중 의료/영수증/웹후기 지문 감지로 배제 ($uri)")
                         return@withTimeoutOrNull
                     }
                     val rawUpper = rawText.uppercase()
 
-                    // A. 스코어카드 검증 (18홀 완전 스코어카드 필수 가드레일)
-                    // 9홀 불완전 조각(42타, 50타 등) 및 타수 없는 사진의 단독 등록 원천 차단
-                    val matchedCore = GOLF_CORE_KEYWORDS.filter { rawUpper.contains(it) }
-                    val hasValidGolfKeywords = matchedCore.isNotEmpty()
-                    val hasValid18Holes = scorecardResult.holeScores.size >= 14
-                    val hasValid18TotalScore = scorecardResult.totalScore != null && scorecardResult.totalScore in 54..144
-                    val isValidScorecard = hasValidGolfKeywords && (hasValid18TotalScore || hasValid18Holes)
+                    // A. 스코어카드 검증 (진성 스코어카드 구조 + 타수/홀별 스코어 필수 가드레일)
+                    val isValidScorecard = ScorecardOcrAnalyzer.isGenuineScorecardResult(scorecardResult, rawText)
 
                     // B. 라커룸 안내지 검증 (스코어카드 사진이 전표로 둔갑하여 빈 라운드로 등록되는 부작용 방지)
                     val isScorecardLike = rawUpper.contains("SCORE") || rawUpper.contains("스코어") || (rawUpper.contains("PAR") && rawUpper.contains("HOLE"))
@@ -207,6 +199,31 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
                 android.util.Log.w("AutoProcessGolfMedia", "[$currentIdx/${targetPhotos.size}] 미디어 분석 건너뜀 (${photo.uri}): ${t.message}")
+            }
+        }
+
+        // [Stage 3: 확정된 필드 라운드 날짜의 골프장 촬영 사진(비-스크린샷 카메라 사진) 자동 첨부]
+        // 라커룸 안내지나 스코어카드지로 인해 이미 확정된 필드 라운드가 존재하는 날에 찍은 실제 카메라 사진은 해당 라운드에 자동 첨부합니다.
+        runCatching {
+            val confirmedRounds = golfRepository.getAllGolfRoundsList().filter {
+                com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(it.clubName)
+            }
+            for (round in confirmedRounds) {
+                val roundDate = (round.startTime ?: round.roundDate).toLocalDate()
+                val sameDayCameraUris = targetPhotos.filter { photo ->
+                    photo.time.toLocalDate() == roundDate &&
+                            !photo.tags.contains("스크린샷") &&
+                            !photo.uri.lowercase().contains("screenshot") &&
+                            !photo.uri.lowercase().contains("스크린샷") &&
+                            photo.uri != round.scorecardPhotoUri
+                }.map { it.uri }
+
+                if (sameDayCameraUris.isNotEmpty()) {
+                    val mergedPhotos = (round.matchingPhotoUris + sameDayCameraUris).distinct()
+                    if (mergedPhotos.size > round.matchingPhotoUris.size) {
+                        golfRepository.updateGolfRound(round.copy(matchingPhotoUris = mergedPhotos))
+                    }
+                }
             }
         }
 

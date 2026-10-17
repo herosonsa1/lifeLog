@@ -169,7 +169,7 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
         val ccGcRegex = Regex("""\b(CC|GC|C\.C|G\.C|COUNTRY\s*CLUB|GOLF\s*CLUB|GOLF\s*RESORT|GOLF\s*LINKS)\b""", RegexOption.IGNORE_CASE)
         val hasCcGc = ccGcRegex.containsMatchIn(raw)
         val hasExplicitLocker = upperRaw.contains("락카") || upperRaw.contains("라커") || upperRaw.contains("락커") ||
-            upperRaw.contains("LOCKER") || upperRaw.contains("비밀번호") || upperRaw.contains("PASSWORD") || upperRaw.contains("정산기")
+            upperRaw.contains("LOCKER") || upperRaw.contains("입장번호") || upperRaw.contains("정산기")
         val hasGolfTerms = upperRaw.contains("골프") || upperRaw.contains("GOLF") || upperRaw.contains("TEE-OFF") || upperRaw.contains("TEE OFF") ||
             upperRaw.contains("티오프") || upperRaw.contains("티업") || upperRaw.contains("그린피") || upperRaw.contains("골프장") || upperRaw.contains("골프백") ||
             upperRaw.contains("라운드") || upperRaw.contains("ROUND") || upperRaw.contains("캐디") || upperRaw.contains("CADDIE") ||
@@ -364,13 +364,29 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
         var clubName: String? = null
         val normalizedRaw = raw.replace(Regex("""[^가-힣A-Za-z0-9]"""), "").uppercase()
 
-        // 2-0. 전체 텍스트에서 사전(knownClubs) 정규화 매칭 (영문/한글 공백 무관 매칭)
-        for ((kw, name) in knownClubs) {
+        // [다중 구장 목록 차단] 한 이미지 내에 서로 다른 골프장이 2개 이상 등장하면(후기 목록, 부킹 비교, 랭킹) 즉시 중단
+        val matchedDistinctClubs = knownClubs.entries.mapNotNull { (kw, name) ->
             val normKw = kw.replace(Regex("""[^가-힣A-Za-z0-9]"""), "").uppercase()
-            if (normKw.length >= 2 && normalizedRaw.contains(normKw)) {
-                clubName = name
-                break
-            }
+            if (normKw.length >= 2 && normalizedRaw.contains(normKw)) name else null
+        }.distinct()
+        if (matchedDistinctClubs.size >= 2) {
+            runCatching { android.util.Log.d("GolfLockerSlipOcr", "다중 골프장 목록(${matchedDistinctClubs}) 감지로 전표 분석 즉시 중단") }
+            return GolfLockerSlipResult(
+                isLockerSlip = false,
+                clubName = "일반 사진",
+                lockerNumber = null,
+                teeOffTime = null,
+                courseName = null,
+                date = fallbackDate ?: LocalDate.now(),
+                playerName = null,
+                gender = null,
+                rawText = raw
+            )
+        }
+
+        // 2-0. 전체 텍스트에서 사전(knownClubs) 정규화 매칭 (영문/한글 공백 무관 매칭)
+        if (matchedDistinctClubs.size == 1) {
+            clubName = matchedDistinctClubs.first()
         }
 
         // 2-1. 최하단 영역(마지막 6줄) 특화 탐색: 감사/환영 문구, 법인/상호, 주소/전화번호 연계
@@ -469,11 +485,12 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
 
         // 2-3. 본문 명시적 레이블 탐색 (예: "골프장 : 스카이밸리", "CLUB : SKY VALLEY")
         if (clubName == null) {
-            val labelClubRegex = Regex("""(?:골프장|골프클럽|구장|Club|Golf\s*Club)\s*[:：]?\s*([가-힣A-Za-z0-9\s&]{2,25})""", RegexOption.IGNORE_CASE)
+            val labelClubRegex = Regex("""(?:골프장|골프클럽|구장|Club|Golf\s*Club)\s*[:：]\s*([가-힣A-Za-z0-9\s&]{2,25})""", RegexOption.IGNORE_CASE)
             for (line in lines) {
                 val m = labelClubRegex.find(line)
                 if (m != null) {
                     val cand = m.groupValues[1].trim()
+                    if (cand.contains("입력") || cand.contains("검색") || cand.contains("선택")) continue
                     val matched = knownClubs[cand] ?: knownClubs.entries.firstOrNull { cand.contains(it.key, ignoreCase = true) }?.value
                     clubName = matched ?: if (cand.endsWith("CC") || cand.endsWith("GC") || cand.endsWith("클럽") || cand.endsWith("골프장")) cand else "$cand CC"
                     break
@@ -492,45 +509,52 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
             }
         }
 
-        val hasKnownClub = clubName != null
-
-        // 3. Locker Number Extraction
+        // 3. Locker Number Extraction (오직 명시적 라커 라벨 또는 괄호 성별 표기와 결합된 번호만 추출!)
         var lockerNumber: String? = null
-        val genderLockerRegex = Regex("""(?:\([남여]\)|\[[남여]\]|[남여])\s*([A-Za-z]?\s*[-–]?\s*\d{2,4})|([A-Za-z]?\s*[-–]?\s*\d{2,4})\s*(?:\([남여]\)|\[[남여]\])""")
+        var hasExplicitGenderLockerPair = false
+
+        // 3-1. 명시적 라커 라벨('락카', '라커', '락커', 'LOCKER', '입장번호', 'NO.')과 직접 결합된 번호 최우선 추출
+        val labelLockerRegex = Regex("""(?:락카|라커|락커|LOCKER|입장번호|NO\.)\s*(?:\([남여]\)|\[[남여]\]|[남여])?\s*[:：#번호.\s]*([A-Za-z]?\s*[-–]?\s*\d{2,4})\b""", RegexOption.IGNORE_CASE)
         for (line in lines) {
-            val m = genderLockerRegex.find(line)
+            val m = labelLockerRegex.find(line)
             if (m != null) {
-                val matched = (m.groups[1]?.value ?: m.groups[2]?.value)?.replace(" ", "")?.trim()
-                if (!matched.isNullOrBlank() && matched != "7777" && !matched.startsWith("202")) {
-                    lockerNumber = matched
+                val cand = m.groupValues[1].replace(" ", "").trim()
+                if (cand != "7777" && cand != "0000" && !cand.startsWith("202")) {
+                    lockerNumber = cand
                     break
                 }
             }
         }
-        if (lockerNumber == null) {
-            for (i in lines.indices) {
-                val line = lines[i].trim()
-                val isNearbyGender = line.contains("남") || line.contains("여") ||
-                    (i > 0 && (lines[i-1].contains("남") || lines[i-1].contains("여"))) ||
-                    (i < lines.size - 1 && (lines[i+1].contains("남") || lines[i+1].contains("여")))
 
-                val standaloneMatch = Regex("""^[A-Za-z]?\s*[-–]?\s*\d{2,4}$""").find(line)
-                if (standaloneMatch != null) {
-                    val cand = standaloneMatch.value.replace(" ", "").trim()
-                    if (cand != "7777" && cand != "0000" && !cand.startsWith("202")) {
-                        lockerNumber = cand
-                        if (isNearbyGender) break
+        // 3-2. 괄호로 둘러싸인 명시적 성별 표기('(남)', '(여)', '[남]', '[여]')와 결합된 라커 번호 추출 ('남여주' 등 지명 오탐 원천 차단)
+        if (lockerNumber == null) {
+            val genderLockerRegex = Regex("""(?:\([남여MＦ]\)|\[[남여]\])\s*([A-Za-z]?\s*[-–]?\s*\d{2,4})\b|\b([A-Za-z]?\s*[-–]?\s*\d{2,4})\s*(?:\([남여MＦ]\)|\[[남여]\])""")
+            for (line in lines) {
+                val m = genderLockerRegex.find(line)
+                if (m != null) {
+                    val matched = (m.groups[1]?.value ?: m.groups[2]?.value)?.replace(" ", "")?.trim()
+                    if (!matched.isNullOrBlank() && matched != "7777" && matched != "0000" && !matched.startsWith("202")) {
+                        lockerNumber = matched
+                        hasExplicitGenderLockerPair = true
+                        break
                     }
                 }
             }
         }
-        if (lockerNumber == null) {
-            val labelLockerRegex = Regex("""(?:락카|라커|락커|LOCKER|NO\.?)\s*[:#번호\s]*([A-Za-z]?\s*[-–]?\s*\d{2,4})""", RegexOption.IGNORE_CASE)
-            for (line in lines) {
-                val m = labelLockerRegex.find(line)
-                if (m != null) {
-                    val cand = m.groupValues[1].replace(" ", "").trim()
-                    if (cand != "7777" && !cand.startsWith("202")) {
+
+        // 3-3. 단독 줄 번호 추출: 반드시 바로 위/아래 1줄 이내에 명시적 라커 라벨('락카', '라커', 'LOCKER') 또는 명시적 성별('(남)', '(여)')이 있을 때만 허용!
+        // ('88', '72', '52', '27' 등 일반 표의 숫자 셀을 무조건 lockerNumber로 넣던 치명적 버그 제거)
+        if (lockerNumber == null && hasExplicitLocker) {
+            val explicitMarkerRegex = Regex("""(?:락카|라커|락커|LOCKER|입장번호|\([남여]\)|\[[남여]\])""", RegexOption.IGNORE_CASE)
+            for (i in lines.indices) {
+                val line = lines[i].trim()
+                val standaloneMatch = Regex("""^[A-Za-z]?\s*[-–]?\s*\d{2,4}$""").find(line)
+                if (standaloneMatch != null) {
+                    val cand = standaloneMatch.value.replace(" ", "").trim()
+                    if (cand in listOf("88", "72", "52", "27", "7777", "0000") || cand.startsWith("202")) continue
+                    val hasAdjacentMarker = (i > 0 && explicitMarkerRegex.containsMatchIn(lines[i - 1])) ||
+                            (i < lines.size - 1 && explicitMarkerRegex.containsMatchIn(lines[i + 1]))
+                    if (hasAdjacentMarker) {
                         lockerNumber = cand
                         break
                     }
@@ -542,13 +566,18 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
         var courseName: String? = null
         var teeOffTime: LocalTime? = null
 
-        // 4-1. 코스 라인에서 코스명과 시간(0651 또는 06:51) 동시 추출 (예: "코  스 : Hill 0651", "Course : OUT / IN 07:20", "COURSE : LAKE 0715")
-        val courseLineRegex = Regex("""(?:코\s*스|Course)\s*[:：]?\s*([가-힣A-Za-z0-9/]+(?:\s*[/]\s*[가-힣A-Za-z0-9]+)?)(?:\s+([0-2]\d[0-5]\d|[0-2]?\d:[0-5]\d))?""", RegexOption.IGNORE_CASE)
+        val invalidCourseWords = setOf(
+            "코스", "COURSE", "관리", "상태", "매니저", "안내", "설계", "소개", "공략",
+            "후기", "리뷰", "만족", "추천", "전장", "난이도", "조경", "잔디", "변경", "선택"
+        )
+
+        // 4-1. 코스 라인에서 코스명과 시간(0651 또는 06:51) 동시 추출 (예: "코  스 : Hill 0651", "Course : OUT / IN 07:20")
+        val courseLineRegex = Regex("""(?:코\s*스|Course)\s*[:：]\s*([가-힣A-Za-z0-9/]+(?:\s*[/]\s*[가-힣A-Za-z0-9]+)?)(?:\s+([0-2]\d[0-5]\d|[0-2]?\d:[0-5]\d))?""", RegexOption.IGNORE_CASE)
         for (line in lines) {
             val m = courseLineRegex.find(line)
             if (m != null) {
                 val candCourse = m.groupValues[1].trim()
-                if (candCourse.isNotBlank() && !candCourse.equals("코스", ignoreCase = true) && !candCourse.equals("COURSE", ignoreCase = true)) {
+                if (candCourse.isNotBlank() && invalidCourseWords.none { candCourse.contains(it, ignoreCase = true) }) {
                     courseName = candCourse
                 }
                 val timeStr = m.groupValues.getOrNull(2)?.trim()
@@ -657,14 +686,18 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
         val finalDate = parsedDate?.takeIf { !it.isAfter(today) } ?: safeFallback
 
         // 6. Player Name & Gender Extraction
-        // 1순위: 'OOO 고객님', 'OOO 회원님', 'OOO 님' (실제 라운더 본인 우선)
+        // 1순위: 'OOO 고객님', 'OOO 회원님', 'OOO 님' (실제 라운더 본인 우선, '캐디님'/'매니저님' 등 제외)
+        val excludedPlayerNames = setOf(
+            "고객", "회원", "예약", "회원명", "성명", "캐디", "매니저", "직원", "기사",
+            "사장", "대표", "프로", "코치", "선생", "부모", "담당", "관리", "안내", "방문"
+        )
         var playerName: String? = null
         val playerSuffixRegex = Regex("""([가-힣]{2,4})\s*(?:고객님|회원님|님)""")
         for (line in lines) {
             val m = playerSuffixRegex.find(line)
             if (m != null) {
                 val cand = m.groupValues[1].trim()
-                if (cand != "고객" && cand != "회원" && cand != "예약") {
+                if (cand !in excludedPlayerNames && !excludedPlayerNames.any { cand.contains(it) }) {
                     playerName = cand
                     break
                 }
@@ -677,7 +710,7 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
                 val m = playerLabelRegex.find(line)
                 if (m != null) {
                     val cand = m.groupValues[1].trim()
-                    if (cand != "고객" && cand != "회원" && cand != "예약" && cand != "회원명" && cand != "성명") {
+                    if (cand !in excludedPlayerNames && !excludedPlayerNames.any { cand.contains(it) }) {
                         playerName = cand
                         break
                     }
@@ -689,7 +722,7 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
         if (raw.contains("(남)") || raw.contains("남성") || raw.contains("락카(남)") || upperRaw.contains("MALE") || upperRaw.contains("(M)")) gender = "남"
         else if (raw.contains("(여)") || raw.contains("여성") || raw.contains("락카(여)") || upperRaw.contains("FEMALE") || upperRaw.contains("(F)")) gender = "여"
 
-        // 7. Final Slip Decision (구체적인 골프장명이 식별되었거나 명확한 골프/라커 특성이 있을 때만 인정)
+        // 7. Final Slip Decision (실제 라커룸 안내지/번호표 영수증일 때만 엄격하게 인정!)
         // [광고/이벤트 배너 배제] 마케팅 배너, 스크린골프 대여, 결제 이벤트 등의 캡처 사진은 라커룸 전표에서 원천 차단
         val isAdBanner = upperRaw.contains("하루종일") || upperRaw.contains("대여") || upperRaw.contains("기프트카드") ||
                 upperRaw.contains("드려요") || upperRaw.contains("이벤트") || upperRaw.contains("할인") ||
@@ -697,10 +730,15 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
                 upperRaw.contains("선물") || upperRaw.contains("증정") || upperRaw.contains("칠 수 있다") ||
                 (upperRaw.contains("주중") && upperRaw.contains("주말")) || upperRaw.contains("ROOM 대여") || upperRaw.contains("NX PLUS")
 
-        // 라커룸 전표의 필수 요건: 반드시 유효한 라커 번호(lockerNumber)가 있거나 명시적 라커 레이블(락카/라커)이 존재해야 함!
+        // [핵심 가드레일] 라커룸 안내지(영수증)로 인정받기 위한 필수 조건:
+        // 1) 명시적 라커 키워드(락카/라커/락커/LOCKER/입장번호)가 존재하고 라커 번호(또는 티오프/코스+골프 지문)가 확인되거나,
+        // 2) '(남) 128'과 같은 명시적 성별+라커번호 조합이 존재하면서 동시에 티오프 시간이나 방문 감사 문구가 함께 인쇄된 실물 번호표이거나,
+        // 3) 영문/국문 라커 번호표의 4대 필수 필드(NO.번호 + GUEST/성명 + COURSE + TEE-OFF 시간)가 모두 구조적으로 존재해야 함!
+        val hasStructuredSlipFields = lockerNumber != null && teeOffTime != null && courseName != null && playerName != null
         val hasLockerFeature = (hasExplicitLocker && lockerNumber != null) ||
-                (hasExplicitLocker && (hasGolfTerms || hasCcGc || hasKnownClub)) ||
-                (lockerNumber != null && (teeOffTime != null || hasCcGc || hasThankYouNotice || hasKnownClub))
+                (hasExplicitLocker && (teeOffTime != null || courseName != null) && (hasGolfTerms || hasCcGc || hasThankYouNotice)) ||
+                (hasExplicitGenderLockerPair && lockerNumber != null && (teeOffTime != null || hasThankYouNotice)) ||
+                hasStructuredSlipFields
 
         val isRealClub = clubName != null &&
                 clubName != "일반 사진" &&
@@ -710,12 +748,12 @@ class GolfLockerSlipOcrAnalyzer @Inject constructor(
         return GolfLockerSlipResult(
             isLockerSlip = isLockerSlip,
             clubName = if (isLockerSlip) (clubName ?: "골프장") else "일반 사진",
-            lockerNumber = lockerNumber,
-            teeOffTime = teeOffTime,
-            courseName = courseName,
+            lockerNumber = if (isLockerSlip) lockerNumber else null,
+            teeOffTime = if (isLockerSlip) teeOffTime else null,
+            courseName = if (isLockerSlip) courseName else null,
             date = finalDate,
-            playerName = playerName,
-            gender = gender,
+            playerName = if (isLockerSlip) playerName else null,
+            gender = if (isLockerSlip) gender else null,
             rawText = raw
         )
     }

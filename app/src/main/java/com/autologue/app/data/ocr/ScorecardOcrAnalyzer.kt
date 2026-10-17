@@ -581,6 +581,33 @@ class ScorecardOcrAnalyzer @Inject constructor(
             "진료과", "원외처방", "사업자등록번호", "가맹점", "부가세", "부가가치세", "품명", "수량", "단가", "면세"
         )
 
+        /**
+         * 웹사이트 이용후기 게시판, 골프 부킹/조인 목록, 커뮤니티 캡처 등
+         * 실제 라커룸 안내지나 스코어카드지가 아닌 화면을 원천 차단하기 위한 네거티브 지문
+         */
+        val WEB_AND_REVIEW_BOARD_NEGATIVES = listOf(
+            "이용후기", "최근 이용후기", "후기 작성", "개인만족도", "총평점", "등록일자",
+            "추천순", "최신순", "골프장명 입력", "라운딩 후기", "방문 후기", "첫방문 후기",
+            "XGOLF", "SBSGOLF", "JTBCGOLF", "GOLPANG", "골팡", "티업엔조이",
+            "임박특가", "조인모집", "부킹예약", "양도매물", "그린피할인",
+            "게시판", "조회수", "댓글", "공감수", "작성자", "네이버 카페", "오픈채팅"
+        )
+
+        private val DISTINCT_CLUB_KEYWORDS = listOf(
+            "스카이밸리", "아리지", "세라지오", "솔모로", "페럼클럽", "블루헤런", "해슬리", "금강",
+            "신라", "루트52", "소피아그린", "남여주", "사우스스프링스", "블랙스톤", "웰링턴",
+            "비에이비스타", "뉴스프링빌", "필로스", "베어크리크", "일동레이크", "몽베르",
+            "아도니스", "포레스트힐", "아난티", "가평베네스트", "크리스탈밸리", "프리스틴밸리",
+            "서원밸리", "서원힐스", "송추", "레이크우드", "티클라우드", "남촌", "이스트밸리",
+            "곤지암", "뉴서울", "화산", "신원", "아시아나", "레이크사이드", "글렌로스", "태광",
+            "은화삼", "지산", "안성베네스트", "안양", "라데나", "라비에벨", "더플레이어스",
+            "제이드팰리스", "오크밸리", "오크크릭", "성문안", "휘슬링락", "카스카디아", "웰리힐리",
+            "비발디파크", "소노펠리체", "동강시스타", "파인리즈", "메이플비치", "샌드파인",
+            "클럽모우", "킹스데일", "우정힐스", "세종필드", "레인보우힐스", "클럽72", "스카이72",
+            "잭니클라우스", "베어즈베스트", "드림파크", "블루원", "사우스링스", "핀크스",
+            "나인브릿지", "테디밸리", "롯데스카이힐", "인서울27", "88CC", "월송리"
+        )
+
         val MOBILE_APP_UI_KEYWORDS = listOf(
             "라운드", "상세", "기록", "FIELD", "Field", "field", "삭제", "취소", "저장하기", "저장",
             "공유", "수정", "뒤로", "닫기", "메뉴", "홈", "선택", "등록", "버튼", "관리", "설정",
@@ -588,9 +615,70 @@ class ScorecardOcrAnalyzer @Inject constructor(
             "안내", "영수증", "진료", "병원", "약국", "전표", "명세", "통계", "분석", "결과", "목록"
         )
 
+        /**
+         * 한 이미지 안에 서로 다른 골프장명이 몇 개나 등장하는지 카운트합니다.
+         * 단일 스코어카드나 단일 라커룸 번호표에는 1개의 구장명만 등장하며,
+         * 2개 이상의 서로 다른 구장명이 나열된 경우는 후기 게시판/부킹 목록/랭킹 캡처입니다.
+         */
+        fun countDistinctClubsInText(text: String): Int {
+            val normalized = text.replace(Regex("""[^가-힣A-Za-z0-9]"""), "").uppercase()
+            var count = 0
+            for (clubKw in DISTINCT_CLUB_KEYWORDS) {
+                val normKw = clubKw.replace(Regex("""[^가-힣A-Za-z0-9]"""), "").uppercase()
+                if (normKw.length >= 2 && normalized.contains(normKw)) {
+                    count++
+                }
+            }
+            return count
+        }
+
+        fun hasWebOrReviewBoardNegative(text: String): Boolean {
+            val upper = text.uppercase()
+            if (WEB_AND_REVIEW_BOARD_NEGATIVES.any { upper.contains(it) }) return true
+            // 평점(★9.0, ★10.0 등)이나 다중 골프장 리스트(2개 이상 구장 동시 출현)는 후기/부킹 목록 화면이므로 차단
+            val starRatingCount = Regex("""★\s*\d+(?:\.\d+)?""").findAll(text).count()
+            if (starRatingCount >= 2) return true
+            if (countDistinctClubsInText(text) >= 2) return true
+            return false
+        }
+
         fun hasMedicalOrReceiptNegative(text: String): Boolean {
             val upper = text.uppercase()
-            return MEDICAL_AND_RECEIPT_NEGATIVES.any { upper.contains(it) }
+            return MEDICAL_AND_RECEIPT_NEGATIVES.any { upper.contains(it) } ||
+                    hasWebOrReviewBoardNegative(text)
+        }
+
+        /**
+         * 실제 골프 스코어카드지(모바일 스코어카드 앱 또는 지류 스코어카드)인지 엄격하게 검증합니다.
+         * 단순 '골프장' 단어나 우연한 숫자 조합만으로는 절대 통과할 수 없으며,
+         * 반드시 스코어카드 테이블 구조(HOLE, PAR, SCORE, PUTT, GIR 등)와 유효 타수/홀별 스코어가 함께 존재해야 합니다.
+         */
+        fun isGenuineScorecardResult(result: ScorecardOcrResult, rawText: String = result.recognizedRawText): Boolean {
+            if (rawText.isBlank() || hasMedicalOrReceiptNegative(rawText)) return false
+            val upper = rawText.uppercase()
+
+            // 스코어카드 전용 구조 키워드 (일반 '골프', '골프장', '라운드', '캐디' 등 일반 명사는 제외!)
+            val structuralKeywords = listOf(
+                "SCORE", "스코어", "SCORECARD", "SMARTSCORE", "스마트스코어",
+                "HOLE", "PAR", "PUTT", "퍼트", "퍼팅", "GIR", "PENALTY", "페널티", "벌타"
+            )
+            val matchedStructuralCount = structuralKeywords.count { upper.contains(it) }
+
+            val has18Holes = result.holeScores.size >= 14 && result.holeScores.all { it in 1..15 }
+            val has9HolesWithTable = result.holeScores.size >= 9 &&
+                    result.holeScores.all { it in 1..15 } &&
+                    (upper.contains("HOLE") || upper.contains("PAR") || result.holePars.size >= 9)
+            val hasValidTotalScore = result.totalScore != null && result.totalScore in 54..144
+
+            // 1) 14홀 이상의 홀별 타수가 추출되었고 스코어카드 구조 키워드가 최소 1개 이상 있는 경우
+            if (has18Holes && matchedStructuralCount >= 1) return true
+
+            // 2) 총 타수(54..144)가 추출되었고, 동시에 스코어카드 구조적 증거(9홀 이상 타수 배열 또는 2개 이상의 전용 테이블 키워드 + 퍼트/GIR/파 배열)가 있는 경우
+            if (hasValidTotalScore && (has9HolesWithTable || (matchedStructuralCount >= 2 && (result.totalPutts != null || result.girPercentage != null || result.holePars.size >= 9)))) {
+                return true
+            }
+
+            return false
         }
 
         fun containsMobileAppUiKeyword(text: String): Boolean {
@@ -622,7 +710,7 @@ class ScorecardOcrAnalyzer @Inject constructor(
          */
         fun parse(raw: String): ScorecardOcrResult {
             if (hasMedicalOrReceiptNegative(raw)) {
-                runCatching { android.util.Log.d("ScorecardOcrAnalyzer", "parse: 의료/영수증 감지로 골프 파싱 중단") }
+                runCatching { android.util.Log.d("ScorecardOcrAnalyzer", "parse: 비-스코어카드(의료/영수증/웹후기/목록) 감지로 골프 파싱 중단") }
                 return createEmptyResult(raw)
             }
             val lines = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
@@ -910,15 +998,23 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         if (prevIdx < 0) break
                         val prevLine = lines[prevIdx].trim()
                         val prevUpper = prevLine.uppercase()
-                        val isHoleLabel = prevUpper == "HOLE" || prevUpper.startsWith("HOLE ")
+                        // 전반 데이터 행(PUTT, SCORE, PAR, 전반 HOLE 등)을 만나면 즉시 역탐색 중단
+                        if (prevLine.isBlank() ||
+                            prevUpper.contains("SCORE") || prevLine.contains("스코어") ||
+                            prevUpper.contains("PAR") || prevLine.contains("파") ||
+                            prevUpper.contains("PUTT") || prevLine.contains("퍼트") || prevLine.contains("퍼팅") ||
+                            prevUpper.contains("GIR") || prevLine.contains("걸음") ||
+                            prevUpper.contains("TOTAL") || prevLine.contains("합계") ||
+                            Regex("""\b1\s+2\s+3\b""").containsMatchIn(prevUpper)
+                        ) {
+                            break
+                        }
+                        val isStandaloneHoleLabel = prevUpper == "HOLE"
                         val isKnownCourse = allKnownCourseKeywords.any { prevUpper.contains(it) }
-                        val isCourseCandidate = prevLine.length in 2..15 &&
-                                !prevUpper.contains("SCORE") && !prevUpper.contains("PAR") &&
-                                !prevUpper.contains("PUTT") && !prevUpper.contains("GIR") &&
-                                !prevUpper.contains("걸음") && !prevUpper.contains("TOTAL") && !prevUpper.contains("합계")
-                        if (isHoleLabel || isKnownCourse || isCourseCandidate) {
+                        val isCourseCandidate = prevLine.length in 2..15 && !Regex("""\d{2,}""").containsMatchIn(prevLine)
+                        if (isStandaloneHoleLabel || isKnownCourse || isCourseCandidate) {
                             splitPoint = prevIdx
-                        } else if (prevLine.isBlank() || prevUpper.contains("TOTAL") || prevUpper.contains("합계")) {
+                        } else {
                             break
                         }
                     }
@@ -946,11 +1042,20 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         if (prevIdx < 0) break
                         val prevLine = lines[prevIdx].trim()
                         val prevUpper = prevLine.uppercase()
-                        val isHoleLabel = prevUpper == "HOLE" || prevUpper.startsWith("HOLE ")
+                        if (prevLine.isBlank() ||
+                            prevUpper.contains("SCORE") || prevLine.contains("스코어") ||
+                            prevUpper.contains("PAR") || prevLine.contains("파") ||
+                            prevUpper.contains("PUTT") || prevLine.contains("퍼트") ||
+                            prevUpper.contains("TOTAL") || prevLine.contains("합계") ||
+                            Regex("""\b1\s+2\s+3\b""").containsMatchIn(prevUpper)
+                        ) {
+                            break
+                        }
+                        val isStandaloneHoleLabel = prevUpper == "HOLE"
                         val isKnownCourse = allKnownCourseKeywords.any { prevUpper.contains(it) }
-                        if (isHoleLabel || isKnownCourse) {
+                        if (isStandaloneHoleLabel || isKnownCourse) {
                             splitPoint = prevIdx
-                        } else if (prevLine.isBlank()) {
+                        } else {
                             break
                         }
                     }
@@ -973,11 +1078,17 @@ class ScorecardOcrAnalyzer @Inject constructor(
                         if (prevIdx < 0) break
                         val prevLine = lines[prevIdx].trim()
                         val prevUpper = prevLine.uppercase()
-                        if (prevUpper.contains("HOLE") || allKnownCourseKeywords.any { prevUpper.contains(it) } ||
-                            (prevLine.length in 2..15 && !prevUpper.contains("SCORE") && !prevUpper.contains("PUTT"))) {
-                            splitPoint = prevIdx
-                        } else if (prevUpper.contains("TOTAL") || prevUpper.contains("합계")) {
+                        if (prevLine.isBlank() ||
+                            prevUpper.contains("SCORE") || prevLine.contains("스코어") ||
+                            prevUpper.contains("PUTT") || prevLine.contains("퍼트") ||
+                            prevUpper.contains("TOTAL") || prevLine.contains("합계") ||
+                            Regex("""\b1\s+2\s+3\b""").containsMatchIn(prevUpper)
+                        ) {
                             break
+                        }
+                        if (prevUpper.contains("HOLE") || allKnownCourseKeywords.any { prevUpper.contains(it) } ||
+                            (prevLine.length in 2..15 && !prevUpper.contains("PAR"))) {
+                            splitPoint = prevIdx
                         }
                     }
                     backSplitIdx = splitPoint
@@ -1436,7 +1547,16 @@ class ScorecardOcrAnalyzer @Inject constructor(
             var scoreTotal: Int? = null
 
             val parseScoreTokens = { rawText: String, targetPars: List<Int> ->
-                val rawTokens = Regex("""\b\d+\b""").findAll(rawText).map { it.value }.toList()
+                val rawTokensInitial = Regex("""\b\d+\b""").findAll(rawText).map { it.value }.toList()
+                // 후반 9홀 행에 IN 소계(30..75)와 18홀 TOTAL 총계(54..144)가 나란히 적힌 11열 양식(예: 4 5 4 4 5 4 3 5 4 38 77) 대응
+                val rawTokens = if (rawTokensInitial.size >= 11 &&
+                    rawTokensInitial[rawTokensInitial.size - 2].toIntOrNull() in 30..75 &&
+                    rawTokensInitial.last().toIntOrNull() in 54..144
+                ) {
+                    rawTokensInitial.dropLast(1)
+                } else {
+                    rawTokensInitial
+                }
 
                 // 1) 연속된 셀 결합 분해 (예: "54" -> 5, 4 / "5566" -> 5, 5, 6, 6). 단, 맨 마지막 토큰이 30..75면 합계로 보존!
                 val decomposed = mutableListOf<Int>()
@@ -1548,7 +1668,12 @@ class ScorecardOcrAnalyzer @Inject constructor(
             }
 
             // 3-1. 파편화된 숫자 토큰 스트림에서 9홀 스코어 시퀀스 스마트 복원 (South 코스 및 알록달록 칩 분리 대응)
-            if (scores.isEmpty()) {
+            // [가드레일] 해당 섹션에 실제 스코어카드 테이블 지표(HOLE, PAR, SCORE, PUTT 등)가 존재할 때만 수행하여 일반 문서 숫자 오탐 차단
+            val hasSectionTableHeader = pars.isNotEmpty() || holes.isNotEmpty() || sectionLines.any {
+                val u = it.uppercase()
+                u.contains("SCORE") || it.contains("스코어") || u.contains("HOLE") || u.contains("PAR") || it.contains("파") || u.contains("PUTT") || it.contains("퍼트")
+            }
+            if (scores.isEmpty() && hasSectionTableHeader) {
                 val candidateTokens = mutableListOf<Int>()
                 for (line in sectionLines) {
                     val upper = line.uppercase()
@@ -1612,7 +1737,15 @@ class ScorecardOcrAnalyzer @Inject constructor(
             var puttTotal: Int? = null
 
             val parsePuttTokens = { rawText: String ->
-                val rawTokens = Regex("""\b\d+\b""").findAll(rawText).map { it.value }.toList()
+                val rawTokensInitial = Regex("""\b\d+\b""").findAll(rawText).map { it.value }.toList()
+                val rawTokens = if (rawTokensInitial.size >= 11 &&
+                    rawTokensInitial[rawTokensInitial.size - 2].toIntOrNull() in 10..30 &&
+                    rawTokensInitial.last().toIntOrNull() in 18..60
+                ) {
+                    rawTokensInitial.dropLast(1)
+                } else {
+                    rawTokensInitial
+                }
                 val decomposed = mutableListOf<Int>()
                 for (idx in rawTokens.indices) {
                     val tok = rawTokens[idx]

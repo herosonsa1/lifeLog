@@ -417,6 +417,43 @@ class GolfViewModel @Inject constructor(
                         round.memo?.contains("진료비") == true ||
                         (round.totalScore != null && round.totalScore < 50 && round.holeScores.size < 8)
 
+                // [웹 이용후기 게시판 / 다중 구장 목록 / 비-라커전표 오탐 라운드 감지]
+                // xgolf.com 등 후기 목록에서 '코스 관리' -> '관리 코스', '88cc' -> '락커: 88', '캐디님' -> 동반자 '캐디'로 오탐된 가짜 라운드 즉시 식별
+                val baseClubForClean = splitClubAndCourse(round.clubName).first.ifBlank { round.clubName }
+                val isWebReviewFakeRound = round.clubName.contains("관리 코스") ||
+                        round.memo?.contains("관리 코스") == true ||
+                        round.memo?.contains("코스: 관리") == true ||
+                        round.companions.any { it.contains("캐디") || it.contains("매니저") } ||
+                        round.memo?.contains("락커: 88") == true ||
+                        round.memo?.contains("락커: 72") == true ||
+                        round.memo?.contains("락커: 52") == true ||
+                        round.memo?.contains("락커: 27") == true ||
+                        round.clubName.contains("이용후기") ||
+                        round.clubName.contains("XGOLF", ignoreCase = true)
+
+                // 스코어카드 점수가 전혀 없는 라운드인데 첨부된 사진(matchingPhotoUris)이 실제 라커룸 안내지나 스코어카드가 아닌 경우(웹 캡처 등) 검증
+                val isUnverifiedPhotoOnlyRound = if (!isWebReviewFakeRound &&
+                    round.totalScore == null &&
+                    round.holeScores.isEmpty() &&
+                    round.scorecardPhotoUri.isNullOrBlank() &&
+                    round.matchingPhotoUris.isNotEmpty()
+                ) {
+                    var anyValidSlipOrCard = false
+                    for (uStr in round.matchingPhotoUris) {
+                        val u = runCatching { Uri.parse(uStr) }.getOrNull() ?: continue
+                        val probe = runCatching { scorecardOcrAnalyzer.quickProbeText(u, maxDimension = 1024) }.getOrDefault("")
+                        if (probe.isNotBlank() && !ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(probe)) {
+                            val slip = GolfLockerSlipOcrAnalyzer.parse(probe, roundDay)
+                            val card = ScorecardOcrAnalyzer.parse(probe)
+                            if (slip.isLockerSlip || ScorecardOcrAnalyzer.isGenuineScorecardResult(card, probe)) {
+                                anyValidSlipOrCard = true
+                                break
+                            }
+                        }
+                    }
+                    !anyValidSlipOrCard
+                } else false
+
                 // [사용자 핵심 지침] 18홀 완전한 스코어카드(또는 공식 예약/라커)가 없는 9홀 불완전 조각(54타 미만) 및 타수 없는 더미 자동 청소
                 val isIncompleteScoreDummy = round.totalScore != null && round.totalScore < 54 && round.holeScores.size < 14
                 val isNoScorePhotoDummy = round.totalScore == null && round.holeScores.isEmpty() && round.clubName.contains("오크밸리")
@@ -429,11 +466,13 @@ class GolfViewModel @Inject constructor(
                         isFutureFalseOcrRound ||
                         isAdBannerRound ||
                         isMedicalOrReceiptFakeRound ||
+                        isWebReviewFakeRound ||
+                        isUnverifiedPhotoOnlyRound ||
                         isIncompleteScoreDummy ||
                         isNoScorePhotoDummy
                 if (isDummyOrInvalid) {
                     golfRepository.deleteGolfRound(round.id)
-                    // 해당 날짜 다이어리에서도 가짜 골프 스텝 또는 미래 날짜 다이어리 즉시 제거 및 제목 복구
+                    // 해당 날짜 다이어리에서도 가짜 골프 스텝/주행 스텝 또는 미래 날짜 다이어리 즉시 제거 및 제목 복구
                     val day = (round.startTime ?: round.roundDate).toLocalDate()
                     val diaries = runCatching { diaryRepository.getDiaryEntriesByDateRange(day, day).first() }.getOrDefault(emptyList())
                     for (diary in diaries) {
@@ -441,24 +480,26 @@ class GolfViewModel @Inject constructor(
                             diaryRepository.deleteDiaryEntry(diary.id)
                             continue
                         }
-                        val cleanSteps = diary.routeSteps.filter {
-                            !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) &&
-                                !it.title.contains("나인CC", ignoreCase = true) &&
-                                !it.title.contains("나인 CC", ignoreCase = true)
+                        val cleanSteps = diary.routeSteps.filter { step ->
+                            !DailyRouteAggregator.isInvalidOrDummyGolfStep(step) &&
+                                !step.title.contains("나인CC", ignoreCase = true) &&
+                                !step.title.contains("나인 CC", ignoreCase = true) &&
+                                !(step.stepType == RouteStepType.GOLF && (step.title.contains(baseClubForClean) || step.locationName?.contains(baseClubForClean) == true)) &&
+                                !(step.stepType == RouteStepType.DRIVING && (step.title.contains(baseClubForClean) || step.locationName?.contains(baseClubForClean) == true || step.description?.contains("골프장 왕복 주행") == true))
                         }
                         if (cleanSteps.isEmpty() && diary.photoUris.isEmpty()) {
                             diaryRepository.deleteDiaryEntry(diary.id)
                             continue
                         }
-                        val cleanTitle = if (diary.title.contains("필드 골프장") || diary.title.contains("일반 사진") || diary.title.contains("라운딩") || diary.title.contains("나인CC") || diary.title.contains("나인 CC")) {
-                            val place = diary.placeName?.takeIf { !it.contains("나인CC") && !it.contains("나인 CC") }
+                        val cleanTitle = if (diary.title.contains("필드 골프장") || diary.title.contains("일반 사진") || diary.title.contains("라운딩") || diary.title.contains(baseClubForClean) || diary.title.contains("나인CC") || diary.title.contains("나인 CC")) {
+                            val place = diary.placeName?.takeIf { !it.contains("나인CC") && !it.contains("나인 CC") && !it.contains(baseClubForClean) }
                             if (place != null && place != "서울 방이동") "$place 일정" else "${day.monthValue}월 ${day.dayOfMonth}일의 다이어리"
                         } else diary.title
                         val cleanDiary = diary.copy(
                             title = cleanTitle,
-                            hasGolfRound = false,
+                            hasGolfRound = cleanSteps.any { it.stepType == RouteStepType.GOLF },
                             routeSteps = cleanSteps,
-                            tags = diary.tags.filter { !it.contains("골프") && !it.contains("필드") && !it.contains("나인CC") && !it.contains("나인 CC") }
+                            tags = diary.tags.filter { !it.contains("골프") && !it.contains("필드") && !it.contains(baseClubForClean) && !it.contains("캐디") && !it.contains("나인CC") && !it.contains("나인 CC") }
                         )
                         diaryRepository.updateDiaryEntry(cleanDiary)
                     }
@@ -762,32 +803,42 @@ class GolfViewModel @Inject constructor(
                     prefix = "scorecard"
                 )
                 val result = scorecardOcrAnalyzer.analyzeScorecard(permanentUri)
+                val isGenuineCard = ScorecardOcrAnalyzer.isGenuineScorecardResult(result)
                 val target = if (roundId != null) golfRepository.getGolfRoundById(roundId) else null
                 val updatedRound = if (roundId != null && target != null) {
-                    val finalScore = result.totalScore ?: target.totalScore ?: (if (result.holeScores.isNotEmpty()) result.holeScores.sum() else 86)
-                    extractScorecardOcrUseCase.saveOcrResult(
-                        roundId = roundId,
-                        totalScore = finalScore,
-                        totalPutts = result.totalPutts,
-                        holeScores = result.holeScores,
-                        scorecardUri = permanentUri.toString(),
-                        courseName = result.courseName,
-                        penaltyCount = result.penaltyCount,
-                        girPercentage = result.girPercentage,
-                        averageDriveDistance = result.averageDriveDistance,
-                        adjustedDriveDistance = result.adjustedDriveDistance,
-                        averageTempo = result.averageTempo,
-                        steps = result.steps,
-                        driveDistances = result.driveDistances,
-                        tempos = result.tempos,
-                        holePars = result.holePars,
-                        clubName = result.clubName
-                    )
-                    golfRepository.getGolfRoundById(roundId)
+                    if (isGenuineCard) {
+                        val finalScore = result.totalScore ?: target.totalScore ?: result.holeScores.sum()
+                        extractScorecardOcrUseCase.saveOcrResult(
+                            roundId = roundId,
+                            totalScore = finalScore,
+                            totalPutts = result.totalPutts,
+                            holeScores = result.holeScores,
+                            scorecardUri = permanentUri.toString(),
+                            courseName = result.courseName,
+                            penaltyCount = result.penaltyCount,
+                            girPercentage = result.girPercentage,
+                            averageDriveDistance = result.averageDriveDistance,
+                            adjustedDriveDistance = result.adjustedDriveDistance,
+                            averageTempo = result.averageTempo,
+                            steps = result.steps,
+                            driveDistances = result.driveDistances,
+                            tempos = result.tempos,
+                            holePars = result.holePars,
+                            clubName = result.clubName
+                        )
+                        golfRepository.getGolfRoundById(roundId)
+                    } else {
+                        // 스코어카드가 아닌 경우 라커룸 전표인지 확인 후 둘 다 아니면 무시 (가짜 86타 부여 원천 차단)
+                        val slipResult = GolfLockerSlipOcrAnalyzer.parse(result.recognizedRawText, target.roundDate.toLocalDate())
+                        if (slipResult.isLockerSlip) {
+                            processGolfLockerSlipUseCase(slipResult, permanentUri.toString())
+                        } else {
+                            target
+                        }
+                    }
                 } else {
-                    // targetRound가 없더라도 새 라운드를 자동 생성하여 스코어카드 반영
-                    val targetDate = result.playDate ?: LocalDate.now()
-                    extractScorecardOcrUseCase.processScorecardResult(result, permanentUri.toString(), targetDate)
+                    // targetRound가 없을 때: 진성 스코어카드 또는 라커룸 안내지일 때만 라운드 생성
+                    autoProcessGolfMediaUseCase.processSinglePhoto(permanentUri, result.playDate ?: LocalDate.now())
                 }
                 _uiState.value = _uiState.value.copy(
                     isOcrScanning = false,
@@ -1190,13 +1241,16 @@ class GolfViewModel @Inject constructor(
         // [H-06] Dispatchers.IO로 IO 작업 격리 → ANR 방지
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val roundDate = round.roundDate.toLocalDate()
-                val photos = historicalDataImporter.scanHistoricalPhotos(appContext, daysBack = 30)
-                // 스크린샷/캡처 이미지는 라운딩 현장 사진으로 자동 첨부되지 않도록 철저히 차단 (카메라 촬영 사진만 허용)
+                if (!DailyRouteAggregator.isRealGolfClub(round.clubName)) return@launch
+                val roundDate = (round.startTime ?: round.roundDate).toLocalDate()
+                val photos = historicalDataImporter.scanHistoricalPhotos(appContext, daysBack = 60)
+                // 스크린샷/웹 캡처 이미지는 라운딩 현장 사진으로 자동 첨부되지 않도록 철저히 차단 (실제 카메라 촬영 사진만 허용)
                 val sameDayPhotos = photos.filter { photo ->
                     photo.time.toLocalDate() == roundDate &&
                     !photo.tags.contains("스크린샷") &&
                     !photo.uri.lowercase().contains("screenshot") &&
+                    !photo.uri.lowercase().contains("스크린샷") &&
+                    !HistoricalDataImporter.isUriScreenshot(appContext, photo.uri) &&
                     photo.uri != round.scorecardPhotoUri
                 }
                 if (sameDayPhotos.isNotEmpty()) {

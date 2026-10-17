@@ -435,8 +435,19 @@ class SyncHistoricalDataUseCase @Inject constructor(
                         isFakeNineCc ||
                         rDay == java.time.LocalDate.of(2026, 10, 24)
                 )
-                val isMedical = isFakeNineCc ||
+                val isWebReviewFake = r.clubName.contains("관리 코스") ||
+                        r.memo?.contains("관리 코스") == true ||
+                        r.memo?.contains("코스: 관리") == true ||
+                        r.companions.any { it.contains("캐디") || it.contains("매니저") } ||
+                        r.memo?.contains("락커: 88") == true ||
+                        r.memo?.contains("락커: 72") == true ||
+                        r.memo?.contains("락커: 52") == true ||
+                        r.memo?.contains("락커: 27") == true ||
+                        r.clubName.contains("이용후기") ||
+                        r.clubName.contains("XGOLF", ignoreCase = true)
+                val isMedicalOrFake = isFakeNineCc ||
                         isFutureFalseOcr ||
+                        isWebReviewFake ||
                         r.clubName.contains("외래") ||
                         r.clubName.contains("진료비") ||
                         r.clubName.contains("계산서") ||
@@ -450,11 +461,36 @@ class SyncHistoricalDataUseCase @Inject constructor(
                         r.memo?.contains("외래 코스") == true ||
                         r.memo?.contains("진료비") == true ||
                         (r.totalScore != null && r.totalScore < 50 && r.holeScores.size < 8)
-                if (isMedical) {
+                if (isMedicalOrFake) {
                     golfRepository.deleteGolfRound(r.id)
+                    val baseClub = com.autologue.app.domain.model.splitClubAndCourse(r.clubName).first.ifBlank { r.clubName }
+                    val diaries = runCatching { diaryRepository.getDiaryEntriesByDateRange(rDay, rDay).first() }.getOrDefault(emptyList())
+                    for (diary in diaries) {
+                        val cleanSteps = diary.routeSteps.filter { step ->
+                            !(step.stepType == com.autologue.app.domain.model.RouteStepType.GOLF && (step.title.contains(baseClub) || step.locationName?.contains(baseClub) == true)) &&
+                            !(step.stepType == com.autologue.app.domain.model.RouteStepType.DRIVING && (step.title.contains(baseClub) || step.locationName?.contains(baseClub) == true || step.description?.contains("골프장 왕복 주행") == true))
+                        }
+                        if (cleanSteps.isEmpty() && diary.photoUris.isEmpty()) {
+                            diaryRepository.deleteDiaryEntry(diary.id)
+                        } else if (cleanSteps.size != diary.routeSteps.size || diary.hasGolfRound) {
+                            val cleanTitle = if (diary.title.contains(baseClub) || diary.title.contains("라운딩")) {
+                                "${rDay.monthValue}월 ${rDay.dayOfMonth}일의 다이어리"
+                            } else diary.title
+                            diaryRepository.updateDiaryEntry(
+                                diary.copy(
+                                    title = cleanTitle,
+                                    hasGolfRound = cleanSteps.any { it.stepType == com.autologue.app.domain.model.RouteStepType.GOLF },
+                                    routeSteps = cleanSteps,
+                                    tags = diary.tags.filter { !it.contains("골프") && !it.contains(baseClub) && !it.contains("캐디") }
+                                )
+                            )
+                        }
+                    }
                 }
             }
             diaryRepository.cleanDuplicates()
+            val remainingRounds = golfRepository.getAllGolfRoundsList()
+            vehicleRepository.syncAndCleanWithGolfRounds(remainingRounds)
         }
     }
 }
