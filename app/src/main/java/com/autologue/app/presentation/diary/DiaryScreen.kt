@@ -162,7 +162,7 @@ fun DiaryScreen(
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 putExtra(Intent.EXTRA_STREAM, result.fileUri)
-                putExtra(Intent.EXTRA_SUBJECT, "AutoLogue 라이프로그 데이터 내보내기")
+                putExtra(Intent.EXTRA_SUBJECT, "나의일상다이어리 라이프로그 데이터 내보내기")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(Intent.createChooser(shareIntent, "엑셀 파일 공유 및 열기"))
@@ -189,19 +189,41 @@ fun DiaryScreen(
                 TopAppBar(
                     windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
                     title = {
-                        Column {
-                            Text(
-                                text = "스마트 다이어리",
-                                style = AppTypography.h2
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.foundation.Image(
+                                painter = androidx.compose.ui.res.painterResource(id = com.autologue.app.R.drawable.app_logo),
+                                contentDescription = "나의일상다이어리",
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(8.dp))
                             )
-                            Text(
-                                text = "일상·동선 관리",
-                                style = AppTypography.caption.copy(
-                                    color = MenuColors.diary,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp
+                            Spacer(modifier = Modifier.width(Spacing.sm))
+                            Column(
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "나의일상",
+                                    style = AppTypography.h2.copy(
+                                        fontSize = 16.sp,
+                                        lineHeight = 18.sp,
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = (-0.3).sp,
+                                        color = AppColors.textPrimary
+                                    )
                                 )
-                            )
+                                Text(
+                                    text = "다이어리",
+                                    style = AppTypography.caption.copy(
+                                        color = MenuColors.diary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 12.5.sp,
+                                        lineHeight = 14.sp,
+                                        letterSpacing = 0.8.sp
+                                    )
+                                )
+                            }
                         }
                     },
                     actions = {
@@ -475,7 +497,7 @@ fun DiaryScreen(
                             text = """
                                 📌 설정 방법:
                                 1. 아래 [설정으로 이동]을 누릅니다.
-                                2. 설정 목록에서 'AutoLogue'를 누릅니다.
+                                2. 설정 목록에서 '나의일상다이어리'를 누릅니다.
                                 3. '알림 접근 허용' 스위치를 켭니다.
                             """.trimIndent(),
                             style = AppTypography.body.copy(fontWeight = FontWeight.Medium)

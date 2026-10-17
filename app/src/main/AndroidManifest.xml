@@ -41,13 +41,14 @@
         android:name=".AutoLogueApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="AutoLogue"
+        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AutoLogue">
 
         <activity
             android:name=".MainActivity"
+            android:label="@string/app_name"
             android:exported="true"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.AutoLogue">
@@ -59,7 +60,7 @@
 
         <service
             android:name=".service.LifelogNotificationListenerService"
-            android:label="AutoLogue Notification Reader"
+            android:label="@string/notification_listener_label"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>

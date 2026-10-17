@@ -107,35 +107,21 @@ fun WelcomeSplashScreen(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(horizontal = Spacing.xxl)
         ) {
-            // 🌟 4원색 시그니처 궤도 로고 심볼
+            // 4원색 시그니처 궤도 로고 심볼 + 신규 앱 아이콘
             Box(
                 modifier = Modifier
-                    .size(130.dp)
+                    .size(140.dp)
                     .scale(pulseScale),
                 contentAlignment = Alignment.Center
             ) {
-                // 중앙 소프트 배경 서클
-                Box(
+                // 중앙 신규 앱 아이콘 배지
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(id = com.autologue.app.R.drawable.app_logo),
+                    contentDescription = "나의일상다이어리",
                     modifier = Modifier
-                        .size(80.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(
-                                    Color(0xFFEFF6FF),
-                                    PureWhite
-                                )
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoStories,
-                        contentDescription = "AutoLogue",
-                        tint = MenuColors.diary,
-                        modifier = Modifier.size(38.dp)
-                    )
-                }
+                        .size(84.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                )
 
                 // 4원색 궤도 도트들 (회전 변환)
                 val dotColors = listOf(
@@ -144,7 +130,7 @@ fun WelcomeSplashScreen(
                     MenuColors.carLedger, // 180도: 차계부 앰버
                     MenuColors.golf       // 270도: 골프 포레스트 그린
                 )
-                val orbitRadius = 48.dp
+                val orbitRadius = 56.dp
 
                 Box(
                     modifier = Modifier
@@ -170,18 +156,32 @@ fun WelcomeSplashScreen(
 
             Spacer(modifier = Modifier.height(Spacing.xl))
 
-            // 🏷️ 브랜드 타이틀 및 슬로건
-            Text(
-                text = "AutoLogue",
-                style = AppTypography.display.copy(
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.6).sp,
-                    color = Slate900
+            // 브랜드 타이틀 (2줄 표시: 상단 가장 굵은 "나의일상", 하단 조금 더 작은 "다이어리")
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "나의일상",
+                    style = AppTypography.display.copy(
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = (-0.5).sp,
+                        color = Slate900
+                    )
                 )
-            )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "다이어리",
+                    style = AppTypography.h1.copy(
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 1.5.sp,
+                        color = MenuColors.diary
+                    )
+                )
+            }
 
-            Spacer(modifier = Modifier.height(Spacing.xxs))
+            Spacer(modifier = Modifier.height(Spacing.xs))
 
             Text(
                 text = "스마트 라이프로그 & 일상 다이어리",
@@ -192,7 +192,7 @@ fun WelcomeSplashScreen(
                 )
             )
 
-            Spacer(modifier = Modifier.height(44.dp))
+            Spacer(modifier = Modifier.height(40.dp))
 
             // ⏳ 백그라운드 기록 동기화 상태 텍스트
             Text(

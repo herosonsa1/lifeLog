@@ -31,7 +31,10 @@ if (isApkBuildRequested) {
     verPatch += 1
     verCode += 1
     // 루트(.\) 폴더에 동일 버전 파일이 이미 존재하면 덮어쓰지 않도록 미사용 버전까지 자동 증가
-    while (File(rootProject.projectDir, "lifeLog_v${verMajor}.${verMinor}.${verPatch}.apk").exists()) {
+    while (
+        File(rootProject.projectDir, "나의일상다이어리_v${verMajor}.${verMinor}.${verPatch}.apk").exists() ||
+        File(rootProject.projectDir, "lifeLog_v${verMajor}.${verMinor}.${verPatch}.apk").exists()
+    ) {
         verPatch += 1
         verCode += 1
     }
@@ -45,7 +48,7 @@ if (isApkBuildRequested) {
 }
 
 val currentVersionName = "${verMajor}.${verMinor}.${verPatch}"
-val versionedApkFileName = "lifeLog_v${currentVersionName}.apk"
+val versionedApkFileName = "나의일상다이어리_v${currentVersionName}.apk"
 
 android {
     namespace = "com.autologue.app"

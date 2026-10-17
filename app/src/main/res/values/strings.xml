@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">나의일상\n다이어리</string>
+    <string name="app_title">나의일상다이어리</string>
+    <string name="notification_listener_label">나의일상다이어리 알림 리더</string>
+</resources>

@@ -7,6 +7,7 @@ app/build/
 captures/
 *.apk
 !lifeLog_v*.apk
+!나의일상다이어리_v*.apk
 .externalNativeBuild/
 .cxx/
 screen_*.png
