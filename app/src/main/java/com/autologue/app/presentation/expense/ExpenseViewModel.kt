@@ -41,11 +41,33 @@ enum class ExpenseDateFilterMode {
 }
 
 enum class ExpenseBreakdownMode {
-    BY_CATEGORY,    // 카테고리별 지출 보기
-    BY_USER         // 사용자별 지출 보기
+    BOTH,           // 카테고리별 + 사용자별 통계 함께 보기 (기본)
+    BY_CATEGORY,    // 카테고리별 지출 통계만 보기
+    BY_USER         // 사용자별 지출 통계만 보기
 }
 
 const val UNASSIGNED_USER_FILTER = "__UNASSIGNED__"
+
+data class CategoryStatItem(
+    val displayName: String,
+    val amount: Long,
+    val txCount: Int,
+    val percentage: Float,
+    val topUsersSummary: String
+)
+
+data class UserClassificationStatItem(
+    val userKey: String,
+    val displayName: String,
+    val colorIndex: Int?,
+    val isUnassigned: Boolean,
+    val amount: Long,
+    val txCount: Int,
+    val corporateAmount: Long,
+    val corporateTxCount: Int,
+    val percentage: Float,
+    val topCategoriesSummary: String
+)
 
 data class ExpenseUiState(
     val allTransactions: List<Transaction> = emptyList(),
@@ -54,7 +76,7 @@ data class ExpenseUiState(
     val selectedCustomCategoryName: String? = null,
     val selectedUserClassification: String? = null,
     val selectedCorporateFilter: Boolean? = null,
-    val breakdownMode: ExpenseBreakdownMode = ExpenseBreakdownMode.BY_CATEGORY,
+    val breakdownMode: ExpenseBreakdownMode = ExpenseBreakdownMode.BOTH,
     val rules: List<TransactionRule> = emptyList(),
     val totalExpense: Long = 0L,
     val totalIncome: Long = 0L,
@@ -156,6 +178,160 @@ data class ExpenseUiState(
             parts.add(if (selectedCorporateFilter) "법인카드" else "개인결제")
         }
         return parts.joinToString(" · ")
+    }
+
+    /**
+     * 카테고리별 지출 통계 항목 리스트 산출 (선택된 사용자/법인/정기지출 필터와 실시간 교차 연동)
+     */
+    fun getCategoryStatItems(getBuiltInName: (ExpenseCategory) -> String): List<CategoryStatItem> {
+        var baseList = transactions.filter {
+            it.category != ExpenseCategory.INCOME &&
+                it.category != ExpenseCategory.TRANSFER ||
+                (it.category == ExpenseCategory.TRANSFER && !(it.cardOrBankName.contains("내계좌") || (it.transferMemo?.contains("내계좌") == true)))
+        }.filter { it.category != ExpenseCategory.INCOME }
+
+        if (isRecurringFilterOnly) {
+            baseList = baseList.filter { it.id in recurringTransactionIds }
+        }
+        if (!selectedUserClassification.isNullOrBlank()) {
+            baseList = if (selectedUserClassification == UNASSIGNED_USER_FILTER) {
+                baseList.filter { userClassByTxId[it.id] == null }
+            } else {
+                baseList.filter { userClassByTxId[it.id]?.name == selectedUserClassification }
+            }
+        }
+        if (selectedCorporateFilter != null) {
+            baseList = baseList.filter { (corporateByTxId[it.id] == true) == selectedCorporateFilter }
+        }
+
+        val baseTotal = baseList.sumOf { it.amount }.coerceAtLeast(1L)
+        return baseList
+            .groupBy { tx -> customCategoryByTxId[tx.id] ?: getBuiltInName(tx.category) }
+            .mapNotNull { (catName, txs) ->
+                val sum = txs.sumOf { it.amount }
+                if (sum <= 0L) return@mapNotNull null
+                val pct = (sum.toFloat() / baseTotal * 100f)
+                val topUsers = txs
+                    .groupBy { tx -> userClassByTxId[tx.id]?.name ?: "미지정" }
+                    .mapValues { (_, uTxs) -> uTxs.sumOf { it.amount } }
+                    .entries
+                    .sortedByDescending { it.value }
+                    .take(3)
+                    .joinToString(" · ") { (uName, uAmt) ->
+                        val uPct = (uAmt.toFloat() / sum * 100f).toInt()
+                        "$uName %,d원(%d%%)".format(uAmt, uPct)
+                    }
+                CategoryStatItem(
+                    displayName = catName,
+                    amount = sum,
+                    txCount = txs.size,
+                    percentage = pct,
+                    topUsersSummary = topUsers
+                )
+            }
+            .sortedByDescending { it.amount }
+    }
+
+    /**
+     * 사용자별 지출 통계 항목 리스트 산출 (선택된 카테고리/법인/정기지출 필터와 실시간 교차 연동 + 사용자별 주요 카테고리 요약 포함)
+     */
+    fun getUserClassificationStatItems(getBuiltInName: (ExpenseCategory) -> String): List<UserClassificationStatItem> {
+        var baseList = transactions.filter {
+            it.category != ExpenseCategory.INCOME &&
+                (it.category != ExpenseCategory.TRANSFER || !(it.cardOrBankName.contains("내계좌") || (it.transferMemo?.contains("내계좌") == true)))
+        }
+
+        if (isRecurringFilterOnly) {
+            baseList = baseList.filter { it.id in recurringTransactionIds }
+        } else if (!selectedCustomCategoryName.isNullOrBlank()) {
+            baseList = baseList.filter { customCategoryByTxId[it.id] == selectedCustomCategoryName }
+        } else if (selectedCategory != null) {
+            baseList = baseList.filter { tx ->
+                if (selectedCategory == ExpenseCategory.ETC) {
+                    tx.category == ExpenseCategory.ETC && customCategoryByTxId[tx.id].isNullOrBlank()
+                } else {
+                    tx.category == selectedCategory
+                }
+            }
+        }
+        if (selectedCorporateFilter != null) {
+            baseList = baseList.filter { (corporateByTxId[it.id] == true) == selectedCorporateFilter }
+        }
+
+        val baseTotal = baseList.sumOf { it.amount }
+        val denom = baseTotal.coerceAtLeast(1L)
+        val groupedByUser = baseList.groupBy { tx -> userClassByTxId[tx.id]?.name ?: UNASSIGNED_USER_FILTER }
+
+        val knownUserNames = (userClassifications.map { it.name } +
+            groupedByUser.keys.filter { it != UNASSIGNED_USER_FILTER }).distinct()
+
+        val assignedItems = knownUserNames.mapIndexed { idx, uName ->
+            val uTxs = groupedByUser[uName].orEmpty()
+            val sum = uTxs.sumOf { it.amount }
+            val corpTxs = uTxs.filter { corporateByTxId[it.id] == true }
+            val corpAmt = corpTxs.sumOf { it.amount }
+            val matchedUc = userClassifications.firstOrNull { it.name == uName }
+            val topCats = if (sum > 0L) {
+                uTxs.groupBy { tx -> customCategoryByTxId[tx.id] ?: getBuiltInName(tx.category) }
+                    .mapValues { (_, cTxs) -> cTxs.sumOf { it.amount } }
+                    .entries
+                    .sortedByDescending { it.value }
+                    .take(3)
+                    .joinToString(" · ") { (cName, cAmt) ->
+                        val cPct = (cAmt.toFloat() / sum * 100f).toInt()
+                        "$cName %,d원(%d%%)".format(cAmt, cPct)
+                    }
+            } else {
+                ""
+            }
+            UserClassificationStatItem(
+                userKey = uName,
+                displayName = uName,
+                colorIndex = matchedUc?.colorIndex ?: idx,
+                isUnassigned = false,
+                amount = sum,
+                txCount = uTxs.size,
+                corporateAmount = corpAmt,
+                corporateTxCount = corpTxs.size,
+                percentage = if (baseTotal > 0L) (sum.toFloat() / denom * 100f) else 0f,
+                topCategoriesSummary = topCats
+            )
+        }.sortedWith(compareByDescending<UserClassificationStatItem> { it.amount }.thenBy { it.displayName })
+
+        val unassignedTxs = groupedByUser[UNASSIGNED_USER_FILTER].orEmpty()
+        val unassignedSum = unassignedTxs.sumOf { it.amount }
+        val result = assignedItems.toMutableList()
+        if (unassignedTxs.isNotEmpty() || result.isEmpty()) {
+            val corpTxs = unassignedTxs.filter { corporateByTxId[it.id] == true }
+            val topCats = if (unassignedSum > 0L) {
+                unassignedTxs.groupBy { tx -> customCategoryByTxId[tx.id] ?: getBuiltInName(tx.category) }
+                    .mapValues { (_, cTxs) -> cTxs.sumOf { it.amount } }
+                    .entries
+                    .sortedByDescending { it.value }
+                    .take(3)
+                    .joinToString(" · ") { (cName, cAmt) ->
+                        val cPct = (cAmt.toFloat() / unassignedSum * 100f).toInt()
+                        "$cName %,d원(%d%%)".format(cAmt, cPct)
+                    }
+            } else {
+                ""
+            }
+            result.add(
+                UserClassificationStatItem(
+                    userKey = UNASSIGNED_USER_FILTER,
+                    displayName = "미지정 (분류 전)",
+                    colorIndex = null,
+                    isUnassigned = true,
+                    amount = unassignedSum,
+                    txCount = unassignedTxs.size,
+                    corporateAmount = corpTxs.sumOf { it.amount },
+                    corporateTxCount = corpTxs.size,
+                    percentage = if (baseTotal > 0L) (unassignedSum.toFloat() / denom * 100f) else 0f,
+                    topCategoriesSummary = topCats
+                )
+            )
+        }
+        return result
     }
 
     val dateDisplayTitle: String

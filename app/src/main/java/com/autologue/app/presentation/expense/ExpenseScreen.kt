@@ -464,8 +464,19 @@ fun ExpenseScreen(
                 }
             }
 
-            // Level 2: Category Breakdown vs User Classification Breakdown (Segmented Switch)
+            // Level 2: 카테고리별 통계 & 사용자별 통계 (통합 보기 / 카테고리별 / 사용자별 전환 및 상호 필터 연동)
             if (uiState.transactions.isNotEmpty() || uiState.userClassifications.isNotEmpty()) {
+                val categoryStatItems = uiState.getCategoryStatItems { cat ->
+                    viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                }
+                val userStatItems = uiState.getUserClassificationStatItems { cat ->
+                    viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                }
+                val showCategoryStats = uiState.breakdownMode == ExpenseBreakdownMode.BOTH ||
+                    uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY
+                val showUserStats = uiState.breakdownMode == ExpenseBreakdownMode.BOTH ||
+                    uiState.breakdownMode == ExpenseBreakdownMode.BY_USER
+
                 item {
                     Row(
                         modifier = Modifier
@@ -474,7 +485,7 @@ fun ExpenseScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // [카테고리별 지출] / [사용자별 지출] 전환 탭 (48dp 강제 확장 없는 32dp 세그먼트 컨트롤)
+                        // [함께 보기] / [카테고리별 통계] / [사용자별 통계] 3단 세그먼트 컨트롤
                         Row(
                             modifier = Modifier
                                 .height(32.dp)
@@ -484,19 +495,38 @@ fun ExpenseScreen(
                                 .padding(2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val isBoth = uiState.breakdownMode == ExpenseBreakdownMode.BOTH
                             val isByCat = uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY
+                            val isByUser = uiState.breakdownMode == ExpenseBreakdownMode.BY_USER
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isBoth) PureWhite else Color.Transparent)
+                                    .clickable { viewModel.setBreakdownMode(ExpenseBreakdownMode.BOTH) }
+                                    .padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "통합 보기",
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isBoth) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isBoth) Slate900 else Slate600
+                                )
+                            }
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(if (isByCat) PureWhite else Color.Transparent)
                                     .clickable { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_CATEGORY) }
-                                    .padding(horizontal = 12.dp),
+                                    .padding(horizontal = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "카테고리별 지출",
-                                    fontSize = 11.5.sp,
+                                    text = "카테고리별 통계",
+                                    fontSize = 11.sp,
                                     fontWeight = if (isByCat) FontWeight.Bold else FontWeight.Medium,
                                     color = if (isByCat) Slate900 else Slate600
                                 )
@@ -505,16 +535,16 @@ fun ExpenseScreen(
                                 modifier = Modifier
                                     .fillMaxHeight()
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(if (!isByCat) PureWhite else Color.Transparent)
+                                    .background(if (isByUser) PureWhite else Color.Transparent)
                                     .clickable { viewModel.setBreakdownMode(ExpenseBreakdownMode.BY_USER) }
-                                    .padding(horizontal = 12.dp),
+                                    .padding(horizontal = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "사용자별 지출",
-                                    fontSize = 11.5.sp,
-                                    fontWeight = if (!isByCat) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (!isByCat) Slate900 else Slate600
+                                    text = "사용자별 통계",
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isByUser) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isByUser) Slate900 else Slate600
                                 )
                             }
                         }
@@ -541,109 +571,247 @@ fun ExpenseScreen(
                     }
                 }
 
-                val totalExp = uiState.totalExpense.coerceAtLeast(1L)
+                // [섹션 1] 카테고리별 지출 통계
+                if (showCategoryStats) {
+                    val catTotalAmount = categoryStatItems.sumOf { it.amount }
+                    val totalCatCount = categoryStatItems.size.coerceAtLeast(1)
+                    val activeUserFilterLabel = uiState.selectedUserClassification?.let {
+                        if (it == UNASSIGNED_USER_FILTER) "미지정" else it
+                    }
 
-                if (uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY) {
-                    val effectiveEntries = uiState.effectiveCategoryTotals.entries.toList()
-                    val totalCount = effectiveEntries.size.coerceAtLeast(1)
-
-                    itemsIndexed(effectiveEntries) { index, (catDisplayName, amount) ->
-                        val selectedBuiltInName = uiState.selectedCategory?.let {
-                            viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(it)
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.xl, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "카테고리별 지출 통계",
+                                    style = AppTypography.caption.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = Slate800,
+                                        fontSize = 12.5.sp
+                                    )
+                                )
+                                if (activeUserFilterLabel != null) {
+                                    MetricBadge(
+                                        text = "$activeUserFilterLabel 기준",
+                                        textColor = AppColors.primary,
+                                        backgroundColor = Color(0xFFDBEAFE)
+                                    )
+                                }
+                                Text(
+                                    text = "(${categoryStatItems.size}개 항목 · %,d원)".format(catTotalAmount),
+                                    fontSize = 11.sp,
+                                    color = Slate500
+                                )
+                            }
+                            Text(
+                                text = "카테고리 관리 >",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Slate500,
+                                modifier = Modifier.clickable { viewModel.openCategoryManageDialog() }
+                            )
                         }
-                        val isSelected = when {
-                            !uiState.selectedCustomCategoryName.isNullOrBlank() ->
-                                uiState.selectedCustomCategoryName == catDisplayName
-                            uiState.selectedCategory != null ->
-                                selectedBuiltInName == catDisplayName
-                            else -> false
-                        }
-                        val barColor = getRainbowUsageColor(index, totalCount)
-                        val pct = (amount.toFloat() / totalExp * 100f)
+                    }
 
+                    if (categoryStatItems.isEmpty()) {
+                        item {
+                            Text(
+                                text = "조건에 해당하는 카테고리 지출 내역이 없습니다.",
+                                fontSize = 12.sp,
+                                color = Slate500,
+                                modifier = Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.sm)
+                            )
+                        }
+                    } else {
+                        itemsIndexed(categoryStatItems) { index, item ->
+                            val selectedBuiltInName = uiState.selectedCategory?.let {
+                                viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(it)
+                            }
+                            val isSelected = when {
+                                !uiState.selectedCustomCategoryName.isNullOrBlank() ->
+                                    uiState.selectedCustomCategoryName == item.displayName
+                                uiState.selectedCategory != null ->
+                                    selectedBuiltInName == item.displayName
+                                else -> false
+                            }
+                            val barColor = getRainbowUsageColor(index, totalCatCount)
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(if (isSelected) Color(0xFFEFF6FF) else Color.Transparent)
+                                    .clickable { viewModel.toggleEffectiveCategoryByName(item.displayName) }
+                                    .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(barColor, CircleShape)
+                                        )
+                                        Spacer(modifier = Modifier.width(Spacing.xs))
+                                        Text(
+                                            text = item.displayName,
+                                            style = AppTypography.body,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) AppColors.primary else AppColors.textPrimary
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "${item.txCount}건 · %.1f%%".format(item.percentage),
+                                            fontSize = 11.sp,
+                                            color = Slate500
+                                        )
+                                    }
+                                    Text(
+                                        text = "%,d원".format(item.amount),
+                                        style = AppTypography.h3,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                        color = if (isSelected) AppColors.primary else AppColors.textPrimary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(Spacing.xxs))
+                                val proportion = (item.percentage / 100f).coerceIn(0f, 1f)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(3.5.dp)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(Slate100)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(proportion)
+                                            .fillMaxHeight()
+                                            .background(barColor)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 통합 보기 시 카테고리별 통계와 사용자별 통계 사이 구분 여백
+                if (showCategoryStats && showUserStats) {
+                    item {
+                        Spacer(modifier = Modifier.height(Spacing.sm))
+                        HairlineDivider(modifier = Modifier.padding(horizontal = Spacing.xl))
+                        Spacer(modifier = Modifier.height(Spacing.sm))
+                    }
+                }
+
+                // [섹션 2] 사용자별 지출 통계 (카테고리별 통계와 동일한 시각적 완성도 + 사용자별 주요 카테고리 내역 요약)
+                if (showUserStats) {
+                    val userTotalAmount = userStatItems.sumOf { it.amount }
+                    val activeCatFilterLabel = when {
+                        !uiState.selectedCustomCategoryName.isNullOrBlank() -> uiState.selectedCustomCategoryName
+                        uiState.selectedCategory != null -> viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(uiState.selectedCategory!!)
+                        uiState.isRecurringFilterOnly -> "정기지출"
+                        else -> null
+                    }
+
+                    item {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(if (isSelected) Color(0xFFEFF6FF) else Color.Transparent)
-                                .clickable { viewModel.toggleEffectiveCategoryByName(catDisplayName) }
-                                .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
+                                .padding(horizontal = Spacing.xl, vertical = 4.dp)
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .background(barColor, CircleShape)
-                                    )
-                                    Spacer(modifier = Modifier.width(Spacing.xs))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
                                     Text(
-                                        text = catDisplayName,
-                                        style = AppTypography.body,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) AppColors.primary else AppColors.textPrimary
+                                        text = "사용자별 지출 통계",
+                                        style = AppTypography.caption.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Slate800,
+                                            fontSize = 12.5.sp
+                                        )
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    if (activeCatFilterLabel != null) {
+                                        MetricBadge(
+                                            text = "$activeCatFilterLabel 기준",
+                                            textColor = AppColors.primary,
+                                            backgroundColor = Color(0xFFDBEAFE)
+                                        )
+                                    }
                                     Text(
-                                        text = "%.1f%%".format(pct),
+                                        text = "(${userStatItems.count { it.amount > 0L || !it.isUnassigned }}명 · %,d원)".format(userTotalAmount),
                                         fontSize = 11.sp,
                                         color = Slate500
                                     )
                                 }
                                 Text(
-                                    text = "%,d원".format(amount),
-                                    style = AppTypography.h3,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                    color = if (isSelected) AppColors.primary else AppColors.textPrimary
+                                    text = "사용자 관리 >",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Slate500,
+                                    modifier = Modifier.clickable { viewModel.openUserClassificationManageDialog() }
                                 )
                             }
-                            Spacer(modifier = Modifier.height(Spacing.xxs))
-                            val proportion = (amount.toFloat() / totalExp).coerceIn(0f, 1f)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(3.dp)
-                                    .clip(RoundedCornerShape(1.5.dp))
-                                    .background(Slate100)
-                            ) {
-                                Box(
+
+                            // 사용자별 지출 비중 한눈에 보기 멀티 컬러 스택 바
+                            val nonZeroUserStats = userStatItems.filter { it.amount > 0L }
+                            if (nonZeroUserStats.size > 1 && userTotalAmount > 0L) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(
                                     modifier = Modifier
-                                        .fillMaxWidth(proportion)
-                                        .fillMaxHeight()
-                                        .background(barColor)
-                                )
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(Slate100)
+                                ) {
+                                    nonZeroUserStats.forEachIndexed { idx, uItem ->
+                                        val (uFg, _) = if (uItem.isUnassigned) {
+                                            Slate400 to Slate100
+                                        } else {
+                                            getUserClassificationBadgeColors(uItem.colorIndex ?: idx)
+                                        }
+                                        val weightVal = (uItem.amount.toFloat() / userTotalAmount.toFloat()).coerceAtLeast(0.02f)
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(weightVal)
+                                                .fillMaxHeight()
+                                                .background(uFg)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                } else {
-                    val userEntries = uiState.userClassificationTotals.entries.toList()
-                    itemsIndexed(userEntries) { index, (userKey, amount) ->
-                        val isUnassigned = userKey == UNASSIGNED_USER_FILTER
-                        val displayUserName = if (isUnassigned) "미지정 (분류 전)" else userKey
-                        val matchedUc = uiState.userClassifications.firstOrNull { it.name == userKey }
-                        val (fgColor, bgColor) = if (matchedUc != null) {
-                            getUserClassificationBadgeColors(matchedUc.colorIndex)
-                        } else if (isUnassigned) {
+
+                    itemsIndexed(userStatItems) { index, uItem ->
+                        val (fgColor, bgColor) = if (uItem.isUnassigned) {
                             Slate600 to Slate100
                         } else {
-                            getUserClassificationBadgeColors(index)
+                            getUserClassificationBadgeColors(uItem.colorIndex ?: index)
                         }
-                        val isSelected = uiState.selectedUserClassification == userKey
-                        val txCount = if (isUnassigned) {
-                            uiState.transactions.count { uiState.userClassByTxId[it.id] == null }
-                        } else {
-                            uiState.transactions.count { uiState.userClassByTxId[it.id]?.name == userKey }
-                        }
-                        val pct = if (uiState.totalExpense > 0L) (amount.toFloat() / totalExp * 100f) else 0f
+                        val isSelected = uiState.selectedUserClassification == uItem.userKey
 
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(if (isSelected) bgColor.copy(alpha = 0.5f) else Color.Transparent)
-                                .clickable { viewModel.toggleUserClassificationFilter(userKey) }
+                                .background(if (isSelected) bgColor.copy(alpha = 0.55f) else Color.Transparent)
+                                .clickable { viewModel.toggleUserClassificationFilter(uItem.userKey) }
                                 .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
                         ) {
                             Row(
@@ -655,31 +823,43 @@ fun ExpenseScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(fgColor, CircleShape)
+                                    )
                                     MetricBadge(
-                                        text = displayUserName,
+                                        text = uItem.displayName,
                                         textColor = fgColor,
                                         backgroundColor = bgColor
                                     )
                                     Text(
-                                        text = "${txCount}건 · %.1f%%".format(pct),
+                                        text = "${uItem.txCount}건 · %.1f%%".format(uItem.percentage),
                                         fontSize = 11.sp,
                                         color = Slate500
                                     )
+                                    if (uItem.corporateTxCount > 0) {
+                                        MetricBadge(
+                                            text = "법인 ${uItem.corporateTxCount}건",
+                                            textColor = Color(0xFF0369A1),
+                                            backgroundColor = Color(0xFFE0F2FE)
+                                        )
+                                    }
                                 }
                                 Text(
-                                    text = "%,d원".format(amount),
+                                    text = "%,d원".format(uItem.amount),
                                     style = AppTypography.h3,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                                     color = if (isSelected) fgColor else AppColors.textPrimary
                                 )
                             }
                             Spacer(modifier = Modifier.height(Spacing.xxs))
-                            val proportion = if (uiState.totalExpense > 0L) (amount.toFloat() / totalExp).coerceIn(0f, 1f) else 0f
+                            val proportion = (uItem.percentage / 100f).coerceIn(0f, 1f)
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(3.dp)
-                                    .clip(RoundedCornerShape(1.5.dp))
+                                    .height(3.5.dp)
+                                    .clip(RoundedCornerShape(2.dp))
                                     .background(Slate100)
                             ) {
                                 Box(
@@ -687,6 +867,14 @@ fun ExpenseScreen(
                                         .fillMaxWidth(proportion)
                                         .fillMaxHeight()
                                         .background(fgColor)
+                                )
+                            }
+                            if (uItem.topCategoriesSummary.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = "주요 카테고리: ${uItem.topCategoriesSummary}",
+                                    fontSize = 10.5.sp,
+                                    color = Slate500
                                 )
                             }
                         }
