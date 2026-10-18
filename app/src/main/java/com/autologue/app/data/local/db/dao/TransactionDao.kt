@@ -31,8 +31,14 @@ interface TransactionDao {
     @Update
     suspend fun updateTransaction(transaction: TransactionEntity)
 
+    @Update
+    suspend fun updateTransactions(transactions: List<TransactionEntity>)
+
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteTransactionById(id: Long)
+
+    @Query("DELETE FROM transactions WHERE id IN (:ids)")
+    suspend fun deleteTransactionsByIds(ids: List<Long>)
 
     @Query("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE timestamp BETWEEN :start AND :end")
     suspend fun getTotalExpenseBetween(start: Long, end: Long): Long

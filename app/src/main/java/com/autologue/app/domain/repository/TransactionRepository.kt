@@ -12,7 +12,13 @@ interface TransactionRepository {
     fun getTransactionsByCategory(category: ExpenseCategory): Flow<List<Transaction>>
     suspend fun insertTransaction(transaction: Transaction): Long
     suspend fun updateTransaction(transaction: Transaction)
+    suspend fun updateTransactions(transactions: List<Transaction>) {
+        transactions.forEach { updateTransaction(it) }
+    }
     suspend fun deleteTransaction(id: Long)
+    suspend fun deleteTransactionsByIds(ids: Collection<Long>) {
+        ids.forEach { deleteTransaction(it) }
+    }
     suspend fun getTotalExpenseBetween(start: LocalDateTime, end: LocalDateTime): Long
     suspend fun cleanDuplicates(): Int
     suspend fun renameMerchantGlobally(

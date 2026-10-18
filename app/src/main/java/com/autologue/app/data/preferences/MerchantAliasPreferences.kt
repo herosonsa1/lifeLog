@@ -48,6 +48,21 @@ class MerchantAliasPreferences private constructor(
                 val v = json.optString(k, "").trim()
                 if (k.isNotBlank() && v.isNotBlank()) {
                     aliasMap[k] = v
+                    // 로드 시점에 정규화 키도 함께 인덱싱하여 resolveAlias O(1) 조회 보장
+                    when {
+                        k.startsWith(PREFIX_IN) -> {
+                            val norm = normalizeMerchantKey(k.removePrefix(PREFIX_IN))
+                            if (norm.isNotBlank()) aliasMap.putIfAbsent("$PREFIX_IN$norm", v)
+                        }
+                        k.startsWith(PREFIX_OUT) -> {
+                            val norm = normalizeMerchantKey(k.removePrefix(PREFIX_OUT))
+                            if (norm.isNotBlank()) aliasMap.putIfAbsent("$PREFIX_OUT$norm", v)
+                        }
+                        else -> {
+                            val norm = normalizeMerchantKey(k)
+                            if (norm.isNotBlank()) aliasMap.putIfAbsent(norm, v)
+                        }
+                    }
                 }
             }
             _aliasesFlow.value = aliasMap.toMap()
@@ -109,8 +124,6 @@ class MerchantAliasPreferences private constructor(
 
         val cleanRaw = rawOriginalName?.trim().orEmpty()
         val baseRaw = stripTxDirectionSuffix(cleanRaw)
-        val normRaw = normalizeMerchantKey(cleanRaw)
-        val normBaseRaw = normalizeMerchantKey(baseRaw)
 
         // 동일 방향(입금 또는 출금)의 기존 체인(A -> oldName)만 (A -> target)으로 연쇄 갱신
         for ((k, existingVal) in aliasMap.entries.toList()) {
@@ -161,45 +174,31 @@ class MerchantAliasPreferences private constructor(
 
     /**
      * 입력된 결제처명(merchantName)과 입금/출금 구분(isDeposit)에 대해
-     * 사용자가 지정한 치환 결제명이 있으면 반환하고, 없으면 원본 결제처명을 그대로 반환합니다.
+     * 사용자가 지정한 치환 결제명이 있으면 반환하고, 없으면 원본 결제처명을 그대로 반환합니다. (O(1) 해시맵 조회)
      */
     fun resolveAlias(merchantName: String?, isDeposit: Boolean = false): String {
         val raw = merchantName?.trim() ?: return ""
-        if (raw.isBlank()) return ""
+        if (raw.isBlank() || aliasMap.isEmpty()) return raw
 
         val prefix = directionPrefix(isDeposit)
-        val baseRaw = stripTxDirectionSuffix(raw)
-        val norm = normalizeMerchantKey(raw)
-        val normBase = normalizeMerchantKey(baseRaw)
-
         // 1. 해당 입금/출금 방향의 정확 일치 조회
         aliasMap["$prefix$raw"]?.let { return it }
-        if (baseRaw.isNotBlank() && baseRaw != raw) {
-            aliasMap["$prefix$baseRaw"]?.let { return it }
-        }
 
-        // 2. 해당 입금/출금 방향의 공백/대소문자 정규화 키 조회
+        val norm = normalizeMerchantKey(raw)
         if (norm.isNotBlank()) {
             aliasMap["$prefix$norm"]?.let { return it }
         }
-        if (normBase.isNotBlank() && normBase != norm) {
-            aliasMap["$prefix$normBase"]?.let { return it }
-        }
 
-        // 3. 해당 입금/출금 방향 내에서 대소문자 무시 탐색
-        for ((k, v) in aliasMap) {
-            if (!k.startsWith(prefix)) continue
-            val keyBody = stripDirectionPrefix(k)
-            val normKeyBody = normalizeMerchantKey(keyBody)
-            if (keyBody.equals(raw, ignoreCase = true) ||
-                normKeyBody == norm ||
-                (normBase.isNotBlank() && normKeyBody == normBase)
-            ) {
-                return v
+        val baseRaw = stripTxDirectionSuffix(raw)
+        if (baseRaw.isNotBlank() && baseRaw != raw) {
+            aliasMap["$prefix$baseRaw"]?.let { return it }
+            val normBase = normalizeMerchantKey(baseRaw)
+            if (normBase.isNotBlank() && normBase != norm) {
+                aliasMap["$prefix$normBase"]?.let { return it }
             }
         }
 
-        // 4. 레거시 무접두사 키 폴백 (마이그레이션 전 데이터가 남아있는 경우)
+        // 레거시 무접두사 키 폴백
         aliasMap[raw]?.let { return it }
         if (norm.isNotBlank()) {
             aliasMap[norm]?.let { return it }
@@ -214,7 +213,7 @@ class MerchantAliasPreferences private constructor(
      */
     fun isKnownAliasTarget(name: String?, isDeposit: Boolean? = null): Boolean {
         val clean = name?.trim() ?: return false
-        if (clean.isBlank()) return false
+        if (clean.isBlank() || aliasMap.isEmpty()) return false
         val norm = normalizeMerchantKey(clean)
         val prefix = isDeposit?.let { directionPrefix(it) }
         return aliasMap.entries.any { (k, v) ->
@@ -230,7 +229,7 @@ class MerchantAliasPreferences private constructor(
      */
     fun getOriginalNamesForTarget(targetName: String?, isDeposit: Boolean? = null): List<String> {
         val clean = targetName?.trim() ?: return emptyList()
-        if (clean.isBlank()) return emptyList()
+        if (clean.isBlank() || aliasMap.isEmpty()) return emptyList()
         val norm = normalizeMerchantKey(clean)
         val prefix = isDeposit?.let { directionPrefix(it) }
         return aliasMap.entries
@@ -268,6 +267,8 @@ class MerchantAliasPreferences private constructor(
         const val PREFIX_IN = "IN::"
         const val PREFIX_OUT = "OUT::"
 
+        private val DIRECTION_SUFFIX_REGEX = Regex("""\s*\((?:출금|입금)\)\s*$""")
+
         fun directionPrefix(isDeposit: Boolean): String = if (isDeposit) PREFIX_IN else PREFIX_OUT
 
         fun stripDirectionPrefix(key: String): String {
@@ -275,13 +276,21 @@ class MerchantAliasPreferences private constructor(
         }
 
         fun stripTxDirectionSuffix(name: String): String {
-            return name.trim().replace(Regex("""\s*\((?:출금|입금)\)\s*$"""), "").trim()
+            val trimmed = name.trim()
+            if (!trimmed.endsWith(")")) return trimmed
+            return trimmed.replace(DIRECTION_SUFFIX_REGEX, "").trim()
         }
 
         fun normalizeMerchantKey(name: String): String {
-            return name.trim()
-                .replace(Regex("\\s+"), "")
-                .uppercase()
+            if (name.isEmpty()) return ""
+            val sb = StringBuilder(name.length)
+            for (i in 0 until name.length) {
+                val c = name[i]
+                if (!c.isWhitespace()) {
+                    sb.append(c.uppercaseChar())
+                }
+            }
+            return sb.toString()
         }
 
         fun buildDirectionalKey(name: String, isDeposit: Boolean): String {

@@ -66,12 +66,68 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+private val ROW_DATE_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("M.d(E) HH:mm", Locale.KOREA)
+private val MODAL_DATE_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy.MM.dd(E) HH:mm", Locale.KOREA)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExpenseScreen(
     viewModel: ExpenseViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val filteredTransactions = remember(
+        uiState.transactions,
+        uiState.selectedCategory,
+        uiState.selectedCustomCategoryName,
+        uiState.isRecurringFilterOnly,
+        uiState.selectedUserClassification,
+        uiState.selectedCorporateFilter,
+        uiState.recurringTransactionIds,
+        uiState.customCategoryByTxId,
+        uiState.userClassByTxId,
+        uiState.corporateByTxId
+    ) {
+        uiState.filteredTransactions
+    }
+    val filteredExpenseTotal = remember(filteredTransactions) {
+        filteredTransactions.filter { !it.isDepositTransaction() && !it.isSelfTransfer() }.sumOf { it.amount }
+    }
+    val categoryStatItems = remember(
+        uiState.transactions,
+        uiState.categoryTotals,
+        uiState.selectedUserClassification,
+        uiState.selectedCorporateFilter,
+        uiState.isRecurringFilterOnly,
+        uiState.customCategoryByTxId,
+        uiState.userClassByTxId,
+        uiState.corporateByTxId,
+        uiState.recurringTransactionIds,
+        uiState.managedCategories
+    ) {
+        uiState.getCategoryStatItems { cat ->
+            viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+        }
+    }
+    val userStatItems = remember(
+        uiState.transactions,
+        uiState.userClassificationTotals,
+        uiState.userClassifications,
+        uiState.selectedCategory,
+        uiState.selectedCustomCategoryName,
+        uiState.selectedCorporateFilter,
+        uiState.isRecurringFilterOnly,
+        uiState.customCategoryByTxId,
+        uiState.userClassByTxId,
+        uiState.corporateByTxId,
+        uiState.recurringTransactionIds,
+        uiState.managedCategories
+    ) {
+        uiState.getUserClassificationStatItems { cat ->
+            viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+        }
+    }
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val smsPermissionLauncher = rememberLauncherForActivityResult(
@@ -349,7 +405,7 @@ fun ExpenseScreen(
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = "조건 해당 지출 합계: %,d원 (${uiState.filteredTransactions.size}건)".format(uiState.filteredExpenseTotal),
+                                        text = "조건 해당 지출 합계: %,d원 (${filteredTransactions.size}건)".format(filteredExpenseTotal),
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = Color(0xFF1D4ED8)
@@ -466,12 +522,6 @@ fun ExpenseScreen(
 
             // Level 2: 카테고리별 통계 & 사용자별 통계 (통합 보기 / 카테고리별 / 사용자별 전환 및 상호 필터 연동)
             if (uiState.transactions.isNotEmpty() || uiState.userClassifications.isNotEmpty()) {
-                val categoryStatItems = uiState.getCategoryStatItems { cat ->
-                    viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
-                }
-                val userStatItems = uiState.getUserClassificationStatItems { cat ->
-                    viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
-                }
                 val showCategoryStats = uiState.breakdownMode == ExpenseBreakdownMode.BOTH ||
                     uiState.breakdownMode == ExpenseBreakdownMode.BY_CATEGORY
                 val showUserStats = uiState.breakdownMode == ExpenseBreakdownMode.BOTH ||
@@ -903,15 +953,15 @@ fun ExpenseScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = if (activeLabel.isNotBlank()) {
-                                    "$activeLabel (${uiState.filteredTransactions.size}건)"
+                                    "$activeLabel (${filteredTransactions.size}건)"
                                 } else {
-                                    "결제 내역 (${uiState.filteredTransactions.size}건)"
+                                    "결제 내역 (${filteredTransactions.size}건)"
                                 },
                                 style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800, fontSize = 13.sp)
                             )
                             if (uiState.hasActiveSubFilter) {
                                 Text(
-                                    text = "선택 조건 지출 합계: %,d원".format(uiState.filteredExpenseTotal),
+                                    text = "선택 조건 지출 합계: %,d원".format(filteredExpenseTotal),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = AppColors.primary
@@ -999,8 +1049,8 @@ fun ExpenseScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val allSelected = uiState.filteredTransactions.isNotEmpty() &&
-                                    uiState.selectedTransactionIds.size == uiState.filteredTransactions.size
+                                val allSelected = filteredTransactions.isNotEmpty() &&
+                                    uiState.selectedTransactionIds.size == filteredTransactions.size
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.clickable { viewModel.selectAllFilteredTransactions() }
@@ -1010,7 +1060,7 @@ fun ExpenseScreen(
                                         onCheckedChange = { viewModel.selectAllFilteredTransactions() }
                                     )
                                     Text(
-                                        text = "전체 선택 (${uiState.selectedTransactionIds.size}/${uiState.filteredTransactions.size})",
+                                        text = "전체 선택 (${uiState.selectedTransactionIds.size}/${filteredTransactions.size})",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Slate800
@@ -1211,7 +1261,7 @@ fun ExpenseScreen(
             }
 
             // Level 4: Transaction Items
-            if (uiState.filteredTransactions.isEmpty()) {
+            if (filteredTransactions.isEmpty()) {
                 item {
                     Box(
                         modifier = Modifier
@@ -1227,7 +1277,7 @@ fun ExpenseScreen(
                 }
             } else {
                 items(
-                    items = uiState.filteredTransactions,
+                    items = filteredTransactions,
                     key = { it.id }
                 ) { tx ->
                     val matchingAccount = viewModel.getMatchingAccount(tx)
@@ -1382,18 +1432,26 @@ fun ExpenseScreen(
     // Edit Transaction Dialog
     if (uiState.editingTransaction != null) {
         val editingTx = uiState.editingTransaction!!
-        val resolvedBaseCardOrBank = viewModel.expenseCustomMetaPreferences.extractBaseCardName(
-            viewModel.expenseCustomMetaPreferences.resolveDisplayCardOrBankName(editingTx)
-        )
-        val sameDirectionExistingTxs = remember(editingTx.id, uiState.allTransactions) {
-            val isDep = editingTx.isDepositTransaction()
-            uiState.allTransactions
-                .filter { it.id != editingTx.id && it.isDepositTransaction() == isDep }
-                .sortedByDescending { it.timestamp }
+        val resolvedBaseCardOrBank = remember(editingTx.id) {
+            viewModel.expenseCustomMetaPreferences.extractBaseCardName(
+                viewModel.expenseCustomMetaPreferences.resolveDisplayCardOrBankName(editingTx)
+            )
         }
-        val autoMatchedExistingIds = remember(editingTx.id, uiState.allTransactions) {
-            viewModel.findMatchingExistingTransactions(editingTx).map { it.id }.toSet()
+        val editCandidatePair by produceState(
+            initialValue = Pair(emptyList<Transaction>(), emptySet<Long>()),
+            key1 = editingTx.id
+        ) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                val isDep = editingTx.isDepositTransaction()
+                val candidates = uiState.allTransactions
+                    .filter { it.id != editingTx.id && it.isDepositTransaction() == isDep }
+                    .sortedByDescending { it.timestamp }
+                val matchedIds = viewModel.findMatchingExistingTransactions(editingTx).map { it.id }.toSet()
+                Pair(candidates, matchedIds)
+            }
         }
+        val sameDirectionExistingTxs = editCandidatePair.first
+        val autoMatchedExistingIds = editCandidatePair.second
         EditTransactionDialog(
             transaction = editingTx,
             managedCategories = uiState.managedCategories,
@@ -1579,7 +1637,7 @@ fun SaaSTransactionRow(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
                 Text(
-                    text = transaction.timestamp.format(DateTimeFormatter.ofPattern("M.d(E) HH:mm", Locale.KOREA)),
+                    text = transaction.timestamp.format(ROW_DATE_FORMATTER),
                     style = AppTypography.captionMuted
                 )
                 Text("·", style = AppTypography.captionMuted)
@@ -2734,7 +2792,7 @@ fun EditTransactionDialog(
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "${transaction.timestamp.format(DateTimeFormatter.ofPattern("yyyy.MM.dd(E) HH:mm", Locale.KOREA))} · $cardCompany",
+                                text = "${transaction.timestamp.format(MODAL_DATE_FORMATTER)} · $cardCompany",
                                 style = AppTypography.captionMuted
                             )
                         }

@@ -73,7 +73,7 @@ class ExpenseCustomMetaPreferences private constructor(
     constructor() : this(null)
 
     // 1. 커스텀 카테고리 목록 및 기본 카테고리 이름 변경/삭제 상태
-    private val customCategoryList = mutableListOf<String>()
+    private val customCategoryList = java.util.concurrent.CopyOnWriteArrayList<String>()
     private val renamedDefaultCategories = ConcurrentHashMap<String, String>()
     private val deletedDefaultCategories = ConcurrentHashMap.newKeySet<String>()
 
@@ -83,7 +83,7 @@ class ExpenseCustomMetaPreferences private constructor(
     private val merchantBaseCategoryMap = ConcurrentHashMap<String, String>()
 
     // 2. 사용자 분류 목록 및 거래 ID별 / (입출금구분+가맹점)별 사용자 분류 매핑
-    private val userClassificationList = mutableListOf<UserClassificationItem>()
+    private val userClassificationList = java.util.concurrent.CopyOnWriteArrayList<UserClassificationItem>()
     private val txUserClassMap = ConcurrentHashMap<Long, String>()
     private val merchantUserClassMap = ConcurrentHashMap<String, String>()
 
@@ -104,6 +104,10 @@ class ExpenseCustomMetaPreferences private constructor(
     private val deletedTxSignatures = ConcurrentHashMap.newKeySet<String>()
     private val deletedVehicleLogSignatures = ConcurrentHashMap.newKeySet<String>()
 
+    // 일괄 수정 시 불필요한 다중 JSON 직렬화 및 Flow 중복 발행을 방지하는 배치 깊이 카운터
+    private val batchDepth = java.util.concurrent.atomic.AtomicInteger(0)
+    private val batchDirty = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private val _managedCategoriesFlow = MutableStateFlow<List<ManagedCategoryItem>>(emptyList())
     val managedCategoriesFlow: StateFlow<List<ManagedCategoryItem>> = _managedCategoriesFlow.asStateFlow()
 
@@ -116,6 +120,20 @@ class ExpenseCustomMetaPreferences private constructor(
     init {
         loadFromPrefs()
         refreshFlows()
+    }
+
+    /**
+     * 여러 메타데이터 규칙을 연속으로 변경할 때 JSON 직렬화 및 Flow 갱신을 마지막 1회로 병합합니다.
+     */
+    fun <T> runBatchUpdate(block: () -> T): T {
+        batchDepth.incrementAndGet()
+        try {
+            return block()
+        } finally {
+            if (batchDepth.decrementAndGet() == 0 && batchDirty.compareAndSet(true, false)) {
+                saveToPrefs()
+            }
+        }
     }
 
     private fun putDirectionalRule(
@@ -373,6 +391,10 @@ class ExpenseCustomMetaPreferences private constructor(
 
     @Synchronized
     private fun saveToPrefs() {
+        if (batchDepth.get() > 0) {
+            batchDirty.set(true)
+            return
+        }
         runCatching {
             val root = JSONObject()
 
@@ -1063,7 +1085,6 @@ class ExpenseCustomMetaPreferences private constructor(
         saveToPrefs()
     }
 
-    @Synchronized
     fun resolveUserClassification(tx: Transaction): UserClassificationItem? {
         val assignedName = if (isOneTimeEdited(tx)) {
             if (tx.id > 0L) txUserClassMap[tx.id] else null
@@ -1079,7 +1100,6 @@ class ExpenseCustomMetaPreferences private constructor(
             ?: UserClassificationItem(assignedName, (assignedName.hashCode().and(0x7fffffff)) % BADGE_COLOR_COUNT)
     }
 
-    @Synchronized
     fun getUserClassifications(): List<UserClassificationItem> = userClassificationList.toList()
 
     // =========================================================================
@@ -1132,6 +1152,7 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     fun isTransactionDeleted(tx: Transaction): Boolean {
+        if (deletedTxSignatures.isEmpty()) return false
         if (tx.id > 0L && "ID_${tx.id}" in deletedTxSignatures) {
             return true
         }
@@ -1197,6 +1218,31 @@ class ExpenseCustomMetaPreferences private constructor(
             "새마을금고", "우체국", "SC제일은행", "케이뱅크"
         )
 
+        // 정규식 객체 사전 컴파일 (수천 건 트랜잭션 루프 내 반복 컴파일 오버헤드 완벽 제거)
+        private val CORP_PAREN_REGEX = Regex("""\s*\(\s*법인(?:카드)?\s*\)""")
+        private val CORP_BRACKET_REGEX = Regex("""\s*\[\s*법인(?:카드)?\s*\]""")
+        private val PERSONAL_PAREN_REGEX = Regex("""\s*\(\s*개인(?:카드)?\s*\)""")
+        private val HANA_MASK_REGEX = Regex("""하나\s*\(?[0-9*]{2,}""")
+        private val CREDIT_CHECK_MASK_REGEX = Regex("""(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\)""")
+        private val WOORI_MASK_REGEX = Regex("""우리\s*\(?[0-9*]{2,}""")
+        private val SHINHAN_MASK_REGEX = Regex("""신한\s*\(?[0-9*]{2,}""")
+        private val HYUNDAI_MASK_REGEX = Regex("""현대\s*\(?[0-9*]{2,}""")
+        private val SAMSUNG_MASK_REGEX = Regex("""삼성\s*\(?[0-9*]{2,}""")
+        private val LOTTE_MASK_REGEX = Regex("""롯데\s*\(?[0-9*]{2,}""")
+        private val CARD_TOK_PREFIX_REGEX = Regex("""카드\s*[:：]?\s*(?<tok>[가-힣A-Za-z0-9*(),]{3,})""")
+        private val CARD_TOK_ISSUER_REGEX = Regex("""(?<tok>(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업)(?:농협|국민)?(?:카드|체크|법인)?\s*\(?[,0-9*]{2,}\)?)""")
+        private val CARD_TOK_TYPE_REGEX = Regex("""(?<tok>(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\))""")
+        private val DIGITS_AND_MASK_REGEX = Regex("""[0-9*]{2,}""")
+
+        private fun stripCardTagSuffixes(raw: String): String {
+            if (!raw.contains("법인") && !raw.contains("개인")) return raw.trim()
+            return raw
+                .replace(CORP_PAREN_REGEX, "")
+                .replace(CORP_BRACKET_REGEX, "")
+                .replace(PERSONAL_PAREN_REGEX, "")
+                .trim()
+        }
+
         /**
          * 카드 결제 힌트 문자열(예: "하나0*2*", "NH0*2*", "우리(1234)", "KB국민체크(8*4*)" 등)에서
          * 표준 카드사명을 자동 추출하여 반환합니다.
@@ -1206,11 +1252,7 @@ class ExpenseCustomMetaPreferences private constructor(
             fallbackOriginalText: String? = null,
             fallbackSecondText: String? = null
         ): String {
-            val cleaned = rawCardOrHint.orEmpty()
-                .replace(Regex("""\s*\(\s*법인(?:카드)?\s*\)"""), "")
-                .replace(Regex("""\s*\[\s*법인(?:카드)?\s*\]"""), "")
-                .replace(Regex("""\s*\(\s*개인(?:카드)?\s*\)"""), "")
-                .trim()
+            val cleaned = stripCardTagSuffixes(rawCardOrHint.orEmpty())
 
             // 이미 표준 카드사 목록과 정확히 일치하는 경우 즉시 반환
             if (cleaned in DEFAULT_CARD_COMPANIES) return cleaned
@@ -1219,14 +1261,14 @@ class ExpenseCustomMetaPreferences private constructor(
                 if (text.isBlank()) return null
                 val upper = text.uppercase()
                 return when {
-                    text.startsWith("하나") || text.contains("하나카드") || text.contains("하나체크") || upper.contains("HANA") || Regex("""하나\s*\(?[0-9*]{2,}""").containsMatchIn(text) || Regex("""(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\)""").containsMatchIn(text) -> "하나카드"
+                    text.startsWith("하나") || text.contains("하나카드") || text.contains("하나체크") || upper.contains("HANA") || HANA_MASK_REGEX.containsMatchIn(text) || CREDIT_CHECK_MASK_REGEX.containsMatchIn(text) -> "하나카드"
                     upper.startsWith("NH") || text.startsWith("농협") || upper.contains("NH농협") || text.contains("농협카드") || text.contains("농협체크") || text.contains("채움") -> "NH농협카드"
-                    text.startsWith("우리") || text.contains("우리카드") || text.contains("우리체크") || upper.contains("WOORI") || Regex("""우리\s*\(?[0-9*]{2,}""").containsMatchIn(text) -> "우리카드"
-                    text.startsWith("신한") || upper.contains("SOL페이") || text.contains("신한카드") || text.contains("신한체크") || upper.contains("SHINHAN") || Regex("""신한\s*\(?[0-9*]{2,}""").containsMatchIn(text) -> "신한카드"
+                    text.startsWith("우리") || text.contains("우리카드") || text.contains("우리체크") || upper.contains("WOORI") || WOORI_MASK_REGEX.containsMatchIn(text) -> "우리카드"
+                    text.startsWith("신한") || upper.contains("SOL페이") || text.contains("신한카드") || text.contains("신한체크") || upper.contains("SHINHAN") || SHINHAN_MASK_REGEX.containsMatchIn(text) -> "신한카드"
                     upper.startsWith("KB") || text.startsWith("국민") || upper.contains("KB국민") || text.contains("국민카드") || text.contains("국민체크") || upper.contains("KOOKMIN") -> "KB국민카드"
-                    text.startsWith("현대") || text.contains("현대카드") || upper.contains("HYUNDAI") || Regex("""현대\s*\(?[0-9*]{2,}""").containsMatchIn(text) -> "현대카드"
-                    text.startsWith("삼성") || text.contains("삼성카드") || upper.contains("SAMSUNG") || Regex("""삼성\s*\(?[0-9*]{2,}""").containsMatchIn(text) -> "삼성카드"
-                    text.startsWith("롯데") || text.contains("롯데카드") || upper.contains("LOTTE") || Regex("""롯데\s*\(?[0-9*]{2,}""").containsMatchIn(text) -> "롯데카드"
+                    text.startsWith("현대") || text.contains("현대카드") || upper.contains("HYUNDAI") || HYUNDAI_MASK_REGEX.containsMatchIn(text) -> "현대카드"
+                    text.startsWith("삼성") || text.contains("삼성카드") || upper.contains("SAMSUNG") || SAMSUNG_MASK_REGEX.containsMatchIn(text) -> "삼성카드"
+                    text.startsWith("롯데") || text.contains("롯데카드") || upper.contains("LOTTE") || LOTTE_MASK_REGEX.containsMatchIn(text) -> "롯데카드"
                     upper.startsWith("BC") || text.startsWith("비씨") || upper.contains("BC카드") || text.contains("비씨카드") || text.contains("페이북") || upper.contains("PAYBOOC") -> "BC카드"
                     text.contains("카카오페이") || text.startsWith("카카오") || upper.contains("KAKAOPAY") -> "카카오페이"
                     text.contains("네이버페이") || text.startsWith("네이버") || upper.contains("NAVERPAY") -> "네이버페이"
@@ -1270,10 +1312,7 @@ class ExpenseCustomMetaPreferences private constructor(
             fallbackOriginalText: String? = null,
             fallbackMemo: String? = null
         ): String {
-            val cleaned = rawBankOrHint.orEmpty()
-                .replace(Regex("""\s*\(\s*법인(?:카드)?\s*\)"""), "")
-                .replace(Regex("""\s*\[\s*법인(?:카드)?\s*\]"""), "")
-                .trim()
+            val cleaned = stripCardTagSuffixes(rawBankOrHint.orEmpty())
 
             if (cleaned in DEFAULT_BANK_NAMES) return cleaned
 
@@ -1334,7 +1373,7 @@ class ExpenseCustomMetaPreferences private constructor(
             if (combined.isBlank()) return null
             val upper = combined.uppercase()
             return when {
-                combined.contains("하나") || upper.contains("HANA") || Regex("""(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\)""").containsMatchIn(combined) -> "하나카드"
+                combined.contains("하나") || upper.contains("HANA") || CREDIT_CHECK_MASK_REGEX.containsMatchIn(combined) -> "하나카드"
                 upper.contains("NH") || combined.contains("농협") || combined.contains("채움") -> "NH농협카드"
                 combined.contains("우리") || upper.contains("WOORI") -> "우리카드"
                 combined.contains("신한") || upper.contains("SHINHAN") || upper.contains("SOL페이") -> "신한카드"
@@ -1358,22 +1397,25 @@ class ExpenseCustomMetaPreferences private constructor(
             originalText: String?
         ): String? {
             val orig = originalText.orEmpty()
-            val rawCard = rawCardOrBankName.orEmpty()
-                .replace(Regex("""\s*\(\s*법인(?:카드)?\s*\)"""), "")
-                .replace(Regex("""\s*\[\s*법인(?:카드)?\s*\]"""), "")
-                .trim()
+            val rawCard = stripCardTagSuffixes(rawCardOrBankName.orEmpty())
 
-            // 1. "카드 하나0*2*" 형태
-            Regex("""카드\s*[:：]?\s*(?<tok>[가-힣A-Za-z0-9*(),]{3,})""").find(orig)?.groups?.get("tok")?.value?.trim()?.let { tok ->
-                if (tok.any { it.isDigit() || it == '*' }) return tok
-            }
-            // 2. "하나0*2*", "NH카드2*7*", "삼성1844", "KB국민카드4024", "우리(1234)" 형태
-            Regex("""(?<tok>(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업)(?:농협|국민)?(?:카드|체크|법인)?\s*\(?[,0-9*]{2,}\)?)""").find(orig)?.groups?.get("tok")?.value?.replace(" ", "")?.trim()?.let { tok ->
-                return tok
-            }
-            // 3. "신용(,0*2*)" 형태
-            Regex("""(?<tok>(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\))""").find(orig)?.groups?.get("tok")?.value?.replace(" ", "")?.trim()?.let { tok ->
-                return tok
+            if (orig.isNotBlank()) {
+                // 1. "카드 하나0*2*" 형태
+                if (orig.contains("카드")) {
+                    CARD_TOK_PREFIX_REGEX.find(orig)?.groups?.get("tok")?.value?.trim()?.let { tok ->
+                        if (tok.any { it.isDigit() || it == '*' }) return tok
+                    }
+                }
+                // 2. "하나0*2*", "NH카드2*7*", "삼성1844", "KB국민카드4024", "우리(1234)" 형태
+                CARD_TOK_ISSUER_REGEX.find(orig)?.groups?.get("tok")?.value?.replace(" ", "")?.trim()?.let { tok ->
+                    return tok
+                }
+                // 3. "신용(,0*2*)" 형태
+                if (orig.contains("신용") || orig.contains("체크")) {
+                    CARD_TOK_TYPE_REGEX.find(orig)?.groups?.get("tok")?.value?.replace(" ", "")?.trim()?.let { tok ->
+                        return tok
+                    }
+                }
             }
             // 4. rawCard 자체에 마스킹 번호나 숫자가 포함된 경우 (예: "하나0*2*")
             if (rawCard.isNotBlank() && rawCard.any { it.isDigit() || it == '*' } && !rawCard.contains("원")) {
@@ -1391,15 +1433,17 @@ class ExpenseCustomMetaPreferences private constructor(
             originalText: String? = null
         ): List<String> {
             val keys = mutableListOf<String>()
-            val canonicalCard = inferCanonicalCardCompany(
-                cardCompany ?: rawCardOrBankName,
-                rawCardOrBankName,
-                originalText
-            ).replace(Regex("""\s*\(\s*법인(?:카드)?\s*\)"""), "").trim()
+            val canonicalCard = stripCardTagSuffixes(
+                inferCanonicalCardCompany(
+                    cardCompany ?: rawCardOrBankName,
+                    rawCardOrBankName,
+                    originalText
+                )
+            )
 
             val rawToken = extractRawCardHintToken(rawCardOrBankName ?: cardCompany, originalText)
             if (!rawToken.isNullOrBlank()) {
-                val digitsAndMask = Regex("""[0-9*]{2,}""").find(rawToken)?.value
+                val digitsAndMask = DIGITS_AND_MASK_REGEX.find(rawToken)?.value
                 if (!digitsAndMask.isNullOrBlank() && canonicalCard.isNotBlank()) {
                     keys.add("${canonicalCard}#${digitsAndMask}")
                 }

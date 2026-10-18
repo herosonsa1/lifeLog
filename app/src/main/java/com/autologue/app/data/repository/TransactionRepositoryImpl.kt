@@ -10,6 +10,7 @@ import com.autologue.app.domain.model.isDepositTransaction
 import com.autologue.app.domain.repository.TransactionRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
@@ -80,7 +81,7 @@ class TransactionRepositoryImpl @Inject constructor(
     override fun getAllTransactionsFlow(): Flow<List<Transaction>> {
         return transactionDao.getAllTransactions().map { entities ->
             entities.map { it.toDomain() }.filterNot { shouldExcludeTransaction(it) }
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     override fun getTransactionsByDateRange(start: LocalDateTime, end: LocalDateTime): Flow<List<Transaction>> {
@@ -88,13 +89,13 @@ class TransactionRepositoryImpl @Inject constructor(
         val endMilli = end.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         return transactionDao.getTransactionsByDateRange(startMilli, endMilli).map { list ->
             list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     override fun getTransactionsByCategory(category: ExpenseCategory): Flow<List<Transaction>> {
         return transactionDao.getTransactionsByCategory(category).map { list ->
             list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     override suspend fun insertTransaction(transaction: Transaction): Long = withContext(Dispatchers.IO) {
@@ -216,6 +217,11 @@ class TransactionRepositoryImpl @Inject constructor(
         transactionDao.updateTransaction(transaction.toEntity())
     }
 
+    override suspend fun updateTransactions(transactions: List<Transaction>) = withContext(Dispatchers.IO) {
+        if (transactions.isEmpty()) return@withContext
+        transactionDao.updateTransactions(transactions.map { it.toEntity() })
+    }
+
     override suspend fun renameMerchantGlobally(
         oldMerchantName: String,
         newMerchantName: String,
@@ -239,7 +245,7 @@ class TransactionRepositoryImpl @Inject constructor(
         }
 
         val all = transactionDao.getAllTransactionsSync()
-        var updatedCount = 0
+        val toUpdate = ArrayList<TransactionEntity>()
         val genericPlaceholders = setOf("출금 내역", "입금 내역", "계좌 이체", "카드 가맹점", "가맹점", "정선우", "정*우")
         for (tx in all) {
             val domainTx = tx.toDomain()
@@ -294,48 +300,65 @@ class TransactionRepositoryImpl @Inject constructor(
                 resolvedCategory != tx.category ||
                 resolvedCard != tx.cardOrBankName
             ) {
-                transactionDao.updateTransaction(
+                toUpdate.add(
                     tx.copy(
                         merchantName = resolvedName.ifBlank { tx.merchantName },
                         category = resolvedCategory,
                         cardOrBankName = resolvedCard
                     )
                 )
-                updatedCount++
             }
         }
-        updatedCount
+        if (toUpdate.isNotEmpty()) {
+            transactionDao.updateTransactions(toUpdate)
+        }
+        toUpdate.size
     }
 
     override suspend fun deleteTransaction(id: Long) = withContext(Dispatchers.IO) {
-        val all = transactionDao.getAllTransactionsSync()
-        val target = all.firstOrNull { it.id == id }
-        if (target != null) {
-            val targetDomain = target.toDomain()
-            expenseCustomMetaPreferences.markTransactionDeleted(targetDomain)
-            val targetDate = target.timestamp.toLocalDate()
-            val targetNormMer = MerchantAliasPreferences.normalizeMerchantKey(target.merchantName)
-            val targetIsDep = targetDomain.isDepositTransaction()
+        deleteTransactionsByIds(listOf(id))
+    }
 
-            val twinTargets = all.filter { other ->
-                if (other.id == id) return@filter true
-                val otherDomain = other.toDomain()
-                if (expenseCustomMetaPreferences.isTransactionDeleted(otherDomain)) return@filter true
-                if (other.amount != target.amount) return@filter false
-                if (otherDomain.isDepositTransaction() != targetIsDep) return@filter false
-                if (other.timestamp.toLocalDate() != targetDate) return@filter false
-                val otherNormMer = MerchantAliasPreferences.normalizeMerchantKey(other.merchantName)
-                val sameMer = (targetNormMer.isNotBlank() && targetNormMer == otherNormMer) ||
-                    merchantAliasPreferences.isSameMerchant(other.merchantName, target.merchantName) ||
-                    (target.originalText.isNotBlank() && target.originalText == other.originalText)
-                sameMer
+    override suspend fun deleteTransactionsByIds(ids: Collection<Long>) = withContext(Dispatchers.IO) {
+        val distinctIds = ids.distinct()
+        if (distinctIds.isEmpty()) return@withContext
+        val all = transactionDao.getAllTransactionsSync()
+        val targetSet = distinctIds.toHashSet()
+        val matchedEntities = all.filter { it.id in targetSet }
+        if (matchedEntities.isNotEmpty()) {
+            val allTwinEntities = ArrayList<TransactionEntity>(matchedEntities.size * 2)
+            val seenIds = HashSet<Long>(targetSet)
+            allTwinEntities.addAll(matchedEntities)
+
+            for (target in matchedEntities) {
+                val targetDomain = target.toDomain()
+                val targetDate = target.timestamp.toLocalDate()
+                val targetNormMer = MerchantAliasPreferences.normalizeMerchantKey(target.merchantName)
+                val targetIsDep = targetDomain.isDepositTransaction()
+                for (other in all) {
+                    if (other.id in seenIds) continue
+                    val otherDomain = other.toDomain()
+                    if (other.amount != target.amount) continue
+                    if (otherDomain.isDepositTransaction() != targetIsDep) continue
+                    if (other.timestamp.toLocalDate() != targetDate) continue
+                    val otherNormMer = MerchantAliasPreferences.normalizeMerchantKey(other.merchantName)
+                    val sameMer = (targetNormMer.isNotBlank() && targetNormMer == otherNormMer) ||
+                        merchantAliasPreferences.isSameMerchant(other.merchantName, target.merchantName) ||
+                        (target.originalText.isNotBlank() && target.originalText == other.originalText)
+                    if (sameMer) {
+                        seenIds.add(other.id)
+                        allTwinEntities.add(other)
+                    }
+                }
             }
-            expenseCustomMetaPreferences.markTransactionsDeleted(twinTargets.map { it.toDomain() })
-            for (twin in twinTargets) {
-                transactionDao.deleteTransactionById(twin.id)
+            expenseCustomMetaPreferences.markTransactionsDeleted(allTwinEntities.map { it.toDomain() })
+            seenIds.toList().chunked(500).forEach { chunk ->
+                transactionDao.deleteTransactionsByIds(chunk)
             }
         } else {
-            transactionDao.deleteTransactionById(id)
+            distinctIds.chunked(500).forEach { chunk ->
+                transactionDao.deleteTransactionsByIds(chunk)
+            }
         }
     }
 

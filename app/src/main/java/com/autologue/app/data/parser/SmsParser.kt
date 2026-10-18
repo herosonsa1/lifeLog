@@ -96,6 +96,45 @@ object SmsParser {
         """(?:/\s*)*(?:총누적이용금액|총누적금액|누적이용금액|누적사용금액|누적결제금액|누적금액|총누적|결제예정금액|결제예정액|청구예정금액|청구예정액|총사용금액|총이용금액|총결제금액|총사용액|총이용액)(?:\s*안내)?"""
     )
 
+    private val EXCLUDED_NAVER_PAY_TOKENS = listOf("네이버페이", "naverpay", "naver_pay", "네이버파이낸셜", "npay")
+
+    private val INVALID_MERCHANT_SUBSTRINGS = listOf(
+        "누적이용금액", "누적사용금액", "누적결제금액", "누적금액",
+        "결제예정금액", "결제예정액", "총사용금액", "총이용금액",
+        "청구예정금액", "이용대금명세서", "신용(,"
+    )
+
+    private val SPAM_KEYWORDS = listOf(
+        "[광고]", "(광고)", "무료수신거부", "수신거부", "인증번호", "본인확인",
+        "비밀번호", "로그인", "택배", "배송완료", "배송출발", "입고안내",
+        "쿠폰 지급", "쿠폰 안내", "포인트 충전 완료", "포인트 적립 안내", "이벤트 안내"
+    )
+
+    private val STOCK_OR_NEWS_KEYWORDS = listOf(
+        "목표주가", "투자의견", "매수", "매도", "체결", "공모주", "청약",
+        "배당", "시황", "코스피", "코스닥", "증시", "상한가", "하한가",
+        "시가총액", "현재가", "장전", "브리핑", "리포트", "애널리스트", "컨센서스",
+        "주주", "보유수량", "예수금", "수익률", "손익"
+    )
+
+    private val NON_USAGE_NOTICE_KEYWORDS = listOf(
+        "결제예정금액", "결제예정액", "결제예정일", "이번달 결제예정", "이번 달 결제예정",
+        "청구예정금액", "청구예정액", "청구금액", "청구액", "이용대금명세서", "이용대금 안내", "이용대금안내",
+        "명세서 안내", "명세서안내", "결제일 안내", "결제일안내", "결제금액 안내", "결제금액안내",
+        "총사용금액", "총이용금액", "총결제금액", "총사용액", "총이용액",
+        "누적이용금액 안내", "누적금액 안내", "누적사용금액 안내", "이번달 누적", "이번 달 누적",
+        "출금예정", "인출예정", "납부예정", "자동납부 안내", "자동납부안내",
+        "연체 안내", "리볼빙 안내", "한도 안내", "한도안내"
+    )
+
+    private val SUMMARY_TOKENS = listOf("누적이용금액", "누적사용금액", "누적결제금액", "누적금액", "총누적", "결제예정", "총사용", "총이용")
+
+    private val WON_AMOUNT_REGEX = Regex("""[\d,]+원""")
+    private val INSTALLMENT_MONTH_REGEX = Regex("""\d+개월""")
+    private val CARD_BRAND_1_REGEX = Regex("""(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|씨티|우체국|새마을|신협|수협|카카오뱅크|토스뱅크|케이뱅크)\s*(?:카드|체크|신용)""")
+    private val CARD_BRAND_2_REGEX = Regex("""(?:NH|삼성|현대|신한|KB|롯데|우리|하나)카드?[0-9*]{2,}""")
+    private val CARD_BRAND_3_REGEX = Regex("""(?:신용|체크)\s*\([,0-9*]+\)""")
+
     /**
      * 문자열에서 누적이용금액, 결제예정금액, 총사용금액, 잔액, 한도 등 당시 실사용 금액이 아닌 구문을 모두 제거합니다.
      */
@@ -103,6 +142,15 @@ object SmsParser {
         return body
             .replace(NON_USAGE_AMOUNT_CLAUSE_REGEX, "")
             .replace(NON_USAGE_TRAIL_KEYWORD_REGEX, "")
+    }
+
+    private fun containsNaverPayToken(raw: String?): Boolean {
+        if (raw.isNullOrBlank()) return false
+        val compact = if (raw.indexOf(' ') >= 0) raw.replace(" ", "").lowercase() else raw.lowercase()
+        for (token in EXCLUDED_NAVER_PAY_TOKENS) {
+            if (compact.contains(token)) return true
+        }
+        return false
     }
 
     /**
@@ -114,26 +162,17 @@ object SmsParser {
         cardOrBankName: String? = null,
         originalText: String? = null
     ): Boolean {
-        val excludedTokens = listOf("네이버페이", "naverpay", "naver_pay", "네이버파이낸셜", "npay")
-        val mer = merchantName.orEmpty().replace(" ", "").lowercase()
-        val card = cardOrBankName.orEmpty().replace(" ", "").lowercase()
-        val orig = originalText.orEmpty().replace(" ", "").lowercase()
-        return excludedTokens.any { token ->
-            mer.contains(token) || card.contains(token) || orig.contains(token)
-        }
+        return containsNaverPayToken(merchantName) ||
+            containsNaverPayToken(cardOrBankName) ||
+            containsNaverPayToken(originalText)
     }
 
     fun isInvalidMerchantName(name: String?): Boolean {
         if (name.isNullOrBlank()) return true
         val trimmed = name.trim()
         if (trimmed.lowercase() in INVALID_MERCHANT_NAMES) return true
-        if (isNaverPayExcluded(merchantName = trimmed)) return true
-        val invalidSubstrings = listOf(
-            "누적이용금액", "누적사용금액", "누적결제금액", "누적금액",
-            "결제예정금액", "결제예정액", "총사용금액", "총이용금액",
-            "청구예정금액", "이용대금명세서", "신용(,"
-        )
-        if (invalidSubstrings.any { trimmed.contains(it, ignoreCase = true) }) return true
+        if (containsNaverPayToken(trimmed)) return true
+        if (INVALID_MERCHANT_SUBSTRINGS.any { trimmed.contains(it, ignoreCase = true) }) return true
         return false
     }
 
@@ -149,7 +188,7 @@ object SmsParser {
         if (isNaverPayExcluded(merchantName, cardOrBankName, originalText)) return true
         if (isInvalidMerchantName(merchantName)) return true
         val card = cardOrBankName?.trim().orEmpty()
-        if (card.startsWith("(결제)") || card.startsWith("[결제]") || card.startsWith("(승인)") || Regex("""[\d,]+원""").containsMatchIn(card)) {
+        if (card.startsWith("(결제)") || card.startsWith("[결제]") || card.startsWith("(승인)") || WON_AMOUNT_REGEX.containsMatchIn(card)) {
             return true
         }
         if (isNonPaymentMessage(originalText)) return true
@@ -165,51 +204,30 @@ object SmsParser {
         if (clean.isBlank()) return true
 
         // 0. 이력 등록 제외 대상("네이버페이") 즉시 차단
-        if (isNaverPayExcluded(originalText = clean)) {
+        if (containsNaverPayToken(clean)) {
             return true
         }
 
         // 1. 광고 / 인증 / 쿠폰·포인트 안내 문자 즉시 차단
-        val spamKeywords = listOf(
-            "[광고]", "(광고)", "무료수신거부", "수신거부", "인증번호", "본인확인",
-            "비밀번호", "로그인", "택배", "배송완료", "배송출발", "입고안내",
-            "쿠폰 지급", "쿠폰 안내", "포인트 충전 완료", "포인트 적립 안내", "이벤트 안내"
-        )
-        if (spamKeywords.any { clean.contains(it, ignoreCase = true) }) {
+        if (SPAM_KEYWORDS.any { clean.contains(it, ignoreCase = true) }) {
             return true
         }
 
         // 2. 주식/증권 시황/뉴스/청약/매매 체결 브리핑 문자 차단
-        val stockOrNewsKeywords = listOf(
-            "목표주가", "투자의견", "매수", "매도", "체결", "공모주", "청약",
-            "배당", "시황", "코스피", "코스닥", "증시", "상한가", "하한가",
-            "시가총액", "현재가", "장전", "브리핑", "리포트", "애널리스트", "컨센서스",
-            "주주", "보유수량", "예수금", "수익률", "손익"
-        )
-        if (stockOrNewsKeywords.any { clean.contains(it, ignoreCase = true) }) {
+        if (STOCK_OR_NEWS_KEYWORDS.any { clean.contains(it, ignoreCase = true) }) {
             return true
         }
 
         // 3. 결제예정금액, 총사용금액, 청구금액, 명세서 등 당시 실사용 결제가 아닌 안내 문자 즉시 차단
-        val nonUsageNoticeKeywords = listOf(
-            "결제예정금액", "결제예정액", "결제예정일", "이번달 결제예정", "이번 달 결제예정",
-            "청구예정금액", "청구예정액", "청구금액", "청구액", "이용대금명세서", "이용대금 안내", "이용대금안내",
-            "명세서 안내", "명세서안내", "결제일 안내", "결제일안내", "결제금액 안내", "결제금액안내",
-            "총사용금액", "총이용금액", "총결제금액", "총사용액", "총이용액",
-            "누적이용금액 안내", "누적금액 안내", "누적사용금액 안내", "이번달 누적", "이번 달 누적",
-            "출금예정", "인출예정", "납부예정", "자동납부 안내", "자동납부안내",
-            "연체 안내", "리볼빙 안내", "한도 안내", "한도안내"
-        )
-        if (nonUsageNoticeKeywords.any { clean.contains(it, ignoreCase = true) }) {
+        if (NON_USAGE_NOTICE_KEYWORDS.any { clean.contains(it, ignoreCase = true) }) {
             return true
         }
 
         // 4. 누적이용금액/누적금액/결제예정/총사용 등이 포함된 메시지에서 해당 비실사용 금액 구문을 제거했을 때
         //    실제 결제된 승인 금액([\d,]+원)이 전혀 남아있지 않거나, 제목/헤더 형태로만 존재하면 비결제 안내 문자로 판별
-        val summaryTokens = listOf("누적이용금액", "누적사용금액", "누적결제금액", "누적금액", "총누적", "결제예정", "총사용", "총이용")
-        if (summaryTokens.any { clean.contains(it, ignoreCase = true) }) {
+        if (SUMMARY_TOKENS.any { clean.contains(it, ignoreCase = true) }) {
             val stripped = stripNonUsageAmounts(clean)
-            if (!Regex("""[\d,]+원""").containsMatchIn(stripped)) {
+            if (!WON_AMOUNT_REGEX.containsMatchIn(stripped)) {
                 return true
             }
             // 누적/총사용 키워드 뒤에 금액이 바로 붙은 부가정보 형태가 아니라 헤더로 쓰이고 별도 줄에 '금액 211,254원'만 있는 안내문 차단
@@ -235,16 +253,16 @@ object SmsParser {
         val hasApprovalAction = clean.contains("승인") ||
             clean.contains("일시불") ||
             clean.contains("할부") ||
-            Regex("""\d+개월""").containsMatchIn(clean) ||
+            INSTALLMENT_MONTH_REGEX.containsMatchIn(clean) ||
             clean.contains("사용처") ||
             clean.contains("가맹점") ||
             clean.contains("(결제)") ||
             clean.contains("[결제]") ||
             clean.contains("체크출금")
 
-        val hasCardBrand = Regex("""(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|씨티|우체국|새마을|신협|수협|카카오뱅크|토스뱅크|케이뱅크)\s*(?:카드|체크|신용)""").containsMatchIn(clean) ||
-            Regex("""(?:NH|삼성|현대|신한|KB|롯데|우리|하나)카드?[0-9*]{2,}""").containsMatchIn(clean) ||
-            Regex("""(?:신용|체크)\s*\([,0-9*]+\)""").containsMatchIn(clean)
+        val hasCardBrand = CARD_BRAND_1_REGEX.containsMatchIn(clean) ||
+            CARD_BRAND_2_REGEX.containsMatchIn(clean) ||
+            CARD_BRAND_3_REGEX.containsMatchIn(clean)
 
         val isPureAccountTransfer = (clean.contains("입금") || clean.contains("송금") || clean.contains("계좌이체")) &&
             !clean.contains("승인") && !clean.contains("일시불") && !clean.contains("할부") && !clean.contains("사용처")
