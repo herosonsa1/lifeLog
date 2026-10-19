@@ -199,6 +199,78 @@ class SyncCheckpointPreferences @Inject constructor(
         _state.value = loadState()
     }
 
+    // --- 초고속 갤러리 분석을 위한 영구 캐시 (비-골프 OCR 판정 URI & 사진 EXIF 위치 캐시) ---
+
+    private val nonGolfUriMemCache: MutableSet<String> by lazy {
+        val saved = prefs.getStringSet(KEY_NON_GOLF_CHECKED_URIS, emptySet()) ?: emptySet()
+        java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply { addAll(saved) }
+    }
+
+    private val photoMetaMemCache: java.util.concurrent.ConcurrentHashMap<String, CachedPhotoLocation> by lazy {
+        val map = java.util.concurrent.ConcurrentHashMap<String, CachedPhotoLocation>()
+        val rawSet = prefs.getStringSet(KEY_PHOTO_LOCATION_CACHE, emptySet()) ?: emptySet()
+        for (entry in rawSet) {
+            CachedPhotoLocation.deserialize(entry)?.let { (uri, meta) ->
+                map[uri] = meta
+            }
+        }
+        map
+    }
+
+    fun isKnownNonGolfUri(uri: String): Boolean = nonGolfUriMemCache.contains(uri)
+
+    fun markNonGolfUri(uri: String) {
+        if (uri.isBlank()) return
+        if (nonGolfUriMemCache.add(uri)) {
+            persistNonGolfUrisIfNeeded()
+        }
+    }
+
+    fun markNonGolfUris(uris: Collection<String>) {
+        var changed = false
+        for (u in uris) {
+            if (u.isNotBlank() && nonGolfUriMemCache.add(u)) {
+                changed = true
+            }
+        }
+        if (changed) {
+            persistNonGolfUris()
+        }
+    }
+
+    @Synchronized
+    private fun persistNonGolfUrisIfNeeded() {
+        if (nonGolfUriMemCache.size % 15 == 0) {
+            persistNonGolfUris()
+        }
+    }
+
+    @Synchronized
+    fun persistNonGolfUris() {
+        val snapshot = if (nonGolfUriMemCache.size > MAX_CACHED_URIS) {
+            nonGolfUriMemCache.take(MAX_CACHED_URIS).toSet()
+        } else {
+            HashSet(nonGolfUriMemCache)
+        }
+        prefs.edit().putStringSet(KEY_NON_GOLF_CHECKED_URIS, snapshot).apply()
+    }
+
+    fun getCachedPhotoLocation(uri: String): CachedPhotoLocation? = photoMetaMemCache[uri]
+
+    fun putCachedPhotoLocation(uri: String, location: CachedPhotoLocation) {
+        if (uri.isBlank()) return
+        photoMetaMemCache[uri] = location
+    }
+
+    @Synchronized
+    fun flushPhotoLocationCache() {
+        val entries = photoMetaMemCache.entries
+            .take(MAX_CACHED_URIS)
+            .map { (uri, meta) -> meta.serialize(uri) }
+            .toSet()
+        prefs.edit().putStringSet(KEY_PHOTO_LOCATION_CACHE, entries).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "sync_checkpoint_prefs"
         private const val KEY_LAST_APP_LAUNCHED_AT = "last_app_launched_at_millis"
@@ -209,6 +281,9 @@ class SyncCheckpointPreferences @Inject constructor(
         private const val KEY_LAST_GOLF_SYNC_COMPLETED_AT = "last_golf_sync_completed_at_millis"
         private const val KEY_LAST_DIARY_SYNC_COMPLETED_AT = "last_diary_sync_completed_at_millis"
         private const val KEY_LAST_LEGACY_CLEANUP_VERSION = "last_legacy_cleanup_version"
+        private const val KEY_NON_GOLF_CHECKED_URIS = "non_golf_checked_uris_v1"
+        private const val KEY_PHOTO_LOCATION_CACHE = "photo_location_cache_v1"
+        private const val MAX_CACHED_URIS = 4000
 
         const val CURRENT_CLEANUP_VERSION = 27
 
@@ -225,3 +300,45 @@ class SyncCheckpointPreferences @Inject constructor(
         }
     }
 }
+
+/**
+ * 갤러리 사진 1장의 EXIF GPS 및 역지오코딩 결과 영구 캐시 엔트리
+ * hasGps == false 이면 EXIF에 위치 정보가 없는 사진이므로 재스캔 시 InputStream을 다시 열지 않고 0ms로 통과합니다.
+ */
+data class CachedPhotoLocation(
+    val hasGps: Boolean,
+    val placeName: String? = null,
+    val address: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null
+) {
+    fun serialize(uri: String): String {
+        val safePlace = (placeName ?: "").replace("\t", " ").replace("\n", " ")
+        val safeAddr = (address ?: "").replace("\t", " ").replace("\n", " ")
+        val latStr = latitude?.toString() ?: ""
+        val lngStr = longitude?.toString() ?: ""
+        return listOf(uri, if (hasGps) "1" else "0", safePlace, safeAddr, latStr, lngStr).joinToString("\t")
+    }
+
+    companion object {
+        fun deserialize(raw: String): Pair<String, CachedPhotoLocation>? {
+            val parts = raw.split("\t")
+            if (parts.size < 6) return null
+            val uri = parts[0]
+            if (uri.isBlank()) return null
+            val hasGps = parts[1] == "1"
+            val place = parts[2].takeIf { it.isNotBlank() }
+            val addr = parts[3].takeIf { it.isNotBlank() }
+            val lat = parts[4].toDoubleOrNull()
+            val lng = parts[5].toDoubleOrNull()
+            return uri to CachedPhotoLocation(
+                hasGps = hasGps,
+                placeName = place,
+                address = addr,
+                latitude = lat,
+                longitude = lng
+            )
+        }
+    }
+}
+

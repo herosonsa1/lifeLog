@@ -398,6 +398,47 @@ fun ExpenseScreen(
                 .padding(padding)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
+                if (uiState.isBackgroundSmsSyncing) {
+                    Surface(
+                        color = MenuColors.expenseBg,
+                        border = BorderStroke(1.dp, MenuColors.expenseBorder),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MenuColors.expense
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = uiState.smsSyncProgressMessage.ifBlank { "백그라운드에서 결제 문자 내역을 고속 분석하고 있습니다..." },
+                                    style = AppTypography.caption.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = Slate900,
+                                        fontSize = 12.sp
+                                    )
+                                )
+                                Text(
+                                    text = "다른 메뉴를 이동하거나 내역을 조회하셔도 백그라운드에서 끝까지 완료됩니다.",
+                                    style = AppTypography.caption.copy(
+                                        color = Slate600,
+                                        fontSize = 10.5.sp
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
                 // =========================================================================
                 // 고정 상단 컨트롤 바: [연월 선택기] + [접었다 폈다 하는 관리·도구 메뉴] + [결제 내역 | 소비 통계 리포트] 탭
                 // =========================================================================

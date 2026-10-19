@@ -292,7 +292,10 @@ fun DiaryScreen(
         ) {
             // Real-time Auto/Manual Syncing Banner
             if (uiState.isAutoSyncing) {
-                SyncingBannerCard(stage = uiState.autoSyncStage)
+                SyncingBannerCard(
+                    stage = uiState.autoSyncStage,
+                    progress = uiState.syncProgress
+                )
             }
 
             // Contextual Notification Listener Bar
@@ -1832,6 +1835,7 @@ fun SyncProgressDialog(
 @Composable
 fun SyncingBannerCard(
     stage: String,
+    progress: com.autologue.app.domain.usecase.sync.SyncProgress? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -1851,12 +1855,27 @@ fun SyncingBannerCard(
                 color = AppColors.primary
             )
             Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "백그라운드 고속 동기화 진행 중 (화면 이동 가능)",
+                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
+                    )
+                    if (progress != null && (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0)) {
+                        Text(
+                            text = buildString {
+                                append("결제 ${progress.syncedTxCount} · 사진 ${progress.syncedPhotoCount}")
+                                if (progress.syncedGolfCount > 0) append(" · 골프 ${progress.syncedGolfCount}")
+                            },
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.primary)
+                        )
+                    }
+                }
                 Text(
-                    text = "일상 기록 동기화 중...",
-                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
-                )
-                Text(
-                    text = stage.ifBlank { "데이터를 분석하고 있습니다..." },
+                    text = stage.ifBlank { "결제 문자 및 갤러리 사진을 병렬 분석하고 있습니다..." },
                     style = AppTypography.captionMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1878,14 +1897,14 @@ fun ManualSyncPeriodDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "데이터 수집 및 동기화",
+                text = "데이터 수집 및 백그라운드 동기화",
                 style = AppTypography.h2
             )
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    text = "마지막으로 데이터 수집 및 분석이 완료된 시점 이후의 신규 데이터만 빠르게 수집하거나, 원하는 과거 기간을 선택해 복원할 수 있습니다.",
+                    text = "결제 문자(SMS/MMS/RCS), 일반 갤러리 사진(EXIF 위치), 골프 스코어카드·라커룸 전표 OCR 모두 마지막 분석 완료 시점이 기록됩니다.\n전체 기간 스캔도 병렬 엔진을 통해 백그라운드에서 빠르게 수행되며, 분석 중 다른 메뉴를 자유롭게 이용하실 수 있습니다.",
                     style = AppTypography.bodySecondary
                 )
 
@@ -1895,9 +1914,9 @@ fun ManualSyncPeriodDialog(
                 ) {
                     val periods: List<Pair<Int?, String>> = listOf(
                         0 to "마지막 분석 이후 신규 데이터만 (추천 · 초고속 증분 분석)",
-                        30 to "최근 30일 (사진/골프/결제 복원)",
-                        60 to "최근 60일 (2달치 집중 분석)",
-                        null to "전체 기간 (갤러리/문자 전수 스캔 및 골프 자동 등록)"
+                        30 to "최근 30일 (사진/골프/결제 백그라운드 복원)",
+                        60 to "최근 60일 (2달치 집중 백그라운드 분석)",
+                        null to "전체 기간 (모든 결제 내역 + 갤러리 병렬 백그라운드 스캔)"
                     )
 
                     periods.forEach { (days, label) ->
@@ -1947,7 +1966,7 @@ fun ManualSyncPeriodDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary, contentColor = PureWhite),
                 shape = AppShapes.button
             ) {
-                Text("동기화 시작", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
+                Text("백그라운드 분석 시작", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

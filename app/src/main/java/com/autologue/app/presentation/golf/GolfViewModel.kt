@@ -64,6 +64,7 @@ data class GolfUiState(
     val loadingTitle: String = "골프 라운드 조회 중",
     val loadingMessage: String = "라운드 기록 및 스코어 통계를 불러오고 있습니다...",
     val isOcrScanning: Boolean = false,
+    val isBackgroundGalleryScanning: Boolean = false,
     val ocrScanningMessage: String = "",
     val isGalleryScanDialogOpen: Boolean = false,
     val selectedRound: GolfRound? = null,
@@ -898,14 +899,18 @@ class GolfViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isGalleryScanDialogOpen = false)
     }
 
+    private val backgroundGalleryScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+    )
+
     /**
-     * 갤러리 및 캡처된 사진(스크린샷)에서 라커룸 전표와 스코어카드를 자동 스캔하여 라운드를 생성/결합합니다.
+     * 갤러리 및 캡처된 사진(스크린샷)에서 라커룸 전표와 스코어카드를 백그라운드 병렬 스캔하여 라운드를 생성/결합합니다.
      * @param daysBack 0이면 마지막 분석 완료 시점 이후의 신규 사진만, null이면 과거 전체 기간, 양수면 최근 N일간의 사진을 스캔합니다.
-     * @param limit 스캔할 최대 후보 사진 수 (기본 300장)
+     * @param limit 스캔할 최대 후보 사진 수 (기본 300장, 전체 기간은 600장)
      */
     fun scanAllGolfMediaFromGallery(daysBack: Int? = 0, limit: Int = 300) {
         closeGalleryScanDialog()
-        viewModelScope.launch(Dispatchers.IO) {
+        backgroundGalleryScope.launch {
             val isIncremental = daysBack == 0
             val lastGolfSyncAt = syncCheckpointPreferences.getLastGolfSyncCompletedAtMillis()
             val periodText = when {
@@ -916,7 +921,7 @@ class GolfViewModel @Inject constructor(
                 else -> "과거 전체"
             }
             _uiState.value = _uiState.value.copy(
-                isOcrScanning = true,
+                isBackgroundGalleryScanning = true,
                 ocrScanningMessage = "$periodText 갤러리 미디어 수집 중..."
             )
             try {
@@ -936,10 +941,11 @@ class GolfViewModel @Inject constructor(
                 } else null
 
                 val effectiveDaysBack = if (isIncremental) 30 else daysBack
+                val effectiveLimit = if (daysBack == null) maxOf(limit, 600) else limit
                 val candidates = historicalDataImporter.scanHistoricalGolfCandidates(
                     context = appContext,
                     daysBack = effectiveDaysBack,
-                    limit = limit,
+                    limit = effectiveLimit,
                     sinceTimestampMillis = effectiveSinceMillis
                 )
                 if (candidates.isEmpty()) {
@@ -948,21 +954,21 @@ class GolfViewModel @Inject constructor(
                     return@launch
                 }
                 _uiState.value = _uiState.value.copy(
-                    ocrScanningMessage = "$periodText 갤러리 사진 OCR 스캔 시작 (${candidates.size}장)..."
+                    ocrScanningMessage = "$periodText 갤러리 병렬 OCR 분석 시작 (${candidates.size}장)..."
                 )
                 val processedCount = autoProcessGolfMediaUseCase.processBatchCandidates(candidates) { current, total, foundCount ->
                     val foundMsg = if (foundCount > 0) " (⛳ 골프 ${foundCount}건 발견)" else ""
                     _uiState.value = _uiState.value.copy(
-                        ocrScanningMessage = "갤러리 사진 OCR 분석 중... (${current}/${total}장$foundMsg)"
+                        ocrScanningMessage = "백그라운드 갤러리 OCR 분석 중... (${current}/${total}장$foundMsg)"
                     )
                 }
                 syncCheckpointPreferences.recordGolfSyncCompleted(System.currentTimeMillis())
-                android.util.Log.d("GolfViewModel", "갤러리 골프 미디어 자동 스캔 완료: $processedCount 건 처리")
+                android.util.Log.d("GolfViewModel", "갤러리 골프 미디어 백그라운드 스캔 완료: $processedCount 건 처리")
                 loadRounds()
             } catch (t: Throwable) {
-                android.util.Log.e("GolfViewModel", "갤러리 골프 미디어 자동 스캔 중 오류", t)
+                android.util.Log.e("GolfViewModel", "갤러리 골프 미디어 백그라운드 스캔 중 오류", t)
             } finally {
-                _uiState.value = _uiState.value.copy(isOcrScanning = false, ocrScanningMessage = "")
+                _uiState.value = _uiState.value.copy(isBackgroundGalleryScanning = false, ocrScanningMessage = "")
             }
         }
     }

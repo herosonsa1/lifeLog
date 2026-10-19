@@ -234,6 +234,42 @@ fun GolfScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = Spacing.xxxl)
             ) {
+                if (uiState.isBackgroundGalleryScanning) {
+                    item {
+                        Surface(
+                            color = MenuColors.golfBg,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MenuColors.golf
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "백그라운드 갤러리 골프 미디어 병렬 분석 중 (화면 이동 가능)",
+                                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.golf)
+                                    )
+                                    Text(
+                                        text = uiState.ocrScanningMessage.ifBlank { "스코어카드 및 라커룸 전표를 고속 탐색하고 있습니다..." },
+                                        style = AppTypography.captionMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                        HairlineDivider()
+                    }
+                }
+
                 // Level 1: Natural Golf Stats
                 item {
                     Row(
@@ -4232,14 +4268,14 @@ fun GolfGalleryScanDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "갤러리 골프 미디어 스캔",
+                text = "갤러리 골프 미디어 백그라운드 스캔",
                 style = AppTypography.h2
             )
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    text = "마지막 분석 완료 시점 이후 새로 추가된 사진·스크린샷만 빠르게 분석하거나, 과거 기간을 지정해 라커룸 전표와 스코어카드를 복원합니다.",
+                    text = "마지막 분석 완료 시점 이후 새로 추가된 사진·스크린샷만 초고속 분석하거나, 과거 전체 기간을 백그라운드 병렬 엔진으로 스캔합니다. 이미 일반 사진으로 확인된 항목은 즉시 건너뛰어 훨씬 빠르게 완료됩니다.",
                     style = AppTypography.bodySecondary
                 )
 
@@ -4249,9 +4285,9 @@ fun GolfGalleryScanDialog(
                 ) {
                     val periods: List<Pair<Int?, String>> = listOf(
                         0 to "마지막 분석 이후 신규 사진만 (추천 · 초고속 증분 스캔)",
-                        30 to "최근 30일 (스코어카드/라커룸 복원)",
-                        60 to "최근 60일 (2달치 집중 분석)",
-                        null to "전체 기간 (갤러리 내 모든 과거 스코어카드 전수 스캔)"
+                        30 to "최근 30일 (스코어카드/라커룸 백그라운드 복원)",
+                        60 to "최근 60일 (2달치 집중 백그라운드 분석)",
+                        null to "전체 기간 (갤러리 내 모든 스코어카드 병렬 백그라운드 스캔)"
                     )
 
                     periods.forEach { (days, label) ->
@@ -4293,7 +4329,7 @@ fun GolfGalleryScanDialog(
         },
         confirmButton = {
             AutoLoguePrimaryButton(
-                text = "스캔 시작",
+                text = "백그라운드 스캔 시작",
                 onClick = { onConfirm(selectedDays) }
             )
         },

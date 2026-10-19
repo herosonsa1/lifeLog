@@ -123,18 +123,19 @@ class SyncHistoricalDataUseCase @Inject constructor(
     /**
      * 사용자가 명시적으로 요청한 기간별 수동 동기화를 백그라운드에서 시작합니다.
      * daysBack == 0 인 경우 마지막 분석 완료 시점 이후의 증분 데이터만 수집·분석합니다.
+     * runInBackground == true(기본값)이면 화면을 가리는 모달 대신 상단 실시간 배너로 무차단 백그라운드 실행합니다.
      */
-    fun startManualSync(context: Context, daysBack: Int? = 0) {
+    fun startManualSync(context: Context, daysBack: Int? = 0, runInBackground: Boolean = true) {
         val appCtx = context.applicationContext ?: context
         synchronized(stateLock) {
             val previousJob = activeSyncJob
             val sessionId = syncSessionId.incrementAndGet()
-            _isManualSyncDialogVisible.value = true
+            _isManualSyncDialogVisible.value = !runInBackground
             updateSessionState(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "데이터 수집 및 분석 준비 중...",
+                    stage = "백그라운드 고속 데이터 수집 및 분석 준비 중...",
                     isDone = false
                 )
             )
@@ -247,7 +248,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "$periodDesc 신규 결제 문자 수집 및 분석 중...",
+                    stage = "$periodDesc 결제 문자(SMS/MMS/RCS) 병렬 스캔 중...",
                     syncedTxCount = 0,
                     syncedPhotoCount = 0,
                     syncedGolfCount = 0,
@@ -255,29 +256,47 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 )
             )
 
-            // 2. 문자 스캔 및 거래/주유 내역 동기화 (최대 30초 타임아웃 방어)
+            // 2. 문자 스캔 및 거래/주유 내역 동기화 (병렬 고속 스캔)
             val sinceSmsMillis = if (useIncremental) syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis() else null
             val savedTransactions = mutableListOf<com.autologue.app.domain.model.Transaction>()
-            withTimeoutOrNull(30_000L) {
+            val smsTimeoutMs = if (daysBack == null && !useIncremental) 60_000L else 30_000L
+            withTimeoutOrNull(smsTimeoutMs) {
                 val smsDaysBack = when {
                     useIncremental -> null
                     daysBack == null -> null
                     else -> maxOf(daysBack, 365)
                 }
-                val smsLimit = if (useIncremental) 1000 else 5000
+                val smsLimit = when {
+                    useIncremental -> 1000
+                    daysBack == null -> 10000
+                    else -> 5000
+                }
                 val transactions = importer.scanHistoricalSms(
                     context = context,
                     daysBack = smsDaysBack,
                     limit = smsLimit,
                     sinceTimestampMillis = sinceSmsMillis
                 )
-                for (tx in transactions) {
+                for ((idx, tx) in transactions.withIndex()) {
                     runCatching {
                         val txId = processTransactionUseCase(tx)
                         if (txId > 0L) {
                             savedTransactions.add(tx)
                             txCount++
                         }
+                    }
+                    if ((idx + 1) % 25 == 0 || (idx + 1) == transactions.size) {
+                        updateSessionState(
+                            sessionId,
+                            SyncProgress(
+                                isRunning = true,
+                                stage = "$periodDesc 결제 내역 반영 중... (${idx + 1}/${transactions.size}건 · 신규 ${txCount}건)",
+                                syncedTxCount = txCount,
+                                syncedPhotoCount = 0,
+                                syncedGolfCount = 0,
+                                isDone = false
+                            )
+                        )
                     }
                 }
                 if (savedTransactions.isNotEmpty() || !useIncremental) {
@@ -300,7 +319,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "$periodDesc 신규 갤러리 사진 및 위치 분석 중...",
+                    stage = "$periodDesc 갤러리 사진 및 위치 병렬 분석 중...",
                     syncedTxCount = txCount,
                     syncedPhotoCount = 0,
                     syncedGolfCount = 0,
@@ -308,24 +327,48 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 )
             )
 
-            // 3. 갤러리 사진 및 위치 스캔 (최대 25초 타임아웃 방어)
+            // 3. 갤러리 사진 및 위치 스캔 (6채널 병렬 + 영구 위치 캐시 연동)
             val sincePhotoMillis = if (useIncremental) syncCheckpointPreferences.getLastPhotoSyncCompletedAtMillis() else null
-            val photos = withTimeoutOrNull(25_000L) {
+            val photoLimit = when {
+                useIncremental -> 200
+                daysBack == null -> 1500
+                daysBack >= 60 -> 600
+                else -> 300
+            }
+            val photoTimeoutMs = if (daysBack == null && !useIncremental) 90_000L else 35_000L
+            val photos = withTimeoutOrNull(photoTimeoutMs) {
                 importer.scanHistoricalPhotos(
                     context = context,
                     daysBack = if (useIncremental) null else daysBack,
-                    limit = 100,
+                    limit = photoLimit,
                     sinceTimestampMillis = sincePhotoMillis
-                )
+                ) { cur, tot ->
+                    updateSessionState(
+                        sessionId,
+                        SyncProgress(
+                            isRunning = true,
+                            stage = "$periodDesc 갤러리 사진·위치 병렬 분석 중... (${cur}/${tot}장)",
+                            syncedTxCount = txCount,
+                            syncedPhotoCount = cur,
+                            syncedGolfCount = 0,
+                            isDone = false
+                        )
+                    )
+                }
             } ?: emptyList()
             photoCount = photos.size
             syncCheckpointPreferences.recordPhotoSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
 
-            // 4. 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지
+            // 4. 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지 (3채널 병렬 지문 OCR + 영구 캐시)
             val sinceGolfMillis = if (useIncremental) syncCheckpointPreferences.getLastGolfSyncCompletedAtMillis() else null
-            val candidateLimit = if (useIncremental) 100 else if (!isManual && daysBack != null && daysBack <= 7) 60 else 200
+            val candidateLimit = when {
+                useIncremental -> 150
+                !isManual && daysBack != null && daysBack <= 7 -> 60
+                daysBack == null -> 600
+                else -> 300
+            }
             val candidateDaysBack = if (useIncremental) null else if (!isManual && daysBack != null && daysBack <= 7) 14 else daysBack
-            val golfCandidates = withTimeoutOrNull(10_000L) {
+            val golfCandidates = withTimeoutOrNull(15_000L) {
                 importer.scanHistoricalGolfCandidates(
                     context = context,
                     daysBack = candidateDaysBack,
@@ -339,24 +382,28 @@ class SyncHistoricalDataUseCase @Inject constructor(
                     sessionId,
                     SyncProgress(
                         isRunning = true,
-                        stage = "$periodDesc 갤러리 사진 OCR 스캔 준비 중 (${golfCandidates.size}장)...",
+                        stage = "$periodDesc 갤러리 골프 OCR 병렬 스캔 시작 (${golfCandidates.size}장)...",
                         syncedTxCount = txCount,
                         syncedPhotoCount = photoCount,
                         syncedGolfCount = 0,
                         isDone = false
                     )
                 )
-                val ocrTimeoutMs = if (isManual) 60_000L else 35_000L
+                val ocrTimeoutMs = when {
+                    daysBack == null && !useIncremental -> 180_000L
+                    isManual -> 90_000L
+                    else -> 35_000L
+                }
                 golfSyncedCount = withTimeoutOrNull(ocrTimeoutMs) {
                     runCatching {
                         autoProcessGolfMediaUseCase.processBatchCandidates(golfCandidates) { current, total, foundCount ->
-                            if (current == 1 || current % 2 == 0 || current == total || foundCount > 0) {
+                            if (current == 1 || current % 3 == 0 || current == total || foundCount > 0) {
                                 val foundMsg = if (foundCount > 0) " (⛳ 골프 ${foundCount}건 발견)" else ""
                                 updateSessionState(
                                     sessionId,
                                     SyncProgress(
                                         isRunning = true,
-                                        stage = "갤러리 사진 OCR 분석 중... (${current}/${total}장$foundMsg)",
+                                        stage = "갤러리 골프 OCR 병렬 분석 중... (${current}/${total}장$foundMsg)",
                                         syncedTxCount = txCount,
                                         syncedPhotoCount = photoCount,
                                         syncedGolfCount = foundCount,
@@ -387,8 +434,9 @@ class SyncHistoricalDataUseCase @Inject constructor(
             }
             syncCheckpointPreferences.recordGolfSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
 
-            // 5. 통합 다이어리 생성 및 주행 기록 동기화 (최대 25초 타임아웃 방어)
-            withTimeoutOrNull(25_000L) {
+            // 5. 통합 다이어리 생성 및 주행 기록 동기화
+            val diaryTimeoutMs = if (daysBack == null && !useIncremental) 90_000L else 35_000L
+            withTimeoutOrNull(diaryTimeoutMs) {
                 val allGolfRounds = runCatching {
                     golfRepository.getAllGolfRoundsList()
                 }.getOrDefault(emptyList())
@@ -419,7 +467,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                         val fullDayPhotos = (photos + importer.scanHistoricalPhotos(
                             context = context,
                             daysBack = null,
-                            limit = 100,
+                            limit = 200,
                             sinceTimestampMillis = (minAffectedStartMillis - 1L).coerceAtLeast(1L)
                         )).distinctBy { it.uri }
 
@@ -460,7 +508,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                         insertedEntriesCount++
                     }
 
-                    if ((idx + 1) % 2 == 0 || (idx + 1) == totalEntries) {
+                    if ((idx + 1) % 3 == 0 || (idx + 1) == totalEntries) {
                         updateSessionState(
                             sessionId,
                             SyncProgress(

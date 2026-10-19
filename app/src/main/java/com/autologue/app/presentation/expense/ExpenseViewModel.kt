@@ -117,6 +117,8 @@ data class ExpenseUiState(
     val isLoading: Boolean = true,
     val loadingTitle: String = "가계부 내역 조회 중",
     val loadingMessage: String = "결제 내역과 통계를 불러오고 있습니다...",
+    val isBackgroundSmsSyncing: Boolean = false,
+    val smsSyncProgressMessage: String = "",
     // 선택적 일괄 삭제 모드 상태
     val isSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
@@ -2560,42 +2562,50 @@ class ExpenseViewModel @Inject constructor(
         }
     }
 
-    fun syncHistoricalSms(context: android.content.Context) {
-        viewModelScope.launch {
-            val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
-                context,
-                android.Manifest.permission.READ_SMS
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    private val backgroundSmsScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+    )
 
-            if (!hasPerm) {
-                _uiState.update {
-                    it.copy(
-                        syncResultMessage = "문자(SMS) 읽기 권한이 필요합니다. 설정에서 권한을 허용해주세요."
-                    )
-                }
-                return@launch
+    fun syncHistoricalSms(context: android.content.Context, fullHistory: Boolean = false) {
+        val appCtx = context.applicationContext ?: context
+        val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+            appCtx,
+            android.Manifest.permission.READ_SMS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (!hasPerm) {
+            _uiState.update {
+                it.copy(
+                    syncResultMessage = "문자(SMS) 읽기 권한이 필요합니다. 설정에서 권한을 허용해주세요."
+                )
             }
+            return
+        }
 
+        backgroundSmsScope.launch {
             val lastSmsSyncAt = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis()
-            val sinceLabel = if (lastSmsSyncAt > 0L) {
-                "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(lastSmsSyncAt)} 이후"
-            } else {
-                "최근 1년"
+            val sinceLabel = when {
+                fullHistory -> "과거 전체 기간"
+                lastSmsSyncAt > 0L -> "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(lastSmsSyncAt)} 이후"
+                else -> "과거 전체 기간"
             }
 
             _uiState.update {
                 it.copy(
-                    isLoading = true,
-                    loadingTitle = "결제 문자 증분 동기화 중",
-                    loadingMessage = "$sinceLabel 새로 수신된 결제 문자를 분석하여 가계부를 동기화하고 있습니다..."
+                    isBackgroundSmsSyncing = true,
+                    smsSyncProgressMessage = "$sinceLabel 결제 문자(SMS/MMS/RCS) 병렬 스캔 중..."
                 )
             }
 
-            val msg = withContext(Dispatchers.IO) {
+            val msg = runCatching {
                 runCatching { transactionRepository.cleanDuplicates() }
 
-                var effectiveSinceMillis = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
-                if (effectiveSinceMillis == null) {
+                var effectiveSinceMillis = if (fullHistory) {
+                    null
+                } else {
+                    syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
+                }
+                if (!fullHistory && effectiveSinceMillis == null) {
                     val existingTxs = runCatching { transactionRepository.getAllTransactionsFlow().first() }.getOrDefault(emptyList())
                     val maxExistingMillis = existingTxs.maxOfOrNull {
                         it.timestamp.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -2607,13 +2617,14 @@ class ExpenseViewModel @Inject constructor(
                 }
 
                 val scanResult = importer.scanHistoricalSmsDetailed(
-                    context = context,
-                    daysBack = 365,
-                    limit = 5000,
+                    context = appCtx,
+                    daysBack = if (fullHistory) null else 365,
+                    limit = if (fullHistory) 10000 else 5000,
                     sinceTimestampMillis = effectiveSinceMillis
                 )
                 var newCount = 0
-                for (tx in scanResult.transactions) {
+                val totalTxs = scanResult.transactions.size
+                for ((idx, tx) in scanResult.transactions.withIndex()) {
                     if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
                     if (tx.paymentMethod == PaymentMethod.NAVER_PAY ||
                         com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
@@ -2625,6 +2636,13 @@ class ExpenseViewModel @Inject constructor(
                     runCatching {
                         val id = processTransactionUseCase(tx)
                         if (id > 0L) newCount++
+                    }
+                    if ((idx + 1) % 30 == 0 || (idx + 1) == totalTxs) {
+                        _uiState.update {
+                            it.copy(
+                                smsSyncProgressMessage = "$sinceLabel 결제 내역 반영 중... (${idx + 1}/${totalTxs}건 · 신규 ${newCount}건)"
+                            )
+                        }
                     }
                 }
 
@@ -2639,7 +2657,7 @@ class ExpenseViewModel @Inject constructor(
                 val totalScanned = scanResult.totalMessagesScanned
                 val effectiveSinceDesc = effectiveSinceMillis?.let {
                     "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(it)} 이후 "
-                } ?: ""
+                } ?: if (fullHistory) "전체 기간 " else ""
                 when {
                     !scanResult.isPermissionGranted ->
                         "문자(SMS) 읽기 권한이 없습니다. 스마트폰 [설정 > 애플리케이션 > LifeLog > 권한]에서 'SMS'를 허용해주세요."
@@ -2652,8 +2670,17 @@ class ExpenseViewModel @Inject constructor(
                     else ->
                         "${effectiveSinceDesc}새로 수신된 결제 문자가 없습니다."
                 }
+            }.getOrElse { e ->
+                "결제 문자 백그라운드 분석 중 오류가 발생했습니다: ${e.localizedMessage}"
             }
-            _uiState.update { it.copy(isLoading = false, syncResultMessage = msg) }
+
+            _uiState.update {
+                it.copy(
+                    isBackgroundSmsSyncing = false,
+                    smsSyncProgressMessage = "",
+                    syncResultMessage = msg
+                )
+            }
         }
     }
 }
