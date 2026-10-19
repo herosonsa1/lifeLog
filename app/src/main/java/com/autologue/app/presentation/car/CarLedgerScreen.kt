@@ -213,6 +213,36 @@ fun CarLedgerScreen(
 
     var isMoreMenuExpanded by remember { mutableStateOf(false) }
 
+    // 차계부 메인 탭 (운행·주유 기록 / 주행·유지비 통계) 및 기간별 분석 상태
+    var selectedMainTab by remember { mutableStateOf(CarLedgerPageTab.RECORDS) }
+    var carAnalyticsUnit by remember {
+        mutableStateOf(com.autologue.app.presentation.expense.AnalyticsPeriodUnit.MONTHLY)
+    }
+    var carAnalyticsPeriod by remember {
+        mutableStateOf(
+            com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                com.autologue.app.presentation.expense.AnalyticsPeriodUnit.MONTHLY,
+                java.time.LocalDate.now()
+            )
+        )
+    }
+    var carAnalyticsBasis by remember {
+        mutableStateOf(com.autologue.app.presentation.expense.AnalyticsComparisonBasis.PREVIOUS_PERIOD)
+    }
+    var carAnalyticsSubTab by remember { mutableStateOf(CarLedgerAnalyticsSubTab.OVERVIEW_INSIGHT) }
+    var hasSyncedCarInitialPeriod by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.logs.size) {
+        if (!hasSyncedCarInitialPeriod && uiState.logs.isNotEmpty()) {
+            val latestDate = uiState.logs.maxOf { it.timestamp.toLocalDate() }
+            carAnalyticsPeriod = com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                carAnalyticsUnit,
+                latestDate
+            )
+            hasSyncedCarInitialPeriod = true
+        }
+    }
+
     val triggerSmsSync = {
         val hasPerm = ContextCompat.checkSelfPermission(
             context,
@@ -454,25 +484,111 @@ fun CarLedgerScreen(
             ) {
                 // 다중 차량 (2대) 선택 탭 바
                 item {
-                VehicleSelectorBar(
-                    vehicles = uiState.vehicles,
-                    selectedVehicleId = uiState.selectedVehicleId,
-                    onSelectVehicle = { viewModel.selectVehicle(it) },
-                    onManageVehicles = { viewModel.openVehicleManageDialog() }
-                )
-                HairlineDivider()
-            }
+                    VehicleSelectorBar(
+                        vehicles = uiState.vehicles,
+                        selectedVehicleId = uiState.selectedVehicleId,
+                        onSelectVehicle = { viewModel.selectVehicle(it) },
+                        onManageVehicles = { viewModel.openVehicleManageDialog() }
+                    )
+                    HairlineDivider()
+                }
 
-            // Level 1: Natural Metrics Grid
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
+                // 차계부 메인 탭 바: [운행 · 주유 기록] | [주행 · 유지비 통계]
+                item {
+                    Surface(
+                        color = Slate50,
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Slate200),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            CarLedgerPageTab.values().forEach { tab ->
+                                val isSelected = selectedMainTab == tab
+                                Surface(
+                                    onClick = { selectedMainTab = tab },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Transparent,
+                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder) else null,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = tab.label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) MenuColors.carLedger else Slate600
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    HairlineDivider()
+                }
+
+                if (selectedMainTab == CarLedgerPageTab.STATISTICS) {
+                    item {
+                        val carReport = remember(
+                            uiState.logs,
+                            carAnalyticsUnit,
+                            carAnalyticsPeriod,
+                            carAnalyticsBasis
+                        ) {
+                            CarLedgerAnalyticsEngine.buildReport(
+                                logs = uiState.logs,
+                                unit = carAnalyticsUnit,
+                                targetPeriod = carAnalyticsPeriod,
+                                requestedBasis = carAnalyticsBasis
+                            )
+                        }
+
+                        CarLedgerAnalyticsSection(
+                            report = carReport,
+                            selectedSubTab = carAnalyticsSubTab,
+                            onSelectSubTab = { carAnalyticsSubTab = it },
+                            onSelectPeriodUnit = { newUnit ->
+                                carAnalyticsUnit = newUnit
+                                val anchorDate = uiState.logs.maxOfOrNull { it.timestamp.toLocalDate() }
+                                    ?: java.time.LocalDate.now()
+                                carAnalyticsPeriod = com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                                    newUnit,
+                                    anchorDate
+                                )
+                            },
+                            onPreviousPeriod = {
+                                carAnalyticsPeriod = carAnalyticsPeriod.previousSequential()
+                            },
+                            onNextPeriod = {
+                                carAnalyticsPeriod = carAnalyticsPeriod.nextSequential()
+                            },
+                            onSelectComparisonBasis = { carAnalyticsBasis = it },
+                            onJumpToLogTabWithFilter = { mode ->
+                                viewModel.setLogFilterMode(mode)
+                                selectedMainTab = CarLedgerPageTab.RECORDS
+                            }
+                        )
+                    }
+                } else {
+                    // Level 1: Natural Metrics Grid
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("평균 연비", style = AppTypography.caption)
                             Spacer(modifier = Modifier.width(4.dp))
@@ -930,6 +1046,7 @@ fun CarLedgerScreen(
                     )
                     HairlineDivider()
                 }
+            }
             }
         }
 

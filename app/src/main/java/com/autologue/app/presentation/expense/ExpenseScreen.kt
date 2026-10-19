@@ -88,11 +88,12 @@ private val MODAL_DATE_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy.MM.dd(E) HH:mm", Locale.KOREA)
 
 /**
- * 가계부 상단 서브 페이지 구분 (결제 내역 전용 뷰 vs 소비 통계 리포트 전용 페이지)
+ * 가계부 상단 서브 페이지 구분 (결제 내역 vs 구성비 통계 vs 기간별 증감 비교·인사이트)
  */
 private enum class ExpensePageTab {
-    TRANSACTIONS, // 결제 내역 조회 및 빠른 관리 (기본)
-    STATISTICS    // 원형 그래프 + 카테고리별/사용자별 심층 소비 통계 리포트
+    TRANSACTIONS,      // 결제 내역 조회 및 빠른 관리 (기본)
+    STATISTICS,        // 원형 그래프 + 카테고리별/사용자별 구성비 통계
+    PERIOD_COMPARISON  // 월간·분기별·반기별·연간 증감 비교 및 최대 변동 인사이트
 }
 
 /**
@@ -147,7 +148,7 @@ fun ExpenseScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
-    // 2026.10 UX: [결제 내역] 페이지와 [소비 통계 리포트] 페이지 분리 + 접었다 폈다 하는 아코디언 상태
+    // 2026.10 UX: [결제 내역] · [구성비 통계] · [기간별 비교·인사이트] 3탭 분리 + 아코디언 상태
     var activePageTab by remember { mutableStateOf(ExpensePageTab.TRANSACTIONS) }
     var isToolsMenuExpanded by remember { mutableStateOf(false) }
     var isQuickFilterExpanded by remember { mutableStateOf(false) }
@@ -159,6 +160,20 @@ fun ExpenseScreen(
     var showAllCategoryRanks by remember { mutableStateOf(false) }
     var isUserRankSectionExpanded by remember { mutableStateOf(true) }
     var showAllUserRanks by remember { mutableStateOf(false) }
+
+    // 기간별 증감 비교·인사이트 전용 탭 상태
+    var analyticsUnit by remember { mutableStateOf(AnalyticsPeriodUnit.MONTHLY) }
+    var analyticsPeriod by remember(uiState.selectedYearMonth) {
+        mutableStateOf(
+            PeriodSpec.fromDate(
+                unit = analyticsUnit,
+                date = uiState.selectedYearMonth.atDay(15)
+            )
+        )
+    }
+    var analyticsBasis by remember { mutableStateOf(AnalyticsComparisonBasis.PREVIOUS_PERIOD) }
+    var analyticsSubTab by remember { mutableStateOf(ExpenseAnalyticsSubTab.OVERVIEW_INSIGHT) }
+    var analyticsSortMode by remember { mutableStateOf(ExpenseDeltaSortMode.BY_CHANGE_MAGNITUDE) }
 
     val filteredTransactions = remember(
         uiState.transactions,
@@ -719,7 +734,7 @@ fun ExpenseScreen(
                         }
                     }
 
-                    // 2026.10 트렌드 세그먼트 탭: [결제 내역] vs [소비 통계 리포트 (원형 그래프)]
+                    // 2026.10 트렌드 3분할 세그먼트 탭: [결제 내역] vs [구성비 통계] vs [기간별 비교·인사이트]
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -732,6 +747,7 @@ fun ExpenseScreen(
                     ) {
                         val isTxTab = activePageTab == ExpensePageTab.TRANSACTIONS
                         val isStatTab = activePageTab == ExpensePageTab.STATISTICS
+                        val isCompTab = activePageTab == ExpensePageTab.PERIOD_COMPARISON
 
                         Box(
                             modifier = Modifier
@@ -747,10 +763,11 @@ fun ExpenseScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "결제 내역 (${filteredTransactions.size}건)",
-                                fontSize = 12.5.sp,
+                                text = "결제 내역 (${filteredTransactions.size})",
+                                fontSize = 11.5.sp,
                                 fontWeight = if (isTxTab) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isTxTab) Slate900 else Slate600
+                                color = if (isTxTab) Slate900 else Slate600,
+                                maxLines = 1
                             )
                         }
 
@@ -767,30 +784,42 @@ fun ExpenseScreen(
                                 .clickable { activePageTab = ExpensePageTab.STATISTICS },
                             contentAlignment = Alignment.Center
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PieChart,
-                                    contentDescription = null,
-                                    tint = if (isStatTab) AppColors.primary else Slate500,
-                                    modifier = Modifier.size(14.dp)
+                            Text(
+                                text = "구성비 통계",
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isStatTab) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isStatTab) AppColors.primary else Slate600,
+                                maxLines = 1
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1.15f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isCompTab) PureWhite else Color.Transparent)
+                                .then(
+                                    if (isCompTab) Modifier.border(1.dp, Slate200, RoundedCornerShape(8.dp))
+                                    else Modifier
                                 )
-                                Text(
-                                    text = "소비 통계 리포트",
-                                    fontSize = 12.5.sp,
-                                    fontWeight = if (isStatTab) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isStatTab) AppColors.primary else Slate600
-                                )
-                            }
+                                .clickable { activePageTab = ExpensePageTab.PERIOD_COMPARISON },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "기간별 비교·인사이트",
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isCompTab) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isCompTab) AppColors.primary else Slate600,
+                                maxLines = 1
+                            )
                         }
                     }
                 }
                 HairlineDivider()
 
                 // =========================================================================
-                // 본문 영역: 선택된 탭([결제 내역] 또는 [소비 통계 리포트])에 따라 독립 렌더링
+                // 본문 영역: 선택된 탭([결제 내역] · [구성비 통계] · [기간별 비교·인사이트])에 따라 독립 렌더링
                 // =========================================================================
                 LazyColumn(
                     modifier = Modifier
@@ -841,26 +870,20 @@ fun ExpenseScreen(
                                         }
                                     }
 
-                                    // 원형 그래프 및 비율 통계 페이지로 이동하는 원클릭 버튼
+                                    // 기간별 증감 비교 및 인사이트 페이지로 이동하는 원클릭 버튼
                                     Row(
                                         modifier = Modifier
                                             .height(34.dp)
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(Color(0xFFEFF6FF))
                                             .border(1.dp, Color(0xFFBFDBFE), RoundedCornerShape(8.dp))
-                                            .clickable { activePageTab = ExpensePageTab.STATISTICS }
+                                            .clickable { activePageTab = ExpensePageTab.PERIOD_COMPARISON }
                                             .padding(horizontal = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.PieChart,
-                                            contentDescription = "소비 비율 통계",
-                                            tint = Color(0xFF1D4ED8),
-                                            modifier = Modifier.size(14.dp)
-                                        )
                                         Text(
-                                            text = "비율·통계 보기 >",
+                                            text = "전월·전년 비교 >",
                                             fontSize = 11.5.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF1D4ED8)
@@ -1386,9 +1409,9 @@ fun ExpenseScreen(
                                 HairlineDivider()
                             }
                         }
-                    } else {
+                    } else if (activePageTab == ExpensePageTab.STATISTICS) {
                         // -----------------------------------------------------------------
-                        // [탭 2: 소비 통계 리포트 별도 페이지] - 원형(도넛) 그래프 + 접이식 심층 통계
+                        // [탭 2: 구성비 통계 별도 페이지] - 원형(도넛) 그래프 + 접이식 심층 통계
                         // -----------------------------------------------------------------
                         item(key = "stat_donut_card") {
                             val donutSlices = remember(donutDimension, categoryStatItems, userStatItems) {
@@ -1456,6 +1479,36 @@ fun ExpenseScreen(
                                     .padding(horizontal = Spacing.xl, vertical = Spacing.md),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
+                                // 기간별(월간·분기·반기·연간) 증감 비교 및 인사이트 바로가기 카드
+                                Surface(
+                                    onClick = { activePageTab = ExpensePageTab.PERIOD_COMPARISON },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color(0xFFEFF6FF),
+                                    border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "월간·분기·반기·연간 소비 증감(%) 비교 및 인사이트 도표",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF1E40AF)
+                                        )
+                                        Text(
+                                            text = "비교 보기 >",
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF1D4ED8)
+                                        )
+                                    }
+                                }
+
                                 // 1. 원형(도넛) 그래프 카드
                                 ExpenseDonutChartCard(
                                     dateTitle = uiState.dateDisplayTitle,
@@ -2041,6 +2094,84 @@ fun ExpenseScreen(
                                     }
                                 }
                             }
+                        }
+                    } else {
+                        // -----------------------------------------------------------------
+                        // [탭 3: 기간별 비교·인사이트 전용 페이지] - 월간·분기별·반기별·연간 비교 및 최대 변동 인사이트
+                        // -----------------------------------------------------------------
+                        item(key = "period_comparison_section") {
+                            val sourceAllTxs = if (uiState.dedupedAllTransactions.isNotEmpty()) {
+                                uiState.dedupedAllTransactions
+                            } else {
+                                uiState.allTransactions
+                            }
+                            val userNameByTxId = remember(uiState.userClassByTxId) {
+                                uiState.userClassByTxId.mapValues { it.value.name }
+                            }
+                            val comparisonReport = remember(
+                                sourceAllTxs,
+                                analyticsUnit,
+                                analyticsPeriod,
+                                analyticsBasis,
+                                uiState.customCategoryByTxId,
+                                userNameByTxId,
+                                uiState.corporateByTxId,
+                                uiState.recurringTransactionIds,
+                                uiState.selectedUserClassification,
+                                uiState.selectedCorporateFilter,
+                                uiState.isRecurringFilterOnly,
+                                uiState.metaVersion
+                            ) {
+                                ExpenseAnalyticsEngine.buildReport(
+                                    allTransactions = sourceAllTxs,
+                                    unit = analyticsUnit,
+                                    targetPeriod = analyticsPeriod,
+                                    requestedBasis = analyticsBasis,
+                                    customCategoryByTxId = uiState.customCategoryByTxId,
+                                    userClassByTxId = userNameByTxId,
+                                    corporateByTxId = uiState.corporateByTxId,
+                                    recurringTransactionIds = uiState.recurringTransactionIds,
+                                    selectedUserFilter = uiState.selectedUserClassification,
+                                    selectedCorporateFilter = uiState.selectedCorporateFilter,
+                                    isRecurringFilterOnly = uiState.isRecurringFilterOnly,
+                                    getBuiltInCategoryName = { cat ->
+                                        viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                                    }
+                                )
+                            }
+
+                            ExpensePeriodComparisonSection(
+                                report = comparisonReport,
+                                selectedSubTab = analyticsSubTab,
+                                onSelectSubTab = { analyticsSubTab = it },
+                                selectedSortMode = analyticsSortMode,
+                                onSelectSortMode = { analyticsSortMode = it },
+                                onSelectPeriodUnit = { newUnit ->
+                                    analyticsUnit = newUnit
+                                    analyticsPeriod = PeriodSpec.fromDate(
+                                        unit = newUnit,
+                                        date = analyticsPeriod.startDate
+                                    )
+                                },
+                                onPreviousPeriod = {
+                                    analyticsPeriod = analyticsPeriod.previousSequential()
+                                },
+                                onNextPeriod = {
+                                    analyticsPeriod = analyticsPeriod.nextSequential()
+                                },
+                                onSelectComparisonBasis = { newBasis ->
+                                    analyticsBasis = newBasis
+                                },
+                                onNavigateToCategoryTransactions = { catName, periodSpec ->
+                                    if (periodSpec.unit == AnalyticsPeriodUnit.MONTHLY) {
+                                        viewModel.selectYearMonth(YearMonth.of(periodSpec.year, periodSpec.subIndex))
+                                    } else {
+                                        viewModel.setCustomDateRange(periodSpec.startDate, periodSpec.endDate)
+                                    }
+                                    viewModel.toggleEffectiveCategoryByName(catName)
+                                    activePageTab = ExpensePageTab.TRANSACTIONS
+                                }
+                            )
                         }
                     }
                 }

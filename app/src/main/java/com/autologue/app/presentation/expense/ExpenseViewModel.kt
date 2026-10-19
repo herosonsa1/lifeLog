@@ -74,6 +74,7 @@ data class UserClassificationStatItem(
 
 data class ExpenseUiState(
     val allTransactions: List<Transaction> = emptyList(),
+    val dedupedAllTransactions: List<Transaction> = emptyList(),
     val transactions: List<Transaction> = emptyList(),
     val selectedCategory: ExpenseCategory? = null,
     val selectedCustomCategoryName: String? = null,
@@ -803,6 +804,7 @@ class ExpenseViewModel @Inject constructor(
         return recomputeCurrentMonthStats(
             state.copy(
                 selectedYearMonth = state.selectedYearMonth,
+                dedupedAllTransactions = dedupedAll,
                 transactions = filtered,
                 recurringTransactionIds = recurringIds,
                 userClassByTxId = uClassMap,
@@ -848,6 +850,7 @@ class ExpenseViewModel @Inject constructor(
                 } else {
                     latest.copy(
                         selectedYearMonth = computed.selectedYearMonth,
+                        dedupedAllTransactions = computed.dedupedAllTransactions,
                         transactions = computed.transactions,
                         totalExpense = computed.totalExpense,
                         totalIncome = computed.totalIncome,
