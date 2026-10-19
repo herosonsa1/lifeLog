@@ -220,6 +220,62 @@ fun resolveEffectiveRouteEndpoints(steps: List<RouteStep>): Pair<RouteStep, Rout
     return startStep to furthestStep
 }
 
+/**
+ * GPS 좌표가 누락(null 또는 0.0)된 주행/방문 거점이 있더라도
+ * 장소명·주소·제목의 한국 지역 키워드를 기반으로 좌표를 보강하여 지도에서 거점이 누락되지 않도록 합니다.
+ */
+fun ensureStepCoordinates(step: RouteStep): RouteStep {
+    val lat = step.latitude
+    val lng = step.longitude
+    if (lat != null && lng != null && (lat != 0.0 || lng != 0.0)) {
+        return step
+    }
+
+    val text = listOfNotNull(step.locationName, step.address, step.title).joinToString(" ")
+    val inferred: Pair<Double, Double>? = when {
+        text.contains("수서") || text.contains("더샵") || text.contains("광평로") || text.contains("자곡") || text.contains("세곡") || text.contains("집") -> 37.4847 to 127.0945
+        text.contains("영등포") || text.contains("문래") || text.contains("당산") -> 37.5172 to 126.9068
+        text.contains("여의도") -> 37.5219 to 126.9245
+        text.contains("위례") || text.contains("학암") -> 37.4785 to 127.1465
+        text.contains("감일") || text.contains("하남") || text.contains("미사") -> 37.5393 to 127.2149
+        text.contains("송파") || text.contains("잠실") || text.contains("문정") || text.contains("가락") -> 37.5145 to 127.1060
+        text.contains("강남") || text.contains("역삼") || text.contains("삼성") || text.contains("테헤란") || text.contains("청담") || text.contains("논현") || text.contains("대치") || text.contains("개포") || text.contains("일원") -> 37.5085 to 127.0550
+        text.contains("서초") || text.contains("양재") || text.contains("반포") || text.contains("방배") -> 37.4837 to 127.0324
+        text.contains("강동") || text.contains("천호") || text.contains("고덕") -> 37.5301 to 127.1238
+        text.contains("성남") || text.contains("분당") || text.contains("판교") || text.contains("정자") || text.contains("수정구") || text.contains("중원구") -> 37.4020 to 127.1086
+        text.contains("용인") || text.contains("수지") || text.contains("기흥") || text.contains("처인") -> 37.2747 to 127.1320
+        text.contains("수원") || text.contains("광교") || text.contains("영통") -> 37.2636 to 127.0286
+        text.contains("마포") || text.contains("상암") || text.contains("홍대") || text.contains("합정") -> 37.5663 to 126.9019
+        text.contains("용산") || text.contains("이태원") || text.contains("한남") -> 37.5326 to 126.9900
+        text.contains("성동") || text.contains("성수") || text.contains("왕십리") -> 37.5446 to 127.0560
+        text.contains("광진") || text.contains("건대") || text.contains("구의") -> 37.5385 to 127.0823
+        text.contains("종로") || text.contains("광화문") || text.contains("중구") || text.contains("명동") || text.contains("을지로") -> 37.5665 to 126.9780
+        text.contains("강서") || text.contains("마곡") || text.contains("김포공항") -> 37.5509 to 126.8495
+        text.contains("양천") || text.contains("목동") -> 37.5169 to 126.8664
+        text.contains("구로") || text.contains("가산") || text.contains("금천") || text.contains("신도림") -> 37.4954 to 126.8874
+        text.contains("동작") || text.contains("사당") || text.contains("관악") -> 37.4950 to 126.9530
+        text.contains("과천") -> 37.4292 to 126.9876
+        text.contains("안양") || text.contains("평촌") || text.contains("군포") || text.contains("의왕") -> 37.3943 to 126.9568
+        text.contains("광명") -> 37.4786 to 126.8646
+        text.contains("부천") -> 37.5034 to 126.7660
+        text.contains("고양") || text.contains("일산") -> 37.6584 to 126.8320
+        text.contains("인천") || text.contains("송도") || text.contains("청라") || text.contains("영종") -> 37.4563 to 126.7052
+        text.contains("화성") || text.contains("동탄") -> 37.2006 to 127.0970
+        text.contains("여주") -> 37.2983 to 127.6374
+        text.contains("이천") -> 37.2720 to 127.4350
+        text.contains("광주") && !text.contains("광역시") -> 37.4095 to 127.2550
+        text.contains("춘천") || text.contains("홍천") -> 37.8813 to 127.7298
+        text.contains("원주") -> 37.3422 to 127.9202
+        else -> null
+    }
+
+    return if (inferred != null) {
+        step.copy(latitude = inferred.first, longitude = inferred.second)
+    } else {
+        step
+    }
+}
+
 @Composable
 fun GoogleMapRouteView(
     routeSteps: List<RouteStep>,
@@ -240,7 +296,9 @@ fun GoogleMapRouteView(
         }
     }
     val validCoordinateSteps = remember(nonTransactionSteps) {
-        nonTransactionSteps.filter { it.latitude != null && it.longitude != null }
+        nonTransactionSteps
+            .map { ensureStepCoordinates(it) }
+            .filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
     }
 
     var mapFocusStep by remember { mutableStateOf<RouteStep?>(selectedStep) }
@@ -248,7 +306,6 @@ fun GoogleMapRouteView(
     // 기본값: 실제 구글 한국지도 타일 + 시·군·구 지역 구분선 + 실제 도로 경로가 나오는 상세 한국 지도 모드
     var isOnlineMapMode by remember { mutableStateOf(true) }
     var isMapExpanded by remember { mutableStateOf(false) }
-    var isWebViewLoading by remember { mutableStateOf(false) }
 
     val tripGroups = remember(validCoordinateSteps) { segmentRouteIntoTrips(validCoordinateSteps) }
     val selectedTripGroup = remember(tripGroups, selectedTripGroupId) {
@@ -421,7 +478,7 @@ fun GoogleMapRouteView(
 
         HairlineDivider()
 
-        // 2. Interactive Korea Map Area (기본 340dp / 확대 시 480dp, 구글 한국 지도 타일 + 시·군·구 행정경계 + 실제 도로 경로)
+        // 2. Interactive Korea Map Area (기본 340dp / 확대 시 480dp, 100% 네이티브 Compose 슬리피 타일 + 시·군·구 행정경계 + 실제 도로 경로 + 번호 지점 핀)
         val mapHeight = if (isMapExpanded) 480.dp else 340.dp
         Box(
             modifier = Modifier
@@ -431,89 +488,16 @@ fun GoogleMapRouteView(
                 .background(Color(0xFFEEF2F6))
         ) {
             if (bottomDisplaySteps.isNotEmpty()) {
-                if (!isOnlineMapMode) {
-                    // 오프라인 행정구역 벡터 맵 (자동 확대 + 시·군·구 경계 다각형 + 한강/탄천/고속도로)
-                    MidKoreaStaticMapView(
-                        steps = bottomDisplaySteps,
-                        focusedStep = mapFocusStep,
-                        onStepClick = { step ->
-                            mapFocusStep = step
-                            onStepSelected(step)
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    // 기본 모드: Google API Key 없이 동작하는 고정밀 한국 상세 지도 (mt0~3.google.com 한글 타일 + 시·군·구 경계선 + OSRM 실제 도로 경로)
-                    val targetMapHtml = remember(bottomDisplaySteps, mapFocusStep) {
-                        buildInteractiveHtmlMap(bottomDisplaySteps, mapFocusStep)
-                    }
-
-                    LaunchedEffect(targetMapHtml) {
-                        isWebViewLoading = true
-                        delay(550L)
-                        isWebViewLoading = false
-                    }
-
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                @SuppressLint("SetJavaScriptEnabled")
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.databaseEnabled = true
-                                settings.loadWithOverviewMode = true
-                                settings.useWideViewPort = true
-                                settings.setSupportZoom(true)
-                                settings.builtInZoomControls = true
-                                settings.displayZoomControls = false
-                                settings.cacheMode = WebSettings.LOAD_DEFAULT
-                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-
-                                webViewClient = object : WebViewClient() {
-                                    @Deprecated("Deprecated in Java")
-                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = false
-                                }
-
-                                tag = targetMapHtml
-                                loadDataWithBaseURL("https://mt1.google.com", targetMapHtml, "text/html", "UTF-8", null)
-                            }
-                        },
-                        update = { webView ->
-                            if (webView.tag != targetMapHtml) {
-                                webView.tag = targetMapHtml
-                                webView.loadDataWithBaseURL("https://mt1.google.com", targetMapHtml, "text/html", "UTF-8", null)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-
-                    if (isWebViewLoading) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Surface(
-                                shape = AppShapes.pill,
-                                color = Color(0xFF0F172A).copy(alpha = 0.88f),
-                                border = BorderStroke(1.dp, Color(0xFF334155)),
-                                shadowElevation = 6.dp
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(13.dp),
-                                        strokeWidth = 2.dp,
-                                        color = Color(0xFF60A5FA)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("상세 한국 지도 불러오는 중...", fontSize = 11.sp, color = Color(0xFFE2E8F0))
-                                }
-                            }
-                        }
-                    }
-                }
+                MidKoreaStaticMapView(
+                    steps = bottomDisplaySteps,
+                    focusedStep = mapFocusStep,
+                    onStepClick = { step ->
+                        mapFocusStep = step
+                        onStepSelected(step)
+                    },
+                    useRealMapTiles = isOnlineMapMode,
+                    modifier = Modifier.fillMaxSize()
+                )
 
                 // 좌측 상단: 현재 선택된 트립/지점 상태 배지 + 지도 크기 확대/축소 버튼
                 Row(

@@ -1,11 +1,14 @@
 package com.autologue.app.presentation.diary.map
 
+import android.graphics.BitmapFactory
+import android.util.LruCache
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -21,7 +24,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -31,23 +33,29 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
-import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.max
-import kotlin.math.min
+import com.autologue.app.presentation.theme.AppShapes
+import com.autologue.app.presentation.theme.PureWhite
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.*
 
 /**
  * 한국 행정구역(시·도 / 시·군·구 / 주요 동·신도시) 및 도로·수계 고정밀 지오레퍼런스 데이터
- * - Google Maps 스타일의 밝고 선명한 행정구역 구분선, 한강/탄천/중랑천 수계, 고속도로망 제공
- * - 사용자의 이동 경로(steps) 범위에 맞춰 자동으로 확대(Auto-Fit Viewport)되어 시작하며,
- *   핀치 줌 시에도 글자 크기나 선 굵기가 비정상적으로 커지지 않고 선명하게 유지됩니다.
  */
 object MidKoreaBounds {
     const val MIN_LAT = 36.00
@@ -82,7 +90,6 @@ object MidKoreaBounds {
 
     // 서울·수도권 핵심 시·군·구 행정구역 경계 폴리곤 (실제 지도처럼 지역 구분선 표시용)
     val DISTRICT_BOUNDARIES = listOf(
-        // 서울 강남·서초·송파·강동
         DistrictBoundary(
             "송파구", "SEOUL",
             listOf(37.538 to 127.080, 37.542 to 127.125, 37.495 to 127.160, 37.472 to 127.145, 37.474 to 127.110, 37.505 to 127.075)
@@ -99,7 +106,6 @@ object MidKoreaBounds {
             "서초구", "SEOUL",
             listOf(37.515 to 126.975, 37.532 to 127.015, 37.505 to 127.015, 37.472 to 127.040, 37.435 to 127.065, 37.445 to 126.985)
         ),
-        // 서울 영등포·동작·관악·구로·양천·강서·마포·용산·성동·광진·종로·중구
         DistrictBoundary(
             "영등포구", "SEOUL",
             listOf(37.550 to 126.885, 37.535 to 126.945, 37.492 to 126.925, 37.495 to 126.885)
@@ -148,8 +154,6 @@ object MidKoreaBounds {
             "은평·서대문구", "SEOUL",
             listOf(37.655 to 126.900, 37.625 to 126.975, 37.565 to 126.960, 37.580 to 126.890)
         ),
-
-        // 경기 동부·남부 핵심 (하남시, 성남 수정/중원/분당, 과천, 구리, 남양주, 광주, 수원, 용인)
         DistrictBoundary(
             "하남시", "GYEONGGI_EAST",
             listOf(37.575 to 127.175, 37.565 to 127.255, 37.475 to 127.245, 37.468 to 127.142, 37.495 to 127.160, 37.540 to 127.182)
@@ -224,7 +228,7 @@ object MidKoreaBounds {
         LandmarkAnchor("대전광역시", 36.3504, 127.3845, 1, "CHUNGCHEONG"),
         LandmarkAnchor("세종특별자치시", 36.4800, 127.2890, 1, "CHUNGCHEONG"),
 
-        // Tier 2: 주요 구·시·군 (확대 시 상세 표출)
+        // Tier 2: 주요 구·시·군
         LandmarkAnchor("송파구", 37.5145, 127.1060, 2, "METRO"),
         LandmarkAnchor("강동구", 37.5301, 127.1238, 2, "METRO"),
         LandmarkAnchor("강남구", 37.5172, 127.0473, 2, "METRO"),
@@ -253,7 +257,7 @@ object MidKoreaBounds {
         LandmarkAnchor("부천시", 37.5034, 126.7660, 2, "METRO"),
         LandmarkAnchor("김포시", 37.6152, 126.7156, 2, "METRO"),
 
-        // Tier 3: 세부 동·생활권 (확대 시 구글지도처럼 상세 동 이름 표출)
+        // Tier 3: 세부 동·생활권
         LandmarkAnchor("위례·학암동", 37.4785, 127.1465, 3, "METRO"),
         LandmarkAnchor("감일동", 37.5080, 127.1520, 3, "METRO"),
         LandmarkAnchor("미사강변", 37.5630, 127.1920, 3, "METRO"),
@@ -273,98 +277,332 @@ object MidKoreaBounds {
 }
 
 /**
- * 경로 중심 자동 확대(Auto-Fit) 및 구글지도 스타일 행정구역 경계선·수계·도로망을 제공하는 고정밀 벡터 지도 뷰
+ * 구글 한국어 지도 타일(mt0~3.google.com/vt/lyrs=m&hl=ko&gl=kr&scale=2) 및 OSRM 도로 경로 인메모리 캐시 & 로더
+ * WebView 없이 순수 Jetpack Compose Canvas 위에서 100% 네이티브로 선명한 지도를 렌더링합니다.
+ */
+private object NativeKoreaMapCache {
+    private val tileCache = object : LruCache<String, ImageBitmap>(220) {}
+    private val inFlightTiles = ConcurrentHashMap.newKeySet<String>()
+    private val routeCache = ConcurrentHashMap<String, List<Pair<Double, Double>>>()
+    private val inFlightRoutes = ConcurrentHashMap.newKeySet<String>()
+
+    fun getTile(key: String): ImageBitmap? = synchronized(tileCache) { tileCache.get(key) }
+
+    private fun putTile(key: String, bitmap: ImageBitmap) = synchronized(tileCache) {
+        tileCache.put(key, bitmap)
+    }
+
+    suspend fun fetchTileIfNeeded(
+        tileStyle: String, // "road" or "sat"
+        z: Int,
+        x: Int,
+        y: Int,
+        onLoaded: () -> Unit
+    ) {
+        val maxIndex = (1 shl z) - 1
+        if (x !in 0..maxIndex || y !in 0..maxIndex) return
+        val key = "${tileStyle}_${z}_${x}_${y}"
+        if (getTile(key) != null) return
+        if (!inFlightTiles.add(key)) return
+
+        try {
+            val bitmap = withContext(Dispatchers.IO) {
+                val serverIdx = (x + y) and 3
+                val lyrs = if (tileStyle == "sat") "y" else "m"
+                val googleUrl = "https://mt$serverIdx.google.com/vt/lyrs=$lyrs&hl=ko&gl=kr&x=$x&y=$y&z=$z&scale=2"
+                downloadImageBitmap(googleUrl)
+                    ?: if (tileStyle == "road" && z <= 19) {
+                        downloadImageBitmap("https://tile.openstreetmap.org/$z/$x/$y.png")
+                    } else null
+            }
+            if (bitmap != null) {
+                putTile(key, bitmap)
+                onLoaded()
+            }
+        } finally {
+            inFlightTiles.remove(key)
+        }
+    }
+
+    private fun downloadImageBitmap(urlStr: String): ImageBitmap? {
+        return runCatching {
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 4000
+                requestMethod = "GET"
+                setRequestProperty(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                )
+                setRequestProperty("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+                setRequestProperty("Accept-Language", "ko-KR,ko;q=0.9")
+            }
+            try {
+                if (conn.responseCode in 200..299) {
+                    conn.inputStream.use { stream ->
+                        BitmapFactory.decodeStream(stream)?.asImageBitmap()
+                    }
+                } else null
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()
+    }
+
+    fun getCachedRoute(key: String): List<Pair<Double, Double>>? = routeCache[key]
+
+    suspend fun fetchOsrmRoadRouteIfNeeded(
+        steps: List<RouteStep>,
+        onLoaded: (List<Pair<Double, Double>>) -> Unit
+    ) {
+        if (steps.size < 2) return
+        val key = steps.joinToString("|") { "%.5f,%.5f".format(it.latitude, it.longitude) }
+        routeCache[key]?.let {
+            onLoaded(it)
+            return
+        }
+        if (!inFlightRoutes.add(key)) return
+
+        try {
+            val roadCoords = withContext(Dispatchers.IO) {
+                runCatching {
+                    val coordParam = steps.joinToString(";") { "${it.longitude},${it.latitude}" }
+                    val urlStr = "https://router.project-osrm.org/route/v1/driving/$coordParam?overview=full&geometries=geojson"
+                    val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 4000
+                        readTimeout = 4000
+                        requestMethod = "GET"
+                        setRequestProperty("User-Agent", "LifeLog-Android/1.0")
+                    }
+                    try {
+                        if (conn.responseCode in 200..299) {
+                            val body = conn.inputStream.bufferedReader().use { it.readText() }
+                            val json = JSONObject(body)
+                            val routes = json.optJSONArray("routes")
+                            if (routes != null && routes.length() > 0) {
+                                val geom = routes.getJSONObject(0).optJSONObject("geometry")
+                                val coordsArr = geom?.optJSONArray("coordinates")
+                                if (coordsArr != null && coordsArr.length() > 1) {
+                                    val list = ArrayList<Pair<Double, Double>>(coordsArr.length())
+                                    for (i in 0 until coordsArr.length()) {
+                                        val pt = coordsArr.getJSONArray(i)
+                                        val lng = pt.getDouble(0)
+                                        val lat = pt.getDouble(1)
+                                        list.add(lat to lng)
+                                    }
+                                    list
+                                } else null
+                            } else null
+                        } else null
+                    } finally {
+                        conn.disconnect()
+                    }
+                }.getOrNull()
+            }
+            if (!roadCoords.isNullOrEmpty()) {
+                routeCache[key] = roadCoords
+                onLoaded(roadCoords)
+            }
+        } finally {
+            inFlightRoutes.remove(key)
+        }
+    }
+}
+
+/**
+ * 표준 Web Mercator (EPSG:3857) 투영 변환기
+ * 구글 지도 타일과 행정구역 경계선·도로 경로·마커 핀이 1픽셀의 오차도 없이 정확히 일치하도록 계산합니다.
+ */
+private object WebMercator {
+    fun lngToWorldX(lng: Double): Double = (lng + 180.0) / 360.0
+
+    fun latToWorldY(lat: Double): Double {
+        val clamped = lat.coerceIn(-85.05112878, 85.05112878)
+        val rad = Math.toRadians(clamped)
+        return (1.0 - ln(tan(rad) + 1.0 / cos(rad)) / PI) / 2.0
+    }
+
+    fun worldXToLng(worldX: Double): Double = (worldX.coerceIn(0.0, 1.0) * 360.0) - 180.0
+
+    fun worldYToLat(worldY: Double): Double {
+        val n = PI - 2.0 * PI * worldY.coerceIn(0.0, 1.0)
+        return Math.toDegrees(atan(0.5 * (exp(n) - exp(-n))))
+    }
+
+    fun toScreenOffset(
+        lat: Double,
+        lng: Double,
+        centerLat: Double,
+        centerLng: Double,
+        zoom: Float,
+        screenW: Float,
+        screenH: Float,
+        baseTilePx: Float
+    ): Offset {
+        val worldScale = baseTilePx * 2.0.pow(zoom.toDouble())
+        val cx = lngToWorldX(centerLng) * worldScale
+        val cy = latToWorldY(centerLat) * worldScale
+        val px = lngToWorldX(lng) * worldScale
+        val py = latToWorldY(lat) * worldScale
+        return Offset(
+            x = (screenW / 2.0 + (px - cx)).toFloat(),
+            y = (screenH / 2.0 + (py - cy)).toFloat()
+        )
+    }
+
+    /**
+     * 이동 경로 거점들이 지도 화면 중앙에 확대되어 한눈에 들어오도록 초기 중심점과 줌 레벨을 계산합니다.
+     */
+    fun computeAutoFitCamera(
+        steps: List<RouteStep>,
+        focusedStep: RouteStep?
+    ): Pair<Pair<Double, Double>, Float> {
+        if (focusedStep?.latitude != null && focusedStep.longitude != null) {
+            return (focusedStep.latitude to focusedStep.longitude) to 15.2f
+        }
+        if (steps.isEmpty()) {
+            return (37.5150 to 127.0400) to 11.2f
+        }
+        if (steps.size == 1) {
+            val s = steps.first()
+            return (s.latitude!! to s.longitude!!) to 15.0f
+        }
+
+        val minLat = steps.minOf { it.latitude!! }
+        val maxLat = steps.maxOf { it.latitude!! }
+        val minLng = steps.minOf { it.longitude!! }
+        val maxLng = steps.maxOf { it.longitude!! }
+
+        val centerLat = (minLat + maxLat) / 2.0
+        val centerLng = (minLng + maxLng) / 2.0
+
+        val worldSpanX = abs(lngToWorldX(maxLng) - lngToWorldX(minLng)).coerceAtLeast(1e-5)
+        val worldSpanY = abs(latToWorldY(minLat) - latToWorldY(maxLat)).coerceAtLeast(1e-5)
+
+        // 화면 폭의 약 68%(좌우 마커 캡션 여백 확보) 안에 전체 경로가 꽉 차게 들어오도록 줌 산출
+        val targetTilesW = 0.85
+        val targetTilesH = 0.72
+        val zoomX = ln(targetTilesW / worldSpanX) / ln(2.0)
+        val zoomY = ln(targetTilesH / worldSpanY) / ln(2.0)
+        val bestZoom = min(zoomX, zoomY).toFloat().coerceIn(9.8f, 15.4f)
+
+        return (centerLat to centerLng) to bestZoom
+    }
+}
+
+private data class PinPlacement(
+    val step: RouteStep,
+    val index: Int,
+    val rawPoint: Offset,
+    val displayPoint: Offset,
+    val labelAbove: Boolean,
+    val isClustered: Boolean
+)
+
+/**
+ * WebView에 의존하지 않는 100% 네이티브 Jetpack Compose 한국 상세 지도 & 행정구역 벡터 맵 뷰.
+ *
+ * - [상세 한국 지도 모드 (useRealMapTiles = true)]:
+ *   Google 한국어 고해상도 지도 타일(mt0~3.google.com/vt/lyrs=m&hl=ko&gl=kr&scale=2) + 시·군·구 지역 구분선 + OSRM 실제 도로 경로 + 번호 지점 핀을 즉시 렌더링합니다.
+ * - [행정구역 벡터 모드 (useRealMapTiles = false)]:
+ *   오프라인에서도 0ms 만에 동작하는 구글지도 스타일 행정구역 다각형 + 한강/탄천 수계 + 고속도로망 + 번호 지점 핀을 렌더링합니다.
  */
 @Composable
 fun MidKoreaStaticMapView(
     steps: List<RouteStep>,
     focusedStep: RouteStep? = null,
     onStepClick: (RouteStep) -> Unit = {},
+    useRealMapTiles: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val textMeasurer = rememberTextMeasurer()
-
-    var userZoom by remember { mutableFloatStateOf(1f) }
-    var userPan by remember { mutableStateOf(Offset.Zero) }
-    var selectedStep by remember(focusedStep) { mutableStateOf(focusedStep) }
+    val density = LocalDensity.current
+    val baseTilePx = with(density) { 256.dp.toPx() }
+    val coroutineScope = rememberCoroutineScope()
 
     val validSteps = remember(steps) {
-        steps.filter { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 }
+        steps
+            .map { ensureStepCoordinates(it) }
+            .filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
     }
 
-    // 경로나 포커스 지점이 바뀔 때 사용자 줌/팬 초기화 (자동 확대 뷰포트가 즉시 적용되도록)
+    val initialCamera = remember(validSteps, focusedStep) {
+        WebMercator.computeAutoFitCamera(validSteps, focusedStep)
+    }
+
+    var centerLat by remember { mutableDoubleStateOf(initialCamera.first.first) }
+    var centerLng by remember { mutableDoubleStateOf(initialCamera.first.second) }
+    var zoomLevel by remember { mutableFloatStateOf(initialCamera.second) }
+    var selectedStep by remember(focusedStep) { mutableStateOf(focusedStep) }
+
+    // 타일 스타일 ("road": 구글 한국지도, "sat": 위성+지명) 및 지역경계선 표시 토글
+    var tileStyle by remember { mutableStateOf("road") }
+    var showDistrictBorders by remember { mutableStateOf(true) }
+    var tileRedrawTick by remember { mutableIntStateOf(0) }
+    var roadGeometry by remember(validSteps) { mutableStateOf<List<Pair<Double, Double>>?>(null) }
+
+    // 경로나 포커스 지점이 바뀌면 카메라를 자동으로 해당 구역에 맞춰 확대
     LaunchedEffect(validSteps, focusedStep) {
-        userZoom = 1f
-        userPan = Offset.Zero
+        val (center, z) = WebMercator.computeAutoFitCamera(validSteps, focusedStep)
+        centerLat = center.first
+        centerLng = center.second
+        zoomLevel = z
     }
 
-    // 조회된 경로 거점들을 화면 중앙에 크게 확대해 보여주는 동적 위경도 바운딩 박스 계산
-    val viewportBounds = remember(validSteps, focusedStep) {
-        if (focusedStep?.latitude != null && focusedStep.longitude != null) {
-            val cLat = focusedStep.latitude
-            val cLng = focusedStep.longitude
-            val halfLat = 0.022 // 동/도로 단위 상세 줌
-            val halfLng = 0.028
-            ViewportGeoBounds(cLat - halfLat, cLat + halfLat, cLng - halfLng, cLng + halfLng)
-        } else if (validSteps.isNotEmpty()) {
-            val minLat = validSteps.minOf { it.latitude!! }
-            val maxLat = validSteps.maxOf { it.latitude!! }
-            val minLng = validSteps.minOf { it.longitude!! }
-            val maxLng = validSteps.maxOf { it.longitude!! }
-
-            val cLat = (minLat + maxLat) / 2.0
-            val cLng = (minLng + maxLng) / 2.0
-
-            // 최소 스팬 보장 + 여백 35% 부여로 경로가 화면에 꽉 차고 주변 시·군·구 경계가 함께 보이도록 설정
-            val latSpan = max(maxLat - minLat, 0.035) * 1.45
-            val lngSpan = max(maxLng - minLng, 0.045) * 1.45
-
-            ViewportGeoBounds(
-                minLat = cLat - latSpan / 2.0,
-                maxLat = cLat + latSpan / 2.0,
-                minLng = cLng - lngSpan / 2.0,
-                maxLng = cLng + lngSpan / 2.0
-            )
-        } else {
-            // 기본 수도권 중심 뷰
-            ViewportGeoBounds(37.35, 37.68, 126.80, 127.25)
+    // 실제 한국 도로망(OSRM) 경로 비동기 로드 (로드 전에도 기본 경로선이 즉시 표시됨)
+    LaunchedEffect(validSteps) {
+        roadGeometry = null
+        if (validSteps.size >= 2) {
+            NativeKoreaMapCache.fetchOsrmRoadRouteIfNeeded(validSteps) { coords ->
+                roadGeometry = coords
+            }
         }
     }
 
     val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
-        userZoom = (userZoom * zoomChange).coerceIn(0.6f, 8f)
-        val maxPan = 900f * max(userZoom, 1f)
-        userPan = Offset(
-            x = (userPan.x + panChange.x).coerceIn(-maxPan, maxPan),
-            y = (userPan.y + panChange.y).coerceIn(-maxPan, maxPan)
-        )
+        val newZoom = (zoomLevel + (ln(zoomChange.toDouble()) / ln(2.0)).toFloat()).coerceIn(7.5f, 17.8f)
+        val worldScale = baseTilePx * 2.0.pow(newZoom.toDouble())
+        val newWorldX = WebMercator.lngToWorldX(centerLng) - (panChange.x / worldScale)
+        val newWorldY = WebMercator.latToWorldY(centerLat) - (panChange.y / worldScale)
+
+        zoomLevel = newZoom
+        centerLng = WebMercator.worldXToLng(newWorldX).coerceIn(124.5, 131.0)
+        centerLat = WebMercator.worldYToLat(newWorldY).coerceIn(33.0, 38.9)
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFEEF2F6)) // 구글 지도 스타일 밝은 베이스 배경
+            .background(Color(0xFFEEF2F6))
             .clipToBounds()
     ) {
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .transformable(state = transformableState)
-                .pointerInput(validSteps, viewportBounds, userZoom, userPan) {
+                .pointerInput(validSteps, centerLat, centerLng, zoomLevel) {
                     detectTapGestures(
                         onTap = { tapOffset ->
                             val w = size.width.toFloat()
                             val h = size.height.toFloat()
-                            val pinPositions = computeScreenPinPositions(validSteps, viewportBounds, w, h, userZoom, userPan)
+                            val placements = computePinPlacements(
+                                steps = validSteps,
+                                centerLat = centerLat,
+                                centerLng = centerLng,
+                                zoom = zoomLevel,
+                                w = w,
+                                h = h,
+                                baseTilePx = baseTilePx
+                            )
 
                             var hitStep: RouteStep? = null
-                            var minHitDist = 38.dp.toPx()
+                            var minHitDist = 42.dp.toPx()
 
-                            pinPositions.forEach { (step, pt) ->
-                                val dist = (pt - tapOffset).getDistance()
+                            placements.forEach { p ->
+                                val dist = (p.displayPoint - tapOffset).getDistance()
                                 if (dist < minHitDist) {
                                     minHitDist = dist
-                                    hitStep = step
+                                    hitStep = p.step
                                 }
                             }
 
@@ -376,184 +614,350 @@ fun MidKoreaStaticMapView(
                             }
                         },
                         onDoubleTap = {
-                            if (userZoom > 2.2f) {
-                                userZoom = 1f
-                                userPan = Offset.Zero
-                            } else {
-                                userZoom = (userZoom * 1.8f).coerceAtMost(6f)
-                            }
+                            zoomLevel = (zoomLevel + 1.0f).coerceAtMost(17.5f)
                         }
                     )
                 }
         ) {
             val w = size.width
             val h = size.height
+            // tileRedrawTick 읽기로 타일 다운로드 완료 시 즉시 리컴포지션/드로잉 트리거
+            val tick = tileRedrawTick
+            if (tick < 0) return@Canvas
 
-            // 1. 구글지도 스타일 행정구역 다각형·수계(한강/탄천)·고속도로·지역명 드로잉 (줌 배율 독립형 선명 텍스트)
+            // 1. 베이스로 구글지도 스타일 행정구역 다각형·수계·고속도로 벡터 맵을 먼저 그려서
+            //    타일 로딩 중이거나 오프라인일 때도 빈 화면이 절대 발생하지 않도록 보장
             drawGoogleStyleKoreaBaseMap(
                 w = w,
                 h = h,
-                bounds = viewportBounds,
-                userZoom = userZoom,
-                userPan = userPan,
-                textMeasurer = textMeasurer
+                centerLat = centerLat,
+                centerLng = centerLng,
+                zoom = zoomLevel,
+                baseTilePx = baseTilePx,
+                textMeasurer = textMeasurer,
+                drawLabelsAndBorders = !useRealMapTiles
             )
 
-            // 2. 주행 경로선(Polyline) 및 진행 방향 화살표 렌더링
-            val pinPositions = computeScreenPinPositions(validSteps, viewportBounds, w, h, userZoom, userPan)
-            if (pinPositions.size > 1) {
-                val routePath = Path()
-                val rawPoints = validSteps.map { step ->
-                    viewportBounds.toScreenOffset(step.latitude!!, step.longitude!!, w, h, userZoom, userPan)
-                }
-                routePath.moveTo(rawPoints.first().x, rawPoints.first().y)
-                for (i in 1 until rawPoints.size) {
-                    routePath.lineTo(rawPoints[i].x, rawPoints[i].y)
-                }
+            // 2. [상세 한국 지도 모드] 실제 구글 한국어 고해상도 지도 타일 렌더링
+            if (useRealMapTiles && w > 0f && h > 0f) {
+                val tileZ = zoomLevel.roundToInt().coerceIn(7, 18)
+                val scaleFromTileZ = 2.0.pow((zoomLevel - tileZ).toDouble()).toFloat()
+                val tileScreenPx = baseTilePx * scaleFromTileZ
+                val numTiles = 1 shl tileZ
 
-                // 외곽 진파랑 케이싱 (구글맵 내비게이션 경로 스타일)
-                drawPath(
-                    path = routePath,
-                    color = Color(0xFF1D4ED8).copy(alpha = 0.85f),
-                    style = Stroke(
-                        width = 8.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
-                )
-                // 내부 밝은 블루 경로선
-                drawPath(
-                    path = routePath,
-                    color = Color(0xFF3B82F6),
-                    style = Stroke(
-                        width = 5.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
-                )
-                // 중앙 화이트 대시 가이드라인
-                drawPath(
-                    path = routePath,
-                    color = Color.White.copy(alpha = 0.75f),
-                    style = Stroke(
-                        width = 1.8.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
-                    )
+                val centerTileX = WebMercator.lngToWorldX(centerLng) * numTiles
+                val centerTileY = WebMercator.latToWorldY(centerLat) * numTiles
+
+                val halfTilesX = (w / (2f * tileScreenPx)) + 1.2f
+                val halfTilesY = (h / (2f * tileScreenPx)) + 1.2f
+
+                val minTx = floor(centerTileX - halfTilesX).toInt().coerceIn(0, numTiles - 1)
+                val maxTx = floor(centerTileX + halfTilesX).toInt().coerceIn(0, numTiles - 1)
+                val minTy = floor(centerTileY - halfTilesY).toInt().coerceIn(0, numTiles - 1)
+                val maxTy = floor(centerTileY + halfTilesY).toInt().coerceIn(0, numTiles - 1)
+
+                for (tx in minTx..maxTx) {
+                    for (ty in minTy..maxTy) {
+                        val leftPx = (w / 2f + (tx - centerTileX).toFloat() * tileScreenPx).roundToInt()
+                        val topPx = (h / 2f + (ty - centerTileY).toFloat() * tileScreenPx).roundToInt()
+                        val rightPx = (w / 2f + (tx + 1 - centerTileX).toFloat() * tileScreenPx).roundToInt()
+                        val bottomPx = (h / 2f + (ty + 1 - centerTileY).toFloat() * tileScreenPx).roundToInt()
+
+                        val key = "${tileStyle}_${tileZ}_${tx}_${ty}"
+                        val bitmap = NativeKoreaMapCache.getTile(key)
+                        if (bitmap != null) {
+                            drawImage(
+                                image = bitmap,
+                                dstOffset = IntOffset(leftPx, topPx),
+                                dstSize = IntSize((rightPx - leftPx).coerceAtLeast(1), (bottomPx - topPx).coerceAtLeast(1))
+                            )
+                        } else {
+                            coroutineScope.launch {
+                                NativeKoreaMapCache.fetchTileIfNeeded(
+                                    tileStyle = tileStyle,
+                                    z = tileZ,
+                                    x = tx,
+                                    y = ty,
+                                    onLoaded = { tileRedrawTick++ }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. 시·군·구 지역 구분 경계선 오버레이 (상세 한국 지도 위에서도 지역 구분선이 선명하게 표시됨)
+            if (showDistrictBorders) {
+                drawDistrictBoundariesOverlay(
+                    w = w,
+                    h = h,
+                    centerLat = centerLat,
+                    centerLng = centerLng,
+                    zoom = zoomLevel,
+                    baseTilePx = baseTilePx,
+                    textMeasurer = textMeasurer,
+                    isOverTileMap = useRealMapTiles,
+                    isSatellite = useRealMapTiles && tileStyle == "sat"
                 )
             }
 
-            // 3. 거점 번호 마커 핀 오버레이 (모든 승차/출발·하차/도착 지점을 번호 핀으로 표시 + 겹침 자동 분리)
-            pinPositions.forEachIndexed { index, (step, pt) ->
-                val isFocus = step.id == selectedStep?.id || step.id == focusedStep?.id
-                val isStart = index == 0
-                val isEnd = index == pinPositions.lastIndex && pinPositions.size > 1
-                val isBoardingOrAlighting = step.tags.any {
-                    it.contains("출발") || it.contains("도착") || it.contains("승차") || it.contains("하차")
-                } || step.title.contains("출발") || step.title.contains("도착") ||
-                    step.title.contains("승차") || step.title.contains("하차") ||
-                    !com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(step)
+            // 4. 주행 경로선(Polyline) 렌더링 (OSRM 실제 도로망 경로가 로드되면 실제 도로 굴곡으로, 로드 전에는 즉시 직선/곡선 경로로 표시)
+            val placements = computePinPlacements(
+                steps = validSteps,
+                centerLat = centerLat,
+                centerLng = centerLng,
+                zoom = zoomLevel,
+                w = w,
+                h = h,
+                baseTilePx = baseTilePx
+            )
 
-                val isKeyPoint = isStart || isEnd || isFocus || isBoardingOrAlighting || step.stepType != RouteStepType.DRIVING
+            if (validSteps.size > 1) {
+                val pathCoords = roadGeometry ?: validSteps.map { it.latitude!! to it.longitude!! }
+                val screenRoutePts = pathCoords.map { (lat, lng) ->
+                    WebMercator.toScreenOffset(lat, lng, centerLat, centerLng, zoomLevel, w, h, baseTilePx)
+                }
 
-                if (isKeyPoint) {
-                    val pinColor = when {
-                        isFocus -> Color(0xFFEA580C)
-                        isStart -> Color(0xFF16A34A)
-                        isEnd -> Color(0xFFDC2626)
-                        else -> Color(0xFF2563EB)
+                if (screenRoutePts.size > 1) {
+                    val routePath = Path().apply {
+                        moveTo(screenRoutePts.first().x, screenRoutePts.first().y)
+                        for (i in 1 until screenRoutePts.size) {
+                            lineTo(screenRoutePts[i].x, screenRoutePts[i].y)
+                        }
                     }
 
-                    val radius = if (isFocus) 14.dp.toPx() else 11.5.dp.toPx()
+                    // 외곽 진파랑 케이싱
+                    drawPath(
+                        path = routePath,
+                        color = Color(0xFF1E3A8A).copy(alpha = 0.90f),
+                        style = Stroke(
+                            width = 8.5.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                    // 내부 밝은 블루 경로선
+                    drawPath(
+                        path = routePath,
+                        color = Color(0xFF3B82F6),
+                        style = Stroke(
+                            width = 5.2.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                    // 중앙 화이트 대시 가이드라인
+                    drawPath(
+                        path = routePath,
+                        color = Color.White.copy(alpha = 0.85f),
+                        style = Stroke(
+                            width = 1.8.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
+                        )
+                    )
+                }
+            }
 
-                    // 그림자 및 흰색 외곽선
-                    drawCircle(
-                        color = Color.Black.copy(alpha = 0.22f),
-                        radius = radius + 3.dp.toPx(),
-                        center = Offset(pt.x, pt.y + 2.dp.toPx())
+            // 5. 거점 번호 마커 핀 오버레이 (1, 2, 3, 4 모든 거점 100% 표시 + 동일 좌표 대각선 분리 및 지시선 연결)
+            placements.forEach { placement ->
+                val step = placement.step
+                val index = placement.index
+                val pt = placement.displayPoint
+                val rawPt = placement.rawPoint
+
+                val isFocus = step.id == selectedStep?.id || step.id == focusedStep?.id
+                val isStart = index == 0
+                val isEnd = index == placements.lastIndex && placements.size > 1
+
+                val pinColor = when {
+                    isFocus -> Color(0xFFEA580C)
+                    isStart -> Color(0xFF16A34A)
+                    isEnd -> Color(0xFFDC2626)
+                    else -> Color(0xFF2563EB)
+                }
+
+                // 동일 좌표에서 분리된 마커인 경우 실제 GPS 위치(rawPt)와 마커(pt) 사이에 지시선 표시
+                if (placement.isClustered) {
+                    drawLine(
+                        color = Color.White,
+                        start = rawPt,
+                        end = pt,
+                        strokeWidth = 3.5.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                    drawLine(
+                        color = pinColor,
+                        start = rawPt,
+                        end = pt,
+                        strokeWidth = 1.8.dp.toPx(),
+                        cap = StrokeCap.Round
                     )
                     drawCircle(
                         color = Color.White,
-                        radius = radius + 2.dp.toPx(),
-                        center = pt
+                        radius = 4.dp.toPx(),
+                        center = rawPt
                     )
                     drawCircle(
                         color = pinColor,
-                        radius = radius,
-                        center = pt
+                        radius = 2.5.dp.toPx(),
+                        center = rawPt
                     )
+                }
 
-                    val numStr = "${index + 1}"
-                    val numLayout = textMeasurer.measure(
-                        text = AnnotatedString(numStr),
-                        style = TextStyle(
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            textAlign = TextAlign.Center
-                        )
-                    )
-                    drawText(
-                        textLayoutResult = numLayout,
-                        topLeft = Offset(
-                            pt.x - numLayout.size.width / 2f,
-                            pt.y - numLayout.size.height / 2f
-                        )
-                    )
+                val radius = if (isFocus) 14.5.dp.toPx() else 12.5.dp.toPx()
 
-                    val rawLabel = step.locationName ?: step.title
-                    val cleanPlace = rawLabel
-                        .replace(Regex("\\[.*?\\]"), "")
-                        .replace("승차 (출발)", "")
-                        .replace("하차", "")
-                        .trim()
-                        .ifBlank { rawLabel.take(8) }
-                    val rolePrefix = when {
-                        isStart -> "출발·"
-                        isEnd -> "도착·"
-                        else -> ""
-                    }
-                    val placeLabel = (rolePrefix + cleanPlace).take(10)
+                // 마커 그림자 및 흰색 테두리 + 원형 배지
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.28f),
+                    radius = radius + 3.dp.toPx(),
+                    center = Offset(pt.x, pt.y + 2.dp.toPx())
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = radius + 2.2.dp.toPx(),
+                    center = pt
+                )
+                drawCircle(
+                    color = pinColor,
+                    radius = radius,
+                    center = pt
+                )
 
-                    val labelLayout = textMeasurer.measure(
-                        text = AnnotatedString(placeLabel),
-                        style = TextStyle(
-                            color = if (isFocus) Color(0xFF9A3412) else Color(0xFF0F172A),
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                val numStr = "${index + 1}"
+                val numLayout = textMeasurer.measure(
+                    text = AnnotatedString(numStr),
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.Center
                     )
-                    val labelW = labelLayout.size.width + 12f
-                    val labelH = labelLayout.size.height + 6f
-                    val labelTopLeft = Offset(pt.x - labelW / 2f, pt.y + radius + 4f)
+                )
+                drawText(
+                    textLayoutResult = numLayout,
+                    topLeft = Offset(
+                        pt.x - numLayout.size.width / 2f,
+                        pt.y - numLayout.size.height / 2f
+                    )
+                )
 
-                    drawRoundRect(
-                        color = Color.White.copy(alpha = 0.95f),
-                        topLeft = labelTopLeft,
-                        size = Size(labelW, labelH),
-                        cornerRadius = CornerRadius(6f, 6f)
+                val rawLabel = step.locationName ?: step.title
+                val cleanPlace = rawLabel
+                    .replace(Regex("\\[.*?\\]"), "")
+                    .replace("승차 (출발)", "")
+                    .replace("하차", "")
+                    .trim()
+                    .ifBlank { rawLabel.take(8) }
+                val rolePrefix = when {
+                    isStart -> "출발·"
+                    isEnd -> "도착·"
+                    else -> ""
+                }
+                val placeLabel = (rolePrefix + cleanPlace).take(11)
+
+                val labelLayout = textMeasurer.measure(
+                    text = AnnotatedString(placeLabel),
+                    style = TextStyle(
+                        color = if (isFocus) Color(0xFF9A3412) else Color(0xFF0F172A),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
                     )
-                    drawRoundRect(
-                        color = if (isFocus) Color(0xFFEA580C) else pinColor.copy(alpha = 0.7f),
-                        topLeft = labelTopLeft,
-                        size = Size(labelW, labelH),
-                        cornerRadius = CornerRadius(6f, 6f),
-                        style = Stroke(width = 1.5f)
-                    )
-                    drawText(
-                        textLayoutResult = labelLayout,
-                        topLeft = Offset(labelTopLeft.x + 6f, labelTopLeft.y + 3f)
-                    )
+                )
+                val labelW = labelLayout.size.width + 14f
+                val labelH = labelLayout.size.height + 6f
+                val labelTopY = if (placement.labelAbove) {
+                    pt.y - radius - labelH - 5f
                 } else {
-                    val dotRadius = 4.5.dp.toPx()
-                    drawCircle(color = Color.White, radius = dotRadius + 1.5.dp.toPx(), center = pt)
-                    drawCircle(color = Color(0xFF2563EB), radius = dotRadius, center = pt)
+                    pt.y + radius + 5f
+                }
+                val labelTopLeft = Offset(
+                    x = (pt.x - labelW / 2f).coerceIn(4f, (w - labelW - 4f).coerceAtLeast(4f)),
+                    y = labelTopY.coerceIn(4f, (h - labelH - 4f).coerceAtLeast(4f))
+                )
+
+                drawRoundRect(
+                    color = Color.White.copy(alpha = 0.96f),
+                    topLeft = labelTopLeft,
+                    size = Size(labelW, labelH),
+                    cornerRadius = CornerRadius(6f, 6f)
+                )
+                drawRoundRect(
+                    color = if (isFocus) Color(0xFFEA580C) else pinColor,
+                    topLeft = labelTopLeft,
+                    size = Size(labelW, labelH),
+                    cornerRadius = CornerRadius(6f, 6f),
+                    style = Stroke(width = 1.6f)
+                )
+                drawText(
+                    textLayoutResult = labelLayout,
+                    topLeft = Offset(labelTopLeft.x + 7f, labelTopLeft.y + 3f)
+                )
+            }
+        }
+
+        // 좌측 하단: 레이어 스위치 바 ([구글 한국지도] | [위성+지명] | [지역경계선])
+        Surface(
+            shape = AppShapes.pill,
+            color = Color(0xFF0F172A).copy(alpha = 0.90f),
+            border = BorderStroke(1.dp, Color(0xFF334155)),
+            shadowElevation = 4.dp,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 10.dp, bottom = 10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(3.dp)
+            ) {
+                if (useRealMapTiles) {
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = if (tileStyle == "road") Color(0xFF2563EB) else Color.Transparent,
+                        modifier = Modifier.clickable { tileStyle = "road" }
+                    ) {
+                        Text(
+                            text = "구글지도",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (tileStyle == "road") PureWhite else Color(0xFFCBD5E1),
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = if (tileStyle == "sat") Color(0xFF2563EB) else Color.Transparent,
+                        modifier = Modifier.clickable { tileStyle = "sat" }
+                    ) {
+                        Text(
+                            text = "위성",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (tileStyle == "sat") PureWhite else Color(0xFFCBD5E1),
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(2.dp))
+                }
+                Surface(
+                    shape = AppShapes.pill,
+                    color = if (showDistrictBorders) Color(0xFF059669) else Color.Transparent,
+                    modifier = Modifier.clickable { showDistrictBorders = !showDistrictBorders }
+                ) {
+                    Text(
+                        text = if (showDistrictBorders) "지역경계 ON" else "지역경계 OFF",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (showDistrictBorders) PureWhite else Color(0xFF94A3B8),
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                    )
                 }
             }
         }
 
-        // 우측 하단 줌 컨트롤러 (+ / - / 경로 맞춤)
+        // 우측 중앙: 확대(+) / 축소(-) / 경로 맞춤 버튼
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
@@ -561,7 +965,7 @@ fun MidKoreaStaticMapView(
                 .padding(end = 10.dp)
         ) {
             SmallFloatingActionButton(
-                onClick = { userZoom = (userZoom * 1.35f).coerceAtMost(8f) },
+                onClick = { zoomLevel = (zoomLevel + 0.85f).coerceAtMost(17.8f) },
                 containerColor = Color.White.copy(alpha = 0.95f),
                 contentColor = Color(0xFF0F172A),
                 shape = CircleShape,
@@ -571,7 +975,7 @@ fun MidKoreaStaticMapView(
             }
             Spacer(modifier = Modifier.height(6.dp))
             SmallFloatingActionButton(
-                onClick = { userZoom = (userZoom / 1.35f).coerceAtLeast(0.6f) },
+                onClick = { zoomLevel = (zoomLevel - 0.85f).coerceAtLeast(7.5f) },
                 containerColor = Color.White.copy(alpha = 0.95f),
                 contentColor = Color(0xFF0F172A),
                 shape = CircleShape,
@@ -582,8 +986,10 @@ fun MidKoreaStaticMapView(
             Spacer(modifier = Modifier.height(6.dp))
             SmallFloatingActionButton(
                 onClick = {
-                    userZoom = 1f
-                    userPan = Offset.Zero
+                    val (center, z) = WebMercator.computeAutoFitCamera(validSteps, null)
+                    centerLat = center.first
+                    centerLng = center.second
+                    zoomLevel = z
                     selectedStep = null
                 },
                 containerColor = Color.White.copy(alpha = 0.95f),
@@ -602,14 +1008,14 @@ fun MidKoreaStaticMapView(
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(10.dp)
-                .fillMaxWidth(0.68f)
+                .padding(start = 10.dp, bottom = 44.dp)
+                .fillMaxWidth(0.66f)
         ) {
             selectedStep?.let { step ->
                 Surface(
                     color = Color.White.copy(alpha = 0.97f),
                     shape = RoundedCornerShape(10.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6)),
+                    border = BorderStroke(1.dp, Color(0xFF3B82F6)),
                     shadowElevation = 6.dp
                 ) {
                     Column(modifier = Modifier.padding(10.dp)) {
@@ -652,137 +1058,143 @@ fun MidKoreaStaticMapView(
     }
 }
 
-private data class ViewportGeoBounds(
-    val minLat: Double,
-    val maxLat: Double,
-    val minLng: Double,
-    val maxLng: Double
-) {
-    val centerLat: Double get() = (minLat + maxLat) / 2.0
-    val centerLng: Double get() = (minLng + maxLng) / 2.0
-    val latSpan: Double get() = (maxLat - minLat).coerceAtLeast(0.01)
-    val lngSpan: Double get() = (maxLng - minLng).coerceAtLeast(0.01)
-
-    fun toScreenOffset(
-        lat: Double,
-        lng: Double,
-        w: Float,
-        h: Float,
-        zoom: Float,
-        pan: Offset
-    ): Offset {
-        // 위도 37.5도 기준 경도-위도 종횡비 보정 (cos(37.5°) ≈ 0.793)
-        val cosLat = cos(Math.toRadians(centerLat)).coerceAtLeast(0.75)
-        val geoAspect = (lngSpan * cosLat) / latSpan
-        val screenAspect = (w / h).toDouble().coerceAtLeast(0.5)
-
-        val effectiveLatSpan: Double
-        val effectiveLngSpan: Double
-        if (geoAspect > screenAspect) {
-            effectiveLngSpan = lngSpan
-            effectiveLatSpan = (lngSpan * cosLat) / screenAspect
-        } else {
-            effectiveLatSpan = latSpan
-            effectiveLngSpan = (latSpan * screenAspect) / cosLat
-        }
-
-        val normX = ((lng - centerLng) / effectiveLngSpan).toFloat()
-        val normY = ((centerLat - lat) / effectiveLatSpan).toFloat()
-
-        val baseX = w / 2f + normX * w * 0.82f
-        val baseY = h / 2f + normY * h * 0.78f
-
-        return Offset(
-            x = (baseX - w / 2f) * zoom + w / 2f + pan.x,
-            y = (baseY - h / 2f) * zoom + h / 2f + pan.y
+/**
+ * 동일하거나 인접한 좌표(예: 집 출발 핀 1과 귀가 도착 핀 4, 또는 영등포 하차 핀 2와 승차 핀 3)가
+ * 서로 겹치지 않도록 좌상단(라벨 위)/우하단(라벨 아래)으로 대각선 분리하여 배치합니다.
+ */
+private fun computePinPlacements(
+    steps: List<RouteStep>,
+    centerLat: Double,
+    centerLng: Double,
+    zoom: Float,
+    w: Float,
+    h: Float,
+    baseTilePx: Float
+): List<PinPlacement> {
+    val rawPoints = steps.map { step ->
+        WebMercator.toScreenOffset(
+            lat = step.latitude!!,
+            lng = step.longitude!!,
+            centerLat = centerLat,
+            centerLng = centerLng,
+            zoom = zoom,
+            screenW = w,
+            screenH = h,
+            baseTilePx = baseTilePx
         )
     }
-}
-
-/**
- * 동일하거나 매우 인접한 좌표(예: 집 출발 핀 1과 귀가 도착 핀 4)가 서로 겹치지 않도록
- * 화면 좌표를 좌우로 자동 분리(Spiderfy Offset)하여 계산합니다.
- */
-private fun computeScreenPinPositions(
-    steps: List<RouteStep>,
-    bounds: ViewportGeoBounds,
-    w: Float,
-    h: Float,
-    zoom: Float,
-    pan: Offset
-): List<Pair<RouteStep, Offset>> {
-    val rawList = steps.map { step ->
-        step to bounds.toScreenOffset(step.latitude!!, step.longitude!!, w, h, zoom, pan)
+    if (steps.size <= 1) {
+        return steps.mapIndexed { idx, s ->
+            PinPlacement(s, idx, rawPoints[idx], rawPoints[idx], labelAbove = false, isClustered = false)
+        }
     }
-    if (rawList.size <= 1) return rawList
 
-    val adjusted = rawList.toMutableList()
-    val thresholdPx = 22f
+    val clusterRadiusPx = 42f
+    val result = ArrayList<PinPlacement>(steps.size)
 
-    for (i in adjusted.indices) {
-        val (stepI, ptI) = adjusted[i]
-        val clusterIndices = mutableListOf<Int>()
-        for (j in adjusted.indices) {
-            if ((adjusted[j].second - ptI).getDistance() < thresholdPx) {
-                clusterIndices.add(j)
+    for (i in steps.indices) {
+        val ptI = rawPoints[i]
+        val group = mutableListOf<Int>()
+        for (j in steps.indices) {
+            if ((rawPoints[j] - ptI).getDistance() < clusterRadiusPx) {
+                group.add(j)
             }
         }
-        if (clusterIndices.size > 1) {
-            val posInCluster = clusterIndices.indexOf(i)
-            val totalInCluster = clusterIndices.size
-            val spread = 26f
-            val offsetX = (posInCluster - (totalInCluster - 1) / 2f) * spread
-            val offsetY = if (posInCluster % 2 == 0) -4f else 4f
-            adjusted[i] = stepI to Offset(ptI.x + offsetX, ptI.y + offsetY)
+        if (group.size <= 1) {
+            result.add(
+                PinPlacement(
+                    step = steps[i],
+                    index = i,
+                    rawPoint = ptI,
+                    displayPoint = ptI,
+                    labelAbove = false,
+                    isClustered = false
+                )
+            )
+        } else {
+            val posInGroup = group.indexOf(i)
+            val total = group.size
+            // 짝수 순번은 위쪽+좌측(라벨 위), 홀수 순번은 아래쪽+우측(라벨 아래)으로 분리해 캡션 충돌 원천 방지
+            val spreadX = 24f
+            val offsetX = (posInGroup - (total - 1) / 2f) * spreadX
+            val isUpper = posInGroup % 2 == 0
+            val offsetY = if (isUpper) -11f else 11f
+            result.add(
+                PinPlacement(
+                    step = steps[i],
+                    index = i,
+                    rawPoint = ptI,
+                    displayPoint = Offset(ptI.x + offsetX, ptI.y + offsetY),
+                    labelAbove = isUpper,
+                    isClustered = true
+                )
+            )
         }
     }
-    return adjusted
+    return result
 }
 
 /**
- * 구글 지도 스타일의 행정구역 다각형(시·군·구 경계), 한강/탄천 수계, 고속도로망, 계층형 지역명 렌더링
+ * 시·군·구 지역 구분 경계선 및 자치구/시 이름 오버레이 렌더링
  */
-private fun DrawScope.drawGoogleStyleKoreaBaseMap(
+private fun DrawScope.drawDistrictBoundariesOverlay(
     w: Float,
     h: Float,
-    bounds: ViewportGeoBounds,
-    userZoom: Float,
-    userPan: Offset,
-    textMeasurer: TextMeasurer
+    centerLat: Double,
+    centerLng: Double,
+    zoom: Float,
+    baseTilePx: Float,
+    textMeasurer: TextMeasurer,
+    isOverTileMap: Boolean,
+    isSatellite: Boolean
 ) {
-    fun pt(lat: Double, lng: Double): Offset = bounds.toScreenOffset(lat, lng, w, h, userZoom, userPan)
+    fun pt(lat: Double, lng: Double): Offset =
+        WebMercator.toScreenOffset(lat, lng, centerLat, centerLng, zoom, w, h, baseTilePx)
 
-    // 1. 행정구역(시·군·구) 폴리곤 채우기 및 경계선 (실제 구글지도처럼 지역 구분 표시)
-    val districtBorderEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 5f), 0f)
+    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+
     MidKoreaBounds.DISTRICT_BOUNDARIES.forEach { district ->
         if (district.polygon.size >= 3) {
-            val polyPath = Path()
             val screenPts = district.polygon.map { (lat, lng) -> pt(lat, lng) }
-            polyPath.moveTo(screenPts.first().x, screenPts.first().y)
-            for (i in 1 until screenPts.size) {
-                polyPath.lineTo(screenPts[i].x, screenPts[i].y)
-            }
-            polyPath.close()
+            // 화면 밖 폴리곤 스킵
+            val minX = screenPts.minOf { it.x }
+            val maxX = screenPts.maxOf { it.x }
+            val minY = screenPts.minOf { it.y }
+            val maxY = screenPts.maxOf { it.y }
+            if (maxX < -50f || minX > w + 50f || maxY < -50f || minY > h + 50f) return@forEach
 
-            val fillColor = when (district.regionGroup) {
-                "SEOUL" -> Color(0xFFF8FAFC)
-                "GYEONGGI_EAST" -> Color(0xFFF1F5F9)
-                "GYEONGGI_SOUTH" -> Color(0xFFF4F6F9)
-                "INCHEON" -> Color(0xFFEFF6FF)
-                else -> Color(0xFFF3F4F6)
+            val polyPath = Path().apply {
+                moveTo(screenPts.first().x, screenPts.first().y)
+                for (i in 1 until screenPts.size) {
+                    lineTo(screenPts[i].x, screenPts[i].y)
+                }
+                close()
             }
 
-            drawPath(path = polyPath, color = fillColor, style = Fill)
-            // 시·군·구 행정경계선
+            val isSeoul = district.regionGroup == "SEOUL"
+            val borderColor = when {
+                isSatellite -> if (isSeoul) Color(0xFFFCA5A5) else Color(0xFF93C5FD)
+                isOverTileMap -> if (isSeoul) Color(0xFFDC2626).copy(alpha = 0.72f) else Color(0xFF334155).copy(alpha = 0.72f)
+                else -> if (isSeoul) Color(0xFFDC2626).copy(alpha = 0.55f) else Color(0xFF64748B).copy(alpha = 0.70f)
+            }
+
+            if (isOverTileMap) {
+                // 타일 지도 위에서 경계선이 뚜렷하게 보이도록 얇은 화이트 케이싱 후 점선 표시
+                drawPath(
+                    path = polyPath,
+                    color = Color.White.copy(alpha = 0.55f),
+                    style = Stroke(width = 2.8.dp.toPx())
+                )
+            }
             drawPath(
                 path = polyPath,
-                color = Color(0xFF94A3B8).copy(alpha = 0.75f),
-                style = Stroke(width = 1.4.dp.toPx(), pathEffect = districtBorderEffect)
+                color = borderColor,
+                style = Stroke(width = 1.5.dp.toPx(), pathEffect = dashEffect)
             )
         }
     }
 
-    // 서울특별시-경기도 광역 시·도 경계선 강조
+    // 서울특별시-경기도 광역 경계선 강조
     val seoulMetroBorder = listOf(
         37.585 to 126.795, 37.655 to 126.900, 37.695 to 127.010, 37.685 to 127.095,
         37.575 to 127.175, 37.540 to 127.182, 37.495 to 127.160, 37.472 to 127.145,
@@ -796,118 +1208,23 @@ private fun DrawScope.drawGoogleStyleKoreaBaseMap(
     }
     drawPath(
         path = seoulBorderPath,
-        color = Color(0xFF64748B).copy(alpha = 0.85f),
+        color = if (isSatellite) Color(0xFFFef08a).copy(alpha = 0.85f) else Color(0xFFB91C1C).copy(alpha = 0.65f),
         style = Stroke(width = 2.2.dp.toPx())
     )
 
-    // 2. 한강 본류 및 주요 지류(탄천, 안양천, 중랑천) 수계 렌더링
-    val hanRiverCoords = listOf(
-        37.650 to 126.680, 37.580 to 126.810, 37.545 to 126.895, 37.528 to 126.925,
-        37.515 to 126.960, 37.525 to 127.010, 37.530 to 127.065, 37.522 to 127.105,
-        37.555 to 127.145, 37.575 to 127.195, 37.545 to 127.255, 37.520 to 127.320,
-        37.500 to 127.450
-    )
-    val hanPath = Path().apply {
-        val pts = hanRiverCoords.map { (lat, lng) -> pt(lat, lng) }
-        moveTo(pts.first().x, pts.first().y)
-        for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
-    }
-    drawPath(
-        path = hanPath,
-        color = Color(0xFF93C5FD).copy(alpha = 0.85f),
-        style = Stroke(width = 9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    )
-
-    // 탄천 (잠실 한강 합류점 ➔ 송파/강남 경계 ➔ 성남 수정/분당 ➔ 용인)
-    val tancheonCoords = listOf(
-        37.522 to 127.075, 37.495 to 127.095, 37.470 to 127.115, 37.435 to 127.125,
-        37.385 to 127.115, 37.330 to 127.110
-    )
-    val tancheonPath = Path().apply {
-        val pts = tancheonCoords.map { (lat, lng) -> pt(lat, lng) }
-        moveTo(pts.first().x, pts.first().y)
-        for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
-    }
-    drawPath(
-        path = tancheonPath,
-        color = Color(0xFF93C5FD).copy(alpha = 0.7f),
-        style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    )
-
-    // 안양천 (염창 한강 합류점 ➔ 영등포/양천 ➔ 구로/광명 ➔ 안양)
-    val anyangcheonCoords = listOf(
-        37.550 to 126.875, 37.520 to 126.885, 37.485 to 126.875, 37.440 to 126.890, 37.395 to 126.925
-    )
-    val anyangPath = Path().apply {
-        val pts = anyangcheonCoords.map { (lat, lng) -> pt(lat, lng) }
-        moveTo(pts.first().x, pts.first().y)
-        for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
-    }
-    drawPath(
-        path = anyangPath,
-        color = Color(0xFF93C5FD).copy(alpha = 0.7f),
-        style = Stroke(width = 3.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-    )
-
-    // 3. 주요 간선도로·고속도로망 (올림픽대로, 강변북로, 수도권제1순환, 경부, 서해안, 분당수서로)
-    val roadColor = Color(0xFFFDE68A).copy(alpha = 0.9f)
-    val roadBorderColor = Color(0xFFF59E0B).copy(alpha = 0.55f)
-
-    fun drawExpressway(coords: List<Pair<Double, Double>>) {
-        val roadPath = Path().apply {
-            val pts = coords.map { (lat, lng) -> pt(lat, lng) }
-            moveTo(pts.first().x, pts.first().y)
-            for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
-        }
-        drawPath(roadPath, roadBorderColor, style = Stroke(width = 4.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        drawPath(roadPath, roadColor, style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-    }
-
-    // 올림픽대로 (강서 ➔ 여의도 ➔ 동작 ➔ 반포 ➔ 잠실 ➔ 강동 ➔ 하남 미사)
-    drawExpressway(
-        listOf(
-            37.575 to 126.815, 37.540 to 126.895, 37.515 to 126.940, 37.508 to 126.995,
-            37.518 to 127.060, 37.522 to 127.105, 37.550 to 127.155, 37.560 to 127.205
-        )
-    )
-    // 수도권제1순환고속도로 동부·남부 (구리 ➔ 강동 ➔ 하남 서하남IC ➔ 송파IC/위례 ➔ 성남IC ➔ 판교IC ➔ 청계/평촌 ➔ 광명/부천)
-    drawExpressway(
-        listOf(
-            37.610 to 127.145, 37.555 to 127.175, 37.515 to 127.185, 37.482 to 127.138,
-            37.445 to 127.135, 37.405 to 127.102, 37.395 to 127.025, 37.380 to 126.940,
-            37.450 to 126.780, 37.550 to 126.750
-        )
-    )
-    // 경부고속도로 (한남 ➔ 반포 ➔ 양재 ➔ 판교 ➔ 기흥/수원 ➔ 동탄/평택 ➔ 천안)
-    drawExpressway(
-        listOf(
-            37.530 to 127.012, 37.495 to 127.020, 37.460 to 127.042, 37.395 to 127.102,
-            37.270 to 127.105, 37.150 to 127.095, 36.815 to 127.150
-        )
-    )
-    // 송파대로·위례중앙로·분당수서로 (잠실 ➔ 가락/문정 ➔ 위례·학암동 ➔ 성남/분당)
-    drawExpressway(
-        listOf(
-            37.513 to 127.100, 37.485 to 127.120, 37.478 to 127.145, 37.445 to 127.140, 37.385 to 127.118
-        )
-    )
-
-    // 4. 계층형 행정구역 및 동/생활권 지명 라벨 (확대 배율에 따라 겹침 없이 선명하게 표출)
-    val effectiveSpan = bounds.latSpan / userZoom
+    // 계층형 시·군·구 및 동 라벨 렌더링
     val placedRects = mutableListOf<androidx.compose.ui.geometry.Rect>()
-
     MidKoreaBounds.ANCHORS.sortedBy { it.tier }.forEach { anchor ->
-        // 현재 줌 수준에 맞는 계층의 지명만 선택
         val shouldShow = when (anchor.tier) {
-            1 -> true
-            2 -> effectiveSpan < 0.70
-            3 -> effectiveSpan < 0.38
+            1 -> zoom <= 12.8f
+            2 -> zoom in 10.0f..15.2f
+            3 -> zoom >= 11.4f
             else -> false
         }
         if (!shouldShow) return@forEach
 
         val screenPt = pt(anchor.lat, anchor.lng)
-        if (screenPt.x < 16f || screenPt.x > w - 16f || screenPt.y < 16f || screenPt.y > h - 16f) {
+        if (screenPt.x < 20f || screenPt.x > w - 20f || screenPt.y < 20f || screenPt.y > h - 20f) {
             return@forEach
         }
 
@@ -917,9 +1234,9 @@ private fun DrawScope.drawGoogleStyleKoreaBaseMap(
             else -> 9.sp
         }
         val textColor = when (anchor.tier) {
-            1 -> Color(0xFF1E293B)
-            2 -> Color(0xFF334155)
-            else -> Color(0xFF475569)
+            1 -> Color(0xFF0F172A)
+            2 -> Color(0xFF1E3A8A)
+            else -> Color(0xFF334155)
         }
         val fontWeight = when (anchor.tier) {
             1 -> FontWeight.ExtraBold
@@ -947,19 +1264,157 @@ private fun DrawScope.drawGoogleStyleKoreaBaseMap(
             bottom = topLeft.y + layout.size.height + 3f
         )
 
-        // 라벨 간 겹침(충돌) 방지
         if (placedRects.any { it.overlaps(candidateRect) }) {
             return@forEach
         }
         placedRects.add(candidateRect)
 
-        // 가독성을 위한 반투명 화이트 헤일로 배경
         drawRoundRect(
-            color = Color.White.copy(alpha = 0.78f),
-            topLeft = Offset(topLeft.x - 3f, topLeft.y - 1f),
-            size = Size(layout.size.width + 6f, layout.size.height + 2f),
+            color = Color.White.copy(alpha = if (isOverTileMap) 0.84f else 0.80f),
+            topLeft = Offset(topLeft.x - 4f, topLeft.y - 1.5f),
+            size = Size(layout.size.width + 8f, layout.size.height + 3f),
             cornerRadius = CornerRadius(4f, 4f)
         )
         drawText(textLayoutResult = layout, topLeft = topLeft)
+    }
+}
+
+/**
+ * 구글 지도 스타일의 행정구역 다각형(시·군·구), 한강/탄천 수계, 고속도로망 베이스 렌더링
+ */
+private fun DrawScope.drawGoogleStyleKoreaBaseMap(
+    w: Float,
+    h: Float,
+    centerLat: Double,
+    centerLng: Double,
+    zoom: Float,
+    baseTilePx: Float,
+    textMeasurer: TextMeasurer,
+    drawLabelsAndBorders: Boolean
+) {
+    fun pt(lat: Double, lng: Double): Offset =
+        WebMercator.toScreenOffset(lat, lng, centerLat, centerLng, zoom, w, h, baseTilePx)
+
+    // 1. 행정구역(시·군·구) 폴리곤 채우기
+    MidKoreaBounds.DISTRICT_BOUNDARIES.forEach { district ->
+        if (district.polygon.size >= 3) {
+            val screenPts = district.polygon.map { (lat, lng) -> pt(lat, lng) }
+            val polyPath = Path().apply {
+                moveTo(screenPts.first().x, screenPts.first().y)
+                for (i in 1 until screenPts.size) {
+                    lineTo(screenPts[i].x, screenPts[i].y)
+                }
+                close()
+            }
+
+            val fillColor = when (district.regionGroup) {
+                "SEOUL" -> Color(0xFFF8FAFC)
+                "GYEONGGI_EAST" -> Color(0xFFF1F5F9)
+                "GYEONGGI_SOUTH" -> Color(0xFFF4F6F9)
+                "INCHEON" -> Color(0xFFEFF6FF)
+                else -> Color(0xFFF3F4F6)
+            }
+            drawPath(path = polyPath, color = fillColor, style = Fill)
+        }
+    }
+
+    // 2. 한강 본류 및 주요 지류(탄천, 안양천) 수계 렌더링
+    val hanRiverCoords = listOf(
+        37.650 to 126.680, 37.580 to 126.810, 37.545 to 126.895, 37.528 to 126.925,
+        37.515 to 126.960, 37.525 to 127.010, 37.530 to 127.065, 37.522 to 127.105,
+        37.555 to 127.145, 37.575 to 127.195, 37.545 to 127.255, 37.520 to 127.320,
+        37.500 to 127.450
+    )
+    val hanPath = Path().apply {
+        val pts = hanRiverCoords.map { (lat, lng) -> pt(lat, lng) }
+        moveTo(pts.first().x, pts.first().y)
+        for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
+    }
+    drawPath(
+        path = hanPath,
+        color = Color(0xFF93C5FD).copy(alpha = 0.85f),
+        style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+
+    val tancheonCoords = listOf(
+        37.522 to 127.075, 37.495 to 127.095, 37.470 to 127.115, 37.435 to 127.125,
+        37.385 to 127.115, 37.330 to 127.110
+    )
+    val tancheonPath = Path().apply {
+        val pts = tancheonCoords.map { (lat, lng) -> pt(lat, lng) }
+        moveTo(pts.first().x, pts.first().y)
+        for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
+    }
+    drawPath(
+        path = tancheonPath,
+        color = Color(0xFF93C5FD).copy(alpha = 0.7f),
+        style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+
+    val anyangcheonCoords = listOf(
+        37.550 to 126.875, 37.520 to 126.885, 37.485 to 126.875, 37.440 to 126.890, 37.395 to 126.925
+    )
+    val anyangPath = Path().apply {
+        val pts = anyangcheonCoords.map { (lat, lng) -> pt(lat, lng) }
+        moveTo(pts.first().x, pts.first().y)
+        for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
+    }
+    drawPath(
+        path = anyangPath,
+        color = Color(0xFF93C5FD).copy(alpha = 0.7f),
+        style = Stroke(width = 3.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    )
+
+    // 3. 주요 간선도로·고속도로망
+    val roadColor = Color(0xFFFDE68A).copy(alpha = 0.9f)
+    val roadBorderColor = Color(0xFFF59E0B).copy(alpha = 0.55f)
+
+    fun drawExpressway(coords: List<Pair<Double, Double>>) {
+        val roadPath = Path().apply {
+            val pts = coords.map { (lat, lng) -> pt(lat, lng) }
+            moveTo(pts.first().x, pts.first().y)
+            for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
+        }
+        drawPath(roadPath, roadBorderColor, style = Stroke(width = 4.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(roadPath, roadColor, style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+    }
+
+    drawExpressway(
+        listOf(
+            37.575 to 126.815, 37.540 to 126.895, 37.515 to 126.940, 37.508 to 126.995,
+            37.518 to 127.060, 37.522 to 127.105, 37.550 to 127.155, 37.560 to 127.205
+        )
+    )
+    drawExpressway(
+        listOf(
+            37.610 to 127.145, 37.555 to 127.175, 37.515 to 127.185, 37.482 to 127.138,
+            37.445 to 127.135, 37.405 to 127.102, 37.395 to 127.025, 37.380 to 126.940,
+            37.450 to 126.780, 37.550 to 126.750
+        )
+    )
+    drawExpressway(
+        listOf(
+            37.530 to 127.012, 37.495 to 127.020, 37.460 to 127.042, 37.395 to 127.102,
+            37.270 to 127.105, 37.150 to 127.095, 36.815 to 127.150
+        )
+    )
+    drawExpressway(
+        listOf(
+            37.513 to 127.100, 37.485 to 127.120, 37.478 to 127.145, 37.445 to 127.140, 37.385 to 127.118
+        )
+    )
+
+    if (drawLabelsAndBorders) {
+        drawDistrictBoundariesOverlay(
+            w = w,
+            h = h,
+            centerLat = centerLat,
+            centerLng = centerLng,
+            zoom = zoom,
+            baseTilePx = baseTilePx,
+            textMeasurer = textMeasurer,
+            isOverTileMap = false,
+            isSatellite = false
+        )
     }
 }
