@@ -78,7 +78,7 @@ object SmsParser {
 
     private val INVALID_MERCHANT_NAMES = setOf(
         "제목", "제목없음", "제목 없음", "no subject", "nosubject",
-        "기타 가맹점", "간편결제 가맹점", "알림", "[web발신]", "web발신",
+        "가맹점", "카드 가맹점", "기타 가맹점", "간편결제 가맹점", "알림", "[web발신]", "web발신",
         "금액", "결제금액", "승인금액", "이용금액", "사용금액", "합계", "총액",
         "누적이용금액", "누적금액", "누적사용금액", "누적결제금액", "총누적", "총누적금액", "총누적이용금액", "누적",
         "결제예정금액", "결제예정액", "결제예정", "청구예정금액", "청구예정액", "청구금액",
@@ -101,13 +101,36 @@ object SmsParser {
     private val INVALID_MERCHANT_SUBSTRINGS = listOf(
         "누적이용금액", "누적사용금액", "누적결제금액", "누적금액",
         "결제예정금액", "결제예정액", "총사용금액", "총이용금액",
-        "청구예정금액", "이용대금명세서", "신용(,"
+        "청구예정금액", "이용대금명세서", "신용(,",
+        "상품권을", "상품권 증정", "상품권 지급", "상품권 받", "기프티콘", "교환권",
+        "무이자", "무이자할부", "부분무이자",
+        "할인 혜택", "할인혜택", "할인과", "등 할인", "청구할인", "즉시할인",
+        "캐시백", "페이백", "혜택", "프로모션", "이벤트",
+        "누려보세요", "만나보세요", "받아보세요", "확인해보세요", "이용해보세요", "신청해보세요",
+        "보세요", "있어요", "드려요", "받으세요", "받을 수", "받으실 수",
+        "주유소 등", "음식점,", "링크 한 번", "링크 한번", "링크로",
+        "수신거부", "무료거부", "준법감시", "심의필", "유의사항",
+        "리볼빙", "일부결제금액이월약정", "카드론", "현금서비스", "http://", "https://"
     )
 
     private val SPAM_KEYWORDS = listOf(
-        "[광고]", "(광고)", "무료수신거부", "수신거부", "인증번호", "본인확인",
+        "[광고]", "(광고)", "무료수신거부", "수신거부", "무료거부", "인증번호", "본인확인",
         "비밀번호", "로그인", "택배", "배송완료", "배송출발", "입고안내",
-        "쿠폰 지급", "쿠폰 안내", "포인트 충전 완료", "포인트 적립 안내", "이벤트 안내"
+        "쿠폰 지급", "쿠폰 안내", "포인트 충전 완료", "포인트 적립 안내", "이벤트 안내",
+        "상품권을 받을 수", "상품권 증정", "상품권 지급", "기프티콘 증정",
+        "무이자할부", "무이자 할부", "부분무이자",
+        "누려보세요", "만나보세요", "받아보세요", "확인해보세요", "이용해보세요", "신청해보세요", "참여해보세요", "챙겨보세요",
+        "링크 한 번으로", "링크 한번으로", "주유소 등 할인", "음식점, 주유소",
+        "혜택 안내", "혜택안내", "할인 혜택", "할인혜택", "적립 혜택", "적립혜택", "캐시백 혜택",
+        "준법감시", "심의필", "일부결제금액이월약정", "금리인하요구권"
+    )
+
+    private val PROMO_INSTALLMENT_RANGE_REGEX = Regex("""\d+\s*[~～-]\s*\d+\s*개월""")
+    private val PROMO_AMOUNT_CONTEXT_REGEX = Regex(
+        """[\d,]+원\s*(?:상품권|쿠폰|기프티콘|교환권|캐시백|페이백|할인|청구할인|즉시할인|적립|혜택|증정|경품|리워드|드려요|받으세요|받을\s*수|이상\s*결제|이상\s*이용|한도|무이자)|(?:최대|연간|월간|매월)\s*[\d,]+원\s*(?:할인|혜택|캐시백|적립|상품권|쿠폰)"""
+    )
+    private val EXPLICIT_APPROVAL_DATE_REGEX = Regex(
+        """(?<![0-9~～-])(?:20\d{2}[./-])?(?:0?[1-9]|1[0-2])[./-](?:0?[1-9]|[12]\d|3[01])(?:\s+\d{1,2}:\d{2}|(?![0-9~～-]|개월))|(?:0?[1-9]|1[0-2])월\s*(?:0?[1-9]|[12]\d|3[01])일"""
     )
 
     private val STOCK_OR_NEWS_KEYWORDS = listOf(
@@ -124,16 +147,28 @@ object SmsParser {
         "총사용금액", "총이용금액", "총결제금액", "총사용액", "총이용액",
         "누적이용금액 안내", "누적금액 안내", "누적사용금액 안내", "이번달 누적", "이번 달 누적",
         "출금예정", "인출예정", "납부예정", "자동납부 안내", "자동납부안내",
-        "연체 안내", "리볼빙 안내", "한도 안내", "한도안내"
+        "연체 안내", "리볼빙 안내", "한도 안내", "한도안내", "한도 상향", "한도상향",
+        "유효기간 만료", "재발급 안내", "연회비 안내"
     )
 
     private val SUMMARY_TOKENS = listOf("누적이용금액", "누적사용금액", "누적결제금액", "누적금액", "총누적", "결제예정", "총사용", "총이용")
 
     private val WON_AMOUNT_REGEX = Regex("""[\d,]+원""")
-    private val INSTALLMENT_MONTH_REGEX = Regex("""\d+개월""")
+    private val INSTALLMENT_MONTH_REGEX = Regex("""(?<![0-9~～-])\d{1,2}개월""")
     private val CARD_BRAND_1_REGEX = Regex("""(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|씨티|우체국|새마을|신협|수협|카카오뱅크|토스뱅크|케이뱅크)\s*(?:카드|체크|신용)""")
     private val CARD_BRAND_2_REGEX = Regex("""(?:NH|삼성|현대|신한|KB|롯데|우리|하나)카드?[0-9*]{2,}""")
     private val CARD_BRAND_3_REGEX = Regex("""(?:신용|체크)\s*\([,0-9*]+\)""")
+
+    /**
+     * 문자열 내에 명시적인 승인/거래 일자(MM/DD, YYYY.MM.DD, M월 D일 등)가 포함되어 있는지 확인합니다.
+     */
+    fun hasExplicitApprovalDate(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        val stripped = text.replace(PROMO_INSTALLMENT_RANGE_REGEX, " ")
+            .replace(Regex("""\b(?:15\d{2}|16\d{2}|18\d{2}|080|02|0\d{1,2})-\d{3,4}(?:-\d{4})?\b"""), " ")
+            .replace(Regex("""\b\d{3,}[-\d*]{5,}\b"""), " ")
+        return EXPLICIT_APPROVAL_DATE_REGEX.containsMatchIn(stripped)
+    }
 
     /**
      * 문자열에서 누적이용금액, 결제예정금액, 총사용금액, 잔액, 한도 등 당시 실사용 금액이 아닌 구문을 모두 제거합니다.
@@ -173,12 +208,20 @@ object SmsParser {
         if (trimmed.lowercase() in INVALID_MERCHANT_NAMES) return true
         if (containsNaverPayToken(trimmed)) return true
         if (INVALID_MERCHANT_SUBSTRINGS.any { trimmed.contains(it, ignoreCase = true) }) return true
+        // 광고/안내 문장 부호(!, ?, ~, ～) 또는 할부 개월 수가 가맹점명에 혼입된 경우 차단
+        if (trimmed.contains("!") || trimmed.contains("?") || trimmed.contains("~") || trimmed.contains("～")) return true
+        if (PROMO_INSTALLMENT_RANGE_REGEX.containsMatchIn(trimmed) || Regex("""\d+\s*개월""").containsMatchIn(trimmed)) return true
+        // 상호명이 아닌 긴 안내 문장(28자 초과 또는 마침표 뒤 복문/5어절 이상 문장) 차단
+        if (trimmed.length > 28) return true
+        if (trimmed.contains(". ") || trimmed.endsWith("다.") || trimmed.endsWith("요.")) return true
+        val wordCount = trimmed.split(Regex("""\s+""")).size
+        if (wordCount >= 5) return true
         return false
     }
 
     /**
-     * 이미 저장된 트랜잭션이나 파싱 후보가 누적이용금액/결제예정금액/총사용금액 등 비실사용 오인입 내역이거나
-     * 이력 등록 제외 대상("네이버페이")인지 판별합니다.
+     * 이미 저장된 트랜잭션이나 파싱 후보가 누적이용금액/결제예정금액/총사용금액/광고/안내 메시지 등 비실사용 오인입 내역이거나
+     * 사용처·승인일자·금액이 명확하지 않거나 이력 등록 제외 대상("네이버페이")인지 판별합니다.
      */
     fun isNonUsageOrCorruptedTransaction(
         merchantName: String?,
@@ -192,11 +235,12 @@ object SmsParser {
             return true
         }
         if (isNonPaymentMessage(originalText)) return true
+        if (!merchantName.isNullOrBlank() && isNonPaymentMessage(merchantName)) return true
         return false
     }
 
     /**
-     * 주식/증권 시황 브리핑, 뉴스레터, 광고, 본인인증, 이력 제외 대상("네이버페이") 및
+     * 주식/증권 시황 브리핑, 뉴스레터, 광고/혜택 안내, 본인인증, 이력 제외 대상("네이버페이") 및
      * 누적이용금액·결제예정금액·총사용금액·명세서 안내 등 당시 사용된 결제 내역이 아닌 문자인지 판별합니다.
      */
     fun isNonPaymentMessage(body: String): Boolean {
@@ -208,8 +252,14 @@ object SmsParser {
             return true
         }
 
-        // 1. 광고 / 인증 / 쿠폰·포인트 안내 문자 즉시 차단
+        // 1. 광고 / 혜택 / 무이자할부 안내 / 인증 / 쿠폰·포인트 안내 문자 즉시 차단
         if (SPAM_KEYWORDS.any { clean.contains(it, ignoreCase = true) }) {
+            return true
+        }
+        if (PROMO_INSTALLMENT_RANGE_REGEX.containsMatchIn(clean)) {
+            return true
+        }
+        if (PROMO_AMOUNT_CONTEXT_REGEX.containsMatchIn(clean)) {
             return true
         }
 
@@ -233,11 +283,11 @@ object SmsParser {
             // 누적/총사용 키워드 뒤에 금액이 바로 붙은 부가정보 형태가 아니라 헤더로 쓰이고 별도 줄에 '금액 211,254원'만 있는 안내문 차단
             val hasExplicitApprovalContext = stripped.contains("승인") ||
                 stripped.contains("일시불") ||
-                stripped.contains("할부") ||
                 stripped.contains("사용처") ||
                 stripped.contains("가맹점") ||
                 stripped.contains("(결제)") ||
-                stripped.contains("[결제]")
+                stripped.contains("[결제]") ||
+                stripped.contains("체크출금")
             if (!hasExplicitApprovalContext) {
                 return true
             }
@@ -250,24 +300,28 @@ object SmsParser {
         val clean = body.trim()
         if (isNonPaymentMessage(clean)) return false
 
-        val hasApprovalAction = clean.contains("승인") ||
-            clean.contains("일시불") ||
-            clean.contains("할부") ||
-            INSTALLMENT_MONTH_REGEX.containsMatchIn(clean) ||
-            clean.contains("사용처") ||
-            clean.contains("가맹점") ||
-            clean.contains("(결제)") ||
-            clean.contains("[결제]") ||
-            clean.contains("체크출금")
+        val cleanForAction = clean
+            .replace("무이자할부", " ")
+            .replace("무이자 할부", " ")
+            .replace("부분무이자", " ")
+            .replace(PROMO_INSTALLMENT_RANGE_REGEX, " ")
 
-        val hasCardBrand = CARD_BRAND_1_REGEX.containsMatchIn(clean) ||
-            CARD_BRAND_2_REGEX.containsMatchIn(clean) ||
-            CARD_BRAND_3_REGEX.containsMatchIn(clean)
+        val hasApprovalAction = cleanForAction.contains("승인") ||
+            cleanForAction.contains("일시불") ||
+            cleanForAction.contains("사용처") ||
+            cleanForAction.contains("가맹점") ||
+            cleanForAction.contains("(결제)") ||
+            cleanForAction.contains("[결제]") ||
+            cleanForAction.contains("체크출금")
 
-        val isPureAccountTransfer = (clean.contains("입금") || clean.contains("송금") || clean.contains("계좌이체")) &&
-            !clean.contains("승인") && !clean.contains("일시불") && !clean.contains("할부") && !clean.contains("사용처")
+        val hasCardBrand = CARD_BRAND_1_REGEX.containsMatchIn(cleanForAction) ||
+            CARD_BRAND_2_REGEX.containsMatchIn(cleanForAction) ||
+            CARD_BRAND_3_REGEX.containsMatchIn(cleanForAction)
 
-        return (hasApprovalAction || (hasCardBrand && clean.contains("결제"))) && !isPureAccountTransfer
+        val isPureAccountTransfer = (cleanForAction.contains("입금") || cleanForAction.contains("송금") || cleanForAction.contains("계좌이체")) &&
+            !cleanForAction.contains("승인") && !cleanForAction.contains("일시불") && !cleanForAction.contains("사용처")
+
+        return (hasApprovalAction || (hasCardBrand && cleanForAction.contains("결제완료"))) && !isPureAccountTransfer
     }
 
     private fun resolveTimestamp(
@@ -554,23 +608,29 @@ object SmsParser {
         val m = pattern.matcher(body)
         if (m.find()) {
             val rawAmount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
+            if (rawAmount <= 0L) return null
             val amount = if (isCancel) -rawAmount else rawAmount
             val cardName = "KB국민카드"
 
-            var timestamp = fallbackDateTime
             val monthStr = m.group("month")
             val dayStr = m.group("day")
             val hourStr = m.group("hour")
             val minuteStr = m.group("minute")
-            if (!monthStr.isNullOrBlank() && !dayStr.isNullOrBlank()) {
+            if (monthStr.isNullOrBlank() || dayStr.isNullOrBlank()) {
+                // 승인일자가 명시되지 않은 KB 안내 문자는 집계 제외
+                if (!hasExplicitApprovalDate(body)) return null
+            }
+            val timestamp = if (!monthStr.isNullOrBlank() && !dayStr.isNullOrBlank()) {
                 val mo = monthStr.toIntOrNull() ?: fallbackDateTime.monthValue
                 val da = dayStr.toIntOrNull() ?: fallbackDateTime.dayOfMonth
                 val ho = hourStr?.toIntOrNull() ?: fallbackDateTime.hour
                 val mi = minuteStr?.toIntOrNull() ?: fallbackDateTime.minute
-                timestamp = resolveTimestamp(fallbackDateTime, mo, da, ho, mi)
+                resolveTimestamp(fallbackDateTime, mo, da, ho, mi)
+            } else {
+                fallbackDateTime
             }
 
-            val rawMerchant = m.group("merchant")?.trim() ?: "KB국민카드 가맹점"
+            val rawMerchant = m.group("merchant")?.trim() ?: return null
             val merchant = cleanMerchantName(rawMerchant)
             if (isInvalidMerchantName(merchant) || merchant == "가맹점") return null
 
@@ -692,8 +752,12 @@ object SmsParser {
         val amount = amtMatch?.groups?.get("amt")?.value?.replace(",", "")?.toLongOrNull() ?: return null
         if (amount <= 0) return null
 
-        // 2. 날짜/시간 추출
+        // 2. 날짜/시간 추출 (승인/입출금 일자나 계좌번호·잔액 근거가 전혀 없는 안내 메시지는 차단)
         val dateMatch = Regex("""(?<month>\d{1,2})[./-](?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})""").find(body)
+        val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(body)
+        if (dateMatch == null && !hasExplicitApprovalDate(body) && accMatch == null && balanceMatch == null) {
+            return null
+        }
         val timestamp = if (dateMatch != null) {
             val mo = dateMatch.groups["month"]?.value?.toIntOrNull() ?: fallbackDateTime.monthValue
             val da = dateMatch.groups["day"]?.value?.toIntOrNull() ?: fallbackDateTime.dayOfMonth
@@ -721,7 +785,6 @@ object SmsParser {
         }
 
         // 4. 계좌번호 추출
-        val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(body)
         val accNo = accMatch?.groups?.get("acc")?.value
 
         // 5. 수취인/입금자/가맹점 추출: 잔액, 금액, 일시, 계좌번호, 은행명, 특수문자 제거 후 남은 이름 추출
@@ -748,7 +811,8 @@ object SmsParser {
                 cand.length >= 2 &&
                     !cand.contains("은행") &&
                     !cand.contains("알림") &&
-                    !cand.matches(Regex("""^[\d\s-]+$"""))
+                    !cand.matches(Regex("""^[\d\s-]+$""")) &&
+                    !isInvalidMerchantName(cand)
             }
             .toList()
 
@@ -762,6 +826,7 @@ object SmsParser {
         } else {
             if (isDeposit) "입금 내역" else "출금 내역"
         }
+        if (isInvalidMerchantName(merchant)) return null
 
         val memoParts = mutableListOf<String>()
         if (!accNo.isNullOrBlank()) memoParts.add("계좌: $accNo")
@@ -795,6 +860,7 @@ object SmsParser {
         val m = pattern.matcher(body)
         if (m.find()) {
             val rawAmount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
+            if (rawAmount <= 0L) return null
             val amount = if (isCancel) -rawAmount else rawAmount
             val rawCardName = m.group("cardHeader") ?: m.group("cardName") ?: sender ?: "신용카드"
             val fullCardName = ExpenseCustomMetaPreferences.inferCanonicalCardCompany(rawCardName, body) ?: rawCardName
@@ -803,6 +869,11 @@ object SmsParser {
             val dayStr = m.group("day")
             val hourStr = m.group("hour")
             val minuteStr = m.group("minute")
+
+            // 승인일자(MM/DD 등)가 명확하지 않은 광고/안내 문자는 절대 거래로 집계하지 않음
+            if (monthStr.isNullOrBlank() || dayStr.isNullOrBlank()) {
+                if (!hasExplicitApprovalDate(body)) return null
+            }
 
             val timestamp = if (!monthStr.isNullOrBlank() && !dayStr.isNullOrBlank()) {
                 val mo = monthStr.toIntOrNull() ?: fallbackDateTime.monthValue
@@ -814,7 +885,7 @@ object SmsParser {
                 fallbackDateTime
             }
 
-            val rawMerchant = m.group("merchant")?.trim() ?: "카드 가맹점"
+            val rawMerchant = m.group("merchant")?.trim() ?: return null
             val merchant = cleanMerchantName(rawMerchant)
             if (isInvalidMerchantName(merchant)) return null
 
@@ -849,8 +920,12 @@ object SmsParser {
         if (rawAmount <= 0L) return null
         val amount = if (isCancel) -rawAmount else rawAmount
 
-        // 2. 날짜/시간 추출
-        val dateMatch = Regex("""(?:20\d{2}[./-])?(?<month>\d{1,2})[./-](?<day>\d{1,2})(?:\s+(?<hour>\d{1,2}):(?<minute>\d{1,2}))?""").find(bodyWithoutAccum)
+        // 2. 날짜/시간 추출 및 명시적 가맹점 라벨 확인 (승인일자와 명시적 사용처 라벨이 모두 없는 불명확 문자는 차단)
+        val explicitMerMatch = Regex("""(?:사용처|가맹점명?|이용처)\s*[:：]\s*(?<mer>[^\n\r]+)""").find(bodyWithoutAccum)
+        val dateMatch = Regex("""(?:20\d{2}[./-])?(?<month>0?[1-9]|1[0-2])[./-](?<day>0?[1-9]|[12]\d|3[01])(?:\s+(?<hour>\d{1,2}):(?<minute>\d{1,2}))?""").find(bodyWithoutAccum)
+        if (dateMatch == null && explicitMerMatch == null && !hasExplicitApprovalDate(bodyWithoutAccum)) {
+            return null
+        }
         val timestamp = if (dateMatch != null) {
             val mo = dateMatch.groups["month"]?.value?.toIntOrNull() ?: fallbackDateTime.monthValue
             val da = dateMatch.groups["day"]?.value?.toIntOrNull() ?: fallbackDateTime.dayOfMonth
@@ -879,7 +954,6 @@ object SmsParser {
             }
 
         // 4. 가맹점명 추출 (명시적 라벨 우선 -> 슬래시 구분자 -> 라인별 정제 추출)
-        val explicitMerMatch = Regex("""(?:사용처|가맹점명?|이용처)\s*[:：]\s*(?<mer>[^\n\r]+)""").find(bodyWithoutAccum)
         val slashMerMatch = Regex("""(?<mer>[^\n\r/]+?)\s*/\s*(?:신용|체크)\s*\(""").find(bodyWithoutAccum)
         val merchant = when {
             explicitMerMatch != null -> {
@@ -936,12 +1010,15 @@ object SmsParser {
     }
 
     private fun parseSimplePay(body: String, fallbackDateTime: LocalDateTime): Transaction? {
-        if (isNaverPayExcluded(originalText = body)) return null
+        if (isNaverPayExcluded(originalText = body) || isNonPaymentMessage(body)) return null
+        val hasPayAction = body.contains("결제완료") || body.contains("결제") || body.contains("승인") || body.contains("송금") || body.contains("보냈어요")
+        if (!hasPayAction || !hasExplicitApprovalDate(body)) return null
         if (body.contains("카카오페이") || body.contains("토스")) {
             val amtPattern = Pattern.compile("""(?<amount>[\d,]+)원""")
             val m = amtPattern.matcher(body)
             if (m.find()) {
                 val amount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
+                if (amount <= 0L) return null
                 val method = when {
                     body.contains("카카오페이") -> PaymentMethod.KAKAO_PAY
                     else -> PaymentMethod.TOSS_PAY
@@ -975,15 +1052,15 @@ object SmsParser {
     }
 
     private fun parseFallback(body: String, sender: String?, fallbackDateTime: LocalDateTime): Transaction? {
-        // 명시적인 결제/승인/일시불/할부/출금 키워드가 전혀 없는 단순 숫자+'원' 포함 문자는 거래로 파싱하지 않음
-        val hasPaymentKeyword = body.contains("승인") || body.contains("결제") ||
-            body.contains("일시불") || body.contains("할부") || body.contains("체크출금")
-        if (!hasPaymentKeyword || isNonPaymentMessage(body)) return null
+        // 승인일자와 명시적인 결제/승인/일시불/체크출금 키워드가 모두 명확한 경우에만 거래로 파싱
+        val hasPaymentKeyword = body.contains("승인") || body.contains("일시불") || body.contains("체크출금")
+        if (!hasPaymentKeyword || !hasExplicitApprovalDate(body) || isNonPaymentMessage(body)) return null
 
         val amtPattern = Pattern.compile("""(?<amount>[\d,]+)원""")
         val m = amtPattern.matcher(body)
         if (m.find()) {
             val amount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
+            if (amount <= 0L) return null
             val lines = body.split("\n").map { it.trim() }.filter {
                 it.isNotEmpty() &&
                     it.lowercase() !in INVALID_MERCHANT_NAMES &&
@@ -992,7 +1069,7 @@ object SmsParser {
             }
             val rawLast = lines.lastOrNull() ?: return null
             val merchant = cleanMerchantName(rawLast)
-            if (isInvalidMerchantName(merchant) || merchant == "가맹점" || merchant.length > 30) return null
+            if (isInvalidMerchantName(merchant) || merchant == "가맹점" || merchant.length > 28) return null
 
             val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = body)
             return Transaction(

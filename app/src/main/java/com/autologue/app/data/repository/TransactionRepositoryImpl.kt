@@ -488,9 +488,19 @@ class TransactionRepositoryImpl @Inject constructor(
             }
             val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(tx.merchantName, isDeposit) || savedBaseCategory != null
 
-            // 1-1. 비결제 문자(주식 시황, 광고, 뉴스, 누적/결제예정/총사용 안내 등) 또는 무효 가맹점명 레코드 정리
+            val lacksExplicitApprovalDate = !isManual &&
+                raw.isNotBlank() &&
+                !com.autologue.app.data.parser.SmsParser.hasExplicitApprovalDate(raw) &&
+                !(raw.contains("금액") && (raw.contains("사용처") || raw.contains("가맹점"))) &&
+                !raw.contains("카카오페이") &&
+                !raw.contains("토스") &&
+                !raw.startsWith("[네이버")
+
+            // 1-1. 비결제 문자(주식 시황, 광고, 뉴스, 누적/결제예정/총사용 안내, 승인일자 불명확 등) 또는 무효 가맹점명 레코드 정리
             if (!isManual && (
+                    lacksExplicitApprovalDate ||
                     com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(raw) ||
+                    com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(tx.merchantName) ||
                     (!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName))
                 )
             ) {

@@ -32,13 +32,44 @@ class VehicleRepositoryImpl @Inject constructor(
         return note?.contains("[one_time_edit:true]") == true
     }
 
+    private fun isCorruptedOrAdVehicleLog(
+        logType: VehicleLogType,
+        stationName: String?,
+        note: String?
+    ): Boolean {
+        if (logType != VehicleLogType.REFUELING &&
+            logType != VehicleLogType.PARKING &&
+            logType != VehicleLogType.MAINTENANCE
+        ) {
+            return false
+        }
+        val clean = stationName?.trim() ?: ""
+        if (clean.isBlank()) return false
+        if (com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(clean)) {
+            return true
+        }
+        val noteStr = note ?: ""
+        val isExplicitManualInput = noteStr.contains("직접 등록") || noteStr.contains("직접 입력")
+        if (isExplicitManualInput && !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(clean)) {
+            return false
+        }
+        val isUserAliased = isOneTimeFuelLog(noteStr) || merchantAliasPreferences.isKnownAliasTarget(clean)
+        return !isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(clean)
+    }
+
     private fun isProtectedFuelStation(stationName: String, note: String?): Boolean {
         val clean = stationName.trim()
         if (clean.isBlank()) return false
+        if (com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(clean) ||
+            com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(clean)
+        ) {
+            return false
+        }
         val noteStr = note ?: ""
+        val isAutoSynced = noteStr.contains("가계부 결제 내역 자동 분석")
         val isManualRefuel = noteStr.contains("직접 등록") ||
             noteStr.contains("직접 입력") ||
-            noteStr.contains("카테고리 변경 연동") ||
+            (!isAutoSynced && noteStr.contains("카테고리 변경 연동")) ||
             noteStr.contains("[custom_fuel:true]") ||
             noteStr.contains("[custom_name:true]") ||
             noteStr.contains("[one_time_edit:true]")
@@ -52,7 +83,10 @@ class VehicleRepositoryImpl @Inject constructor(
             vehicleLogDao.getAllVehicleLogs(),
             merchantAliasPreferences.aliasesFlow
         ) { list, _ ->
-            list.map { e -> e.toDomain().normalizeInflatedDrivingLog() }
+            list.asSequence()
+                .filterNot { e -> isCorruptedOrAdVehicleLog(e.logType, e.gasStationName, e.note) }
+                .map { e -> e.toDomain().normalizeInflatedDrivingLog() }
+                .toList()
         }
     }
 
@@ -61,11 +95,17 @@ class VehicleRepositoryImpl @Inject constructor(
             vehicleLogDao.getRefuelingLogs(),
             merchantAliasPreferences.aliasesFlow
         ) { list, _ ->
-            list.map { e -> e.toDomain() }
+            list.asSequence()
+                .filterNot { e -> isCorruptedOrAdVehicleLog(e.logType, e.gasStationName, e.note) }
+                .map { e -> e.toDomain() }
+                .toList()
         }
     }
 
     override suspend fun insertVehicleLog(log: VehicleLog): Long = withContext(Dispatchers.IO) {
+        if (isCorruptedOrAdVehicleLog(log.logType, log.gasStationName, log.note)) {
+            return@withContext -1L
+        }
         val normalizedTypeLog = if (log.logType == VehicleLogType.REFUELING && log.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON) {
             log.copy(
                 logType = VehicleLogType.PARKING,
@@ -251,16 +291,18 @@ class VehicleRepositoryImpl @Inject constructor(
     override suspend fun syncRefuelingFromTransactions(transactions: List<com.autologue.app.domain.model.Transaction>): Int = withContext(Dispatchers.IO) {
         var addedCount = 0
 
-        // 가계부에서 명시적으로 주유/충전 또는 차량정비/세차 카테고리로 지정된 가맹점 집합
+        // 가계부에서 명시적으로 주유/충전 또는 차량정비/세차 카테고리로 지정된 가맹점 집합 (광고/비결제/무효 상호명 제외)
         val explicitVehicleTxKeys = transactions
-            .filter {
-                it.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
-                    it.category == com.autologue.app.domain.model.ExpenseCategory.CAR_MAINTENANCE
+            .filter { tx ->
+                !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(tx.merchantName) &&
+                    !com.autologue.app.data.parser.SmsParser.isNonPaymentMessage(tx.originalText) &&
+                    (tx.category == com.autologue.app.domain.model.ExpenseCategory.FUEL ||
+                        tx.category == com.autologue.app.domain.model.ExpenseCategory.CAR_MAINTENANCE)
             }
             .map { "${it.timestamp.toLocalDate()}_${it.amount}" }
             .toSet()
 
-        // 0. 기존 차계부 DB에 잘못 들어간 '제목' 등 비정상 주유 로그 선제 정리, 3만원 미만 주유 내역의 주차(PARKING) 전환 및 사용자 지정 별칭 자동 치환
+        // 0. 기존 차계부 DB에 잘못 들어간 광고/안내/비정상 로그 선제 삭제, 3만원 미만 주유 내역의 주차(PARKING) 전환 및 사용자 지정 별칭 자동 치환
         val initialLogs = vehicleLogDao.getAllVehicleLogsSync()
         for (entity in initialLogs) {
             if (entity.logType == VehicleLogType.REFUELING ||
@@ -273,6 +315,14 @@ class VehicleRepositoryImpl @Inject constructor(
                 } else {
                     merchantAliasPreferences.resolveAlias(rawStation, isDeposit = false)
                 }
+                val candidateStation = if (resolvedStation.isNotBlank()) resolvedStation else rawStation
+                if (isCorruptedOrAdVehicleLog(entity.logType, rawStation, entity.note) ||
+                    isCorruptedOrAdVehicleLog(entity.logType, candidateStation, entity.note)
+                ) {
+                    vehicleLogDao.deleteVehicleLogById(entity.id)
+                    continue
+                }
+
                 val isUnderMinRefuel = entity.logType == VehicleLogType.REFUELING &&
                     entity.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
                 val targetType = if (isUnderMinRefuel) VehicleLogType.PARKING else entity.logType
@@ -566,14 +616,26 @@ class VehicleRepositoryImpl @Inject constructor(
                 continue
             }
 
-            // 0. '제목' 등 비결제 MMS 제목 컬럼 오탐으로 생성된 가짜 주유 레코드 삭제, 3만원 미만 주차(PARKING) 전환 및 별칭 자동 치환
-            if (log.logType == VehicleLogType.REFUELING || log.logType == VehicleLogType.PARKING) {
+            // 0. 광고/안내/비정상 상호명 오탐 레코드 즉시 삭제, 3만원 미만 주차(PARKING) 전환 및 별칭 자동 치환
+            if (log.logType == VehicleLogType.REFUELING ||
+                log.logType == VehicleLogType.PARKING ||
+                log.logType == VehicleLogType.MAINTENANCE
+            ) {
                 val rawStation = log.gasStationName?.trim() ?: ""
                 val resolvedStation = if (isOneTimeFuelLog(note)) {
                     rawStation
                 } else {
                     merchantAliasPreferences.resolveAlias(rawStation)
                 }
+                val candidateStation = if (resolvedStation.isNotBlank()) resolvedStation else rawStation
+                if (isCorruptedOrAdVehicleLog(log.logType, rawStation, note) ||
+                    isCorruptedOrAdVehicleLog(log.logType, candidateStation, note)
+                ) {
+                    vehicleLogDao.deleteVehicleLogById(log.id)
+                    modifiedCount++
+                    continue
+                }
+
                 val isUnderMinRefuel = log.logType == VehicleLogType.REFUELING &&
                     log.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
                 if ((resolvedStation.isNotBlank() && resolvedStation != rawStation) || isUnderMinRefuel) {

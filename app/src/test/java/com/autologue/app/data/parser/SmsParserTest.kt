@@ -389,6 +389,49 @@ class SmsParserTest {
         assertEquals(1, dedupedDb.size)
         assertEquals("DB손해보험(실비보상)", dedupedDb.first().merchantName)
     }
+
+    @Test
+    fun `사용처와 승인일자 및 금액이 명확하지 않은 카드 혜택 및 광고 안내 메시지는 집계되지 않고 기존 차계부 DB에서도 즉시 삭제되어야 한다`() {
+        val promoAdBody = """
+            [Web발신]
+            10,000원 상품권을 받을 수 있어요. 음식점, 주유소 등 할인과 2~5개월 무이자할부도 링크 한 번으로 누려보세요!
+        """.trimIndent()
+        val promoAdMerchant = "상품권을 받을 수 있어요. 음식점, 주유소 등 할인과 2~5개월 무이자할부도 링크 한 번으로 누려보세요!"
+
+        // 1. 비결제 광고/안내 메시지 및 무효 가맹점명 판별 검증
+        assertTrue(SmsParser.isNonPaymentMessage(promoAdBody))
+        assertTrue(SmsParser.isNonPaymentMessage(promoAdMerchant))
+        assertTrue(SmsParser.isInvalidMerchantName(promoAdMerchant))
+        assertFalse(SmsParser.isCardApprovalMessage(promoAdBody))
+        assertFalse(SmsParser.hasExplicitApprovalDate(promoAdBody))
+
+        // 2. SmsParser 및 NotificationParser 원천 차단 검증
+        assertNull(SmsParser.parse("삼성카드", promoAdBody))
+        assertNull(
+            NotificationParser.parse(
+                packageName = "com.samsung.android.messaging",
+                title = "삼성카드",
+                text = promoAdBody
+            )
+        )
+
+        // 3. 승인일자가 없는 불명확한 문자 역시 파싱되지 않아야 함
+        val noDateAmbiguousSms = "[Web발신] 신한카드 10,000원 주유소 할인 이벤트 안내"
+        assertFalse(SmsParser.hasExplicitApprovalDate(noDateAmbiguousSms))
+        assertNull(SmsParser.parse("신한카드", noDateAmbiguousSms))
+
+        // 4. 이미 DB에 잘못 저장된 트랜잭션 레코드 판별 검증
+        assertTrue(
+            SmsParser.isNonUsageOrCorruptedTransaction(
+                merchantName = promoAdMerchant,
+                cardOrBankName = "삼성카드",
+                originalText = promoAdBody
+            )
+        )
+        assertFalse(
+             com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(promoAdMerchant)
+        )
+    }
 }
 
 

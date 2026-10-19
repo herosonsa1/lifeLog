@@ -2846,3 +2846,32 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - `CarLedgerViewModel.loadData()`에서 각 차량별로 독립적인 주유 간격·연비 계산(`FuelEconomyCalculator.calculateForVehicle`)을 먼저 수행한 뒤, `'전체'` 선택 시에는 모든 차량의 기록과 통합 통계(전체 주행거리, 전체 주유비, 통합 평균 연비)를 표시하고, 개별 차량(`벤츠`, `볼보`) 선택 시에는 해당 차량의 기록과 통계만 필터링하여 표시하도록 구현.
 - **산출물 및 배포**: `나의일상다이어리_v1.0.22.apk` (`versionCode = 23`).
 
+---
+
+## 81. 사용처·승인일자·금액이 불명확한 광고/안내 메시지 집계 차단 및 기존 차계부·가계부 DB 오염 데이터 즉시 제거 (2026-10-19, `v1.0.23`)
+
+### 81.1. 사용자 핵심 요청 사항 및 제보 화면
+- **요청 원문**:
+  > *"지금 조회되는 항목과 같이, 사용처와 승인일자, 금액이 명확하지 않은 항목은 집계하지마. 광고/안내 메세지야."*
+- **첨부 화면 (`media_1792395470707_d3de5079.png`) 분석**:
+  - `스마트 차계부` 내역에 `"상품권을 받을 수 있어요. 음식점, 주유소 등 할인과 2~5개월 무이자할부도 링크 한 번으로 누려보세요!"` (`10,000원`)와 같은 카드사 혜택·이벤트·무이자할부 안내 문자가 주유소(`"주유소 등"`) 및 할부(`"무이자할부"`) 키워드 매칭으로 인해 차계부 및 가계부에 오인입되어 집계되고 있었음.
+
+### 81.2. 결함 원인 분석
+1. **`"무이자할부"` 내 `"할부"` 키워드 및 `"주유소 등"` 문구의 오탐 (`SmsParser.kt`)**:
+   - 카드사 프로모션 문구의 `"2~5개월 무이자할부"`에 포함된 `"할부"`와 혜택 금액(`"10,000원 상품권"`)이 결합되어 카드 승인 문자로 오판되었고, `"음식점, 주유소 등 할인"`의 `"주유소"` 키워드로 인해 주유(`ExpenseCategory.FUEL`) 카테고리로 분류됨.
+   - 또한 문자 본문에 명시적인 승인일자(`MM/DD` 등)가 없거나 `2~5개월` 범위 표기가 날짜 패턴과 혼동될 여지가 있었음.
+2. **차계부 자동 연동 노트의 수동 보호 오판 및 3만원 미만 `PARKING` 선전환 (`VehicleRepositoryImpl.kt`)**:
+   - `syncRefuelingFromTransactions()`가 자동 생성한 주유 로그 노트에 `"가계부 결제 내역 자동 분석 [카테고리 변경 연동]"`을 기록했는데, `isProtectedFuelStation()`이 `"카테고리 변경 연동"` 포함 항목을 모두 수동 보호 대상으로 간주하여 삭제에서 제외하고 있었음.
+   - 또한 `10,000원`짜리 광고 레코드를 무효 가맹점 삭제 단계 이전에 3만원 미만 `VehicleLogType.PARKING`으로 먼저 전환하여 `REFUELING` 전용 삭제 조건을 우회함.
+
+### 81.3. 주요 개선 및 구현 내역
+1. **사용처·승인일자·금액 3요소 명확성 검증 및 광고/혜택/안내 메시지 원천 차단 ([`SmsParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/SmsParser.kt))**:
+   - `hasExplicitApprovalDate(text)` 신설: 할부 개월 범위(`2~5개월`), 전화번호, 계좌번호를 먼저 제거한 뒤 명시적 승인일자(`MM/DD`, `YYYY.MM.DD`, `M월 D일` 등)가 실제로 존재하는지 검증하고, 승인일자가 불명확한 문자는 `parseKbCard`, `parseStandardCard`, `parseUniversalCardSms`, `parseBankTransferSms`, `parseSimplePay`, `parseFallback`에서 즉시 `null` 반환.
+   - `PROMO_INSTALLMENT_RANGE_REGEX`(`\d+\s*[~～-]\s*\d+\s*개월`) 및 `PROMO_AMOUNT_CONTEXT_REGEX`(`10,000원 상품권/할인/캐시백/혜택/무이자` 등)를 추가하여 프로모션 금액 문맥과 할부 개월 범위 안내를 `isNonPaymentMessage()`에서 즉시 차단.
+   - `isCardApprovalMessage()`에서 `"무이자할부"`, `"무이자 할부"`, `"부분무이자"` 및 `2~5개월`을 선제 제거하고 단순 `"할부"` 단독 키워드를 제거하여 명시적 승인 키워드(`승인`, `일시불`, `사용처`, `가맹점`, `(결제)`, `[결제]`, `체크출금`)가 있을 때만 카드 승인 문자로 인정.
+   - `isInvalidMerchantName()` 강화: 느낌표(`!`), 물음표(`?`), 물결표(`~`), 할부 개월(`\d+개월`), 28자 초과 장문, 5어절 이상 서술형 문장(`. `, `다.`, `요.`), 광고/혜택 어휘(`"상품권을"`, `"무이자"`, `"할인과"`, `"등 할인"`, `"누려보세요"`, `"있어요"`, `"받을 수"`, `"주유소 등"`, `"음식점,"`, `"링크 한 번"` 등)가 포함된 경우 무효 가맹점명으로 판정.
+2. **차계부 및 가계부 기존 DB 오염 레코드 0ms 화면 필터링 및 영구 삭제 ([`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt), [`TransactionRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt))**:
+   - `VehicleRepositoryImpl.isCorruptedOrAdVehicleLog()`를 신설하여 `SmsParser.isNonPaymentMessage(station)` 또는 `SmsParser.isInvalidMerchantName(station)`에 해당하는 `REFUELING` / `PARKING` / `MAINTENANCE` 레코드를 `getAllVehicleLogsFlow()`와 `getRefuelingLogsFlow()`에서 0ms 즉시 필터링하고, `syncRefuelingFromTransactions()` 및 `cleanDuplicatesAndCorruptedLogs()` 최상단(3만원 미만 `PARKING` 전환 이전)에서 DB 영구 삭제(`deleteVehicleLogById`).
+   - `isProtectedFuelStation()`에서 `"가계부 결제 내역 자동 분석"` 노트는 수동 보호 대상에서 제외.
+   - `TransactionRepositoryImpl.cleanInvalidTransactions()`에서도 승인일자가 불명확하거나 가맹점명이 광고/비결제 문구인 기존 트랜잭션을 즉시 삭제.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.23.apk` (`versionCode = 24`).
