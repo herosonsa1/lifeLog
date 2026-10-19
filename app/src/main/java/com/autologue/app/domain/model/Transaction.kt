@@ -179,6 +179,79 @@ object TransactionDeduplicator {
     private val BALANCE_EXTRACT_REGEX = Regex("""잔액\s*[:：]?\s*(?<bal>[\d,]+)원?""")
     private val DIRECTION_SUFFIX_CLEAN_REGEX = Regex("""\s*\((?:입금|출금)\)\s*$""")
 
+    // "카드 6", "카드 2", "카드6", "NH카드 6", "농협카드 2", "체크카드 출금", "카드 6*9*" 등 카드번호 파편/일반 플레이스홀더 정규식
+    private val CARD_PLACEHOLDER_MERCHANT_REGEX = Regex(
+        """^(?:(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*)?(?:체크\s*|신용\s*)?(?:카드|체크)(?:\s*[-*0-9()]+|\s*(?:출금|결제|승인|사용|내역))?(?:\s*\((?:출금|입금)\))?$""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // "계좌: 1588-1600", "계좌: 1644-4000", "계좌: 1800-1111" 등 고객센터 대표번호가 계좌번호로 오탐된 메모 정규식
+    private val CUSTOMER_SERVICE_PHONE_AS_ACCOUNT_REGEX = Regex(
+        """계좌\s*[:：]\s*(?:15|16|18)\d{2}-\d{4}\b"""
+    )
+
+    /**
+     * 가맹점명이 "카드 6", "카드 2", "출금 내역", "계좌 이체" 등 구체적인 상호명이 아닌
+     * 카드번호 파편 또는 일반 플레이스홀더인지 판별합니다.
+     */
+    fun isGenericOrCardPlaceholderMerchant(merchantName: String?, transferMemo: String? = null): Boolean {
+        if (merchantName.isNullOrBlank()) return true
+        val rawTrimmed = merchantName.trim()
+        val clean = rawTrimmed.replace(DIRECTION_SUFFIX_CLEAN_REGEX, "").trim()
+        if (clean.isBlank()) return true
+        if (rawTrimmed in GENERIC_TRANSFER_PLACEHOLDERS || clean in GENERIC_TRANSFER_PLACEHOLDERS) return true
+        if (CARD_PLACEHOLDER_MERCHANT_REGEX.matches(rawTrimmed) || CARD_PLACEHOLDER_MERCHANT_REGEX.matches(clean)) return true
+        if (clean.matches(Regex("""^(?:카드|체크)\s*\d+[\d*()-]*$"""))) return true
+        return false
+    }
+
+    /**
+     * 메모에 "계좌: 1588-1600" 등 카드사/은행 고객센터 대표 전화번호가 계좌번호로 잘못 들어가 있는지 판별합니다.
+     */
+    fun hasCustomerServicePhoneAsAccount(transferMemo: String?): Boolean {
+        if (transferMemo.isNullOrBlank()) return false
+        return CUSTOMER_SERVICE_PHONE_AS_ACCOUNT_REGEX.containsMatchIn(transferMemo)
+    }
+
+    /**
+     * 결제명(가맹점명)의 상세도 점수를 산출합니다.
+     * - "카드 6", "카드 2", "출금 내역" 등 플레이스홀더/파편: 음수(-4,000 ~ -3,000)
+     * - "한화정선우" 등 통장 인자 축약명: 음수(-500)
+     * - 실제 상호명: 기본 점수(+1,500) + 지점/상세 괄호 정보 보너스(+600) + 유의미 글자 수 비례 점수(글자당 +40, 최대 +800)
+     */
+    fun scoreMerchantDetailLevel(merchantName: String, transferMemo: String? = null): Int {
+        val mer = merchantName.trim()
+        if (isGenericOrCardPlaceholderMerchant(mer, transferMemo)) {
+            return if (hasCustomerServicePhoneAsAccount(transferMemo)) -4_000 else -3_000
+        }
+        if (hasCustomerServicePhoneAsAccount(transferMemo) && mer.length <= 5) {
+            return -2_500
+        }
+        if (mer.endsWith("정선우") || mer.endsWith("정*우")) {
+            return -500
+        }
+
+        val cleanMer = mer.replace(DIRECTION_SUFFIX_CLEAN_REGEX, "").trim()
+        var detailScore = 1_500
+
+        // 지점명이나 상세 내역이 괄호로 포함된 경우 (예: "아이스크림살래(힐스점)", "한화손해(실비보상)") 가산점
+        if (cleanMer.contains("(") && cleanMer.contains(")") &&
+            !cleanMer.endsWith("(주)") && !cleanMer.endsWith("(유)")
+        ) {
+            detailScore += 600
+        }
+
+        // 공백·기호를 제외한 실제 상호명 글자 수가 더 길고 구체적일수록 높은 점수 부여
+        val meaningfulChars = cleanMer
+            .replace(Regex("""\((?:주|유)\)"""), "")
+            .replace("주식회사", "")
+            .replace(Regex("""[\s*_\-.,/]+"""), "")
+        val charBonus = (meaningfulChars.length.coerceIn(1, 20)) * 40
+        detailScore += charBonus
+
+        return detailScore
+    }
+
     fun extractBalance(tx: Transaction): Long? {
         val memoMatch = tx.transferMemo?.let { BALANCE_EXTRACT_REGEX.find(it) }
         if (memoMatch != null) {
@@ -219,6 +292,7 @@ object TransactionDeduplicator {
      * 가맹점명에서 '정선우', '(입금)', '(출금)', '(실비보상)', '손해보험', '손보', '(주)' 등을 제거한 핵심 상호 어근 추출
      */
     fun extractMerchantCoreStem(name: String): String {
+        if (isGenericOrCardPlaceholderMerchant(name)) return ""
         val cleaned = name.trim()
             .replace(DIRECTION_SUFFIX_CLEAN_REGEX, "")
             .replace(Regex("""\([^)]*\)"""), "")
@@ -258,7 +332,7 @@ object TransactionDeduplicator {
         if (timeDiffMillis > 10 * 60 * 1000L) return false
 
         val mer = candidateWithdraw.merchantName.trim()
-        val isGenericWithdrawPlaceholder = mer == "출금 내역" || mer == "계좌 이체" || mer == "이체/출금"
+        val isGenericWithdrawPlaceholder = isGenericOrCardPlaceholderMerchant(mer, candidateWithdraw.transferMemo)
         if (!isGenericWithdrawPlaceholder) return false
 
         val balA = extractBalance(candidateWithdraw)
@@ -277,7 +351,7 @@ object TransactionDeduplicator {
     }
 
     /**
-     * 두 거래 내역이 다중 채널(문자·보험사 알림톡·은행 알림톡 등)로 수신된 동일한 단일 거래인지 판별합니다.
+     * 두 거래 내역이 다중 채널(문자·보험사 알림톡·은행 알림톡·체크카드 출금 알림 등)로 수신된 동일한 단일 거래인지 판별합니다.
      */
     fun areSameTransactionEvent(
         a: Transaction,
@@ -317,10 +391,16 @@ object TransactionDeduplicator {
 
         val merA = a.merchantName.trim()
         val merB = b.merchantName.trim()
+        val aIsPlaceholder = isGenericOrCardPlaceholderMerchant(merA, a.transferMemo) ||
+            hasCustomerServicePhoneAsAccount(a.transferMemo)
+        val bIsPlaceholder = isGenericOrCardPlaceholderMerchant(merB, b.transferMemo) ||
+            hasCustomerServicePhoneAsAccount(b.transferMemo)
+
         val normA = merA.replace(Regex("""\s+"""), "").uppercase()
         val normB = merB.replace(Regex("""\s+"""), "").uppercase()
 
-        val isExactOrSubstringMerchant = normA.isNotBlank() && normB.isNotBlank() &&
+        val isExactOrSubstringMerchant = !aIsPlaceholder && !bIsPlaceholder &&
+            normA.isNotBlank() && normB.isNotBlank() &&
             (normA == normB || normA.contains(normB) || normB.contains(normA) ||
                 isSameMerchantAlias?.invoke(merA, merB) == true)
 
@@ -337,8 +417,7 @@ object TransactionDeduplicator {
         val balB = extractBalance(b)
         val isSameBalance = balA != null && balB != null && balA == balB
 
-        val isEitherPlaceholderOrNamed = merA in GENERIC_TRANSFER_PLACEHOLDERS ||
-            merB in GENERIC_TRANSFER_PLACEHOLDERS ||
+        val isEitherPlaceholderOrNamed = aIsPlaceholder || bIsPlaceholder ||
             merA.endsWith("정선우") || merB.endsWith("정선우") ||
             merA.endsWith("정*우") || merB.endsWith("정*우")
 
@@ -357,6 +436,11 @@ object TransactionDeduplicator {
             if (timeDiffMillis <= 10 * 60 * 1000L && (isExactOrSubstringMerchant || isSameInstitution || isSameCoreStem)) {
                 return true
             }
+            // 한쪽이 "카드 6", "카드 2", "출금 내역", "계좌: 1588-1600" 등 플레이스홀더/파편이고 동일 금액 거래가 10분 이내에 함께 존재하는 경우
+            // (예: 카드 승인 상세 문자 + 체크카드/은행 출금 알림 또는 구버전 오파싱 레코드 중복) -> 동일 거래로 통합하여 상세 결제명 노출
+            if (timeDiffMillis <= 10 * 60 * 1000L && (aIsPlaceholder || bIsPlaceholder)) {
+                return true
+            }
             // 은행 계좌 출금/이체가 문자와 알림톡으로 동시에 수신된 경우 (5분 이내 + 동일 금액 + 동일 잔액 또는 플레이스홀더/동일 시각)
             if (timeDiffMillis <= 5 * 60 * 1000L && a.isBankAccountTransaction() && b.isBankAccountTransaction()) {
                 if (isSameBalance || isEitherPlaceholderOrNamed || timeDiffMillis <= 3 * 60 * 1000L) {
@@ -369,11 +453,11 @@ object TransactionDeduplicator {
 
     /**
      * 중복 그룹 내에서 화면에 표시하고 남길 대표 항목(Winner)의 품질 점수를 산출합니다.
-     * 1순위: 사용자가 1회성 수정한 항목 (+10,000)
-     * 2순위: 사용자가 영구 별칭/카테고리/분류 규칙을 지정한 항목, 예: "한화손해(실비보상)" (+5,000)
-     * 3순위: 구체적 상호/기관명이 살아있는 항목, 예: "DB손해보험", "한화손해보험" (+1,000 ~ +1,800)
+     * 1순위: 사용자가 1회성 수정한 항목 (단, 플레이스홀더가 아닌 경우 +10,000)
+     * 2순위: 사용자가 영구 별칭/카테고리/분류 규칙을 지정한 항목 (플레이스홀더가 아닌 경우 +5,000)
+     * 3순위: 결제명(가맹점명)이 더 상세하고 구체적인 항목 (scoreMerchantDetailLevel: +1,500 ~ +2,900)
      * 4순위: 통장 축약 인자명, 예: "한화정선우", "DB정선우" (-500)
-     * 5순위: 일반 플레이스홀더, 예: "입금 내역", "출금 내역" (-2,000 ~ -5,000)
+     * 5순위: 카드번호 파편 및 일반 플레이스홀더, 예: "카드 6", "카드 2", "입금 내역", "출금 내역" (-3,000 ~ -4,000)
      */
     fun scoreTransactionQuality(
         tx: Transaction,
@@ -381,20 +465,18 @@ object TransactionDeduplicator {
         isKnownAliasOrCustomRule: Boolean = false,
         forceDepositCluster: Boolean = false
     ): Int {
-        var score = 0
-        if (isOneTimeEdited) score += 10_000
-        if (isKnownAliasOrCustomRule) score += 5_000
-
         val mer = tx.merchantName.trim()
-        when {
-            mer in GENERIC_TRANSFER_PLACEHOLDERS -> score -= 2_000
-            mer.endsWith("정선우") || mer.endsWith("정*우") -> score -= 500
-            else -> {
-                score += 1_000
-                if (mer.contains("(") && mer.contains(")") && !mer.endsWith("(입금)") && !mer.endsWith("(출금)")) {
-                    score += 800
-                }
-            }
+        val isPlaceholder = isGenericOrCardPlaceholderMerchant(mer, tx.transferMemo) ||
+            hasCustomerServicePhoneAsAccount(tx.transferMemo)
+
+        var score = scoreMerchantDetailLevel(mer, tx.transferMemo)
+
+        if (isOneTimeEdited && !isPlaceholder) score += 10_000
+        if (isKnownAliasOrCustomRule && !isPlaceholder) score += 5_000
+
+        // 구체적 결제 카테고리(식비, 쇼핑, 생활, 주유 등)가 분류된 카드 결제 항목은 단순 이체/기타보다 가산점 부여
+        if (!isPlaceholder && tx.category != ExpenseCategory.TRANSFER && tx.category != ExpenseCategory.ETC) {
+            score += 300
         }
 
         val isDep = forceDepositCluster || tx.isDepositTransaction()
@@ -451,6 +533,8 @@ object TransactionDeduplicator {
 
     /**
      * 중복 클러스터에서 최우선 대표 항목(Winner) 1건만 선택하여 반환합니다.
+     * 결제명이 더 상세하게 되어 있는 항목이 항상 최우선으로 선택되며,
+     * 만약 선택된 항목의 결제명이 플레이스홀더("카드 6" 등)인데 클러스터 내 다른 항목에 상세 결제명이 있다면 상세 결제명으로 병합합니다.
      */
     fun selectWinner(
         cluster: List<Transaction>,
@@ -469,16 +553,55 @@ object TransactionDeduplicator {
                     forceDepositCluster = hasConfirmedDeposit
                 )
             }.thenBy { tx ->
-                // 점수가 같으면 먼저 생성된(유효 ID가 작은) 항목 우선
+                scoreMerchantDetailLevel(tx.merchantName, tx.transferMemo)
+            }.thenBy { tx ->
+                // 점수가 완전히 같으면 먼저 생성된(유효 ID가 작은) 항목 우선
                 if (tx.id > 0L) -tx.id else Long.MIN_VALUE
             }
         ) ?: cluster.first()
 
-        return if (hasConfirmedDeposit && winner.category != ExpenseCategory.INCOME && !isOneTimeEditedProvider(winner)) {
-            val fixedMer = if (winner.merchantName == "출금 내역") "입금 내역" else winner.merchantName
-            winner.copy(category = ExpenseCategory.INCOME, merchantName = fixedMer)
+        // 클러스터 내에 더 상세한 가맹점명을 가진 항목이 존재한다면, 플레이스홀더("카드 6", "카드 2", "출금 내역" 등)를 상세 결제명으로 보강
+        val bestDetailedMember = cluster
+            .filterNot { isGenericOrCardPlaceholderMerchant(it.merchantName, it.transferMemo) }
+            .maxByOrNull { scoreMerchantDetailLevel(it.merchantName, it.transferMemo) }
+
+        val mergedWinner = if (
+            bestDetailedMember != null &&
+            bestDetailedMember.id != winner.id &&
+            isGenericOrCardPlaceholderMerchant(winner.merchantName, winner.transferMemo)
+        ) {
+            winner.copy(
+                merchantName = bestDetailedMember.merchantName,
+                category = if (winner.category == ExpenseCategory.TRANSFER || winner.category == ExpenseCategory.ETC) {
+                    bestDetailedMember.category
+                } else {
+                    winner.category
+                },
+                paymentMethod = if (winner.paymentMethod == PaymentMethod.BANK_TRANSFER) {
+                    bestDetailedMember.paymentMethod
+                } else {
+                    winner.paymentMethod
+                },
+                cardOrBankName = if (winner.cardOrBankName.contains("은행") && bestDetailedMember.cardOrBankName.isNotBlank()) {
+                    bestDetailedMember.cardOrBankName
+                } else {
+                    winner.cardOrBankName
+                },
+                transferMemo = if (hasCustomerServicePhoneAsAccount(winner.transferMemo)) {
+                    bestDetailedMember.transferMemo
+                } else {
+                    winner.transferMemo
+                }
+            )
         } else {
             winner
+        }
+
+        return if (hasConfirmedDeposit && mergedWinner.category != ExpenseCategory.INCOME && !isOneTimeEditedProvider(mergedWinner)) {
+            val fixedMer = if (mergedWinner.merchantName == "출금 내역") "입금 내역" else mergedWinner.merchantName
+            mergedWinner.copy(category = ExpenseCategory.INCOME, merchantName = fixedMer)
+        } else {
+            mergedWinner
         }
     }
 

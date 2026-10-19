@@ -390,6 +390,54 @@ class ExpenseViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { transactionRepository.cleanDuplicates() }
             cleanCorruptedTransferRecords()
+            runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded() }
+        }
+    }
+
+    /**
+     * DB 내에 "카드 6", "카드 2", "출금 내역" 등 플레이스홀더 결제명이 남아있는 경우,
+     * 단말기 문자함(SMS/MMS/RCS)을 백그라운드에서 조용히 스캔하여 동일 거래의 상세 결제명이 존재하면 자동으로 보강합니다.
+     */
+    private suspend fun autoRecoverDetailedMerchantsFromSmsIfNeeded() {
+        val currentAll = transactionRepository.getAllTransactionsFlow().first()
+        val hasPlaceholders = currentAll.any { tx ->
+            com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(
+                tx.merchantName,
+                tx.transferMemo
+            ) || com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(tx.transferMemo)
+        }
+        if (!hasPlaceholders) return
+
+        val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+            appContext,
+            android.Manifest.permission.READ_SMS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!hasPerm) return
+
+        val scanResult = importer.scanHistoricalSmsDetailed(appContext, daysBack = 365, limit = 5000)
+        var updatedAny = false
+        for (tx in scanResult.transactions) {
+            if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
+            if (tx.paymentMethod == PaymentMethod.NAVER_PAY ||
+                com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
+                    merchantName = tx.merchantName,
+                    cardOrBankName = tx.cardOrBankName,
+                    originalText = tx.originalText
+                )
+            ) continue
+            if (!com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(
+                    tx.merchantName,
+                    tx.transferMemo
+                )
+            ) {
+                runCatching {
+                    processTransactionUseCase(tx)
+                    updatedAny = true
+                }
+            }
+        }
+        if (updatedAny) {
+            runCatching { transactionRepository.cleanDuplicates() }
         }
     }
 
@@ -435,15 +483,43 @@ class ExpenseViewModel @Inject constructor(
         for (tx in all) {
             if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) continue
             val isDeposit = tx.isDepositTransaction()
-            if (merchantAliasPreferences.isKnownAliasTarget(tx.merchantName, isDeposit)) continue
+            val isPlaceholderOrCsPhone = com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(
+                tx.merchantName,
+                tx.transferMemo
+            ) || com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(tx.transferMemo)
+            if (merchantAliasPreferences.isKnownAliasTarget(tx.merchantName, isDeposit) && !isPlaceholderOrCsPhone) continue
 
             var updated = tx
             var isModified = false
             val isCardMsg = com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(tx.originalText)
 
+            // 0. "카드 6", "카드 2" 또는 "계좌: 1588-1600" 등 카드번호 파편/고객센터 번호 오탐 레코드 원문 재파싱 복원
+            if (isPlaceholderOrCsPhone && tx.originalText.isNotBlank()) {
+                val reparsed = com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)
+                    ?: com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, tx.originalText, tx.timestamp)
+                if (reparsed != null &&
+                    com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                        reparsed.merchantName, reparsed.transferMemo
+                    ) > com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                        tx.merchantName, tx.transferMemo
+                    )
+                ) {
+                    val reparsedDep = reparsed.isDepositTransaction()
+                    updated = updated.copy(
+                        amount = reparsed.amount,
+                        merchantName = merchantAliasPreferences.resolveAlias(reparsed.merchantName, reparsedDep).ifBlank { reparsed.merchantName },
+                        category = reparsed.category,
+                        cardOrBankName = reparsed.cardOrBankName.ifBlank { tx.cardOrBankName },
+                        paymentMethod = reparsed.paymentMethod,
+                        transferMemo = reparsed.transferMemo
+                    )
+                    isModified = true
+                }
+            }
+
             // 1. "09/14 00:23 312-****-9414-21 이민희 잔액383,252원 22,000원" 패턴 정제
-            if (tx.merchantName.contains("312-") || (tx.merchantName.contains("잔액") && tx.merchantName.contains("이민희")) ||
-                (tx.originalText.contains("312-") && tx.originalText.contains("이민희"))) {
+            if (!isModified && (tx.merchantName.contains("312-") || (tx.merchantName.contains("잔액") && tx.merchantName.contains("이민희")) ||
+                (tx.originalText.contains("312-") && tx.originalText.contains("이민희")))) {
                 updated = updated.copy(
                     amount = 22000L,
                     merchantName = merchantAliasPreferences.resolveAlias("이민희", false),
@@ -452,7 +528,7 @@ class ExpenseViewModel @Inject constructor(
                     transferMemo = "출금 내역 (계좌: 312-****-9414-21, 잔액 383,252원)"
                 )
                 isModified = true
-            } else if (tx.merchantName.startsWith("07491612193855") || (tx.originalText.contains("07491612193855") && (tx.merchantName == "0" || tx.merchantName.isBlank()))) {
+            } else if (!isModified && (tx.merchantName.startsWith("07491612193855") || (tx.originalText.contains("07491612193855") && (tx.merchantName == "0" || tx.merchantName.isBlank())))) {
                 updated = updated.copy(
                     amount = 50000L,
                     merchantName = merchantAliasPreferences.resolveAlias("출금 내역", false),
@@ -461,7 +537,7 @@ class ExpenseViewModel @Inject constructor(
                     transferMemo = "출금 내역 (계좌: 07491612193855)"
                 )
                 isModified = true
-            } else if (tx.originalText.contains("천재교과서") && tx.merchantName != merchantAliasPreferences.resolveAlias("(주)천재교과서", false)) {
+            } else if (!isModified && tx.originalText.contains("천재교과서") && tx.merchantName != merchantAliasPreferences.resolveAlias("(주)천재교과서", false)) {
                 updated = updated.copy(
                     merchantName = merchantAliasPreferences.resolveAlias("(주)천재교과서", false),
                     category = ExpenseCategory.LIVING,
@@ -469,7 +545,7 @@ class ExpenseViewModel @Inject constructor(
                     paymentMethod = PaymentMethod.CREDIT_CARD
                 )
                 isModified = true
-            } else if (!isCardMsg && tx.merchantName.matches(Regex("""^\d{6,}.*"""))) {
+            } else if (!isModified && !isCardMsg && tx.merchantName.matches(Regex("""^\d{6,}.*"""))) {
                 val cleanName = if (tx.merchantName.contains("출금")) "출금 내역" else if (isDeposit) "입금 내역" else "계좌 이체"
                 updated = updated.copy(
                     merchantName = merchantAliasPreferences.resolveAlias(cleanName, isDeposit),

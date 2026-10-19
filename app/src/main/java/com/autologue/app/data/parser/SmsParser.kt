@@ -312,16 +312,26 @@ object SmsParser {
             cleanForAction.contains("가맹점") ||
             cleanForAction.contains("(결제)") ||
             cleanForAction.contains("[결제]") ||
-            cleanForAction.contains("체크출금")
+            cleanForAction.contains("체크출금") ||
+            cleanForAction.contains("카드출금") ||
+            cleanForAction.contains("체크결제") ||
+            cleanForAction.contains("카드결제")
+
+        val hasExplicitCardHeaderWithNo = Regex(
+            """(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*(?:농협|국민)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)\s*[\d*()-]{2,}"""
+        ).containsMatchIn(cleanForAction)
 
         val hasCardBrand = CARD_BRAND_1_REGEX.containsMatchIn(cleanForAction) ||
             CARD_BRAND_2_REGEX.containsMatchIn(cleanForAction) ||
-            CARD_BRAND_3_REGEX.containsMatchIn(cleanForAction)
+            CARD_BRAND_3_REGEX.containsMatchIn(cleanForAction) ||
+            hasExplicitCardHeaderWithNo ||
+            (cleanForAction.contains("1588-1600") && (cleanForAction.contains("카드") || cleanForAction.contains("체크")))
 
         val isPureAccountTransfer = (cleanForAction.contains("입금") || cleanForAction.contains("송금") || cleanForAction.contains("계좌이체")) &&
-            !cleanForAction.contains("승인") && !cleanForAction.contains("일시불") && !cleanForAction.contains("사용처")
+            !cleanForAction.contains("승인") && !cleanForAction.contains("일시불") && !cleanForAction.contains("사용처") &&
+            !hasExplicitCardHeaderWithNo
 
-        return (hasApprovalAction || (hasCardBrand && cleanForAction.contains("결제완료"))) && !isPureAccountTransfer
+        return (hasApprovalAction || (hasCardBrand && (cleanForAction.contains("결제완료") || cleanForAction.contains("결제") || cleanForAction.contains("출금")))) && !isPureAccountTransfer
     }
 
     private fun resolveTimestamp(
@@ -490,7 +500,8 @@ object SmsParser {
     }
 
     fun cleanMerchantName(raw: String): String {
-        val statusOnlyRegex = Regex("""^(?:체크출금|체크결제|체크|출금|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\))(?:\s+(?:체크출금|체크결제|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\)))*$""")
+        val statusOnlyRegex = Regex("""^(?:체크출금|카드출금|체크결제|카드결제|체크|출금|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\))(?:\s+(?:체크출금|카드출금|체크결제|카드결제|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\)))*$""")
+        val csPhoneOnlyRegex = Regex("""^(?:고객센터|대표번호|문의)?\s*[:：]?\s*(?:15|16|18)\d{2}-\d{4}$""")
         var name = stripNonUsageAmounts(raw).lines().map { it.trim() }.firstOrNull {
             it.isNotBlank() &&
                 it.lowercase() !in INVALID_MERCHANT_NAMES &&
@@ -500,14 +511,19 @@ object SmsParser {
                 !it.startsWith("총사용") &&
                 !it.startsWith("총이용") &&
                 !it.startsWith("잔액") &&
+                !csPhoneOnlyRegex.matches(it) &&
+                !com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(it) &&
                 !statusOnlyRegex.matches(it)
         } ?: raw.trim()
-        name = stripNonUsageAmounts(name).trim()
+        name = stripNonUsageAmounts(name)
+            .replace(Regex("""\b(?:15|16|18)\d{2}-\d{4}\b"""), "")
+            .replace(Regex("""잔액\s*[:：]?\s*[\d,]+원?"""), "")
+            .trim()
         // 슬래시(/) 구분자로 이어진 카드정보/할부/누적이용금액 파트(예: "지에스25송파물류단지점 / 신용(,0*2*) / / 누적이용금액") 제거
         name = name.replace(Regex("""\s*/\s*(?:신용|체크|일시불|할부|\d+개월|누적|결제예정|총사용|총이용).*$"""), "").trim()
         name = name.replace(Regex("""(?:\s*/\s*)+$"""), "").trim()
-        name = name.replace(Regex("""^(?:\((?:결제|승인|취소|승인취소)\)|\[(?:결제|승인|취소|승인취소)\]|체크출금|체크결제|일시불|\d+개월|승인취소|승인|결제완료|결제)\s+"""), "").trim()
-        name = name.replace(Regex("""\s*(?:\((?:일시불|\d+개월|결제|승인)\)|일시불|\d+개월|체크출금|승인취소|승인|결제완료|결제)\s*$"""), "").trim()
+        name = name.replace(Regex("""^(?:\((?:결제|승인|취소|승인취소)\)|\[(?:결제|승인|취소|승인취소)\]|체크출금|카드출금|체크결제|카드결제|일시불|\d+개월|승인취소|승인|결제완료|결제)\s+"""), "").trim()
+        name = name.replace(Regex("""\s*(?:\((?:일시불|\d+개월|결제|승인)\)|일시불|\d+개월|체크출금|카드출금|체크결제|카드결제|승인취소|승인|결제완료|결제)\s*$"""), "").trim()
         // (주), (유), 주식회사 등 접두/접미사 정제
         name = name.replace(Regex("""^\((?:주|유)\)\s*"""), "")
         name = name.replace(Regex("""^주식회사\s*"""), "")
@@ -515,18 +531,36 @@ object SmsParser {
         name = name.replace(Regex("""\s*\((?:주|유)$"""), "")
         name = name.replace(Regex("""\s*주식회사$"""), "")
         val finalName = name.trim()
-        return if (finalName.isBlank() || finalName.lowercase() in INVALID_MERCHANT_NAMES) "가맹점" else finalName
+        return if (
+            finalName.isBlank() ||
+            finalName.lowercase() in INVALID_MERCHANT_NAMES ||
+            com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(finalName)
+        ) {
+            "가맹점"
+        } else {
+            finalName
+        }
     }
 
     private fun parseNhCard(body: String, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
-        val isCancel = body.contains("승인취소") || body.contains("취소")
+        val hasNhCardHeader = Regex("""(?:NH|농협)\s*(?:농협)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)""").containsMatchIn(body) ||
+            (body.contains("1588-1600") && (body.contains("농협") || body.contains("NH") || body.contains("카드") || body.contains("체크")))
+        if (!hasNhCardHeader) return null
+
+        val isCancel = body.contains("승인취소") || body.contains("결제취소") || body.contains("취소")
+        val cleanNhBody = body
+            .replace(Regex("""\b(?:15|16|18)\d{2}-\d{4}\b"""), "")
+            .replace(Regex("""잔액\s*[:：]?\s*[\d,]+원?"""), "")
+            .trim()
+
         val pattern = Pattern.compile(
-            """(?:NH|농협)(?:농협)?(?:카드|체크)?(?<cardNo>[^\s\n\r승취]+)?\s*(?:승인취소|취소|승인).*?(?<amount>[\d,]+)원(?:\s*(?:\((?:일시불|\d+개월)\)|일시불|\d+개월))?.*?(?:20\d{2}[./-])?(?<month>\d{1,2})[./-](?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})\s*\n?(?<merchant>[^\n\r]+)""",
+            """(?:NH|농협)\s*(?:농협)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)?\s*(?<cardNo>[\d*()-]+)?\s*(?:[가-힣*]+(?:님)?\s*)?(?:승인취소|결제취소|취소|승인|체크출금|카드출금|체크결제|카드결제|결제|출금)?.*?(?<amount>[\d,]+)원(?:\s*(?:\((?:일시불|\d+개월)\)|일시불|\d+개월|체크출금|카드출금|출금|승인|결제))*.*?(?:20\d{2}[./-])?(?<month>\d{1,2})[./-](?<day>\d{1,2})\s+(?<hour>\d{1,2}):(?<minute>\d{1,2})\s*\n?(?<merchant>.+)""",
             Pattern.DOTALL
         )
-        val m = pattern.matcher(body)
+        val m = pattern.matcher(cleanNhBody)
         if (m.find()) {
             val rawAmount = m.group("amount")?.replace(",", "")?.toLongOrNull() ?: return null
+            if (rawAmount <= 0L) return null
             val amount = if (isCancel) -rawAmount else rawAmount
             val cardName = "NH농협카드"
 
@@ -539,22 +573,28 @@ object SmsParser {
 
             val rawMerchant = m.group("merchant")?.trim() ?: "농협카드 가맹점"
             val merchant = cleanMerchantName(rawMerchant)
-            if (isInvalidMerchantName(merchant) || merchant == "가맹점") return null
-
-            val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = body)
-            return Transaction(
-                amount = amount,
-                merchantName = merchant,
-                originalText = body,
-                timestamp = timestamp,
-                paymentMethod = PaymentMethod.CREDIT_CARD,
-                category = category,
-                cardOrBankName = cardName,
-                transferMemo = if (isCancel) "[승인취소]" else null,
-                isAutoCategorized = true
-            )
+            if (!isInvalidMerchantName(merchant) &&
+                merchant != "가맹점" &&
+                !com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(merchant)
+            ) {
+                val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = body)
+                return Transaction(
+                    amount = amount,
+                    merchantName = merchant,
+                    originalText = body,
+                    timestamp = timestamp,
+                    paymentMethod = if (body.contains("체크")) PaymentMethod.CHECK_CARD else PaymentMethod.CREDIT_CARD,
+                    category = category,
+                    cardOrBankName = cardName,
+                    transferMemo = if (isCancel) "[승인취소]" else null,
+                    isAutoCategorized = true
+                )
+            }
         }
-        return null
+        return parseUniversalCardSms(cleanNhBody, "NH농협카드", fallbackDateTime)?.copy(
+            originalText = body,
+            cardOrBankName = "NH농협카드"
+        )
     }
 
     private fun parseSamsungCard(body: String, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
@@ -752,9 +792,10 @@ object SmsParser {
         val amount = amtMatch?.groups?.get("amt")?.value?.replace(",", "")?.toLongOrNull() ?: return null
         if (amount <= 0) return null
 
-        // 2. 날짜/시간 추출 (승인/입출금 일자나 계좌번호·잔액 근거가 전혀 없는 안내 메시지는 차단)
+        // 2. 날짜/시간 추출 (고객센터 대표번호 1588-1600 등은 계좌번호에서 제외)
         val dateMatch = Regex("""(?<month>\d{1,2})[./-](?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})""").find(body)
-        val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(body)
+        val bodyWithoutCsPhone = body.replace(Regex("""\b(?:15|16|18)\d{2}-\d{4}\b"""), " ")
+        val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(bodyWithoutCsPhone)
         if (dateMatch == null && !hasExplicitApprovalDate(body) && accMatch == null && balanceMatch == null) {
             return null
         }
@@ -787,8 +828,8 @@ object SmsParser {
         // 4. 계좌번호 추출
         val accNo = accMatch?.groups?.get("acc")?.value
 
-        // 5. 수취인/입금자/가맹점 추출: 잔액, 금액, 일시, 계좌번호, 은행명, 특수문자 제거 후 남은 이름 추출
-        var remain = com.autologue.app.domain.model.stripNeutralTransferTerms(body)
+        // 5. 수취인/입금자/가맹점 추출: 잔액, 금액, 일시, 고객센터 번호, 카드번호 파편, 계좌번호, 은행명 제거 후 남은 이름 추출
+        var remain = com.autologue.app.domain.model.stripNeutralTransferTerms(bodyWithoutCsPhone)
         for (bm in allBracketMatches) {
             val tag = bm.groups["tag"]?.value?.trim().orEmpty()
             if (tag != bracketInstitution) {
@@ -801,23 +842,31 @@ object SmsParser {
         remain = remain.replace(amtMatch.value, " ")
         remain = remain.replace(Regex("""\d{1,2}[./-]\d{1,2}\s*\d{1,2}:\d{1,2}"""), " ")
         if (accNo != null) remain = remain.replace(accNo, " ")
+        // 은행명 제거 전에 "NH농협카드 6*9*", "농협카드 2*7*", "카드 6*9*" 등 카드 헤더+번호를 먼저 통째로 제거하여 "카드 6", "카드 2" 잔여물 원천 차단
+        remain = remain.replace(
+            Regex("""(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)?\s*(?:농협|국민)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)\s*[\d*()-]+"""),
+            " "
+        )
         remain = remain.replace(Regex("""(?:NH농협은행|NH농협|농협은행|농협|KB국민은행|KB국민|국민은행|신한은행|우리은행|하나은행|카카오뱅크|토스뱅크|기업은행|IBK기업|Web발신)"""), " ")
-        remain = remain.replace(Regex("""(?:입출금알림|입출금|입금안내|출금안내|보험금지급|지급완료|지급안내|지급금액|출금|입금|송금|이체|결제|승인|완료|잔액|계좌|안내|알림톡|알림|원)"""), " ")
+        remain = remain.replace(Regex("""(?:입출금알림|입출금|입금안내|출금안내|보험금지급|지급완료|지급안내|지급금액|체크출금|카드출금|출금|입금|송금|이체|결제|승인|완료|잔액|계좌|안내|알림톡|알림|원)"""), " ")
         remain = remain.trim()
 
-        val nameCandidates = Regex("""([가-힣a-zA-Z0-9\s()]{2,14})""").findAll(remain)
+        val nameCandidates = Regex("""([가-힣a-zA-Z0-9\s()]{2,18})""").findAll(remain)
             .map { it.value.trim() }
             .filter { cand ->
                 cand.length >= 2 &&
                     !cand.contains("은행") &&
                     !cand.contains("알림") &&
                     !cand.matches(Regex("""^[\d\s-]+$""")) &&
+                    !com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(cand) &&
                     !isInvalidMerchantName(cand)
             }
             .toList()
 
         val receiverName = bracketInstitution
-            ?: nameCandidates.firstOrNull { it != "정선우" && it != "정*우" && it != "고객님" && it != "정선우님" }
+            ?: nameCandidates.firstOrNull {
+                it != "정선우" && it != "정*우" && it != "고객님" && it != "정선우님" && !it.endsWith("님")
+            }
             ?: nameCandidates.firstOrNull()
 
         // [핵심] 계좌번호는 merchantName(제목)에 절대 노출하지 않고 상대방 이름 또는 입금/출금 내역으로 설정
@@ -887,7 +936,10 @@ object SmsParser {
 
             val rawMerchant = m.group("merchant")?.trim() ?: return null
             val merchant = cleanMerchantName(rawMerchant)
-            if (isInvalidMerchantName(merchant)) return null
+            if (isInvalidMerchantName(merchant) ||
+                merchant == "가맹점" ||
+                com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(merchant)
+            ) return null
 
             val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = body)
             return Transaction(
@@ -912,9 +964,10 @@ object SmsParser {
         val isCancel = body.contains("승인취소") || body.contains("결제취소") || body.contains("취소승인") ||
             Regex("""\b취소\b""").containsMatchIn(body)
 
-        // 1. 누적이용금액, 결제예정금액, 총사용금액, 잔액, 한도 등 제거 후 실제 승인 금액 추출
+        // 1. 누적이용금액, 결제예정금액, 총사용금액, 잔액, 고객센터 번호(1588-1600 등) 제거 후 실제 승인 금액 추출
         val bodyWithoutAccum = stripNonUsageAmounts(body)
             .replace(Regex("""잔액[\s:：]*[\d,]+원?"""), "")
+            .replace(Regex("""\b(?:15|16|18)\d{2}-\d{4}\b"""), "")
         val amtMatch = Regex("""(?<amt>[\d,]+)원""").find(bodyWithoutAccum) ?: return null
         val rawAmount = amtMatch.groups["amt"]?.value?.replace(",", "")?.toLongOrNull() ?: return null
         if (rawAmount <= 0L) return null
@@ -947,8 +1000,10 @@ object SmsParser {
         }
         val slashCardNoMatch = Regex("""(?:신용|체크)\s*\(\s*,?\s*(?<no>[0-9*]{2,})\s*\)""").find(bodyWithoutAccum)
         val slashCardNo = slashCardNoMatch?.groups?.get("no")?.value
-        val cardName = ExpenseCustomMetaPreferences.inferCanonicalCardCompany(safeSender, bodyWithoutAccum)
+        val cardName = ExpenseCustomMetaPreferences.inferCanonicalCardCompany(safeSender, body)
+            ?: ExpenseCustomMetaPreferences.inferCanonicalCardCompany(safeSender, bodyWithoutAccum)
             ?: when {
+                body.contains("1588-1600") -> "NH농협카드"
                 !slashCardNo.isNullOrBlank() -> "하나카드"
                 else -> safeSender ?: "신용카드"
             }
@@ -979,21 +1034,31 @@ object SmsParser {
                     .map { line ->
                         line.replace("[Web발신]", "")
                             .replace(Regex("""\[[^\]]*카드[^\]]*\]"""), "")
-                            .replace(Regex("""(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업)(?:농협|국민)?(?:카드|체크)?[0-9*()]*"""), "")
+                            .replace(Regex("""(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*(?:농협|국민)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)?\s*[\d*()-]*"""), "")
+                            .replace(Regex("""(?:체크\s*|신용\s*)?(?:카드|체크)\s*[\d*()-]+"""), "")
                             .replace(Regex("""[가-힣]\*[가-힣](?:님)?"""), "")
                             .replace(amtMatch.value, "")
                             .replace(Regex("""(?:20\d{2}[./-])?\d{1,2}[./-]\d{1,2}(?:\s+\d{1,2}:\d{1,2})?"""), "")
-                            .replace(Regex("""(?:\((?:일시불|\d+개월|결제|승인|취소|승인취소)\)|일시불|\d+개월|승인취소|취소|승인|체크출금|결제완료|결제)"""), "")
+                            .replace(Regex("""(?:\((?:일시불|\d+개월|결제|승인|취소|승인취소)\)|일시불|\d+개월|승인취소|취소|승인|체크출금|카드출금|체크결제|카드결제|결제완료|결제|출금)"""), "")
                             .trim()
                     }
-                    .filter { it.isNotBlank() && it.length >= 2 && !isInvalidMerchantName(it) }
+                    .filter {
+                        it.isNotBlank() &&
+                            it.length >= 2 &&
+                            !isInvalidMerchantName(it) &&
+                            !com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(it)
+                    }
 
                 val rawMer = candidateLines.lastOrNull() ?: "카드 가맹점"
                 cleanMerchantName(rawMer)
             }
         }
 
-        if (isInvalidMerchantName(merchant) || merchant == "가맹점" || merchant == "카드 가맹점") return null
+        if (isInvalidMerchantName(merchant) ||
+            merchant == "가맹점" ||
+            merchant == "카드 가맹점" ||
+            com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(merchant)
+        ) return null
 
         val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = bodyWithoutAccum)
         return Transaction(

@@ -191,17 +191,52 @@ class TransactionRepositoryImpl @Inject constructor(
         if (aliasedTransaction.originalText.isNotBlank()) {
             val existingByText = transactionDao.findByOriginalText(aliasedTransaction.originalText)
             if (existingByText != null) {
-                if (!expenseCustomMetaPreferences.isOneTimeEditedId(existingByText.id) &&
-                    existingByText.merchantName != aliasedTransaction.merchantName &&
-                    merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName, isDeposit)
-                ) {
-                    transactionDao.updateTransaction(existingByText.copy(merchantName = aliasedTransaction.merchantName))
+                val existingDomain = existingByText.toDomain()
+                if (!expenseCustomMetaPreferences.isOneTimeEdited(existingDomain)) {
+                    val forceDep = isDeposit || existingDomain.isDepositTransaction()
+                    val existingScore = com.autologue.app.domain.model.TransactionDeduplicator.scoreTransactionQuality(
+                        tx = existingDomain,
+                        isOneTimeEdited = false,
+                        isKnownAliasOrCustomRule = isKnownAliasOrCustomRule(existingDomain),
+                        forceDepositCluster = forceDep
+                    )
+                    val incomingScore = com.autologue.app.domain.model.TransactionDeduplicator.scoreTransactionQuality(
+                        tx = aliasedTransaction,
+                        isOneTimeEdited = isOneTime,
+                        isKnownAliasOrCustomRule = isKnownAliasOrCustomRule(aliasedTransaction),
+                        forceDepositCluster = forceDep
+                    )
+                    val isBetterDetail = incomingScore > existingScore ||
+                        com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                            aliasedTransaction.merchantName, aliasedTransaction.transferMemo
+                        ) > com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                            existingDomain.merchantName, existingDomain.transferMemo
+                        ) ||
+                        merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName, isDeposit)
+
+                    if (isBetterDetail && (
+                            existingByText.merchantName != aliasedTransaction.merchantName ||
+                            existingByText.category != aliasedTransaction.category ||
+                            existingByText.cardOrBankName != aliasedTransaction.cardOrBankName ||
+                            existingByText.transferMemo != aliasedTransaction.transferMemo
+                        )
+                    ) {
+                        transactionDao.updateTransaction(
+                            existingByText.copy(
+                                merchantName = aliasedTransaction.merchantName,
+                                category = if (forceDep) ExpenseCategory.INCOME else aliasedTransaction.category,
+                                paymentMethod = aliasedTransaction.paymentMethod,
+                                cardOrBankName = aliasedTransaction.cardOrBankName.ifBlank { existingByText.cardOrBankName },
+                                transferMemo = aliasedTransaction.transferMemo
+                            )
+                        )
+                    }
                 }
                 return@withContext existingByText.id
             }
         }
 
-        // 다중 채널(문자 + 보험사 알림톡 + 은행 알림톡) 시간·금액·입출금 내역 통합 중복 방지
+        // 다중 채널(문자 + 보험사 알림톡 + 은행 알림톡 + 체크출금 알림) 시간·금액·입출금 내역 통합 중복 방지
         val windowMilli = 30 * 60 * 1000L
         val candidates = transactionDao.findTransactionsByAmountAndDateRange(
             amount = aliasedTransaction.amount,
@@ -233,12 +268,24 @@ class TransactionRepositoryImpl @Inject constructor(
                     isKnownAliasOrCustomRule = isKnownAliasOrCustomRule(aliasedTransaction),
                     forceDepositCluster = forceDep
                 )
-                if (incomingScore > existingScore) {
+                val isBetterDetail = incomingScore > existingScore ||
+                    com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                        aliasedTransaction.merchantName, aliasedTransaction.transferMemo
+                    ) > com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                        existingDomain.merchantName, existingDomain.transferMemo
+                    )
+                if (isBetterDetail) {
                     transactionDao.updateTransaction(
                         duplicate.copy(
                             merchantName = aliasedTransaction.merchantName,
                             category = if (forceDep) ExpenseCategory.INCOME else aliasedTransaction.category,
-                            cardOrBankName = aliasedTransaction.cardOrBankName.ifBlank { duplicate.cardOrBankName }
+                            paymentMethod = aliasedTransaction.paymentMethod,
+                            cardOrBankName = aliasedTransaction.cardOrBankName.ifBlank { duplicate.cardOrBankName },
+                            transferMemo = if (com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(duplicate.transferMemo)) {
+                                aliasedTransaction.transferMemo
+                            } else {
+                                aliasedTransaction.transferMemo ?: duplicate.transferMemo
+                            }
                         )
                     )
                 }
@@ -544,30 +591,50 @@ class TransactionRepositoryImpl @Inject constructor(
             }
 
             val isCardMsg = !isManual && com.autologue.app.data.parser.SmsParser.isCardApprovalMessage(raw)
+            val isCardPlaceholderOrCsPhoneMemo = !isManual && (
+                com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(tx.merchantName, tx.transferMemo) ||
+                    com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(tx.transferMemo)
+                )
 
-            if (isCardMsg && !isUserAliased && (
+            if ((isCardMsg || isCardPlaceholderOrCsPhoneMemo) && (!isUserAliased || isCardPlaceholderOrCsPhoneMemo) && (
                     tx.paymentMethod == com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER ||
                     tx.category == ExpenseCategory.TRANSFER ||
                     tx.category == ExpenseCategory.ETC ||
+                    isCardPlaceholderOrCsPhoneMemo ||
                     tx.merchantName in listOf("출금 내역", "입금 내역", "계좌 이체", "카드 가맹점", "가맹점", "정선우", "정*우")
                 )
             ) {
-                val reparsed = com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
-                    ?: com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
-                if (reparsed != null) {
+                val reparsed = com.autologue.app.data.parser.SmsParser.parse(null, raw, tx.timestamp)
+                    ?: com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, raw, tx.timestamp)
+                if (reparsed != null &&
+                    (!isCardPlaceholderOrCsPhoneMemo ||
+                        com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                            reparsed.merchantName, reparsed.transferMemo
+                        ) > com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                            tx.merchantName, tx.transferMemo
+                        ))
+                ) {
                     val reparsedDeposit = reparsed.isDepositTransaction()
-                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName ?: tx.cardOrBankName, tx.timestamp, reparsedDeposit)
+                    val healedMerchant = resolveMerchantWithAlias(reparsed.merchantName, raw, reparsed.cardOrBankName.ifBlank { tx.cardOrBankName }, tx.timestamp, reparsedDeposit)
                     val healed = tx.copy(
                         amount = reparsed.amount,
                         merchantName = healedMerchant,
                         paymentMethod = reparsed.paymentMethod,
                         category = reparsed.category,
-                        cardOrBankName = reparsed.cardOrBankName ?: tx.cardOrBankName,
+                        cardOrBankName = reparsed.cardOrBankName.ifBlank { tx.cardOrBankName },
                         transferMemo = reparsed.transferMemo,
                         isAutoCategorized = true
                     )
                     transactionDao.updateTransaction(healed)
                     continue
+                } else if (com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(tx.transferMemo)) {
+                    val cleanedMemo = tx.transferMemo
+                        ?.replace(Regex("""계좌\s*[:：]\s*(?:15|16|18)\d{2}-\d{4}(?:\s*·\s*)?"""), "")
+                        ?.trim()
+                        ?.ifBlank { null }
+                    if (cleanedMemo != tx.transferMemo) {
+                        transactionDao.updateTransaction(tx.copy(transferMemo = cleanedMemo))
+                    }
                 }
             }
 
@@ -616,7 +683,7 @@ class TransactionRepositoryImpl @Inject constructor(
             }
         }
 
-        // 2. 다중 채널(문자 + 보험사 알림톡 + 은행 알림톡) 시간·금액·입출금 방향 기반 통합 중복 제거 및 대표 항목 보존
+        // 2. 다중 채널(문자 + 보험사 알림톡 + 은행 알림톡 + 체크출금 알림) 시간·금액·입출금 방향 기반 통합 중복 제거 및 상세 결제명 대표 항목 보존
         val refreshedAll = transactionDao.getAllTransactionsSync()
             .filterNot { it.id in toDeleteIds }
         val domainMap = refreshedAll.associateBy { it.id }
@@ -635,11 +702,21 @@ class TransactionRepositoryImpl @Inject constructor(
                 isKnownAliasOrRuleProvider = ::isKnownAliasOrCustomRule
             )
             val winnerEntity = domainMap[winner.id]
-            if (winnerEntity != null && (winnerEntity.merchantName != winner.merchantName || winnerEntity.category != winner.category)) {
+            if (winnerEntity != null && (
+                    winnerEntity.merchantName != winner.merchantName ||
+                    winnerEntity.category != winner.category ||
+                    winnerEntity.cardOrBankName != winner.cardOrBankName ||
+                    winnerEntity.paymentMethod != winner.paymentMethod ||
+                    winnerEntity.transferMemo != winner.transferMemo
+                )
+            ) {
                 transactionDao.updateTransaction(
                     winnerEntity.copy(
                         merchantName = winner.merchantName,
-                        category = winner.category
+                        category = winner.category,
+                        cardOrBankName = winner.cardOrBankName,
+                        paymentMethod = winner.paymentMethod,
+                        transferMemo = winner.transferMemo
                     )
                 )
             }
@@ -657,19 +734,62 @@ class TransactionRepositoryImpl @Inject constructor(
         toDeleteIds.size
     }
 
-    private fun TransactionEntity.toDomain() = Transaction(
-        id = id,
-        amount = amount,
-        merchantName = MerchantAliasPreferences.sanitizeSingleLine(merchantName),
-        originalText = originalText,
-        timestamp = timestamp,
-        paymentMethod = paymentMethod,
-        category = category,
-        cardOrBankName = MerchantAliasPreferences.sanitizeSingleLine(cardOrBankName),
-        transferMemo = transferMemo?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } },
-        isAutoCategorized = isAutoCategorized,
-        ruleIdApplied = ruleIdApplied
-    )
+    private fun TransactionEntity.toDomain(): Transaction {
+        val cleanMer = MerchantAliasPreferences.sanitizeSingleLine(merchantName)
+        val cleanCard = MerchantAliasPreferences.sanitizeSingleLine(cardOrBankName)
+        val cleanMemo = transferMemo?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
+        val isManual = originalText.startsWith("[직접 입력]") || originalText.startsWith("[차계부 직접 입력]")
+
+        if (!isManual && originalText.isNotBlank() && !expenseCustomMetaPreferences.isOneTimeEditedId(id) && (
+                com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(cleanMer, cleanMemo) ||
+                    com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(cleanMemo)
+            )
+        ) {
+            val reparsed = com.autologue.app.data.parser.SmsParser.parse(null, originalText, timestamp)
+                ?: com.autologue.app.data.parser.SmsParser.parse(cleanCard, originalText, timestamp)
+            if (reparsed != null &&
+                com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                    reparsed.merchantName, reparsed.transferMemo
+                ) > com.autologue.app.domain.model.TransactionDeduplicator.scoreMerchantDetailLevel(
+                    cleanMer, cleanMemo
+                )
+            ) {
+                return Transaction(
+                    id = id,
+                    amount = reparsed.amount,
+                    merchantName = MerchantAliasPreferences.sanitizeSingleLine(reparsed.merchantName),
+                    originalText = originalText,
+                    timestamp = timestamp,
+                    paymentMethod = reparsed.paymentMethod,
+                    category = reparsed.category,
+                    cardOrBankName = MerchantAliasPreferences.sanitizeSingleLine(reparsed.cardOrBankName.ifBlank { cleanCard }),
+                    transferMemo = reparsed.transferMemo?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } },
+                    isAutoCategorized = isAutoCategorized,
+                    ruleIdApplied = ruleIdApplied
+                )
+            }
+        }
+
+        val sanitizedMemo = if (com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(cleanMemo)) {
+            cleanMemo?.replace(Regex("""계좌\s*[:：]\s*(?:15|16|18)\d{2}-\d{4}(?:\s*·\s*)?"""), "")?.trim()?.ifBlank { null }
+        } else {
+            cleanMemo
+        }
+
+        return Transaction(
+            id = id,
+            amount = amount,
+            merchantName = cleanMer,
+            originalText = originalText,
+            timestamp = timestamp,
+            paymentMethod = paymentMethod,
+            category = category,
+            cardOrBankName = cleanCard,
+            transferMemo = sanitizedMemo,
+            isAutoCategorized = isAutoCategorized,
+            ruleIdApplied = ruleIdApplied
+        )
+    }
 
     private fun Transaction.toEntity() = TransactionEntity(
         id = id,

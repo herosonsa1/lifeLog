@@ -455,4 +455,101 @@ class SmsParserTest {
         assertEquals("퇴직연금 ETF 분배금", aliasPrefs.resolveAlias("퇴직연금\n\nETF 분배금", isDeposit = true))
         assertTrue(aliasPrefs.isSameMerchant(multilineMerchant, sanitized))
     }
+
+    @Test
+    fun `카드 6 및 카드 2와 같이 카드번호 파편으로 중복 저장된 내역은 결제명이 더 상세한 항목으로 통합 노출되어야 한다`() {
+        // 1. NH농협카드(1588-1600) 띄어쓰기/출금 변형 문자가 '카드 6', '카드 2' 및 '계좌: 1588-1600'으로 잘못 파싱되지 않고 상세 가맹점명으로 파싱되는지 검증
+        val nhCard6Sms = """
+            [Web발신]
+            NH농협카드 6*9* 승인
+            정*우
+            8,250원 일시불
+            10/06 16:54
+            파리바게뜨(분당정자점)
+            1588-1600
+        """.trimIndent()
+
+        val nhCard2Sms = """
+            [Web발신]
+            NH농협카드 2*7* 출금
+            정*우 33,000원
+            10/06 16:39
+            이마트24(성남점)
+            1588-1600
+        """.trimIndent()
+
+        val parsed6 = SmsParser.parse("1588-1600", nhCard6Sms, java.time.LocalDateTime.of(2026, 10, 6, 16, 54))
+        assertNotNull(parsed6)
+        assertEquals(8250L, parsed6?.amount)
+        assertEquals("파리바게뜨(분당정자점)", parsed6?.merchantName)
+        assertEquals("NH농협카드", parsed6?.cardOrBankName)
+        assertNull(parsed6?.transferMemo)
+
+        val parsed2 = SmsParser.parse("1588-1600", nhCard2Sms, java.time.LocalDateTime.of(2026, 10, 6, 16, 39))
+        assertNotNull(parsed2)
+        assertEquals(33000L, parsed2?.amount)
+        assertEquals("이마트24(성남점)", parsed2?.merchantName)
+        assertEquals("NH농협카드", parsed2?.cardOrBankName)
+        assertNull(parsed2?.transferMemo)
+
+        // 2. 이미 '카드 6' / '카드 2' (ID가 더 작아 먼저 생성된 레코드)와 상세 결제명 레코드가 중복 존재할 때 상세 결제명이 무조건 대표 항목(Winner)으로 선정되어야 함
+        val txCard6Fragment = com.autologue.app.domain.model.Transaction(
+            id = 10L, // 더 작은 ID (과거에 먼저 생성됨)
+            amount = 8250L,
+            merchantName = "카드 6",
+            originalText = "NH농협 8,250원 10/06 16:54 1588-1600",
+            timestamp = java.time.LocalDateTime.of(2026, 10, 6, 16, 54),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER,
+            category = com.autologue.app.domain.model.ExpenseCategory.TRANSFER,
+            cardOrBankName = "NH농협은행",
+            transferMemo = "계좌: 1588-1600"
+        )
+        val txDetailed6 = com.autologue.app.domain.model.Transaction(
+            id = 250L, // 나중에 생성된 상세 결제명 레코드
+            amount = 8250L,
+            merchantName = "파리바게뜨(분당정자점)",
+            originalText = nhCard6Sms,
+            timestamp = java.time.LocalDateTime.of(2026, 10, 6, 16, 54),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
+            category = com.autologue.app.domain.model.ExpenseCategory.CAFE,
+            cardOrBankName = "NH농협카드",
+            transferMemo = null
+        )
+
+        val deduped = com.autologue.app.domain.model.TransactionDeduplicator.deduplicate(
+            transactions = listOf(txCard6Fragment, txDetailed6)
+        )
+        assertEquals(1, deduped.size)
+        assertEquals("파리바게뜨(분당정자점)", deduped.first().merchantName)
+        assertEquals("NH농협카드", deduped.first().cardOrBankName)
+        assertEquals(com.autologue.app.domain.model.ExpenseCategory.CAFE, deduped.first().category)
+
+        // 3. 두 개의 일반 가맹점명이 중복된 경우에도 결제명이 더 상세한 항목(지점명/전체 상호 포함)이 대표 항목으로 선정되어야 함
+        val txShortName = com.autologue.app.domain.model.Transaction(
+            id = 11L,
+            amount = 33000L,
+            merchantName = "이마트24",
+            originalText = "[Web발신] NH카드 승인 33,000원 10/06 16:39 이마트24",
+            timestamp = java.time.LocalDateTime.of(2026, 10, 6, 16, 39),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
+            category = com.autologue.app.domain.model.ExpenseCategory.LIVING,
+            cardOrBankName = "NH농협카드"
+        )
+        val txDetailedName = com.autologue.app.domain.model.Transaction(
+            id = 300L,
+            amount = 33000L,
+            merchantName = "이마트24(성남분당점)",
+            originalText = "[Web발신] NH카드 승인 33,000원 10/06 16:39 이마트24(성남분당점)",
+            timestamp = java.time.LocalDateTime.of(2026, 10, 6, 16, 39),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
+            category = com.autologue.app.domain.model.ExpenseCategory.LIVING,
+            cardOrBankName = "NH농협카드"
+        )
+        val dedupedDetail = com.autologue.app.domain.model.TransactionDeduplicator.deduplicate(
+            transactions = listOf(txShortName, txDetailedName)
+        )
+        assertEquals(1, dedupedDetail.size)
+        assertEquals("이마트24(성남분당점)", dedupedDetail.first().merchantName)
+    }
 }
+
