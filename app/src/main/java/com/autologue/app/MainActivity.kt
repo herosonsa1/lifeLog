@@ -58,6 +58,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
     @Inject lateinit var userLocationPreferences: com.autologue.app.data.preferences.UserLocationPreferences
     @Inject lateinit var placeResolver: com.autologue.app.data.sync.PlaceResolver
+    @Inject lateinit var syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
+    @Inject lateinit var syncHistoricalDataUseCase: com.autologue.app.domain.usecase.sync.SyncHistoricalDataUseCase
 
     private val _isInitialSyncDone = MutableStateFlow(false)
     val isInitialSyncDone: StateFlow<Boolean> = _isInitialSyncDone.asStateFlow()
@@ -75,7 +77,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grantResults ->
         if (grantResults[Manifest.permission.READ_SMS] == true) {
-            syncInitialData()
+            syncInitialData(forceSync = true)
         }
         if (grantResults[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
             grantResults[Manifest.permission.ACCESS_COARSE_LOCATION] == true
@@ -86,6 +88,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 앱이 가장 마지막으로 구동된 시점 즉시 기록
+        runCatching { syncCheckpointPreferences.recordAppLaunch() }
+
         try {
             enableEdgeToEdge()
         } catch (e: Exception) {
@@ -175,70 +180,69 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun syncInitialData() {
+    private fun syncInitialData(forceSync: Boolean = false) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                Log.d("AUTOLOGUE_INIT", "Starting syncInitialData...")
+                val lastLaunch = syncCheckpointPreferences.getLastAppLaunchedAtMillis()
+                val lastSync = syncCheckpointPreferences.getLastSyncCompletedAtMillis()
+                Log.d(
+                    "AUTOLOGUE_INIT",
+                    "Starting incremental syncInitialData (lastLaunch=$lastLaunch, lastSyncCompleted=$lastSync)..."
+                )
 
-                // 0. 차계부 주행 기록("위치 미확인", "GPS 0개 지점", 미래 10/24 나인CC 등) 및 골프/다이어리 미래 오탐 즉시 자가 치유
-                runCatching {
-                    val today = java.time.LocalDate.now()
-                    val allRounds = golfRepository.getAllGolfRoundsList()
-                    for (r in allRounds) {
-                        val rDay = (r.startTime ?: r.roundDate).toLocalDate()
-                        val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
-                            r.clubName.contains("나인 CC", ignoreCase = true) ||
-                            r.clubName == "나인"
-                        val isFutureFalseOcr = rDay.isAfter(today) && (
-                            r.totalScore != null ||
-                            r.holeScores.isNotEmpty() ||
-                            !r.scorecardPhotoUri.isNullOrBlank() ||
-                            r.matchingPhotoUris.isNotEmpty() ||
-                            isFakeNine ||
-                            rDay == java.time.LocalDate.of(2026, 10, 24)
-                        )
-                        if (isFakeNine || isFutureFalseOcr) {
-                            golfRepository.deleteGolfRound(r.id)
+                // 0. 최초 1회 레거시 데이터 자가 치유 (이미 완료된 버전이면 매 구동마다 중복 실행하지 않음)
+                if (!syncCheckpointPreferences.isLegacyCleanupDone()) {
+                    runCatching {
+                        val today = java.time.LocalDate.now()
+                        val allRounds = golfRepository.getAllGolfRoundsList()
+                        for (r in allRounds) {
+                            val rDay = (r.startTime ?: r.roundDate).toLocalDate()
+                            val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
+                                r.clubName.contains("나인 CC", ignoreCase = true) ||
+                                r.clubName == "나인"
+                            val isFutureFalseOcr = rDay.isAfter(today) && (
+                                r.totalScore != null ||
+                                r.holeScores.isNotEmpty() ||
+                                !r.scorecardPhotoUri.isNullOrBlank() ||
+                                r.matchingPhotoUris.isNotEmpty() ||
+                                isFakeNine ||
+                                rDay == java.time.LocalDate.of(2026, 10, 24)
+                            )
+                            if (isFakeNine || isFutureFalseOcr) {
+                                golfRepository.deleteGolfRound(r.id)
+                            }
                         }
+                        val validRounds = golfRepository.getAllGolfRoundsList()
+                        vehicleRepository.syncAndCleanWithGolfRounds(validRounds)
+                        diaryRepository.cleanDuplicates()
                     }
-                    val validRounds = golfRepository.getAllGolfRoundsList()
-                    vehicleRepository.syncAndCleanWithGolfRounds(validRounds)
-                    diaryRepository.cleanDuplicates()
-                }
-                runCatching {
-                    val cfg = userLocationPreferences.config.value
-                    val homeHint = cfg.homeAddress.ifBlank { cfg.homeName }
-                    val compHint = cfg.companyAddress.ifBlank { cfg.companyName }
-                    val homeDong = placeResolver.resolveNeighborhoodName(
-                        this@MainActivity, cfg.homeLat, cfg.homeLng, homeHint
-                    ).ifBlank { cfg.homeName.ifBlank { "송파구 위례동" } }
-                    val compDong = placeResolver.resolveNeighborhoodName(
-                        this@MainActivity, cfg.companyLat, cfg.companyLng, compHint
-                    ).ifBlank { cfg.companyName.ifBlank { "영등포구 영등포동" } }
-                    val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
-                    vehicleRepository.cleanDuplicatesAndCorruptedLogs(homeDong, compDong, dist)
-                }
-
-                // 1. 기존 DB 내 오분류/중복 레코드 자가 치유
-                runCatching { transactionRepository.cleanDuplicates() }
-
-                // 2. 기기 내 결제 문자(SMS/LMS/MMS/RCS) 자동 스캔 및 가계부 적재
-                runCatching {
-                    val scanResult = historicalDataImporter.scanHistoricalSmsDetailed(
-                        context = this@MainActivity,
-                        daysBack = 365,
-                        limit = 5000
-                    )
-                    for (tx in scanResult.transactions) {
-                        runCatching { processTransactionUseCase(tx) }
+                    runCatching {
+                        val cfg = userLocationPreferences.config.value
+                        val homeHint = cfg.homeAddress.ifBlank { cfg.homeName }
+                        val compHint = cfg.companyAddress.ifBlank { cfg.companyName }
+                        val homeDong = placeResolver.resolveNeighborhoodName(
+                            this@MainActivity, cfg.homeLat, cfg.homeLng, homeHint
+                        ).ifBlank { cfg.homeName.ifBlank { "송파구 위례동" } }
+                        val compDong = placeResolver.resolveNeighborhoodName(
+                            this@MainActivity, cfg.companyLat, cfg.companyLng, compHint
+                        ).ifBlank { cfg.companyName.ifBlank { "영등포구 영등포동" } }
+                        val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
+                        vehicleRepository.cleanDuplicatesAndCorruptedLogs(homeDong, compDong, dist)
                     }
+                    runCatching { transactionRepository.cleanDuplicates() }
                 }
 
-                // 3. 스캔 후 정제 및 차계부 주유 기록 전자동 동기화
-                runCatching { transactionRepository.cleanDuplicates() }
-                val allTxs = transactionRepository.getAllTransactionsFlow().first()
-                val syncedCount = vehicleRepository.syncRefuelingFromTransactions(allTxs)
-                Log.d("AUTOLOGUE_INIT", "Synced $syncedCount refueling logs to car ledger (total txs=${allTxs.size})")
+                // 1. 통합 증분 동기화 엔진(SyncHistoricalDataUseCase) 실행:
+                //    마지막 수집·분석 완료 시점(lastSyncCompletedAtMillis) 이후의 신규 데이터만 수집 및 분석
+                syncHistoricalDataUseCase.startAutoSync(
+                    context = applicationContext,
+                    daysBack = 7,
+                    force = forceSync
+                )
+
+                kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                    syncHistoricalDataUseCase.syncState.first { it != null && it.isDone }
+                }
             } catch (e: Exception) {
                 Log.e("AUTOLOGUE_INIT", "Error during syncInitialData", e)
             } finally {

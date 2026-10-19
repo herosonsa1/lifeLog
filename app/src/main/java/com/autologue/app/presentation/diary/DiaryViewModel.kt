@@ -824,7 +824,7 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun triggerHistoricalSync(context: Context) {
-        executeManualSync(daysBack = 7, context = context)
+        executeManualSync(daysBack = 0, context = context)
     }
 
     fun dismissSyncDialog() {

@@ -196,7 +196,8 @@ class GolfViewModel @Inject constructor(
     private val golfLockerSlipOcrAnalyzer: GolfLockerSlipOcrAnalyzer,
     private val processGolfLockerSlipUseCase: ProcessGolfLockerSlipUseCase,
     private val autoProcessGolfMediaUseCase: com.autologue.app.domain.usecase.golf.AutoProcessGolfMediaUseCase,
-    private val golfWeatherRepository: GolfWeatherRepository
+    private val golfWeatherRepository: GolfWeatherRepository,
+    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
 ) : ViewModel() {
 
     // [L-04] ScorecardOcrAnalyzer를 ViewModel 멤버로 관리하여 onCleared()에서 close() 호출
@@ -432,7 +433,8 @@ class GolfViewModel @Inject constructor(
                         round.clubName.contains("XGOLF", ignoreCase = true)
 
                 // 스코어카드 점수가 전혀 없는 라운드인데 첨부된 사진(matchingPhotoUris)이 실제 라커룸 안내지나 스코어카드가 아닌 경우(웹 캡처 등) 검증
-                val isUnverifiedPhotoOnlyRound = if (!isWebReviewFakeRound &&
+                val isUnverifiedPhotoOnlyRound = if (!syncCheckpointPreferences.isLegacyCleanupDone() &&
+                    !isWebReviewFakeRound &&
                     round.totalScore == null &&
                     round.holeScores.isEmpty() &&
                     round.scorecardPhotoUri.isNullOrBlank() &&
@@ -898,19 +900,53 @@ class GolfViewModel @Inject constructor(
 
     /**
      * 갤러리 및 캡처된 사진(스크린샷)에서 라커룸 전표와 스코어카드를 자동 스캔하여 라운드를 생성/결합합니다.
-     * @param daysBack null이면 과거 전체 기간, 숫자면 최근 N일간의 사진을 스캔합니다.
-     * @param limit 스캔할 최대 후보 사진 수 (기본 200장)
+     * @param daysBack 0이면 마지막 분석 완료 시점 이후의 신규 사진만, null이면 과거 전체 기간, 양수면 최근 N일간의 사진을 스캔합니다.
+     * @param limit 스캔할 최대 후보 사진 수 (기본 300장)
      */
-    fun scanAllGolfMediaFromGallery(daysBack: Int? = 30, limit: Int = 300) {
+    fun scanAllGolfMediaFromGallery(daysBack: Int? = 0, limit: Int = 300) {
         closeGalleryScanDialog()
         viewModelScope.launch(Dispatchers.IO) {
-            val periodText = if (daysBack != null) "최근 ${daysBack}일" else "과거 전체"
+            val isIncremental = daysBack == 0
+            val lastGolfSyncAt = syncCheckpointPreferences.getLastGolfSyncCompletedAtMillis()
+            val periodText = when {
+                isIncremental && lastGolfSyncAt > 0L ->
+                    "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(lastGolfSyncAt)} 이후 신규"
+                isIncremental -> "최근 30일 신규"
+                daysBack != null -> "최근 ${daysBack}일"
+                else -> "과거 전체"
+            }
             _uiState.value = _uiState.value.copy(
                 isOcrScanning = true,
                 ocrScanningMessage = "$periodText 갤러리 미디어 수집 중..."
             )
             try {
-                val candidates = historicalDataImporter.scanHistoricalGolfCandidates(appContext, daysBack = daysBack, limit = limit)
+                val effectiveSinceMillis = if (isIncremental) {
+                    var since = lastGolfSyncAt.takeIf { it > 0L }
+                    if (since == null) {
+                        val existingRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
+                        val maxRoundMillis = existingRounds.maxOfOrNull {
+                            (it.startTime ?: it.roundDate).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                        } ?: 0L
+                        if (maxRoundMillis > 0L) {
+                            syncCheckpointPreferences.ensureBaselineCheckpointFromExistingData(maxRoundMillis)
+                            since = syncCheckpointPreferences.getLastGolfSyncCompletedAtMillis().takeIf { it > 0L }
+                        }
+                    }
+                    since
+                } else null
+
+                val effectiveDaysBack = if (isIncremental) 30 else daysBack
+                val candidates = historicalDataImporter.scanHistoricalGolfCandidates(
+                    context = appContext,
+                    daysBack = effectiveDaysBack,
+                    limit = limit,
+                    sinceTimestampMillis = effectiveSinceMillis
+                )
+                if (candidates.isEmpty()) {
+                    syncCheckpointPreferences.recordGolfSyncCompleted(System.currentTimeMillis())
+                    loadRounds()
+                    return@launch
+                }
                 _uiState.value = _uiState.value.copy(
                     ocrScanningMessage = "$periodText 갤러리 사진 OCR 스캔 시작 (${candidates.size}장)..."
                 )
@@ -920,6 +956,7 @@ class GolfViewModel @Inject constructor(
                         ocrScanningMessage = "갤러리 사진 OCR 분석 중... (${current}/${total}장$foundMsg)"
                     )
                 }
+                syncCheckpointPreferences.recordGolfSyncCompleted(System.currentTimeMillis())
                 android.util.Log.d("GolfViewModel", "갤러리 골프 미디어 자동 스캔 완료: $processedCount 건 처리")
                 loadRounds()
             } catch (t: Throwable) {
@@ -932,7 +969,7 @@ class GolfViewModel @Inject constructor(
 
     @Deprecated("Use scanAllGolfMediaFromGallery instead")
     fun scanAllLockerSlipsFromGallery() {
-        scanAllGolfMediaFromGallery(daysBack = 30, limit = 300)
+        scanAllGolfMediaFromGallery(daysBack = 0, limit = 300)
     }
 
     fun deleteRound(roundId: Long) {

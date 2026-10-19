@@ -29,7 +29,8 @@ class PhotoIndexerWorker @AssistedInject constructor(
     @Assisted private val context: Context,
     @Assisted workerParams: WorkerParameters,
     private val diaryRepository: DiaryRepository,
-    private val excludedPhotoPreferences: ExcludedPhotoPreferences
+    private val excludedPhotoPreferences: ExcludedPhotoPreferences,
+    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
 ) : CoroutineWorker(context, workerParams) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -48,6 +49,7 @@ class PhotoIndexerWorker @AssistedInject constructor(
             val projectionList = mutableListOf(
                 MediaStore.Images.Media._ID,
                 MediaStore.Images.Media.DATE_TAKEN,
+                MediaStore.Images.Media.DATE_ADDED,
                 MediaStore.Images.Media.DISPLAY_NAME,
                 @Suppress("DEPRECATION")
                 MediaStore.Images.Media.DATA
@@ -57,10 +59,19 @@ class PhotoIndexerWorker @AssistedInject constructor(
             }
             val projection = projectionList.toTypedArray()
 
+            val lastPhotoSyncMillis = syncCheckpointPreferences.getLastPhotoSyncCompletedAtMillis()
+            val selection = if (lastPhotoSyncMillis > 0L) {
+                val sinceSec = lastPhotoSyncMillis / 1000L
+                "(${MediaStore.Images.Media.DATE_TAKEN} > ? OR (${MediaStore.Images.Media.DATE_TAKEN} IS NULL AND ${MediaStore.Images.Media.DATE_ADDED} > ?))"
+                    .let { expr -> Pair(expr, arrayOf(lastPhotoSyncMillis.toString(), sinceSec.toString())) }
+            } else {
+                Pair(null, null)
+            }
+
             val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC"
             val queryUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
 
-            context.contentResolver.query(queryUri, projection, null, null, sortOrder)?.use { cursor ->
+            context.contentResolver.query(queryUri, projection, selection.first, selection.second, sortOrder)?.use { cursor ->
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val dateTakenColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
                 val displayNameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
@@ -84,6 +95,9 @@ class PhotoIndexerWorker @AssistedInject constructor(
 
                     val id = cursor.getLong(idColumn)
                     val dateTaken = cursor.getLong(dateTakenColumn)
+                    if (lastPhotoSyncMillis > 0L && dateTaken in 1..lastPhotoSyncMillis) {
+                        continue
+                    }
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     if (excludedPhotoPreferences.isExcluded(contentUri.toString())) {
                         count++
@@ -124,6 +138,7 @@ class PhotoIndexerWorker @AssistedInject constructor(
                     count++
                 }
             }
+            syncCheckpointPreferences.recordPhotoSyncCompleted(System.currentTimeMillis())
             Result.success()
         } catch (e: SecurityException) {
             // [C-02] SecurityException: 재시도해도 해결 불가 → failure() 반환으로 무한루프 방지

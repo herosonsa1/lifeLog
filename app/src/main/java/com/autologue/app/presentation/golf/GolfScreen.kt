@@ -4226,20 +4226,20 @@ fun GolfGalleryScanDialog(
     onDismiss: () -> Unit,
     onConfirm: (Int?) -> Unit
 ) {
-    var selectedDays by remember { mutableStateOf<Int?>(30) }
+    var selectedDays by remember { mutableStateOf<Int?>(0) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "과거 갤러리 골프 미디어 전수 스캔",
+                text = "갤러리 골프 미디어 스캔",
                 style = AppTypography.h2
             )
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    text = "스마트폰 갤러리의 스크린샷, 카메라 사진 및 다운로드 이미지에서 라커룸 전표와 스코어카드를 고속으로 전수 분석하여 골프 라운드를 자동 복원합니다.\n스캔할 기간을 선택하세요.",
+                    text = "마지막 분석 완료 시점 이후 새로 추가된 사진·스크린샷만 빠르게 분석하거나, 과거 기간을 지정해 라커룸 전표와 스코어카드를 복원합니다.",
                     style = AppTypography.bodySecondary
                 )
 
@@ -4248,7 +4248,8 @@ fun GolfGalleryScanDialog(
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
                     val periods: List<Pair<Int?, String>> = listOf(
-                        30 to "최근 30일 (추천 · 스코어카드/라커룸 복원)",
+                        0 to "마지막 분석 이후 신규 사진만 (추천 · 초고속 증분 스캔)",
+                        30 to "최근 30일 (스코어카드/라커룸 복원)",
                         60 to "최근 60일 (2달치 집중 분석)",
                         null to "전체 기간 (갤러리 내 모든 과거 스코어카드 전수 스캔)"
                     )

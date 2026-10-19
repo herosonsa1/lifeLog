@@ -1,6 +1,8 @@
 package com.autologue.app.domain.usecase.sync
 
 import android.content.Context
+import com.autologue.app.data.preferences.SyncCheckpointPreferences
+import com.autologue.app.data.preferences.SyncCheckpointState
 import com.autologue.app.data.sync.HistoricalDataImporter
 import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.TransactionRepository
@@ -25,6 +27,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -41,8 +46,8 @@ data class SyncProgress(
 /**
  * 화면(ViewModel / NavBackStackEntry) 생명주기에 종속되지 않고
  * 앱 전역 백그라운드(Application Scope)에서 독립적으로 동작하는 통합 동기화 엔진.
- * 동기화 도중 다른 메뉴(가계부, 차계부, 골프, 라이프)로 이동했다가 복귀하더라도
- * 중단이나 무한 로딩 고착 없이 실시간 진행률을 공유하고 끝까지 완료(isDone = true)됩니다.
+ * 마지막으로 앱이 구동된 시점과 마지막으로 데이터 수집·분석이 완료된 시점(SyncCheckpointPreferences)을 기록해두고,
+ * 그 이후 시점부터 새로 발생한 증분(Incremental) 데이터만 수집 및 분석합니다.
  */
 @Singleton
 class SyncHistoricalDataUseCase @Inject constructor(
@@ -52,7 +57,8 @@ class SyncHistoricalDataUseCase @Inject constructor(
     private val diaryRepository: DiaryRepository,
     private val vehicleRepository: VehicleRepository,
     private val golfRepository: com.autologue.app.domain.repository.GolfRepository,
-    private val autoProcessGolfMediaUseCase: com.autologue.app.domain.usecase.golf.AutoProcessGolfMediaUseCase
+    private val autoProcessGolfMediaUseCase: com.autologue.app.domain.usecase.golf.AutoProcessGolfMediaUseCase,
+    private val syncCheckpointPreferences: SyncCheckpointPreferences
 ) {
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateLock = Any()
@@ -70,6 +76,8 @@ class SyncHistoricalDataUseCase @Inject constructor(
     private val _isManualSyncDialogVisible = MutableStateFlow(false)
     val isManualSyncDialogVisible: StateFlow<Boolean> = _isManualSyncDialogVisible.asStateFlow()
 
+    val checkpointState: StateFlow<SyncCheckpointState> = syncCheckpointPreferences.state
+
     private fun updateSessionState(sessionId: Long, progress: SyncProgress) {
         if (syncSessionId.get() == sessionId) {
             _syncState.value = progress
@@ -79,6 +87,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
     /**
      * 앱 세션 최초 진입 시 백그라운드 자동 동기화를 시작합니다.
      * 이미 동기화가 진행 중이거나 완료된 경우 중복 실행하지 않고 기존 상태를 그대로 유지합니다.
+     * 마지막 수집·분석 완료 시점이 존재하면 해당 시점 이후의 신규 데이터만 증분 수집·분석합니다.
      */
     fun startAutoSync(context: Context, daysBack: Int = 7, force: Boolean = false) {
         val appCtx = context.applicationContext ?: context
@@ -91,11 +100,17 @@ class SyncHistoricalDataUseCase @Inject constructor(
             }
             hasAutoSyncedInSession = true
             val sessionId = syncSessionId.incrementAndGet()
+            val lastSyncMillis = syncCheckpointPreferences.getLastSyncCompletedAtMillis()
+            val initialStage = if (lastSyncMillis > 0L) {
+                "마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncMillis)}) 이후 신규 데이터 수집 시작..."
+            } else {
+                "일상 기록(결제 문자 & 사진) 동기화 시작..."
+            }
             updateSessionState(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "최근 ${daysBack}일 일상 기록(결제 문자 & 사진) 동기화 시작...",
+                    stage = initialStage,
                     isDone = false
                 )
             )
@@ -107,9 +122,9 @@ class SyncHistoricalDataUseCase @Inject constructor(
 
     /**
      * 사용자가 명시적으로 요청한 기간별 수동 동기화를 백그라운드에서 시작합니다.
-     * 진행 중인 자동 동기화가 있다면 안전하게 중단하고 새로운 기간으로 즉시 전환합니다.
+     * daysBack == 0 인 경우 마지막 분석 완료 시점 이후의 증분 데이터만 수집·분석합니다.
      */
-    fun startManualSync(context: Context, daysBack: Int? = null) {
+    fun startManualSync(context: Context, daysBack: Int? = 0) {
         val appCtx = context.applicationContext ?: context
         synchronized(stateLock) {
             val previousJob = activeSyncJob
@@ -119,7 +134,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "과거 기록 동기화 준비 중...",
+                    stage = "데이터 수집 및 분석 준비 중...",
                     isDone = false
                 )
             )
@@ -132,7 +147,6 @@ class SyncHistoricalDataUseCase @Inject constructor(
 
     /**
      * 수동 동기화 다이얼로그를 닫습니다.
-     * 만약 동기화가 아직 진행 중이라면 다이얼로그만 닫고 백그라운드 동기화는 상단 배너를 통해 계속 진행됩니다.
      */
     fun dismissManualSyncDialog() {
         _isManualSyncDialogVisible.value = false
@@ -144,7 +158,6 @@ class SyncHistoricalDataUseCase @Inject constructor(
 
     /**
      * 기존 Flow 수집 방식 호출부(LifestyleViewModel 등)와의 완벽한 하위 호환을 제공합니다.
-     * 내부적으로 전역 백그라운드 작업을 시작/구독하며 완료 시 자동 종료됩니다.
      */
     operator fun invoke(context: Context, daysBack: Int? = null): Flow<SyncProgress> = flow {
         val appCtx = context.applicationContext ?: context
@@ -152,7 +165,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
             activeSyncJob?.isActive != true
         }
         if (shouldStart) {
-            startAutoSync(appCtx, daysBack = daysBack ?: 30, force = true)
+            startAutoSync(appCtx, daysBack = daysBack ?: 7, force = true)
         }
         syncState
             .filterNotNull()
@@ -165,6 +178,23 @@ class SyncHistoricalDataUseCase @Inject constructor(
             }
     }.flowOn(Dispatchers.IO)
 
+    private suspend fun ensureBaselineCheckpointIfNeeded() {
+        if (syncCheckpointPreferences.getLastSyncCompletedAtMillis() > 0L) return
+        runCatching {
+            val zone = ZoneId.systemDefault()
+            val latestTxMillis = transactionRepository.getAllTransactionsFlow().first()
+                .maxOfOrNull { it.timestamp.atZone(zone).toInstant().toEpochMilli() } ?: 0L
+            val latestDiaryMillis = diaryRepository.getDiaryEntriesFlow().first()
+                .maxOfOrNull { it.date.atZone(zone).toInstant().toEpochMilli() } ?: 0L
+            val latestGolfMillis = golfRepository.getAllGolfRoundsList()
+                .maxOfOrNull { (it.startTime ?: it.roundDate).atZone(zone).toInstant().toEpochMilli() } ?: 0L
+            val maxExistingMillis = maxOf(latestTxMillis, latestDiaryMillis, latestGolfMillis)
+            if (maxExistingMillis > 0L) {
+                syncCheckpointPreferences.ensureBaselineCheckpointFromExistingData(maxExistingMillis)
+            }
+        }
+    }
+
     private suspend fun executeSyncPipeline(
         sessionId: Long,
         context: Context,
@@ -175,34 +205,49 @@ class SyncHistoricalDataUseCase @Inject constructor(
         var photoCount = 0
         var golfSyncedCount = 0
         var insertedEntriesCount = 0
+        val syncStartedAtMillis = System.currentTimeMillis()
 
         try {
-            updateSessionState(
-                sessionId,
-                SyncProgress(
-                    isRunning = true,
-                    stage = "기존 중복 데이터 검사 및 정리 중...",
-                    syncedTxCount = 0,
-                    syncedPhotoCount = 0,
-                    syncedGolfCount = 0,
-                    isDone = false
-                )
-            )
+            // 기존 버전에서 업데이트된 단말에 이미 수집된 DB 데이터가 있다면 해당 최신 시점을 기준점으로 자동 설정
+            ensureBaselineCheckpointIfNeeded()
 
-            // 1. 기존 중복 데이터 검사 및 의료/영수증 가짜 골프 라운드 선제 청소 (최대 10초 타임아웃 방어)
-            withTimeoutOrNull(10_000L) {
-                runCatching { transactionRepository.cleanDuplicates() }
-                runCatching { diaryRepository.cleanDuplicates() }
-                runCatching { vehicleRepository.cleanDuplicates() }
-                cleanUpMedicalFakeRounds()
+            val lastSyncCompletedMillis = syncCheckpointPreferences.getLastSyncCompletedAtMillis()
+            val useIncremental = (!isManual && lastSyncCompletedMillis > 0L) ||
+                (isManual && daysBack == 0 && lastSyncCompletedMillis > 0L)
+
+            val periodDesc = when {
+                useIncremental -> "마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncCompletedMillis)}) 이후"
+                daysBack != null && daysBack > 0 -> "최근 ${daysBack}일"
+                else -> "과거 전체"
             }
 
-            val periodDesc = if (daysBack != null) "최근 ${daysBack}일" else "과거 전체"
+            // 1. 기존 중복 데이터 검사 및 가짜 골프 라운드 청소 (최초 1회 또는 수동 기간 전체 동기화 시에만 실행)
+            if (!syncCheckpointPreferences.isLegacyCleanupDone() || (isManual && !useIncremental)) {
+                updateSessionState(
+                    sessionId,
+                    SyncProgress(
+                        isRunning = true,
+                        stage = "기존 중복 데이터 검사 및 정리 중...",
+                        syncedTxCount = 0,
+                        syncedPhotoCount = 0,
+                        syncedGolfCount = 0,
+                        isDone = false
+                    )
+                )
+                withTimeoutOrNull(10_000L) {
+                    runCatching { transactionRepository.cleanDuplicates() }
+                    runCatching { diaryRepository.cleanDuplicates() }
+                    runCatching { vehicleRepository.cleanDuplicates() }
+                    cleanUpMedicalFakeRounds()
+                    syncCheckpointPreferences.markLegacyCleanupDone()
+                }
+            }
+
             updateSessionState(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "$periodDesc 결제 문자 스캔 중...",
+                    stage = "$periodDesc 신규 결제 문자 수집 및 분석 중...",
                     syncedTxCount = 0,
                     syncedPhotoCount = 0,
                     syncedGolfCount = 0,
@@ -211,10 +256,21 @@ class SyncHistoricalDataUseCase @Inject constructor(
             )
 
             // 2. 문자 스캔 및 거래/주유 내역 동기화 (최대 30초 타임아웃 방어)
+            val sinceSmsMillis = if (useIncremental) syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis() else null
             val savedTransactions = mutableListOf<com.autologue.app.domain.model.Transaction>()
             withTimeoutOrNull(30_000L) {
-                val smsDaysBack = if (daysBack == null) null else maxOf(daysBack, 365)
-                val transactions = importer.scanHistoricalSms(context, daysBack = smsDaysBack, limit = 5000)
+                val smsDaysBack = when {
+                    useIncremental -> null
+                    daysBack == null -> null
+                    else -> maxOf(daysBack, 365)
+                }
+                val smsLimit = if (useIncremental) 1000 else 5000
+                val transactions = importer.scanHistoricalSms(
+                    context = context,
+                    daysBack = smsDaysBack,
+                    limit = smsLimit,
+                    sinceTimestampMillis = sinceSmsMillis
+                )
                 for (tx in transactions) {
                     runCatching {
                         val txId = processTransactionUseCase(tx)
@@ -224,18 +280,27 @@ class SyncHistoricalDataUseCase @Inject constructor(
                         }
                     }
                 }
-                runCatching { transactionRepository.cleanDuplicates() }
-                runCatching {
-                    val allDbTxs = transactionRepository.getAllTransactionsFlow().first()
-                    vehicleRepository.syncRefuelingFromTransactions(allDbTxs)
+                if (savedTransactions.isNotEmpty() || !useIncremental) {
+                    runCatching { transactionRepository.cleanDuplicates() }
+                    runCatching {
+                        val targetTxs = if (useIncremental) {
+                            savedTransactions
+                        } else {
+                            transactionRepository.getAllTransactionsFlow().first()
+                        }
+                        if (targetTxs.isNotEmpty()) {
+                            vehicleRepository.syncRefuelingFromTransactions(targetTxs)
+                        }
+                    }
                 }
+                syncCheckpointPreferences.recordSmsSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
             }
 
             updateSessionState(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "$periodDesc 갤러리 사진 및 위치 분석 중...",
+                    stage = "$periodDesc 신규 갤러리 사진 및 위치 분석 중...",
                     syncedTxCount = txCount,
                     syncedPhotoCount = 0,
                     syncedGolfCount = 0,
@@ -244,16 +309,29 @@ class SyncHistoricalDataUseCase @Inject constructor(
             )
 
             // 3. 갤러리 사진 및 위치 스캔 (최대 25초 타임아웃 방어)
+            val sincePhotoMillis = if (useIncremental) syncCheckpointPreferences.getLastPhotoSyncCompletedAtMillis() else null
             val photos = withTimeoutOrNull(25_000L) {
-                importer.scanHistoricalPhotos(context, daysBack = daysBack)
+                importer.scanHistoricalPhotos(
+                    context = context,
+                    daysBack = if (useIncremental) null else daysBack,
+                    limit = 100,
+                    sinceTimestampMillis = sincePhotoMillis
+                )
             } ?: emptyList()
             photoCount = photos.size
+            syncCheckpointPreferences.recordPhotoSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
 
             // 4. 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지
-            val candidateLimit = if (!isManual && daysBack != null && daysBack <= 7) 60 else 200
-            val candidateDaysBack = if (!isManual && daysBack != null && daysBack <= 7) 14 else daysBack
+            val sinceGolfMillis = if (useIncremental) syncCheckpointPreferences.getLastGolfSyncCompletedAtMillis() else null
+            val candidateLimit = if (useIncremental) 100 else if (!isManual && daysBack != null && daysBack <= 7) 60 else 200
+            val candidateDaysBack = if (useIncremental) null else if (!isManual && daysBack != null && daysBack <= 7) 14 else daysBack
             val golfCandidates = withTimeoutOrNull(10_000L) {
-                importer.scanHistoricalGolfCandidates(context, daysBack = candidateDaysBack, limit = candidateLimit)
+                importer.scanHistoricalGolfCandidates(
+                    context = context,
+                    daysBack = candidateDaysBack,
+                    limit = candidateLimit,
+                    sinceTimestampMillis = sinceGolfMillis
+                )
             } ?: emptyList()
 
             if (golfCandidates.isNotEmpty()) {
@@ -307,6 +385,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                     )
                 }
             }
+            syncCheckpointPreferences.recordGolfSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
 
             // 5. 통합 다이어리 생성 및 주행 기록 동기화 (최대 25초 타임아웃 방어)
             withTimeoutOrNull(25_000L) {
@@ -318,24 +397,62 @@ class SyncHistoricalDataUseCase @Inject constructor(
                     transactionRepository.getAllTransactionsFlow().first()
                 }.getOrDefault(savedTransactions)
 
-                val diaryEntries = importer.generateIntegratedDiaries(
-                    photos = photos,
-                    transactions = allDbTxs.ifEmpty { savedTransactions },
-                    golfRounds = allGolfRounds
-                )
+                val diaryEntries = if (useIncremental) {
+                    val affectedDates = mutableSetOf<LocalDate>()
+                    photos.forEach { affectedDates.add(it.time.toLocalDate()) }
+                    savedTransactions.forEach { affectedDates.add(it.timestamp.toLocalDate()) }
+                    if (golfSyncedCount > 0 && sinceGolfMillis != null && sinceGolfMillis > 0L) {
+                        val sinceGolfDate = Instant.ofEpochMilli(sinceGolfMillis)
+                            .atZone(ZoneId.systemDefault())
+                            .toLocalDate()
+                        allGolfRounds
+                            .filter { !it.roundDate.toLocalDate().isBefore(sinceGolfDate) }
+                            .forEach { affectedDates.add(it.roundDate.toLocalDate()) }
+                    }
+
+                    if (affectedDates.isEmpty()) {
+                        emptyList()
+                    } else {
+                        val minAffectedStartMillis = affectedDates.minOf {
+                            it.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                        }
+                        val fullDayPhotos = (photos + importer.scanHistoricalPhotos(
+                            context = context,
+                            daysBack = null,
+                            limit = 100,
+                            sinceTimestampMillis = (minAffectedStartMillis - 1L).coerceAtLeast(1L)
+                        )).distinctBy { it.uri }
+
+                        importer.generateIntegratedDiaries(
+                            photos = fullDayPhotos,
+                            transactions = allDbTxs.ifEmpty { savedTransactions },
+                            golfRounds = allGolfRounds,
+                            targetDates = affectedDates
+                        )
+                    }
+                } else {
+                    importer.generateIntegratedDiaries(
+                        photos = photos,
+                        transactions = allDbTxs.ifEmpty { savedTransactions },
+                        golfRounds = allGolfRounds,
+                        targetDates = null
+                    )
+                }
 
                 val totalEntries = diaryEntries.size
-                updateSessionState(
-                    sessionId,
-                    SyncProgress(
-                        isRunning = true,
-                        stage = if (totalEntries > 0) "하루 이동 경로 및 다이어리 작성 중... (1/${totalEntries}일)" else "다이어리 데이터 정제 중...",
-                        syncedTxCount = txCount,
-                        syncedPhotoCount = photoCount,
-                        syncedGolfCount = golfSyncedCount,
-                        isDone = false
+                if (totalEntries > 0) {
+                    updateSessionState(
+                        sessionId,
+                        SyncProgress(
+                            isRunning = true,
+                            stage = "하루 이동 경로 및 다이어리 작성 중... (1/${totalEntries}일)",
+                            syncedTxCount = txCount,
+                            syncedPhotoCount = photoCount,
+                            syncedGolfCount = golfSyncedCount,
+                            isDone = false
+                        )
                     )
-                )
+                }
 
                 for ((idx, entry) in diaryEntries.withIndex()) {
                     runCatching {
@@ -367,12 +484,22 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 }
             }
 
+            // 6. 데이터 수집 및 분석 완료 시점 영구 기록
+            val completedAtMillis = System.currentTimeMillis()
+            syncCheckpointPreferences.recordSyncCompleted(completedAtMillis)
+
             val golfSummary = if (golfSyncedCount > 0) " / ⛳ 골프 ${golfSyncedCount}건 등록" else ""
+            val doneMessage = if (useIncremental && txCount == 0 && photoCount == 0 && golfSyncedCount == 0) {
+                "마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncCompletedMillis)}) 이후 새로 추가된 데이터가 없습니다. (최신 상태 유지)"
+            } else {
+                "$periodDesc 분석 완료: 신규 결제 ${txCount}건, 사진 ${photoCount}장$golfSummary, 다이어리 ${insertedEntriesCount}일 갱신!"
+            }
+
             updateSessionState(
                 sessionId,
                 SyncProgress(
                     isRunning = false,
-                    stage = "동기화 완료: 결제 ${txCount}건, 사진 ${photoCount}장 색인$golfSummary 및 다이어리 ${insertedEntriesCount}일 구축 완료!",
+                    stage = doneMessage,
                     syncedTxCount = txCount,
                     syncedPhotoCount = photoCount,
                     syncedGolfCount = golfSyncedCount,
@@ -382,6 +509,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             android.util.Log.e("SyncHistoricalData", "백그라운드 동기화 중 예외 안전 처리", t)
+            syncCheckpointPreferences.recordSyncCompleted(System.currentTimeMillis())
             updateSessionState(
                 sessionId,
                 SyncProgress(

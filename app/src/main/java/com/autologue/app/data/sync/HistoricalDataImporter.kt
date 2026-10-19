@@ -38,14 +38,25 @@ class HistoricalDataImporter @Inject constructor(
     private val excludedPhotoPreferences: ExcludedPhotoPreferences
 ) {
 
-    suspend fun scanHistoricalSms(context: Context, daysBack: Int? = 365, limit: Int = 5000): List<Transaction> {
-        return scanHistoricalSmsDetailed(context, daysBack, limit).transactions
+    suspend fun scanHistoricalSms(
+        context: Context,
+        daysBack: Int? = 365,
+        limit: Int = 5000,
+        sinceTimestampMillis: Long? = null
+    ): List<Transaction> {
+        return scanHistoricalSmsDetailed(
+            context = context,
+            daysBack = daysBack,
+            limit = limit,
+            sinceTimestampMillis = sinceTimestampMillis
+        ).transactions
     }
 
     suspend fun scanHistoricalSmsDetailed(
         context: Context,
         daysBack: Int? = 365,
-        limit: Int = 5000
+        limit: Int = 5000,
+        sinceTimestampMillis: Long? = null
     ): SmsScanResult = withContext(Dispatchers.IO) {
         // [L-01] READ_SMS 권한 사전 체크 — SecurityException 원천 방지
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
@@ -53,38 +64,46 @@ class HistoricalDataImporter @Inject constructor(
             return@withContext SmsScanResult(emptyList(), isPermissionGranted = false, totalMessagesScanned = 0)
         }
 
-        // 최소 365일(1년) 이상 결제 문자를 스캔하여 월 변경이나 7일 자동 동기화 시에도 과거 카드/주유 내역이 누락되지 않도록 보장
-        val effectiveDaysBack = if (daysBack != null && daysBack in 1..364) 365 else daysBack
-        val effectiveLimit = maxOf(limit, 5000)
+        val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
+        val effectiveLimit = if (isIncremental) limit else maxOf(limit, 5000)
 
-        val minDateMillis = if (effectiveDaysBack != null && effectiveDaysBack > 0) {
-            System.currentTimeMillis() - (effectiveDaysBack.toLong() * 24 * 60 * 60 * 1000L)
-        } else {
-            null
+        val minDateMillis: Long? = when {
+            isIncremental -> sinceTimestampMillis
+            daysBack != null && daysBack > 0 -> {
+                System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+            }
+            else -> null
         }
 
         val allTxs = mutableListOf<Transaction>()
         var totalScanned = 0
 
         // 1. 단문 SMS 수신함 스캔
-        val (smsTxs, smsCount) = scanSmsMessages(context, minDateMillis, effectiveLimit)
+        val (smsTxs, smsCount) = scanSmsMessages(context, minDateMillis, effectiveLimit, isIncremental)
         allTxs.addAll(smsTxs)
         totalScanned += smsCount
 
         // 2. 장문 MMS / LMS 수신함 스캔 (80~90바이트 초과 카드 승인 문자 완벽 지원, _data 프로젝션 제거 및 벌크 파트 폴백 포함)
-        val (mmsTxs, mmsCount) = scanMmsMessages(context, minDateMillis, effectiveLimit)
+        val (mmsTxs, mmsCount) = scanMmsMessages(context, minDateMillis, effectiveLimit, isIncremental)
         allTxs.addAll(mmsTxs)
         totalScanned += mmsCount
 
         // 3. 삼성 갤럭시 채팅+(RCS) 및 통합 대화 프로바이더(im/chat, mms-sms/conversations 등) 동적 스캔
-        val (rcsTxs, rcsCount) = scanRcsAndUnifiedMessages(context, minDateMillis, effectiveLimit)
+        val (rcsTxs, rcsCount) = scanRcsAndUnifiedMessages(context, minDateMillis, effectiveLimit, isIncremental)
         allTxs.addAll(rcsTxs)
         totalScanned += rcsCount
 
         // 4. 삼성 One UI 보안 정책으로 RCS DB(content://im/chat) 직접 쿼리가 차단된 단말 환경에서
         //    검증된 RCS 기업 메시징(NH카드6*9* 등) 내역을 복사-붙여넣기 없이 100% 전자동 복원
-        if (allTxs.none { it.originalText.contains("NH카드6*9*") }) {
-            val recoveredRcs = recoverIsolatedRcsTransactions()
+        //    단, 마지막 데이터 수집·분석 완료 시점 이후의 증분 스캔에서는 이미 복원된 과거 내역을 중복 생성하지 않음
+        if (!isIncremental && allTxs.none { it.originalText.contains("NH카드6*9*") }) {
+            val recoveredRcs = recoverIsolatedRcsTransactions().filter { tx ->
+                if (minDateMillis == null || minDateMillis <= 0L) true
+                else {
+                    val txMillis = tx.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    txMillis >= minDateMillis
+                }
+            }
             if (recoveredRcs.isNotEmpty()) {
                 allTxs.addAll(recoveredRcs)
                 totalScanned += recoveredRcs.size
@@ -98,7 +117,7 @@ class HistoricalDataImporter @Inject constructor(
 
         android.util.Log.d(
             "HistoricalDataImporter",
-            "문자 스캔 완료: 총 ${totalScanned}건 스캔(SMS: $smsCount, MMS: $mmsCount, RCS/통합: $rcsCount), 거래 ${distinctTxs.size}건 파싱"
+            "문자 스캔 완료(incremental=$isIncremental, minDateMillis=$minDateMillis): 총 ${totalScanned}건 스캔(SMS: $smsCount, MMS: $mmsCount, RCS/통합: $rcsCount), 거래 ${distinctTxs.size}건 파싱"
         )
 
         SmsScanResult(
@@ -119,7 +138,8 @@ class HistoricalDataImporter @Inject constructor(
     private fun scanSmsMessages(
         context: Context,
         minDateMillis: Long?,
-        limit: Int
+        limit: Int,
+        isIncremental: Boolean = false
     ): Pair<List<Transaction>, Int> {
         val result = mutableListOf<Transaction>()
         var count = 0
@@ -161,7 +181,12 @@ class HistoricalDataImporter @Inject constructor(
                         // 10자리(초) vs 13자리(밀리초) 자동 감지 및 통일
                         val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
 
-                        if (minDateMillis == null || minDateMillis <= 0 || dateMillis >= minDateMillis) {
+                        val passesDate = when {
+                            minDateMillis == null || minDateMillis <= 0L -> true
+                            isIncremental -> dateMillis > minDateMillis
+                            else -> dateMillis >= minDateMillis
+                        }
+                        if (passesDate) {
                             if (body.isNotBlank()) {
                                 candidateList.add(RawSmsItem(address, body, dateMillis))
                             }
@@ -204,7 +229,8 @@ class HistoricalDataImporter @Inject constructor(
     private fun scanMmsMessages(
         context: Context,
         minDateMillis: Long?,
-        limit: Int
+        limit: Int,
+        isIncremental: Boolean = false
     ): Pair<List<Transaction>, Int> {
         val result = mutableListOf<Transaction>()
         var count = 0
@@ -239,7 +265,12 @@ class HistoricalDataImporter @Inject constructor(
                         // MMS의 date 컬럼은 일반적으로 10자리(초) 단위 -> 13자리 밀리초 통일
                         val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
 
-                        if (minDateMillis == null || minDateMillis <= 0 || dateMillis >= minDateMillis) {
+                        val passesDate = when {
+                            minDateMillis == null || minDateMillis <= 0L -> true
+                            isIncremental -> dateMillis > minDateMillis
+                            else -> dateMillis >= minDateMillis
+                        }
+                        if (passesDate) {
                             if (!mmsId.isNullOrBlank()) {
                                 candidateList.add(RawMmsItem(mmsId, dateMillis, subject))
                             }
@@ -253,8 +284,17 @@ class HistoricalDataImporter @Inject constructor(
                 }
             }
 
+            // 증분 스캔 시 신규 MMS 헤더가 0건이면 전체 mms/part 테이블 스캔을 즉시 생략하여 0ms 종료
+            if (isIncremental && rawList.isEmpty()) {
+                return Pair(emptyList(), 0)
+            }
+
             // 벌크 MMS part 맵 구성 (개별 content://mms/{id}/part 쿼리가 막히거나 느린 단말 대응)
-            val bulkPartMap = preloadBulkMmsParts(context)
+            val bulkPartMap = if (rawList.isNotEmpty() || !isIncremental) {
+                preloadBulkMmsParts(context)
+            } else {
+                emptyMap()
+            }
 
             count = rawList.size
             val sortedList = rawList.sortedBy { it.dateMillis }
@@ -284,8 +324,8 @@ class HistoricalDataImporter @Inject constructor(
                 }
             }
 
-            // 만약 content://mms 헤더가 비어있는데 bulkPartMap에 카드 승인 본문이 존재하는 경우 추가 파싱
-            if (result.isEmpty() && bulkPartMap.isNotEmpty()) {
+            // 만약 최초 전체 스캔에서 content://mms 헤더가 비어있는데 bulkPartMap에 카드 승인 본문이 존재하는 경우 추가 파싱
+            if (!isIncremental && result.isEmpty() && bulkPartMap.isNotEmpty()) {
                 for ((_, partText) in bulkPartMap) {
                     if (partText.isNotBlank()) {
                         val parsed = SmsParser.parse(null, partText)
@@ -458,7 +498,8 @@ class HistoricalDataImporter @Inject constructor(
     private fun scanRcsAndUnifiedMessages(
         context: Context,
         minDateMillis: Long?,
-        limit: Int
+        limit: Int,
+        isIncremental: Boolean = false
     ): Pair<List<Transaction>, Int> {
         val result = mutableListOf<Transaction>()
         var scannedCount = 0
@@ -530,7 +571,11 @@ class HistoricalDataImporter @Inject constructor(
                         rawDate > 0L -> rawDate
                         else -> System.currentTimeMillis()
                     }
-                    if (minDateMillis != null && minDateMillis > 0 && dateMillis < minDateMillis) continue
+                    if (minDateMillis != null && minDateMillis > 0L) {
+                        if (rawDate <= 0L && isIncremental) continue
+                        val passes = if (isIncremental) dateMillis > minDateMillis else dateMillis >= minDateMillis
+                        if (!passes) continue
+                    }
 
                     val address = addrCols.firstNotNullOfOrNull { aIdx ->
                         runCatching { c.getString(aIdx) }.getOrNull()?.takeIf { it.isNotBlank() }
@@ -545,7 +590,7 @@ class HistoricalDataImporter @Inject constructor(
                         ?: SmsParser.parse(null, combinedBody, fallbackTime)
                     if (parsed != null) {
                         result.add(parsed)
-                    } else {
+                    } else if (!isIncremental) {
                         val multi = SmsParser.parseMultiple(combinedBody)
                         if (multi.isNotEmpty()) {
                             result.addAll(multi)
@@ -679,7 +724,12 @@ class HistoricalDataImporter @Inject constructor(
         }.getOrDefault(emptyList())
     }
 
-    suspend fun scanHistoricalPhotos(context: Context, daysBack: Int? = 30, limit: Int = 100): List<ScannedPhoto> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalPhotos(
+        context: Context,
+        daysBack: Int? = 30,
+        limit: Int = 100,
+        sinceTimestampMillis: Long? = null
+    ): List<ScannedPhoto> = withContext(Dispatchers.IO) {
         val scanned = mutableListOf<ScannedPhoto>()
         try {
             val projectionList = mutableListOf(
@@ -698,12 +748,15 @@ class HistoricalDataImporter @Inject constructor(
             val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
-            val minDateMillis = if (daysBack != null) {
-                System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
-            } else 0L
+            val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
+            val minDateMillis = when {
+                isIncremental -> sinceTimestampMillis!!
+                daysBack != null -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+                else -> 0L
+            }
             val minDateSec = minDateMillis / 1000L
 
-            val selection = if (daysBack != null) {
+            val selection = if (minDateMillis > 0L) {
                 "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
             } else null
 
@@ -734,13 +787,16 @@ class HistoricalDataImporter @Inject constructor(
                     }
 
                     val timestampMillis = when {
-                        dateTaken > 0 -> dateTaken
+                        dateTaken > 100_000_000_000L -> dateTaken
+                        dateTaken > 0 -> dateTaken * 1000L
+                        dateAdded > 100_000_000_000L -> dateAdded
                         dateAdded > 0 -> dateAdded * 1000L
                         else -> System.currentTimeMillis()
                     }
 
-                    if (minDateMillis > 0L && timestampMillis < minDateMillis) {
-                        continue
+                    if (minDateMillis > 0L) {
+                        val passes = if (isIncremental) timestampMillis > minDateMillis else timestampMillis >= minDateMillis
+                        if (!passes) continue
                     }
 
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
@@ -771,7 +827,7 @@ class HistoricalDataImporter @Inject constructor(
                     count++
                 }
             }
-            android.util.Log.d("HistoricalDataImporter", "일반 다이어리 사진 스캔 완료: ${scanned.size}장 색인됨")
+            android.util.Log.d("HistoricalDataImporter", "일반 다이어리 사진 스캔 완료(incremental=$isIncremental): ${scanned.size}장 색인됨")
         } catch (t: Throwable) {
             android.util.Log.e("HistoricalDataImporter", "사진 스캔 중 오류", t)
             t.printStackTrace()
@@ -780,16 +836,15 @@ class HistoricalDataImporter @Inject constructor(
     }
 
     /**
-     * 캡처된 스크린샷 및 갤러리 사진에서 스코어카드와 라커룸 안내지 후보 사진을 검색합니다.
-     * 일반 다이어리 스캔과 달리 스크린샷(Screenshots 폴더 및 파일)을 허용하며,
-     * 골프/스코어/라커룸 관련 키워드를 가진 이미지를 최우선으로 수집합니다.
+     * 갤러리 내 사진(카메라 롤 및 스크린샷)에서 스코어카드와 라커룸 전표를 탐지하기 위한 대상 사진을 수집합니다.
+     * sinceTimestampMillis가 지정된 경우 마지막 수집·분석 완료 시점 이후의 신규 미디어만 수집합니다.
      */
-    /**
-     * 갤러리 내 사진(카메라 롤 및 스크린샷)에서 스코어카드와 라커룸 전표를 탐지하기 위한 대상 사진을 전수 수집합니다.
-     * 카메라 원본(20260911_...)과 스크린샷은 파일명에 골프 키워드가 없으므로 문자열 필터링을 전면 배제하고,
-     * 메타데이터 크기 필터(400px 이상, 20KB 이상)만 거쳐 실제 OCR 지문 분석 단계로 전달합니다.
-     */
-    suspend fun scanHistoricalGolfCandidates(context: Context, daysBack: Int? = 60, limit: Int = 300): List<ScannedPhoto> = withContext(Dispatchers.IO) {
+    suspend fun scanHistoricalGolfCandidates(
+        context: Context,
+        daysBack: Int? = 60,
+        limit: Int = 300,
+        sinceTimestampMillis: Long? = null
+    ): List<ScannedPhoto> = withContext(Dispatchers.IO) {
         val hasReadPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
         } else {
@@ -821,12 +876,15 @@ class HistoricalDataImporter @Inject constructor(
             val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
-            val minDateMillis = if (daysBack != null) {
-                System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
-            } else 0L
+            val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
+            val minDateMillis = when {
+                isIncremental -> sinceTimestampMillis!!
+                daysBack != null -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+                else -> 0L
+            }
             val minDateSec = minDateMillis / 1000L
 
-            val selection = if (daysBack != null) {
+            val selection = if (minDateMillis > 0L) {
                 "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateSec) OR (${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
             } else null
 
@@ -874,7 +932,10 @@ class HistoricalDataImporter @Inject constructor(
                         dateAdded > 0L -> dateAdded * 1000L
                         else -> System.currentTimeMillis()
                     }
-                    if (minDateMillis > 0L && timestampMillis < minDateMillis) continue
+                    if (minDateMillis > 0L) {
+                        val passes = if (isIncremental) timestampMillis > minDateMillis else timestampMillis >= minDateMillis
+                        if (!passes) continue
+                    }
 
                     val photoTime = Instant.ofEpochMilli(timestampMillis)
                         .atZone(ZoneId.systemDefault())
@@ -891,7 +952,7 @@ class HistoricalDataImporter @Inject constructor(
                     )
                 }
             }
-            android.util.Log.d("HistoricalDataImporter", "골프 후보 사진 스캔 완료: 총 ${candidates.size}장 수집됨 (limit=$limit)")
+            android.util.Log.d("HistoricalDataImporter", "골프 후보 사진 스캔 완료(incremental=$isIncremental): 총 ${candidates.size}장 수집됨 (limit=$limit)")
         } catch (t: Throwable) {
             android.util.Log.e("HistoricalDataImporter", "골프 후보 사진 스캔 중 오류", t)
             t.printStackTrace()
@@ -903,14 +964,20 @@ class HistoricalDataImporter @Inject constructor(
         photos: List<ScannedPhoto>,
         transactions: List<Transaction>,
         golfRounds: List<GolfRound> = emptyList(),
-        vehicleLogs: List<VehicleLog> = emptyList()
+        vehicleLogs: List<VehicleLog> = emptyList(),
+        targetDates: Set<LocalDate>? = null
     ): List<DiaryEntry> = withContext(Dispatchers.Default) {
         val today = LocalDate.now()
-        val allDates = mutableSetOf<LocalDate>()
-        photos.forEach { allDates.add(it.time.toLocalDate()) }
-        transactions.forEach { allDates.add(it.timestamp.toLocalDate()) }
-        golfRounds.forEach { allDates.add(it.roundDate.toLocalDate()) }
-        vehicleLogs.forEach { allDates.add(it.timestamp.toLocalDate()) }
+        val allDates = if (targetDates != null) {
+            targetDates
+        } else {
+            val set = mutableSetOf<LocalDate>()
+            photos.forEach { set.add(it.time.toLocalDate()) }
+            transactions.forEach { set.add(it.timestamp.toLocalDate()) }
+            golfRounds.forEach { set.add(it.roundDate.toLocalDate()) }
+            vehicleLogs.forEach { set.add(it.timestamp.toLocalDate()) }
+            set
+        }
 
         val entries = mutableListOf<DiaryEntry>()
         for (date in allDates.filter { !it.isAfter(today) }.sortedDescending()) {

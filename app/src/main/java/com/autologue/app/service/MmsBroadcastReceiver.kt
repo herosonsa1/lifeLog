@@ -30,6 +30,9 @@ class MmsBroadcastReceiver : BroadcastReceiver() {
     @Inject
     lateinit var vehicleRepository: com.autologue.app.domain.repository.VehicleRepository
 
+    @Inject
+    lateinit var syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
+
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         if (action == "android.provider.Telephony.WAP_PUSH_RECEIVED" ||
@@ -40,13 +43,24 @@ class MmsBroadcastReceiver : BroadcastReceiver() {
                 try {
                     // OS가 MMS 테이블(content://mms)에 데이터와 파트를 영속화할 시간을 1.5초 부여
                     delay(1500L)
-                    val result = importer.scanHistoricalSmsDetailed(context, daysBack = 7, limit = 50)
+                    val lastSmsSyncAt = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis()
+                    // 통신사 발송 시각과 단말기 수신 시각 오차를 감안하여 마지막 완료 시점 5분 전부터 신규 수신분만 스캔
+                    val sinceMillis = if (lastSmsSyncAt > 0L) {
+                        (lastSmsSyncAt - 5 * 60_000L).coerceAtLeast(1L)
+                    } else null
+                    val result = importer.scanHistoricalSmsDetailed(
+                        context = context,
+                        daysBack = 7,
+                        limit = 50,
+                        sinceTimestampMillis = sinceMillis
+                    )
                     for (tx in result.transactions) {
                         runCatching { processTransactionUseCase(tx) }
                     }
                     if (result.transactions.isNotEmpty()) {
                         runCatching { vehicleRepository.syncRefuelingFromTransactions(result.transactions) }
                     }
+                    syncCheckpointPreferences.recordSmsSyncCompleted(System.currentTimeMillis())
                 } catch (t: Throwable) {
                     android.util.Log.e("MmsBroadcastReceiver", "MMS 실시간 수신 처리 중 예외", t)
                 } finally {

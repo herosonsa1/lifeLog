@@ -94,7 +94,8 @@ class CarLedgerViewModel @Inject constructor(
     private val maintenancePreferences: VehicleMaintenancePreferences,
     private val multiVehiclePreferences: MultiVehiclePreferences,
     private val importer: com.autologue.app.data.sync.HistoricalDataImporter,
-    private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
+    private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase,
+    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
 ) : ViewModel() {
 
     private val placeResolver = com.autologue.app.data.sync.PlaceResolver()
@@ -628,10 +629,16 @@ class CarLedgerViewModel @Inject constructor(
 
     fun manualSyncRefueling() {
         viewModelScope.launch {
+            val lastSmsSyncAt = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis()
+            val sinceLabel = if (lastSmsSyncAt > 0L) {
+                "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(lastSmsSyncAt)} 이후"
+            } else {
+                "최근 1년"
+            }
             _uiState.value = _uiState.value.copy(
                 isSyncing = true,
-                loadingTitle = "주유 내역 동기화 중",
-                loadingMessage = "최근 결제 문자 및 주유 기록을 정밀 분석하고 있습니다..."
+                loadingTitle = "주유 내역 증분 동기화 중",
+                loadingMessage = "$sinceLabel 새로 수신된 결제 문자 및 주유 기록을 정밀 분석하고 있습니다..."
             )
             val msg = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 // 0. 기존 DB 내 오분류된 카드/주유 내역 자가 치유 선행
@@ -647,14 +654,32 @@ class CarLedgerViewModel @Inject constructor(
                 val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
                 runCatching { vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist) }
 
-                // 1. 기기 결제 문자(SMS/LMS/MMS/RCS) 최근 365일 전수 스캔 및 가계부/차계부 자동 적재
+                // 1. 마지막 수집 완료 시점 이후의 기기 결제 문자(SMS/LMS/MMS/RCS)만 증분 스캔
+                var effectiveSinceMillis = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
+                if (effectiveSinceMillis == null) {
+                    val existingTxs = runCatching { transactionRepository.getAllTransactionsFlow().first() }.getOrDefault(emptyList())
+                    val maxExistingMillis = existingTxs.maxOfOrNull {
+                        it.timestamp.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    } ?: 0L
+                    if (maxExistingMillis > 0L) {
+                        syncCheckpointPreferences.ensureBaselineCheckpointFromExistingData(maxExistingMillis)
+                        effectiveSinceMillis = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
+                    }
+                }
+
                 var scanResult = com.autologue.app.data.sync.SmsScanResult(emptyList(), hasPerm, 0)
                 if (hasPerm) {
                     runCatching {
-                        scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
+                        scanResult = importer.scanHistoricalSmsDetailed(
+                            context = context,
+                            daysBack = 365,
+                            limit = 5000,
+                            sinceTimestampMillis = effectiveSinceMillis
+                        )
                         for (tx in scanResult.transactions) {
                             processTransactionUseCase(tx)
                         }
+                        syncCheckpointPreferences.recordSmsSyncCompleted(System.currentTimeMillis())
                     }.onFailure {
                         android.util.Log.e("CarLedgerViewModel", "SMS/MMS 스캔 또는 처리 중 예외", it)
                     }
@@ -701,17 +726,20 @@ class CarLedgerViewModel @Inject constructor(
                 val totalFuelLogs = vehicleRepository.getRefuelingLogsFlow().first().size
 
                 val totalScanned = scanResult.totalMessagesScanned
+                val sinceDesc = effectiveSinceMillis?.let {
+                    "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(it)} 이후 "
+                } ?: ""
                 when {
                     !hasPerm && totalFuelLogs == 0 ->
                         "문자(SMS) 읽기 권한이 필요합니다. [주유 동기화]를 눌러 권한을 허용해주세요."
                     addedCount > 0 ->
-                        "결제 문자에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다 (총 ${totalFuelLogs}건)."
+                        "${sinceDesc}결제 문자에서 주유 기록 ${addedCount}건을 새로 자동 동기화했습니다 (총 ${totalFuelLogs}건)."
                     totalFuelLogs > 0 ->
-                        "모든 주유 결제 내역(총 ${totalFuelLogs}건)이 최신 상태로 자동 동기화되었습니다."
+                        "${sinceDesc}새로 추가된 주유 문자가 없습니다. (총 ${totalFuelLogs}건 최신 상태 유지)"
                     totalScanned > 0 ->
                         "기기 문자 총 ${totalScanned}건을 분석했으나 신규 주유 내역을 찾지 못했습니다."
                     else ->
-                        "주유 결제 내역 스캔을 완료했습니다."
+                        "${sinceDesc}주유 결제 내역 증분 스캔을 완료했습니다."
                 }
             }
             _uiState.value = _uiState.value.copy(isSyncing = false, syncResultMessage = msg)

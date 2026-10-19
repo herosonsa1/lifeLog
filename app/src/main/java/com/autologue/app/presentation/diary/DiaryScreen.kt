@@ -1872,20 +1872,20 @@ fun ManualSyncPeriodDialog(
     onDismiss: () -> Unit,
     onConfirm: (Int?) -> Unit
 ) {
-    var selectedDays by remember { mutableStateOf<Int?>(30) }
+    var selectedDays by remember { mutableStateOf<Int?>(0) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "과거 기록 동기화",
+                text = "데이터 수집 및 동기화",
                 style = AppTypography.h2
             )
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    text = "결제 문자(SMS) 및 사진 위치·스코어카드·라커룸 이미지를 분석하여 타임라인과 골프 라운드를 자동 복원합니다.\n동기화할 기간을 선택하세요.",
+                    text = "마지막으로 데이터 수집 및 분석이 완료된 시점 이후의 신규 데이터만 빠르게 수집하거나, 원하는 과거 기간을 선택해 복원할 수 있습니다.",
                     style = AppTypography.bodySecondary
                 )
 
@@ -1894,7 +1894,8 @@ fun ManualSyncPeriodDialog(
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
                     val periods: List<Pair<Int?, String>> = listOf(
-                        30 to "최근 30일 (추천 · 사진/골프/결제 복원)",
+                        0 to "마지막 분석 이후 신규 데이터만 (추천 · 초고속 증분 분석)",
+                        30 to "최근 30일 (사진/골프/결제 복원)",
                         60 to "최근 60일 (2달치 집중 분석)",
                         null to "전체 기간 (갤러리/문자 전수 스캔 및 골프 자동 등록)"
                     )

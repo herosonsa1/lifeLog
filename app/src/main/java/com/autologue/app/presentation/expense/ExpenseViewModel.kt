@@ -370,7 +370,8 @@ class ExpenseViewModel @Inject constructor(
     val expenseCustomMetaPreferences: ExpenseCustomMetaPreferences,
     private val exportAllDataToExcelUseCase: ExportAllDataToExcelUseCase,
     private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase,
-    private val importer: com.autologue.app.data.sync.HistoricalDataImporter
+    private val importer: com.autologue.app.data.sync.HistoricalDataImporter,
+    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ExpenseUiState())
@@ -389,24 +390,28 @@ class ExpenseViewModel @Inject constructor(
         observeCustomMeta()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { transactionRepository.cleanDuplicates() }
-            cleanCorruptedTransferRecords()
-            runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded() }
+            if (!syncCheckpointPreferences.isLegacyCleanupDone()) {
+                cleanCorruptedTransferRecords()
+                runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis = null) }
+            } else {
+                val lastSmsSyncAt = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
+                runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis = lastSmsSyncAt) }
+            }
         }
     }
 
     /**
-     * DB 내에 "카드 6", "카드 2", "출금 내역" 등 플레이스홀더 결제명이 남아있는 경우,
-     * 단말기 문자함(SMS/MMS/RCS)을 백그라운드에서 조용히 스캔하여 동일 거래의 상세 결제명이 존재하면 자동으로 보강합니다.
+     * DB 내에 "카드 6", "카드 2" 등 카드 끝자리 파편 결제명이나 고객센터 번호 오탐이 남아있는 경우,
+     * 마지막 수집 완료 시점(sinceTimestampMillis) 이후의 단말기 문자만 조용히 확인하여 상세 결제명으로 보강합니다.
      */
-    private suspend fun autoRecoverDetailedMerchantsFromSmsIfNeeded() {
+    private suspend fun autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis: Long? = null) {
         val currentAll = transactionRepository.getAllTransactionsFlow().first()
-        val hasPlaceholders = currentAll.any { tx ->
-            com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(
-                tx.merchantName,
-                tx.transferMemo
-            ) || com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(tx.transferMemo)
+        val cardFragmentRegex = Regex("""^(카드|체크|법인)\s*\d+$""")
+        val hasBrokenCardFragments = currentAll.any { tx ->
+            cardFragmentRegex.matches(tx.merchantName.trim()) ||
+                com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(tx.transferMemo)
         }
-        if (!hasPlaceholders) return
+        if (!hasBrokenCardFragments) return
 
         val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
             appContext,
@@ -414,7 +419,12 @@ class ExpenseViewModel @Inject constructor(
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (!hasPerm) return
 
-        val scanResult = importer.scanHistoricalSmsDetailed(appContext, daysBack = 365, limit = 5000)
+        val scanResult = importer.scanHistoricalSmsDetailed(
+            context = appContext,
+            daysBack = 365,
+            limit = 5000,
+            sinceTimestampMillis = sinceTimestampMillis
+        )
         var updatedAny = false
         for (tx in scanResult.transactions) {
             if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
@@ -2566,17 +2576,42 @@ class ExpenseViewModel @Inject constructor(
                 return@launch
             }
 
+            val lastSmsSyncAt = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis()
+            val sinceLabel = if (lastSmsSyncAt > 0L) {
+                "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(lastSmsSyncAt)} 이후"
+            } else {
+                "최근 1년"
+            }
+
             _uiState.update {
                 it.copy(
                     isLoading = true,
-                    loadingTitle = "결제 문자 동기화 중",
-                    loadingMessage = "단말기 결제 문자를 분석하여 가계부를 동기화하고 있습니다..."
+                    loadingTitle = "결제 문자 증분 동기화 중",
+                    loadingMessage = "$sinceLabel 새로 수신된 결제 문자를 분석하여 가계부를 동기화하고 있습니다..."
                 )
             }
 
             val msg = withContext(Dispatchers.IO) {
                 runCatching { transactionRepository.cleanDuplicates() }
-                val scanResult = importer.scanHistoricalSmsDetailed(context, daysBack = 365, limit = 5000)
+
+                var effectiveSinceMillis = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
+                if (effectiveSinceMillis == null) {
+                    val existingTxs = runCatching { transactionRepository.getAllTransactionsFlow().first() }.getOrDefault(emptyList())
+                    val maxExistingMillis = existingTxs.maxOfOrNull {
+                        it.timestamp.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    } ?: 0L
+                    if (maxExistingMillis > 0L) {
+                        syncCheckpointPreferences.ensureBaselineCheckpointFromExistingData(maxExistingMillis)
+                        effectiveSinceMillis = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
+                    }
+                }
+
+                val scanResult = importer.scanHistoricalSmsDetailed(
+                    context = context,
+                    daysBack = 365,
+                    limit = 5000,
+                    sinceTimestampMillis = effectiveSinceMillis
+                )
                 var newCount = 0
                 for (tx in scanResult.transactions) {
                     if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
@@ -2597,17 +2632,25 @@ class ExpenseViewModel @Inject constructor(
                 val allTxs = transactionRepository.getAllTransactionsFlow().first()
                 val addedFuel = vehicleRepository.syncRefuelingFromTransactions(allTxs)
 
+                val completedAt = System.currentTimeMillis()
+                syncCheckpointPreferences.recordSmsSyncCompleted(completedAt)
+
                 val fuelMsg = if (addedFuel > 0) " (차계부 주유 ${addedFuel}건 반영)" else ""
                 val totalScanned = scanResult.totalMessagesScanned
+                val effectiveSinceDesc = effectiveSinceMillis?.let {
+                    "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(it)} 이후 "
+                } ?: ""
                 when {
                     !scanResult.isPermissionGranted ->
                         "문자(SMS) 읽기 권한이 없습니다. 스마트폰 [설정 > 애플리케이션 > LifeLog > 권한]에서 'SMS'를 허용해주세요."
+                    newCount > 0 ->
+                        "${effectiveSinceDesc}신규 결제 문자 ${newCount}건(전체 ${allTxs.size}건)이 가계부 및 차계부에 반영되었습니다.$fuelMsg"
                     allTxs.isNotEmpty() ->
-                        "모든 결제 문자(총 ${allTxs.size}건)가 가계부 및 차계부에 최신 상태로 자동 동기화되었습니다.$fuelMsg"
+                        "${effectiveSinceDesc}새로 추가된 결제 문자가 없습니다. (총 ${allTxs.size}건 최신 상태 유지)$fuelMsg"
                     totalScanned > 0 ->
                         "기기 문자 총 ${totalScanned}건을 스캔했으나, 카드 결제 문자로 인식된 내역이 없습니다."
                     else ->
-                        "결제 문자 자동 동기화를 완료했습니다."
+                        "${effectiveSinceDesc}새로 수신된 결제 문자가 없습니다."
                 }
             }
             _uiState.update { it.copy(isLoading = false, syncResultMessage = msg) }
