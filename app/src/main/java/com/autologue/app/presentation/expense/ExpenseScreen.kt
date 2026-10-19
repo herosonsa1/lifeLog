@@ -529,6 +529,54 @@ fun ExpenseScreen(
                                         modifier = Modifier.clickable { isToolsMenuExpanded = false }
                                     )
                                 }
+                                val totalPermanentRulesCount = uiState.permanentMerchantRules.size +
+                                    uiState.cardCorporateRules.size +
+                                    uiState.rules.size
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFEFF6FF),
+                                    border = BorderStroke(1.dp, Color(0xFF93C5FD)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            isToolsMenuExpanded = false
+                                            viewModel.openPermanentRulesDialog()
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "영구저장 데이터 관리 (자동 치환·분류 규칙 ${totalPermanentRulesCount}건)",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1E40AF)
+                                            )
+                                            Text(
+                                                text = "잘못 영구저장된 결제명 자동 치환 및 카테고리 규칙 해제·원본 복원",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF1D4ED8)
+                                            )
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = Color(0xFF2563EB)
+                                        ) {
+                                            Text(
+                                                text = "관리 열기",
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = PureWhite,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
                                 ExpenseUniformFilterGrid(
                                     options = listOf(
                                         ExpenseGridOptionItem(
@@ -884,9 +932,37 @@ fun ExpenseScreen(
                                     )
 
                                     Row(
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        val permRuleTotal = uiState.permanentMerchantRules.size +
+                                            uiState.cardCorporateRules.size +
+                                            uiState.rules.size
+                                        // 영구저장 데이터 관리 바로가기 버튼
+                                        Box(
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(
+                                                    if (permRuleTotal > 0) Color(0xFFEFF6FF) else Slate100
+                                                )
+                                                .border(
+                                                    1.dp,
+                                                    if (permRuleTotal > 0) Color(0xFF93C5FD) else Slate300,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable { viewModel.openPermanentRulesDialog() }
+                                                .padding(horizontal = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "영구저장($permRuleTotal)",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (permRuleTotal > 0) Color(0xFF1D4ED8) else Slate700
+                                            )
+                                        }
+
                                         // 접었다 폈다 하는 빠른 분류 필터 토글 버튼
                                         Row(
                                             modifier = Modifier
@@ -903,13 +979,13 @@ fun ExpenseScreen(
                                                     RoundedCornerShape(8.dp)
                                                 )
                                                 .clickable { isQuickFilterExpanded = !isQuickFilterExpanded }
-                                                .padding(horizontal = 10.dp),
+                                                .padding(horizontal = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                                         ) {
                                             Text(
-                                                text = if (uiState.hasActiveSubFilter) "빠른 필터 (적용중)" else "빠른 분류 필터",
-                                                fontSize = 11.5.sp,
+                                                text = if (uiState.hasActiveSubFilter) "필터(적용)" else "빠른 필터",
+                                                fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = if (isQuickFilterExpanded || uiState.hasActiveSubFilter) Color(0xFF1D4ED8) else Slate700
                                             )
@@ -933,12 +1009,12 @@ fun ExpenseScreen(
                                                     RoundedCornerShape(8.dp)
                                                 )
                                                 .clickable { viewModel.toggleSelectionMode() }
-                                                .padding(horizontal = 10.dp),
+                                                .padding(horizontal = 8.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                horizontalArrangement = Arrangement.spacedBy(3.dp)
                                             ) {
                                                 Icon(
                                                     imageVector = if (uiState.isSelectionMode) Icons.Default.Close else Icons.Default.Delete,
@@ -947,8 +1023,8 @@ fun ExpenseScreen(
                                                     modifier = Modifier.size(13.dp)
                                                 )
                                                 Text(
-                                                    text = if (uiState.isSelectionMode) "선택 취소" else "선택 삭제",
-                                                    fontSize = 11.5.sp,
+                                                    text = if (uiState.isSelectionMode) "취소" else "선택삭제",
+                                                    fontSize = 11.sp,
                                                     fontWeight = FontWeight.Bold,
                                                     color = if (uiState.isSelectionMode) Color(0xFFDC2626) else Slate700
                                                 )
@@ -1027,7 +1103,7 @@ fun ExpenseScreen(
                                             .padding(horizontal = 10.dp, vertical = 8.dp),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        // [1단] 카테고리별 조회 필터 칩 바
+                                        // [1단] 카테고리별 조회 필터 칩 바 (기타 항목은 항상 제일 마지막에 배치)
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically
@@ -1074,7 +1150,8 @@ fun ExpenseScreen(
                                                     (uiState.categoryTotals.keys +
                                                         uiState.managedCategories.filter { it.isBuiltIn }.map { it.baseCategory }).distinct()
                                                 }
-                                                builtInCatsToShow.forEach { cat ->
+                                                // 1) '기타(ETC)'를 제외한 기본 카테고리 먼저 표시
+                                                builtInCatsToShow.filter { it != ExpenseCategory.ETC }.forEach { cat ->
                                                     val isSelected = uiState.selectedCategory == cat &&
                                                         uiState.selectedCustomCategoryName == null &&
                                                         !uiState.isRecurringFilterOnly
@@ -1087,6 +1164,7 @@ fun ExpenseScreen(
                                                     )
                                                 }
 
+                                                // 2) 사용자 추가 커스텀 카테고리 표시
                                                 uiState.managedCategories.filter { !it.isBuiltIn }.forEach { customItem ->
                                                     val count = quickFilterSnapshot.customCatCounts[customItem.displayName] ?: 0
                                                     val isSelected = uiState.selectedCustomCategoryName == customItem.displayName
@@ -1100,6 +1178,20 @@ fun ExpenseScreen(
                                                         },
                                                         selectedContainerColor = Color(0xFF0D9488),
                                                         selectedBorderColor = Color(0xFF0F766E)
+                                                    )
+                                                }
+
+                                                // 3) '기타(ETC)' 항목은 항상 제일 마지막(하단/우측 끝)에 표시
+                                                if (ExpenseCategory.ETC in builtInCatsToShow) {
+                                                    val isEtcSelected = uiState.selectedCategory == ExpenseCategory.ETC &&
+                                                        uiState.selectedCustomCategoryName == null &&
+                                                        !uiState.isRecurringFilterOnly
+                                                    val etcCount = quickFilterSnapshot.builtInCatCounts[ExpenseCategory.ETC] ?: 0
+                                                    val displayEtc = viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(ExpenseCategory.ETC)
+                                                    ExpenseInlineFilterChip(
+                                                        text = "$displayEtc ($etcCount)",
+                                                        isSelected = isEtcSelected,
+                                                        onClick = { viewModel.toggleCategoryFilter(ExpenseCategory.ETC) }
                                                     )
                                                 }
                                             }
@@ -2002,6 +2094,9 @@ fun ExpenseScreen(
                 viewModel.expenseCustomMetaPreferences.resolveDisplayCardOrBankName(editingTx)
             )
         }
+        val activePermanentRule = remember(editingTx.id, uiState.permanentMerchantRules) {
+            viewModel.findPermanentRuleForTransaction(editingTx)
+        }
         val editCandidatePair by produceState(
             initialValue = Pair(emptyList<Transaction>(), emptySet<Long>()),
             key1 = editingTx.id
@@ -2028,6 +2123,7 @@ fun ExpenseScreen(
             initialIsOneTimeSave = editingTx.id in uiState.oneTimeEditedIds,
             initialIsFixedExpense = editingTx.id in uiState.recurringTransactionIds,
             isSaving = uiState.isSaving,
+            activePermanentRule = activePermanentRule,
             candidateExistingTransactions = sameDirectionExistingTxs,
             autoMatchedExistingTxIds = autoMatchedExistingIds,
             userClassByTxId = uiState.userClassByTxId,
@@ -2044,6 +2140,11 @@ fun ExpenseScreen(
             onDeleteCategory = { item -> viewModel.deleteManagedCategory(item) },
             onOpenCategoryManage = { viewModel.openCategoryManageDialog() },
             onOpenUserClassificationManage = { viewModel.openUserClassificationManageDialog() },
+            onOpenPermanentRulesManage = { viewModel.openPermanentRulesDialog() },
+            onRemovePermanentRule = { rule ->
+                viewModel.removePermanentMerchantRule(rule)
+                viewModel.closeEditDialog()
+            },
             onUpdateUserClassification = { oldName, newName, colorIdx ->
                 viewModel.updateUserClassification(oldName, newName, colorIdx)
             },
@@ -2092,6 +2193,24 @@ fun ExpenseScreen(
                 viewModel.updateUserClassification(oldName, newName, colorIdx)
             },
             onDeleteUserClassification = { name -> viewModel.deleteUserClassification(name) }
+        )
+    }
+
+    // Permanent Rules Manage Dialog (7. 영구저장 데이터 통합 조회 및 해제/원본 복원 관리)
+    if (uiState.isPermanentRulesDialogOpen) {
+        PermanentRulesManageDialog(
+            merchantRules = uiState.permanentMerchantRules,
+            cardCorporateRules = uiState.cardCorporateRules,
+            dbRules = uiState.rules,
+            getBuiltInCategoryName = { cat ->
+                viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+            },
+            onDismiss = { viewModel.closePermanentRulesDialog() },
+            onRemoveMerchantRule = { rule -> viewModel.removePermanentMerchantRule(rule) },
+            onRemoveMerchantAttribute = { rule, attr -> viewModel.removePermanentMerchantAttribute(rule, attr) },
+            onRemoveCardCorporateRule = { cardKey -> viewModel.removeCardCorporateRule(cardKey) },
+            onDeleteDbRule = { ruleId, keyword -> viewModel.deleteTransactionRule(ruleId, keyword) },
+            onClearAllRules = { viewModel.clearAllPermanentRules() }
         )
     }
 
@@ -2844,29 +2963,30 @@ fun DateRangeFilterDialog(
                                     onClick = onToggleRecurring
                                 )
                             )
-                            managedCategories.filter { it.isBuiltIn }.forEach { item ->
-                                val isSel = selectedCategory == item.baseCategory &&
-                                    selectedCustomCategoryName == null &&
-                                    !isRecurringFilterOnly
-                                add(
-                                    ExpenseGridOptionItem(
-                                        label = item.displayName,
-                                        isSelected = isSel,
-                                        onClick = { onSelectCategory(if (isSel) null else item.baseCategory) }
+                            managedCategories.withEtcAlwaysAtBottom().forEach { item ->
+                                if (item.isBuiltIn) {
+                                    val isSel = selectedCategory == item.baseCategory &&
+                                        selectedCustomCategoryName == null &&
+                                        !isRecurringFilterOnly
+                                    add(
+                                        ExpenseGridOptionItem(
+                                            label = item.displayName,
+                                            isSelected = isSel,
+                                            onClick = { onSelectCategory(if (isSel) null else item.baseCategory) }
+                                        )
                                     )
-                                )
-                            }
-                            managedCategories.filter { !it.isBuiltIn }.forEach { customItem ->
-                                val isSel = selectedCustomCategoryName == customItem.displayName
-                                add(
-                                    ExpenseGridOptionItem(
-                                        label = customItem.displayName,
-                                        isSelected = isSel,
-                                        selectedContainerColor = Color(0xFF0D9488),
-                                        selectedBorderColor = Color(0xFF0F766E),
-                                        onClick = { onSelectCustomCategory(if (isSel) null else customItem.displayName) }
+                                } else {
+                                    val isSel = selectedCustomCategoryName == item.displayName
+                                    add(
+                                        ExpenseGridOptionItem(
+                                            label = item.displayName,
+                                            isSelected = isSel,
+                                            selectedContainerColor = Color(0xFF0D9488),
+                                            selectedBorderColor = Color(0xFF0F766E),
+                                            onClick = { onSelectCustomCategory(if (isSel) null else item.displayName) }
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                         ExpenseUniformFilterGrid(
@@ -3265,7 +3385,7 @@ fun AddManualExpenseDialog(
                             )
                         }
                     }
-                    val catOptions = managedCategories.map { item ->
+                    val catOptions = managedCategories.withEtcAlwaysAtBottom().map { item ->
                         val isSelected = if (item.isBuiltIn) {
                             selectedCustomCategoryName == null && selectedCategory == item.baseCategory
                         } else {
@@ -3533,12 +3653,15 @@ fun EditTransactionDialog(
     autoMatchedExistingTxIds: Set<Long> = emptySet(),
     userClassByTxId: Map<Long, com.autologue.app.data.preferences.UserClassificationItem> = emptyMap(),
     customCategoryByTxId: Map<Long, String> = emptyMap(),
+    activePermanentRule: com.autologue.app.data.preferences.PermanentMerchantRuleSummary? = null,
     onResolveCardCorporate: (String) -> Boolean? = { null },
     onAddPermanentCategory: (String) -> Boolean,
     onUpdateCategoryName: (com.autologue.app.data.preferences.ManagedCategoryItem, String) -> Unit = { _, _ -> },
     onDeleteCategory: (com.autologue.app.data.preferences.ManagedCategoryItem) -> Unit = {},
     onOpenCategoryManage: () -> Unit = {},
     onOpenUserClassificationManage: () -> Unit = {},
+    onOpenPermanentRulesManage: () -> Unit = {},
+    onRemovePermanentRule: (com.autologue.app.data.preferences.PermanentMerchantRuleSummary) -> Unit = {},
     onUpdateUserClassification: (oldName: String, newName: String, colorIdx: Int) -> Unit = { _, _, _ -> },
     onDeleteUserClassification: (name: String) -> Unit = {},
     onDismiss: () -> Unit,
@@ -3715,6 +3838,83 @@ fun EditTransactionDialog(
                                 text = "${transaction.timestamp.format(MODAL_DATE_FORMATTER)} · $cardCompany",
                                 style = AppTypography.captionMuted
                             )
+                        }
+                    }
+
+                    // 0. 현재 결제처에 적용 중인 영구저장 규칙 안내 및 즉시 해제 배너
+                    if (activePermanentRule != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFFFFBEB),
+                            border = BorderStroke(1.dp, Color(0xFFFCD34D)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "현재 영구저장 규칙 적용 중",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF92400E)
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Surface(
+                                            onClick = onOpenPermanentRulesManage,
+                                            shape = RoundedCornerShape(5.dp),
+                                            color = PureWhite,
+                                            border = BorderStroke(1.dp, Color(0xFFFCD34D))
+                                        ) {
+                                            Text(
+                                                text = "전체 목록 관리",
+                                                fontSize = 9.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFB45309),
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                            )
+                                        }
+                                        Surface(
+                                            onClick = { onRemovePermanentRule(activePermanentRule) },
+                                            shape = RoundedCornerShape(5.dp),
+                                            color = Color(0xFFFEF2F2),
+                                            border = BorderStroke(1.dp, Color(0xFFFCA5A5))
+                                        ) {
+                                            Text(
+                                                text = "영구저장 해제·복원",
+                                                fontSize = 9.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFDC2626),
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                val summaryText = buildList {
+                                    if (activePermanentRule.sourceMerchantNames.isNotEmpty()) {
+                                        add("치환: ${activePermanentRule.sourceMerchantNames.joinToString(", ")} ➔ ${activePermanentRule.merchantName}")
+                                    }
+                                    val catDisp = activePermanentRule.effectiveCategoryLabel
+                                    if (!catDisp.isNullOrBlank()) add("카테고리: $catDisp")
+                                    if (!activePermanentRule.userClassificationName.isNullOrBlank()) {
+                                        add("분류: ${activePermanentRule.userClassificationName}")
+                                    }
+                                    if (activePermanentRule.isFixedExpense == true) add("고정지출")
+                                }.joinToString(" · ")
+                                if (summaryText.isNotEmpty()) {
+                                    Text(
+                                        text = summaryText,
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF78350F),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -3933,7 +4133,7 @@ fun EditTransactionDialog(
                                 )
                             }
                         }
-                        val editCatOptions = managedCategories.map { item ->
+                        val editCatOptions = managedCategories.withEtcAlwaysAtBottom().map { item ->
                             val isSelected = if (item.isBuiltIn) {
                                 selectedCustomCategoryName == null && selectedCategory == item.baseCategory
                             } else {
@@ -4408,6 +4608,32 @@ fun EditTransactionDialog(
                         modifier = Modifier.padding(8.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "저장 방식 선택",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Slate800
+                            )
+                            Surface(
+                                onClick = onOpenPermanentRulesManage,
+                                shape = RoundedCornerShape(5.dp),
+                                color = PureWhite,
+                                border = BorderStroke(1.dp, Color(0xFF93C5FD))
+                            ) {
+                                Text(
+                                    text = "영구저장 데이터 관리 →",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1D4ED8),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
                         ExpenseUniformFilterGrid(
                             options = listOf(
                                 ExpenseGridOptionItem(

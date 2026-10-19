@@ -5,6 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.data.preferences.ManagedCategoryItem
+import com.autologue.app.data.preferences.PermanentCardCorporateRuleItem
+import com.autologue.app.data.preferences.PermanentMerchantRuleSummary
+import com.autologue.app.data.preferences.PermanentRuleAttribute
 import com.autologue.app.data.preferences.UserAccount
 import com.autologue.app.data.preferences.UserAccountPreferences
 import com.autologue.app.data.preferences.UserClassificationItem
@@ -101,6 +104,10 @@ data class ExpenseUiState(
     val isCategoryManageDialogOpen: Boolean = false,
     val userClassifications: List<UserClassificationItem> = emptyList(),
     val isUserClassificationManageDialogOpen: Boolean = false,
+    // 영구저장 데이터 통합 관리 상태
+    val isPermanentRulesDialogOpen: Boolean = false,
+    val permanentMerchantRules: List<PermanentMerchantRuleSummary> = emptyList(),
+    val cardCorporateRules: List<PermanentCardCorporateRuleItem> = emptyList(),
     val userClassByTxId: Map<Long, UserClassificationItem> = emptyMap(),
     val customCategoryByTxId: Map<Long, String> = emptyMap(),
     val corporateByTxId: Map<Long, Boolean> = emptyMap(),
@@ -181,7 +188,7 @@ data class ExpenseUiState(
     }
 
     /**
-     * 카테고리별 지출 통계 항목 리스트 산출 (선택된 사용자/법인/정기지출 필터와 실시간 교차 연동)
+     * 카테고리별 지출 통계 항목 리스트 산출 (선택된 사용자/법인/정기지출 필터와 실시간 교차 연동, 기타 항목은 항상 최하단 배치)
      */
     fun getCategoryStatItems(getBuiltInName: (ExpenseCategory) -> String): List<CategoryStatItem> {
         var baseList = transactions.filter {
@@ -204,6 +211,7 @@ data class ExpenseUiState(
             baseList = baseList.filter { (corporateByTxId[it.id] == true) == selectedCorporateFilter }
         }
 
+        val etcName = getBuiltInName(ExpenseCategory.ETC)
         val baseTotal = baseList.sumOf { it.amount }.coerceAtLeast(1L)
         return baseList
             .groupBy { tx -> customCategoryByTxId[tx.id] ?: getBuiltInName(tx.category) }
@@ -229,7 +237,11 @@ data class ExpenseUiState(
                     topUsersSummary = topUsers
                 )
             }
-            .sortedByDescending { it.amount }
+            .sortedWith(
+                compareBy<CategoryStatItem> {
+                    it.displayName == etcName || it.displayName == ExpenseCategory.ETC.displayName
+                }.thenByDescending { it.amount }
+            )
     }
 
     /**
@@ -394,6 +406,11 @@ class ExpenseViewModel @Inject constructor(
                 recalculateFilteredTransactions()
             }
         }
+        viewModelScope.launch {
+            merchantAliasPreferences.aliasesFlow.collectLatest {
+                recalculateFilteredTransactions()
+            }
+        }
     }
 
     private fun observeUserAccounts() {
@@ -501,11 +518,16 @@ class ExpenseViewModel @Inject constructor(
         val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
         val recurringExp = expenseOnly.filter { it.id in recurringIds }.sumOf { it.amount }
 
+        val etcBuiltInName = expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(ExpenseCategory.ETC)
+
         val byCat = expenseOnly.groupBy { it.category }
             .mapValues { (_, txs) -> txs.sumOf { it.amount } }
             .filter { it.value > 0L }
             .toList()
-            .sortedByDescending { it.second }
+            .sortedWith(
+                compareBy<Pair<ExpenseCategory, Long>> { it.first == ExpenseCategory.ETC }
+                    .thenByDescending { it.second }
+            )
             .toMap()
 
         val byEffectiveCat = expenseOnly
@@ -513,7 +535,11 @@ class ExpenseViewModel @Inject constructor(
             .mapValues { (_, txs) -> txs.sumOf { it.amount } }
             .filter { it.value > 0L }
             .toList()
-            .sortedByDescending { it.second }
+            .sortedWith(
+                compareBy<Pair<String, Long>> {
+                    it.first == etcBuiltInName || it.first == ExpenseCategory.ETC.displayName
+                }.thenByDescending { it.second }
+            )
             .toMap()
 
         val rawByUser = expenseOnly
@@ -654,6 +680,13 @@ class ExpenseViewModel @Inject constructor(
             }
         }
 
+        val knownNames = (state.allTransactions.map { it.merchantName } + dedupedAll.map { it.merchantName }).distinct()
+        val permMerchantRules = expenseCustomMetaPreferences.getPermanentMerchantRuleSummaries(
+            aliasPreferences = merchantAliasPreferences,
+            knownMerchantNames = knownNames
+        )
+        val cardCorpRules = expenseCustomMetaPreferences.getCardCorporateRules()
+
         return recomputeCurrentMonthStats(
             state.copy(
                 selectedYearMonth = state.selectedYearMonth,
@@ -662,7 +695,9 @@ class ExpenseViewModel @Inject constructor(
                 userClassByTxId = uClassMap,
                 customCategoryByTxId = cCatMap,
                 corporateByTxId = corpMap,
-                oneTimeEditedIds = oneTimeSet
+                oneTimeEditedIds = oneTimeSet,
+                permanentMerchantRules = permMerchantRules,
+                cardCorporateRules = cardCorpRules
             )
         )
     }
@@ -711,7 +746,9 @@ class ExpenseViewModel @Inject constructor(
                         userClassByTxId = computed.userClassByTxId,
                         customCategoryByTxId = computed.customCategoryByTxId,
                         corporateByTxId = computed.corporateByTxId,
-                        oneTimeEditedIds = computed.oneTimeEditedIds
+                        oneTimeEditedIds = computed.oneTimeEditedIds,
+                        permanentMerchantRules = computed.permanentMerchantRules,
+                        cardCorporateRules = computed.cardCorporateRules
                     )
                 }
                 resolved.copy(isLoading = false)
@@ -1792,6 +1829,316 @@ class ExpenseViewModel @Inject constructor(
         }
         viewModelScope.launch(Dispatchers.IO) {
             expenseCustomMetaPreferences.deleteUserClassification(name)
+        }
+    }
+
+    // =========================================================================
+    // 영구저장 데이터 통합 관리 제어 (개별 해제 · 결제처 전체 해제 · 원본 복원 · 전체 초기화)
+    // =========================================================================
+
+    fun openPermanentRulesDialog() {
+        _uiState.update { it.copy(isPermanentRulesDialogOpen = true) }
+        recalculateFilteredTransactions()
+    }
+
+    fun closePermanentRulesDialog() {
+        _uiState.update { it.copy(isPermanentRulesDialogOpen = false) }
+    }
+
+    /**
+     * 특정 거래 내역(tx)에 현재 적용되고 있는 영구저장 규칙(PermanentMerchantRuleSummary)을 찾아 반환합니다.
+     */
+    fun findPermanentRuleForTransaction(tx: Transaction): PermanentMerchantRuleSummary? {
+        if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) return null
+        val isDeposit = tx.isDepositTransaction()
+        val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+        val rawParsedName = if (!isManual && tx.originalText.isNotBlank()) {
+            com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, tx.originalText, tx.timestamp)?.merchantName
+                ?: com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)?.merchantName
+        } else null
+
+        val candidateNorms = buildList {
+            add(tx.merchantName)
+            add(merchantAliasPreferences.resolveAlias(tx.merchantName, isDeposit))
+            if (!rawParsedName.isNullOrBlank()) add(rawParsedName)
+        }.map { com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(it) }
+            .filter { it.isNotBlank() }
+            .toSet()
+
+        if (candidateNorms.isEmpty()) return null
+
+        return _uiState.value.permanentMerchantRules.firstOrNull { rule ->
+            if (rule.isDeposit != isDeposit) return@firstOrNull false
+            val ruleTargetNorm = com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(rule.merchantName)
+            if (ruleTargetNorm in candidateNorms) return@firstOrNull true
+            rule.sourceMerchantNames.any { src ->
+                com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(src) in candidateNorms
+            }
+        }
+    }
+
+    /**
+     * 영구저장 규칙 해제 시, 이미 자동 치환되어 DB에 덮어써졌던 거래 내역들을
+     * 원본 문자(originalText) 파싱 결과로 자동 복원합니다. (1회성 저장 내역은 보존)
+     */
+    private suspend fun restoreOriginalTransactionsForNames(
+        affectedNames: Collection<String>,
+        isDeposit: Boolean?,
+        restoreMerchantName: Boolean,
+        restoreCategory: Boolean,
+        restoreCardOrBank: Boolean
+    ): Pair<Int, Set<Long>> {
+        val targetNorms = affectedNames
+            .map { com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(it) }
+            .filter { it.isNotBlank() }
+            .toHashSet()
+        if (targetNorms.isEmpty() && isDeposit != null) return Pair(0, emptySet())
+
+        val allTxs = transactionRepository.getAllTransactionsFlow().first()
+        val toUpdate = ArrayList<Transaction>()
+        val affectedIds = HashSet<Long>()
+
+        for (tx in allTxs) {
+            if (expenseCustomMetaPreferences.isOneTimeEdited(tx)) continue
+            val txIsDep = tx.isDepositTransaction()
+            if (isDeposit != null && txIsDep != isDeposit) continue
+
+            val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+            val parsed = if (!isManual && tx.originalText.isNotBlank()) {
+                com.autologue.app.data.parser.SmsParser.parse(tx.cardOrBankName, tx.originalText, tx.timestamp)
+                    ?: com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)
+            } else null
+
+            val txNorm = com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)
+            val parsedNorm = parsed?.merchantName?.let {
+                com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(it)
+            }.orEmpty()
+
+            val isMatched = targetNorms.isEmpty() ||
+                txNorm in targetNorms ||
+                (parsedNorm.isNotBlank() && parsedNorm in targetNorms)
+
+            if (!isMatched) continue
+            affectedIds.add(tx.id)
+
+            if (parsed != null) {
+                val restoredMerchant = if (restoreMerchantName && parsed.merchantName.isNotBlank()) {
+                    parsed.merchantName
+                } else {
+                    tx.merchantName
+                }
+                val restoredCategory = if (restoreCategory) {
+                    parsed.category
+                } else {
+                    tx.category
+                }
+                val restoredCard = if (restoreCardOrBank && parsed.cardOrBankName.isNotBlank()) {
+                    parsed.cardOrBankName
+                } else {
+                    tx.cardOrBankName
+                }
+                if (restoredMerchant != tx.merchantName ||
+                    restoredCategory != tx.category ||
+                    restoredCard != tx.cardOrBankName
+                ) {
+                    toUpdate.add(
+                        tx.copy(
+                            merchantName = restoredMerchant,
+                            category = restoredCategory,
+                            cardOrBankName = restoredCard
+                        )
+                    )
+                }
+            }
+        }
+
+        if (toUpdate.isNotEmpty()) {
+            transactionRepository.updateTransactions(toUpdate)
+        }
+        return Pair(toUpdate.size, affectedIds)
+    }
+
+    /**
+     * 특정 결제처(PermanentMerchantRuleSummary)의 모든 영구저장 규칙(결제명 자동 치환 + 분류/속성 규칙)을
+     * 일괄 해제하고, 자동 치환되었던 기존 거래 내역을 원본 문자 기준으로 복원합니다.
+     */
+    fun removePermanentMerchantRule(rule: PermanentMerchantRuleSummary) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val allCandidateNames = LinkedHashSet<String>().apply {
+                add(rule.merchantName)
+                addAll(rule.sourceMerchantNames)
+            }
+            val removedAliasNames = merchantAliasPreferences.removeAliasByMerchant(
+                merchantOrSourceName = rule.merchantName,
+                isDeposit = rule.isDeposit
+            )
+            allCandidateNames.addAll(removedAliasNames)
+            for (src in rule.sourceMerchantNames) {
+                allCandidateNames.addAll(
+                    merchantAliasPreferences.removeAliasByMerchant(
+                        merchantOrSourceName = src,
+                        isDeposit = rule.isDeposit
+                    )
+                )
+            }
+
+            val (restoredCount, affectedIds) = restoreOriginalTransactionsForNames(
+                affectedNames = allCandidateNames,
+                isDeposit = rule.isDeposit,
+                restoreMerchantName = true,
+                restoreCategory = true,
+                restoreCardOrBank = true
+            )
+
+            expenseCustomMetaPreferences.removePermanentMerchantRule(
+                merchantName = rule.merchantName,
+                isDeposit = rule.isDeposit,
+                extraMerchantNames = allCandidateNames,
+                affectedTxIds = affectedIds
+            )
+
+            val dirLabel = if (rule.isDeposit) "입금" else "출금"
+            val restoreSuffix = if (restoredCount > 0) " (기존 자동 치환 내역 ${restoredCount}건 원본 복원 완료)" else ""
+            _uiState.update {
+                it.copy(
+                    syncResultMessage = "'${rule.merchantName}' [$dirLabel] 영구저장 규칙이 해제되었습니다.$restoreSuffix"
+                )
+            }
+            recalculateFilteredTransactions()
+        }
+    }
+
+    /**
+     * 특정 결제처(PermanentMerchantRuleSummary)의 영구저장 규칙 중 선택한 단일 속성만 개별 해제합니다.
+     */
+    fun removePermanentMerchantAttribute(
+        rule: PermanentMerchantRuleSummary,
+        attribute: PermanentRuleAttribute
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val allCandidateNames = LinkedHashSet<String>().apply {
+                add(rule.merchantName)
+                addAll(rule.sourceMerchantNames)
+            }
+
+            if (attribute == PermanentRuleAttribute.ALIAS_NAME) {
+                // 별칭 해제 전 원본 가맹점명으로 나머지 메타 규칙(카테고리, 사용자 분류 등)을 먼저 이관 보존
+                expenseCustomMetaPreferences.removePermanentMerchantAttribute(
+                    attribute = PermanentRuleAttribute.ALIAS_NAME,
+                    merchantName = rule.merchantName,
+                    isDeposit = rule.isDeposit,
+                    extraMerchantNames = allCandidateNames
+                )
+                val removedAliasNames = merchantAliasPreferences.removeAliasByMerchant(
+                    merchantOrSourceName = rule.merchantName,
+                    isDeposit = rule.isDeposit
+                )
+                allCandidateNames.addAll(removedAliasNames)
+                for (src in rule.sourceMerchantNames) {
+                    allCandidateNames.addAll(
+                        merchantAliasPreferences.removeAliasByMerchant(
+                            merchantOrSourceName = src,
+                            isDeposit = rule.isDeposit
+                        )
+                    )
+                }
+            }
+
+            val (restoredCount, affectedIds) = restoreOriginalTransactionsForNames(
+                affectedNames = allCandidateNames,
+                isDeposit = rule.isDeposit,
+                restoreMerchantName = attribute == PermanentRuleAttribute.ALIAS_NAME,
+                restoreCategory = attribute == PermanentRuleAttribute.CATEGORY,
+                restoreCardOrBank = attribute == PermanentRuleAttribute.CARD_DESIGNATION
+            )
+
+            if (attribute != PermanentRuleAttribute.ALIAS_NAME) {
+                expenseCustomMetaPreferences.removePermanentMerchantAttribute(
+                    attribute = attribute,
+                    merchantName = rule.merchantName,
+                    isDeposit = rule.isDeposit,
+                    extraMerchantNames = allCandidateNames,
+                    affectedTxIds = affectedIds
+                )
+            }
+
+            val attrLabel = when (attribute) {
+                PermanentRuleAttribute.ALIAS_NAME -> "결제명 자동 치환"
+                PermanentRuleAttribute.CATEGORY -> "카테고리 지정"
+                PermanentRuleAttribute.USER_CLASSIFICATION -> "사용자 분류"
+                PermanentRuleAttribute.CARD_DESIGNATION -> "카드/은행·법인 지정"
+                PermanentRuleAttribute.FIXED_EXPENSE -> "고정지출 지정"
+            }
+            val restoreSuffix = if (restoredCount > 0) " (기존 내역 ${restoredCount}건 원본 복원)" else ""
+            _uiState.update {
+                it.copy(
+                    syncResultMessage = "'${rule.merchantName}'의 [$attrLabel] 영구저장 설정을 해제했습니다.$restoreSuffix"
+                )
+            }
+            recalculateFilteredTransactions()
+        }
+    }
+
+    /**
+     * 카드별 법인/개인 영구 지정 규칙을 개별 해제합니다.
+     */
+    fun removeCardCorporateRule(cardKey: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            expenseCustomMetaPreferences.removeCardCorporateRule(cardKey)
+            _uiState.update {
+                it.copy(syncResultMessage = "'$cardKey' 카드의 법인/개인 영구 지정 규칙을 해제했습니다.")
+            }
+            recalculateFilteredTransactions()
+        }
+    }
+
+    /**
+     * 키워드 기반 자동 분류 규칙(TransactionRule)을 개별 삭제합니다.
+     */
+    fun deleteTransactionRule(ruleId: Long, keywordPattern: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            manageTransactionRulesUseCase.deleteRule(ruleId)
+            _uiState.update {
+                it.copy(syncResultMessage = "'$keywordPattern' 자동 분류 규칙을 해제했습니다.")
+            }
+            recalculateFilteredTransactions()
+        }
+    }
+
+    /**
+     * 등록된 모든 영구저장 규칙(결제명 자동 치환, 가맹점별 카테고리/사용자분류/카드·법인/고정지출, 카드별 법인 규칙)을
+     * 일괄 초기화하고 자동 치환되었던 기존 내역들을 원본 문자 기준으로 복원합니다.
+     */
+    fun clearAllPermanentRules() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val allRules = _uiState.value.permanentMerchantRules
+            val allNames = LinkedHashSet<String>()
+            for (r in allRules) {
+                allNames.add(r.merchantName)
+                allNames.addAll(r.sourceMerchantNames)
+            }
+
+            merchantAliasPreferences.clearAllAliases()
+            expenseCustomMetaPreferences.clearAllPermanentRules()
+            for (dbRule in _uiState.value.rules) {
+                runCatching { manageTransactionRulesUseCase.deleteRule(dbRule.id) }
+            }
+
+            val (restoredCount, _) = restoreOriginalTransactionsForNames(
+                affectedNames = allNames,
+                isDeposit = null,
+                restoreMerchantName = true,
+                restoreCategory = true,
+                restoreCardOrBank = true
+            )
+
+            val restoreSuffix = if (restoredCount > 0) " (기존 내역 ${restoredCount}건 원본 결제명·분류로 복원 완료)" else ""
+            _uiState.update {
+                it.copy(
+                    syncResultMessage = "모든 영구저장 규칙을 초기화했습니다.$restoreSuffix"
+                )
+            }
+            recalculateFilteredTransactions()
         }
     }
 

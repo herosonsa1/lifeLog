@@ -52,6 +52,45 @@ data class PermanentSaveOptions(
 )
 
 /**
+ * 영구저장된 가맹점(결제처) 규칙 중 개별 해제 가능한 속성 구분
+ */
+enum class PermanentRuleAttribute {
+    ALIAS_NAME,           // 결제명 자동 치환 규칙
+    CATEGORY,             // 기본/커스텀 카테고리 규칙
+    USER_CLASSIFICATION,  // 사용자 분류 규칙
+    CARD_DESIGNATION,     // 카드/은행 및 법인 지정 규칙
+    FIXED_EXPENSE         // 고정지출(정기지출) 지정 규칙
+}
+
+/**
+ * 영구저장된 가맹점(결제처) 통합 규칙 요약 모델
+ */
+data class PermanentMerchantRuleSummary(
+    val ruleKey: String,
+    val merchantName: String,
+    val isDeposit: Boolean,
+    val sourceMerchantNames: List<String> = emptyList(),
+    val baseCategory: ExpenseCategory? = null,
+    val categoryDisplayName: String? = null,
+    val customCategoryName: String? = null,
+    val userClassificationName: String? = null,
+    val cardDesignation: String? = null,
+    val isFixedExpense: Boolean? = null
+) {
+    val hasAliasRule: Boolean get() = sourceMerchantNames.isNotEmpty()
+    val effectiveCategoryLabel: String?
+        get() = customCategoryName?.takeIf { it.isNotBlank() } ?: categoryDisplayName
+}
+
+/**
+ * 카드별 법인/개인 영구 지정 규칙 모델
+ */
+data class PermanentCardCorporateRuleItem(
+    val cardKey: String,
+    val isCorporate: Boolean
+)
+
+/**
  * 가계부·차계부 확장 메타데이터 및 영속 설정 저장소:
  * 1) 카드사/은행명 자동 힌트 추출 및 법인/개인 여부 지정 관리 (입금/출금 구분 포함)
  * 2) 내역 수정 시 1회성 저장 보호(One-Time Override) 관리
@@ -483,7 +522,8 @@ class ExpenseCustomMetaPreferences private constructor(
     private fun refreshFlows() {
         val managed = mutableListOf<ManagedCategoryItem>()
         for (cat in ExpenseCategory.values()) {
-            if (cat.name in deletedDefaultCategories && cat != ExpenseCategory.ETC) continue
+            if (cat == ExpenseCategory.ETC) continue
+            if (cat.name in deletedDefaultCategories) continue
             val label = renamedDefaultCategories[cat.name] ?: cat.displayName
             managed.add(
                 ManagedCategoryItem(
@@ -507,6 +547,16 @@ class ExpenseCustomMetaPreferences private constructor(
             }
             _userClassificationsFlow.value = userClassificationList.toList()
         }
+        // '기타'(ExpenseCategory.ETC) 항목은 항상 커스텀 카테고리들보다도 뒤인 제일 하단(마지막)에 배치
+        val etcLabel = renamedDefaultCategories[ExpenseCategory.ETC.name] ?: ExpenseCategory.ETC.displayName
+        managed.add(
+            ManagedCategoryItem(
+                id = "BUILTIN_${ExpenseCategory.ETC.name}",
+                displayName = etcLabel,
+                baseCategory = ExpenseCategory.ETC,
+                isBuiltIn = true
+            )
+        )
         _managedCategoriesFlow.value = managed
         _metaVersionFlow.value = _metaVersionFlow.value + 1L
     }
@@ -1199,6 +1249,294 @@ class ExpenseCustomMetaPreferences private constructor(
 
     fun isGolfDrivingSyncDeleted(date: LocalDate): Boolean {
         return "GOLF_DRIVE_$date" in deletedVehicleLogSignatures
+    }
+
+    // =========================================================================
+    // 6. 영구저장 데이터 통합 조회 및 해제/초기화 관리
+    // =========================================================================
+
+    /**
+     * 영구저장된 결제명 자동 치환(MerchantAliasPreferences)과
+     * 가맹점별 메타 규칙(카테고리, 커스텀 카테고리, 사용자 분류, 카드/은행·법인 지정, 고정지출)을
+     * (입출금 구분 + 대표 결제명) 단위로 통합하여 반환합니다.
+     */
+    fun getPermanentMerchantRuleSummaries(
+        aliasPreferences: MerchantAliasPreferences,
+        knownMerchantNames: Collection<String> = emptyList()
+    ): List<PermanentMerchantRuleSummary> {
+        val aliasGroups = aliasPreferences.getAliasRuleGroups()
+        // 정규화 키 -> 가독성 높은 원래 표기명 매핑 사전 구축
+        val prettyNameByNorm = HashMap<String, String>()
+        for (name in knownMerchantNames) {
+            val clean = name.trim()
+            if (clean.isBlank()) continue
+            val norm = MerchantAliasPreferences.normalizeMerchantKey(clean)
+            if (norm.isNotBlank()) {
+                val existing = prettyNameByNorm[norm]
+                if (existing == null || clean.count { it.isWhitespace() } > existing.count { it.isWhitespace() }) {
+                    prettyNameByNorm[norm] = clean
+                }
+            }
+        }
+        for (group in aliasGroups) {
+            val normTarget = MerchantAliasPreferences.normalizeMerchantKey(group.targetName)
+            if (normTarget.isNotBlank()) {
+                prettyNameByNorm[normTarget] = group.targetName
+            }
+            for (src in group.sourceNames) {
+                val normSrc = MerchantAliasPreferences.normalizeMerchantKey(src)
+                if (normSrc.isNotBlank()) {
+                    prettyNameByNorm.putIfAbsent(normSrc, src)
+                }
+            }
+        }
+
+        data class BucketKey(val isDeposit: Boolean, val canonicalNorm: String)
+        val bucketDisplayNames = LinkedHashMap<BucketKey, String>()
+        val bucketSourceSets = LinkedHashMap<BucketKey, LinkedHashSet<String>>()
+
+        // 1) 결제명 자동 치환 그룹 먼저 등록
+        for (group in aliasGroups) {
+            val normTarget = MerchantAliasPreferences.normalizeMerchantKey(group.targetName)
+            if (normTarget.isBlank()) continue
+            val bKey = BucketKey(isDeposit = group.isDeposit, canonicalNorm = normTarget)
+            bucketDisplayNames[bKey] = group.targetName
+            val srcSet = bucketSourceSets.getOrPut(bKey) { LinkedHashSet() }
+            group.sourceNames.forEach { src ->
+                if (!src.equals(group.targetName, ignoreCase = true) &&
+                    MerchantAliasPreferences.normalizeMerchantKey(src) != normTarget
+                ) {
+                    srcSet.add(src)
+                }
+            }
+        }
+
+        // 2) 5대 가맹점 메타 규칙 맵의 모든 키를 스캔하여 통합 버킷에 병합
+        val allMetaKeys = LinkedHashSet<String>().apply {
+            addAll(merchantBaseCategoryMap.keys)
+            addAll(merchantCustomCategoryMap.keys)
+            addAll(merchantUserClassMap.keys)
+            addAll(merchantCardDesignationMap.keys)
+            addAll(merchantFixedExpenseMap.keys)
+        }
+
+        for (rawKey in allMetaKeys) {
+            val isDeposit = rawKey.startsWith(MerchantAliasPreferences.PREFIX_IN)
+            val stripped = MerchantAliasPreferences.stripDirectionPrefix(rawKey).trim()
+            if (stripped.isBlank()) continue
+
+            val resolvedTarget = aliasPreferences.resolveAlias(stripped, isDeposit).ifBlank { stripped }
+            val canonicalNorm = MerchantAliasPreferences.normalizeMerchantKey(resolvedTarget)
+            if (canonicalNorm.isBlank()) continue
+
+            val bKey = BucketKey(isDeposit = isDeposit, canonicalNorm = canonicalNorm)
+            if (!bucketDisplayNames.containsKey(bKey)) {
+                val bestDisplay = prettyNameByNorm[canonicalNorm]
+                    ?: resolvedTarget.takeIf { it != canonicalNorm }
+                    ?: stripped
+                bucketDisplayNames[bKey] = bestDisplay
+            }
+            bucketSourceSets.putIfAbsent(bKey, LinkedHashSet())
+        }
+
+        val summaries = mutableListOf<PermanentMerchantRuleSummary>()
+        for ((bKey, displayMerchant) in bucketDisplayNames.entries) {
+            val isDep = bKey.isDeposit
+            val sources = bucketSourceSets[bKey]?.toList().orEmpty()
+            val candidateLookupNames = buildList {
+                add(displayMerchant)
+                add(bKey.canonicalNorm)
+                addAll(sources)
+            }.distinct()
+
+            fun lookupFirstIn(map: ConcurrentHashMap<String, String>): String? {
+                for (cand in candidateLookupNames) {
+                    lookupDirectionalRule(map, cand, isDep)?.takeIf { it.isNotBlank() }?.let { return it }
+                }
+                return null
+            }
+
+            val baseCatRaw = lookupFirstIn(merchantBaseCategoryMap)
+            val baseCat = baseCatRaw?.let { runCatching { ExpenseCategory.valueOf(it) }.getOrNull() }
+            val customCat = lookupFirstIn(merchantCustomCategoryMap)
+            val userClass = lookupFirstIn(merchantUserClassMap)
+            val cardDesig = lookupFirstIn(merchantCardDesignationMap)
+            val fixedRaw = lookupFirstIn(merchantFixedExpenseMap)
+            val isFixed = when (fixedRaw) {
+                "true" -> true
+                "false" -> false
+                else -> null
+            }
+
+            if (sources.isEmpty() &&
+                baseCat == null &&
+                customCat.isNullOrBlank() &&
+                userClass.isNullOrBlank() &&
+                cardDesig.isNullOrBlank() &&
+                isFixed == null
+            ) {
+                continue
+            }
+
+            val dirPrefix = MerchantAliasPreferences.directionPrefix(isDep)
+            summaries.add(
+                PermanentMerchantRuleSummary(
+                    ruleKey = "$dirPrefix${bKey.canonicalNorm}",
+                    merchantName = displayMerchant,
+                    isDeposit = isDep,
+                    sourceMerchantNames = sources,
+                    baseCategory = baseCat,
+                    categoryDisplayName = baseCat?.let { getBuiltInCategoryDisplayName(it) },
+                    customCategoryName = customCat,
+                    userClassificationName = userClass,
+                    cardDesignation = cardDesig,
+                    isFixedExpense = isFixed
+                )
+            )
+        }
+
+        return summaries.sortedWith(
+            compareByDescending<PermanentMerchantRuleSummary> { it.hasAliasRule }
+                .thenBy { it.isDeposit }
+                .thenBy { it.merchantName }
+        )
+    }
+
+    /**
+     * 특정 가맹점(결제처)에 영구저장되어 있는 모든 메타데이터 규칙(카테고리, 커스텀 카테고리, 사용자 분류, 카드 지정, 고정지출)을
+     * 일괄 해제(삭제)합니다.
+     */
+    fun removePermanentMerchantRule(
+        merchantName: String,
+        isDeposit: Boolean,
+        extraMerchantNames: Collection<String> = emptyList(),
+        affectedTxIds: Collection<Long> = emptyList()
+    ) {
+        val extras = extraMerchantNames.toTypedArray()
+        removeDirectionalRule(merchantBaseCategoryMap, merchantName, isDeposit, *extras)
+        removeDirectionalRule(merchantCustomCategoryMap, merchantName, isDeposit, *extras)
+        removeDirectionalRule(merchantUserClassMap, merchantName, isDeposit, *extras)
+        removeDirectionalRule(merchantCardDesignationMap, merchantName, isDeposit, *extras)
+        removeDirectionalRule(merchantFixedExpenseMap, merchantName, isDeposit, *extras)
+
+        for (txId in affectedTxIds) {
+            if (txId > 0L && txId !in oneTimeEditedTxIds) {
+                txCustomCategoryMap.remove(txId)
+                txUserClassMap.remove(txId)
+                txCorporateMap.remove(txId)
+                txFixedExpenseMap.remove(txId)
+            }
+        }
+        saveToPrefs()
+    }
+
+    /**
+     * 특정 가맹점(결제처)의 영구저장 규칙 중 선택한 단일 속성만 개별 해제합니다.
+     */
+    fun removePermanentMerchantAttribute(
+        attribute: PermanentRuleAttribute,
+        merchantName: String,
+        isDeposit: Boolean,
+        extraMerchantNames: Collection<String> = emptyList(),
+        affectedTxIds: Collection<Long> = emptyList()
+    ) {
+        val extras = extraMerchantNames.toTypedArray()
+        when (attribute) {
+            PermanentRuleAttribute.ALIAS_NAME -> {
+                // 별칭 치환 해제는 MerchantAliasPreferences에서 처리하며,
+                // 만약 원본명(extraMerchantNames)으로 메타 규칙을 이관해야 하는 경우 이관 보존
+                for (orig in extraMerchantNames) {
+                    if (orig.isBlank()) continue
+                    lookupDirectionalRule(merchantBaseCategoryMap, merchantName, isDeposit)?.let {
+                        putDirectionalRule(merchantBaseCategoryMap, orig, isDeposit, it)
+                    }
+                    lookupDirectionalRule(merchantCustomCategoryMap, merchantName, isDeposit)?.let {
+                        putDirectionalRule(merchantCustomCategoryMap, orig, isDeposit, it)
+                    }
+                    lookupDirectionalRule(merchantUserClassMap, merchantName, isDeposit)?.let {
+                        putDirectionalRule(merchantUserClassMap, orig, isDeposit, it)
+                    }
+                    lookupDirectionalRule(merchantCardDesignationMap, merchantName, isDeposit)?.let {
+                        putDirectionalRule(merchantCardDesignationMap, orig, isDeposit, it)
+                    }
+                    lookupDirectionalRule(merchantFixedExpenseMap, merchantName, isDeposit)?.let {
+                        putDirectionalRule(merchantFixedExpenseMap, orig, isDeposit, it)
+                    }
+                }
+            }
+            PermanentRuleAttribute.CATEGORY -> {
+                removeDirectionalRule(merchantBaseCategoryMap, merchantName, isDeposit, *extras)
+                removeDirectionalRule(merchantCustomCategoryMap, merchantName, isDeposit, *extras)
+                for (txId in affectedTxIds) {
+                    if (txId > 0L && txId !in oneTimeEditedTxIds) {
+                        txCustomCategoryMap.remove(txId)
+                    }
+                }
+            }
+            PermanentRuleAttribute.USER_CLASSIFICATION -> {
+                removeDirectionalRule(merchantUserClassMap, merchantName, isDeposit, *extras)
+                for (txId in affectedTxIds) {
+                    if (txId > 0L && txId !in oneTimeEditedTxIds) {
+                        txUserClassMap.remove(txId)
+                    }
+                }
+            }
+            PermanentRuleAttribute.CARD_DESIGNATION -> {
+                removeDirectionalRule(merchantCardDesignationMap, merchantName, isDeposit, *extras)
+                for (txId in affectedTxIds) {
+                    if (txId > 0L && txId !in oneTimeEditedTxIds) {
+                        txCorporateMap.remove(txId)
+                    }
+                }
+            }
+            PermanentRuleAttribute.FIXED_EXPENSE -> {
+                removeDirectionalRule(merchantFixedExpenseMap, merchantName, isDeposit, *extras)
+                for (txId in affectedTxIds) {
+                    if (txId > 0L && txId !in oneTimeEditedTxIds) {
+                        txFixedExpenseMap.remove(txId)
+                    }
+                }
+            }
+        }
+        saveToPrefs()
+    }
+
+    /**
+     * 카드별 영구저장된 법인/개인 지정 규칙 목록을 반환합니다.
+     */
+    fun getCardCorporateRules(): List<PermanentCardCorporateRuleItem> {
+        return cardCorporateRuleMap.entries
+            .map { (k, v) -> PermanentCardCorporateRuleItem(cardKey = k, isCorporate = v) }
+            .sortedWith(compareByDescending<PermanentCardCorporateRuleItem> { it.isCorporate }.thenBy { it.cardKey })
+    }
+
+    /**
+     * 특정 카드 키의 법인/개인 영구 지정 규칙을 해제합니다.
+     */
+    fun removeCardCorporateRule(cardKey: String) {
+        val clean = cardKey.trim()
+        if (clean.isBlank()) return
+        cardCorporateRuleMap.remove(clean)
+        txCorporateMap.keys.removeIf { id -> id !in oneTimeEditedTxIds }
+        saveToPrefs()
+    }
+
+    /**
+     * 가맹점별 영구 규칙 및 카드 법인 규칙을 모두 일괄 초기화합니다. (카테고리 목록 및 사용자 분류 목록 자체는 유지)
+     */
+    fun clearAllPermanentRules() {
+        merchantBaseCategoryMap.clear()
+        merchantCustomCategoryMap.clear()
+        merchantUserClassMap.clear()
+        merchantCardDesignationMap.clear()
+        merchantFixedExpenseMap.clear()
+        cardCorporateRuleMap.clear()
+
+        txCustomCategoryMap.keys.removeIf { id -> id !in oneTimeEditedTxIds }
+        txUserClassMap.keys.removeIf { id -> id !in oneTimeEditedTxIds }
+        txCorporateMap.keys.removeIf { id -> id !in oneTimeEditedTxIds }
+        txFixedExpenseMap.keys.removeIf { id -> id !in oneTimeEditedTxIds }
+        saveToPrefs()
     }
 
     companion object {

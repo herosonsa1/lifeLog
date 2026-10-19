@@ -12,9 +12,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,14 +24,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.data.preferences.ManagedCategoryItem
+import com.autologue.app.data.preferences.PermanentCardCorporateRuleItem
+import com.autologue.app.data.preferences.PermanentMerchantRuleSummary
+import com.autologue.app.data.preferences.PermanentRuleAttribute
 import com.autologue.app.data.preferences.UserClassificationItem
 import com.autologue.app.domain.model.ExpenseCategory
+import com.autologue.app.domain.model.TransactionRule
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
+
+/**
+ * 카테고리 목록에서 '기타(ExpenseCategory.ETC)' 항목이 항상 제일 하단(마지막)에 오도록 정렬하는 헬퍼
+ */
+fun List<ManagedCategoryItem>.withEtcAlwaysAtBottom(): List<ManagedCategoryItem> {
+    return this.sortedBy { it.isBuiltIn && it.baseCategory == ExpenseCategory.ETC }
+}
 
 /**
  * 사용자 분류 배지용 10가지 고대비 색상 팔레트 (글자색 to 배경색)
@@ -52,7 +66,7 @@ fun getUserClassificationBadgeColors(colorIndex: Int): Pair<Color, Color> {
 }
 
 /**
- * 5) 등록된 카테고리들 관리 다이얼로그 (추가, 삭제, 수정)
+ * 5) 등록된 카테고리들 관리 다이얼로그 (추가, 삭제, 수정 - 기타 항목은 항상 최하단 고정)
  */
 @Composable
 fun CategoryManageDialog(
@@ -66,6 +80,9 @@ fun CategoryManageDialog(
     var newCategoryName by remember { mutableStateOf("") }
     var editingItemId by remember { mutableStateOf<String?>(null) }
     var editingNameText by remember { mutableStateOf("") }
+    val orderedCategories = remember(managedCategories) {
+        managedCategories.withEtcAlwaysAtBottom()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -94,7 +111,7 @@ fun CategoryManageDialog(
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
                 Text(
-                    text = "새 카테고리를 영구 추가하거나 기존 카테고리 이름을 수정·삭제할 수 있습니다.",
+                    text = "새 카테고리를 영구 추가하거나 기존 카테고리 이름을 수정·삭제할 수 있습니다. ('기타' 항목은 항상 제일 하단에 배치됩니다)",
                     style = AppTypography.captionMuted
                 )
 
@@ -133,12 +150,13 @@ fun CategoryManageDialog(
                 HairlineDivider()
 
                 Text(
-                    text = "등록된 카테고리 목록 (${managedCategories.size}개)",
+                    text = "등록된 카테고리 목록 (${orderedCategories.size}개)",
                     style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate700)
                 )
 
-                managedCategories.forEach { item ->
+                orderedCategories.forEach { item ->
                     val isEditing = editingItemId == item.id
+                    val isEtcBuiltIn = item.isBuiltIn && item.baseCategory == ExpenseCategory.ETC
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = if (item.isBuiltIn) Slate50 else Color(0xFFEFF6FF),
@@ -198,7 +216,11 @@ fun CategoryManageDialog(
                                         style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold, color = Slate900)
                                     )
                                     MetricBadge(
-                                        text = if (item.isBuiltIn) "기본" else "추가됨",
+                                        text = when {
+                                            isEtcBuiltIn -> "기본 · 최하단 고정"
+                                            item.isBuiltIn -> "기본"
+                                            else -> "추가됨"
+                                        },
                                         textColor = if (item.isBuiltIn) Slate600 else Color(0xFF1D4ED8),
                                         backgroundColor = if (item.isBuiltIn) Slate200 else Color(0xFFDBEAFE)
                                     )
@@ -213,7 +235,7 @@ fun CategoryManageDialog(
                                     ) {
                                         Icon(Icons.Default.Edit, contentDescription = "수정", tint = Slate600, modifier = Modifier.size(16.dp))
                                     }
-                                    if (!(item.isBuiltIn && item.baseCategory == ExpenseCategory.ETC)) {
+                                    if (!isEtcBuiltIn) {
                                         IconButton(
                                             onClick = { onDeleteCategory(item) },
                                             modifier = Modifier.size(30.dp)
@@ -510,3 +532,621 @@ fun UserClassificationManageDialog(
         shape = AppShapes.modal
     )
 }
+
+private enum class PermanentRulesFilterTab(val label: String) {
+    ALL("전체"),
+    ALIAS_ONLY("결제명 치환"),
+    META_ONLY("분류·속성"),
+    CARD_AND_KEYWORD("카드·키워드")
+}
+
+/**
+ * 7) 영구저장된 데이터 통합 조회 및 해제/초기화 다이얼로그
+ * - 결제명 자동 치환 규칙(원본명 -> 변경된 결제명), 카테고리, 사용자 분류, 카드/은행·법인 지정, 고정지출 규칙을 한눈에 확인
+ * - 속성별 개별 [✕] 해제, 결제명 치환만 해제(원본명 복원), 결제처 전체 규칙 해제(원본 복원), 전체 초기화 지원
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun PermanentRulesManageDialog(
+    merchantRules: List<PermanentMerchantRuleSummary>,
+    cardCorporateRules: List<PermanentCardCorporateRuleItem>,
+    dbRules: List<TransactionRule>,
+    getBuiltInCategoryName: (ExpenseCategory) -> String,
+    onDismiss: () -> Unit,
+    onRemoveMerchantRule: (PermanentMerchantRuleSummary) -> Unit,
+    onRemoveMerchantAttribute: (PermanentMerchantRuleSummary, PermanentRuleAttribute) -> Unit,
+    onRemoveCardCorporateRule: (String) -> Unit,
+    onDeleteDbRule: (Long, String) -> Unit,
+    onClearAllRules: () -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedTab by remember { mutableStateOf(PermanentRulesFilterTab.ALL) }
+    var confirmClearAll by remember { mutableStateOf(false) }
+
+    val cleanQuery = searchQuery.trim()
+    val filteredMerchantRules = remember(merchantRules, cleanQuery, selectedTab) {
+        merchantRules.filter { rule ->
+            val tabMatches = when (selectedTab) {
+                PermanentRulesFilterTab.ALL -> true
+                PermanentRulesFilterTab.ALIAS_ONLY -> rule.hasAliasRule
+                PermanentRulesFilterTab.META_ONLY ->
+                    rule.effectiveCategoryLabel != null ||
+                        !rule.userClassificationName.isNullOrBlank() ||
+                        !rule.cardDesignation.isNullOrBlank() ||
+                        rule.isFixedExpense != null
+                PermanentRulesFilterTab.CARD_AND_KEYWORD -> false
+            }
+            if (!tabMatches) return@filter false
+            if (cleanQuery.isEmpty()) return@filter true
+            rule.merchantName.contains(cleanQuery, ignoreCase = true) ||
+                rule.sourceMerchantNames.any { it.contains(cleanQuery, ignoreCase = true) } ||
+                (rule.effectiveCategoryLabel?.contains(cleanQuery, ignoreCase = true) == true) ||
+                (rule.userClassificationName?.contains(cleanQuery, ignoreCase = true) == true) ||
+                (rule.cardDesignation?.contains(cleanQuery, ignoreCase = true) == true)
+        }
+    }
+
+    val filteredCardRules = remember(cardCorporateRules, cleanQuery, selectedTab) {
+        if (selectedTab != PermanentRulesFilterTab.ALL && selectedTab != PermanentRulesFilterTab.CARD_AND_KEYWORD) {
+            emptyList()
+        } else if (cleanQuery.isEmpty()) {
+            cardCorporateRules
+        } else {
+            cardCorporateRules.filter { it.cardKey.contains(cleanQuery, ignoreCase = true) }
+        }
+    }
+
+    val filteredDbRules = remember(dbRules, cleanQuery, selectedTab) {
+        if (selectedTab != PermanentRulesFilterTab.ALL && selectedTab != PermanentRulesFilterTab.CARD_AND_KEYWORD) {
+            emptyList()
+        } else if (cleanQuery.isEmpty()) {
+            dbRules
+        } else {
+            dbRules.filter {
+                it.keywordPattern.contains(cleanQuery, ignoreCase = true) ||
+                    getBuiltInCategoryName(it.targetCategory).contains(cleanQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    val totalCount = merchantRules.size + cardCorporateRules.size + dbRules.size
+    val aliasCount = merchantRules.count { it.hasAliasRule }
+    val metaCount = merchantRules.count {
+        it.effectiveCategoryLabel != null ||
+            !it.userClassificationName.isNullOrBlank() ||
+            !it.cardDesignation.isNullOrBlank() ||
+            it.isFixedExpense != null
+    }
+    val cardAndDbCount = cardCorporateRules.size + dbRules.size
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("영구저장 데이터 관리", style = AppTypography.h2)
+                        MetricBadge(
+                            text = "총 ${totalCount}건",
+                            textColor = Color(0xFF1D4ED8),
+                            backgroundColor = Color(0xFFDBEAFE)
+                        )
+                    }
+                    if (totalCount > 0) {
+                        TextButton(
+                            onClick = { confirmClearAll = !confirmClearAll },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = Color(0xFFDC2626)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = if (confirmClearAll) "초기화 취소" else "전체 초기화",
+                                fontSize = 11.sp,
+                                color = Color(0xFFDC2626),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                if (confirmClearAll) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFFEF2F2),
+                        border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "모든 영구저장 규칙을 해제하고 기존 자동 치환 내역을 원본으로 복원할까요?",
+                                fontSize = 11.sp,
+                                color = Color(0xFF991B1B),
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = {
+                                    confirmClearAll = false
+                                    onClearAllRules()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text("전체 해제 실행", fontSize = 11.sp, color = PureWhite, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFF8FAFC),
+                    border = BorderStroke(1.dp, Slate200),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "잘못 영구저장되어 자동으로 결제명이 치환되거나 분류되는 항목을 찾아 개별 해제할 수 있습니다. 해제 즉시 기존에 자동 치환되었던 내역도 원본 문자 기준으로 일괄 복원됩니다.",
+                        style = AppTypography.captionMuted.copy(fontSize = 11.sp, lineHeight = 15.sp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+
+                // 검색 입력창
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("결제명, 원본 가맹점명, 카테고리, 사용자 검색...", fontSize = 12.sp) },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null, tint = Slate500, modifier = Modifier.size(17.dp))
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "지우기", tint = Slate500, modifier = Modifier.size(15.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontSize = 12.5.sp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // 필터 탭 바
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val tabs = listOf(
+                        PermanentRulesFilterTab.ALL to totalCount,
+                        PermanentRulesFilterTab.ALIAS_ONLY to aliasCount,
+                        PermanentRulesFilterTab.META_ONLY to metaCount,
+                        PermanentRulesFilterTab.CARD_AND_KEYWORD to cardAndDbCount
+                    )
+                    tabs.forEach { (tab, count) ->
+                        val isSel = selectedTab == tab
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSel) AppColors.primary else Slate100,
+                            border = BorderStroke(1.dp, if (isSel) AppColors.primary else Slate200),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { selectedTab = tab }
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = tab.label,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSel) PureWhite else Slate700,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${count}건",
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isSel) Color(0xFFDBEAFE) else Slate500
+                                )
+                            }
+                        }
+                    }
+                }
+
+                HairlineDivider()
+
+                // 규칙 목록 스크롤 영역
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (filteredMerchantRules.isEmpty() && filteredCardRules.isEmpty() && filteredDbRules.isEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Slate50,
+                            border = BorderStroke(1.dp, Slate200),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 28.dp, horizontal = 16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = if (cleanQuery.isNotEmpty()) {
+                                        "'$cleanQuery' 검색 조건에 해당하는 영구저장 데이터가 없습니다."
+                                    } else {
+                                        "현재 등록된 영구저장 규칙이 없습니다."
+                                    },
+                                    style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold, color = Slate600)
+                                )
+                                Text(
+                                    text = "결제 내역 수정 화면에서 '영구저장'으로 저장한 항목들이 이곳에 표시됩니다.",
+                                    style = AppTypography.captionMuted
+                                )
+                            }
+                        }
+                    }
+
+                    // 1. 가맹점별 통합 영구저장 규칙 카드
+                    filteredMerchantRules.forEach { rule ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = PureWhite,
+                            border = BorderStroke(
+                                1.dp,
+                                if (rule.hasAliasRule) Color(0xFF93C5FD) else Slate200
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                // 상단 헤더: [출금/입금] 대표 결제명 + [규칙 전체 해제] 버튼
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        MetricBadge(
+                                            text = if (rule.isDeposit) "입금" else "출금",
+                                            textColor = if (rule.isDeposit) Color(0xFF047857) else Color(0xFF1E40AF),
+                                            backgroundColor = if (rule.isDeposit) Color(0xFFD1FAE5) else Color(0xFFDBEAFE)
+                                        )
+                                        Text(
+                                            text = rule.merchantName,
+                                            style = AppTypography.body.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = Slate900,
+                                                fontSize = 13.5.sp
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color(0xFFFEF2F2),
+                                        border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                                        modifier = Modifier.clickable { onRemoveMerchantRule(rule) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "전체 해제",
+                                                tint = Color(0xFFDC2626),
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Text(
+                                                text = "전체 해제",
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFDC2626)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // 결제명 자동 치환 정보 박스 (원본명 -> 변경된 결제명)
+                                if (rule.hasAliasRule) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFFEFF6FF),
+                                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 9.dp, vertical = 6.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.weight(1f),
+                                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                Text(
+                                                    text = "결제명 자동 치환 적용 중",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF1D4ED8)
+                                                )
+                                                Text(
+                                                    text = "${rule.sourceMerchantNames.joinToString(", ")}  ➔  ${rule.merchantName}",
+                                                    fontSize = 11.5.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = Slate800
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = PureWhite,
+                                                border = BorderStroke(1.dp, Color(0xFF93C5FD)),
+                                                modifier = Modifier.clickable {
+                                                    onRemoveMerchantAttribute(rule, PermanentRuleAttribute.ALIAS_NAME)
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = "치환 해제·복원",
+                                                    fontSize = 10.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF1D4ED8),
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 개별 속성 배지 (탭하여 개별 속성만 해제 가능)
+                                val hasAnyMeta = rule.effectiveCategoryLabel != null ||
+                                    !rule.userClassificationName.isNullOrBlank() ||
+                                    !rule.cardDesignation.isNullOrBlank() ||
+                                    rule.isFixedExpense != null
+
+                                if (hasAnyMeta) {
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        rule.effectiveCategoryLabel?.let { catLabel ->
+                                            RemovableRuleAttributeChip(
+                                                prefix = "카테고리",
+                                                value = catLabel,
+                                                textColor = Color(0xFF0F766E),
+                                                bgColor = Color(0xFFCCFBF1),
+                                                borderColor = Color(0xFF99F6E4),
+                                                onRemove = {
+                                                    onRemoveMerchantAttribute(rule, PermanentRuleAttribute.CATEGORY)
+                                                }
+                                            )
+                                        }
+                                        rule.userClassificationName?.takeIf { it.isNotBlank() }?.let { uName ->
+                                            RemovableRuleAttributeChip(
+                                                prefix = "사용자",
+                                                value = uName,
+                                                textColor = Color(0xFF6D28D9),
+                                                bgColor = Color(0xFFEDE9FE),
+                                                borderColor = Color(0xFFDDD6FE),
+                                                onRemove = {
+                                                    onRemoveMerchantAttribute(rule, PermanentRuleAttribute.USER_CLASSIFICATION)
+                                                }
+                                            )
+                                        }
+                                        rule.cardDesignation?.takeIf { it.isNotBlank() }?.let { cardDesig ->
+                                            RemovableRuleAttributeChip(
+                                                prefix = "카드/은행",
+                                                value = cardDesig,
+                                                textColor = Color(0xFF374151),
+                                                bgColor = Slate100,
+                                                borderColor = Slate300,
+                                                onRemove = {
+                                                    onRemoveMerchantAttribute(rule, PermanentRuleAttribute.CARD_DESIGNATION)
+                                                }
+                                            )
+                                        }
+                                        rule.isFixedExpense?.let { isFixed ->
+                                            RemovableRuleAttributeChip(
+                                                prefix = "고정지출",
+                                                value = if (isFixed) "고정지출 지정" else "고정지출 제외",
+                                                textColor = Color(0xFFB45309),
+                                                bgColor = Color(0xFFFEF3C7),
+                                                borderColor = Color(0xFFFDE68A),
+                                                onRemove = {
+                                                    onRemoveMerchantAttribute(rule, PermanentRuleAttribute.FIXED_EXPENSE)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 카드별 법인/개인 영구 지정 규칙
+                    if (filteredCardRules.isNotEmpty()) {
+                        Text(
+                            text = "카드별 법인/개인 영구 규칙 (${filteredCardRules.size}건)",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate700),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        filteredCardRules.forEach { cardRule ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = PureWhite,
+                                border = BorderStroke(1.dp, Slate200),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = cardRule.cardKey,
+                                            style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold, color = Slate900)
+                                        )
+                                        MetricBadge(
+                                            text = if (cardRule.isCorporate) "법인카드 고정" else "개인결제 고정",
+                                            textColor = if (cardRule.isCorporate) Color(0xFF1D4ED8) else Slate600,
+                                            backgroundColor = if (cardRule.isCorporate) Color(0xFFDBEAFE) else Slate200
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { onRemoveCardCorporateRule(cardRule.cardKey) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("규칙 해제", fontSize = 11.sp, color = Color(0xFFDC2626), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. 키워드 기반 자동 분류 규칙 (DB TransactionRule)
+                    if (filteredDbRules.isNotEmpty()) {
+                        Text(
+                            text = "키워드 자동 분류 규칙 (${filteredDbRules.size}건)",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate700),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        filteredDbRules.forEach { dbRule ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = PureWhite,
+                                border = BorderStroke(1.dp, Slate200),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "키워드: ${dbRule.keywordPattern}",
+                                            style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold, color = Slate900)
+                                        )
+                                        MetricBadge(
+                                            text = getBuiltInCategoryName(dbRule.targetCategory),
+                                            textColor = Color(0xFF047857),
+                                            backgroundColor = Color(0xFFD1FAE5)
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { onDeleteDbRule(dbRule.id, dbRule.keywordPattern) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("규칙 해제", fontSize = 11.sp, color = Color(0xFFDC2626), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            AutoLoguePrimaryButton(text = "닫기", onClick = onDismiss)
+        },
+        containerColor = AppColors.surface,
+        shape = AppShapes.modal
+    )
+}
+
+@Composable
+private fun RemovableRuleAttributeChip(
+    prefix: String,
+    value: String,
+    textColor: Color,
+    bgColor: Color,
+    borderColor: Color,
+    onRemove: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = bgColor,
+        border = BorderStroke(1.dp, borderColor),
+        modifier = Modifier.clickable { onRemove() }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "$prefix: $value",
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = textColor
+            )
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "$prefix 규칙 해제",
+                tint = textColor,
+                modifier = Modifier.size(12.dp)
+            )
+        }
+    }
+}
+

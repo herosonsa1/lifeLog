@@ -11,6 +11,18 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * 영구저장된 결제명 자동 치환 그룹 모델
+ * - targetName: 치환되어 표시되는 새 결제명
+ * - isDeposit: 입금(true) / 출금(false) 방향
+ * - sourceNames: 이 결제명으로 자동 치환되는 원본 결제처명 목록
+ */
+data class MerchantAliasRuleGroup(
+    val targetName: String,
+    val isDeposit: Boolean,
+    val sourceNames: List<String>
+)
+
+/**
  * 사용자가 가계부 또는 차계부에서 한 번 수정한 결제명(가맹점명/주유소명/이체처명)을 기억하여,
  * 동일 결제처로부터 등록된 기존 내역 및 향후 새로 수신·동기화되는 모든 결제 내역을
  * 자동으로 수정된 결제명으로 치환하는 영속 매핑 저장소입니다.
@@ -260,6 +272,109 @@ class MerchantAliasPreferences private constructor(
     }
 
     fun getAllAliases(): Map<String, String> = aliasMap.toMap()
+
+    /**
+     * 영구저장된 결제명 자동 치환 규칙을 (입출금 구분 + 치환 결과 결제명) 단위로 묶어 반환합니다.
+     */
+    fun getAliasRuleGroups(): List<MerchantAliasRuleGroup> {
+        if (aliasMap.isEmpty()) return emptyList()
+        data class GroupKey(val isDeposit: Boolean, val normTarget: String)
+        val grouped = LinkedHashMap<GroupKey, MutableList<Pair<String, String>>>()
+
+        for ((rawKey, targetVal) in aliasMap.entries) {
+            val cleanTarget = targetVal.trim()
+            if (cleanTarget.isBlank()) continue
+            val isDeposit = rawKey.startsWith(PREFIX_IN)
+            val sourceRaw = stripDirectionPrefix(rawKey).trim()
+            if (sourceRaw.isBlank()) continue
+            val normSource = normalizeMerchantKey(sourceRaw)
+            val normTarget = normalizeMerchantKey(cleanTarget)
+            if (normSource.isBlank() || normSource == normTarget) continue
+
+            val gKey = GroupKey(isDeposit = isDeposit, normTarget = normTarget)
+            grouped.getOrPut(gKey) { mutableListOf() }.add(sourceRaw to cleanTarget)
+        }
+
+        return grouped.map { (gKey, pairs) ->
+            val displayTarget = pairs.first().second
+            // 정규화 키가 동일한 원본명 중 공백/원래 표기가 살아있는 이름을 우선 채택
+            val dedupedSources = pairs
+                .map { it.first }
+                .groupBy { normalizeMerchantKey(it) }
+                .map { (_, candidates) ->
+                    candidates.maxByOrNull { cand ->
+                        cand.count { it.isWhitespace() } * 10 + cand.length
+                    } ?: candidates.first()
+                }
+                .distinct()
+                .sorted()
+            MerchantAliasRuleGroup(
+                targetName = displayTarget,
+                isDeposit = gKey.isDeposit,
+                sourceNames = dedupedSources
+            )
+        }.sortedWith(compareBy<MerchantAliasRuleGroup> { it.isDeposit }.thenBy { it.targetName })
+    }
+
+    /**
+     * 특정 결제처(원본명 또는 치환된 새 결제명)와 관련된 자동 치환 규칙을 해제(삭제)합니다.
+     * 반환값: 해제된 규칙에 포함되어 있던 모든 원본/대상 결제처명 목록 (기존 내역 원본 복원용)
+     */
+    fun removeAliasByMerchant(merchantOrSourceName: String, isDeposit: Boolean? = null): List<String> {
+        val clean = merchantOrSourceName.trim()
+        if (clean.isBlank() || aliasMap.isEmpty()) return emptyList()
+
+        val norm = normalizeMerchantKey(clean)
+        val normBase = normalizeMerchantKey(stripTxDirectionSuffix(clean))
+        val targetNormSet = setOfNotNull(
+            norm.takeIf { it.isNotBlank() },
+            normBase.takeIf { it.isNotBlank() }
+        )
+        if (targetNormSet.isEmpty()) return emptyList()
+
+        val prefix = isDeposit?.let { directionPrefix(it) }
+        val affectedNames = LinkedHashSet<String>()
+        affectedNames.add(clean)
+
+        val keysToRemove = mutableListOf<String>()
+        for ((k, v) in aliasMap.entries) {
+            val dirMatch = prefix == null ||
+                k.startsWith(prefix) ||
+                (!k.startsWith(PREFIX_IN) && !k.startsWith(PREFIX_OUT))
+            if (!dirMatch) continue
+
+            val rawSource = stripDirectionPrefix(k).trim()
+            val normSource = normalizeMerchantKey(rawSource)
+            val normBaseSource = normalizeMerchantKey(stripTxDirectionSuffix(rawSource))
+            val normVal = normalizeMerchantKey(v)
+            val normBaseVal = normalizeMerchantKey(stripTxDirectionSuffix(v))
+
+            if (normSource in targetNormSet ||
+                normBaseSource in targetNormSet ||
+                normVal in targetNormSet ||
+                normBaseVal in targetNormSet
+            ) {
+                keysToRemove.add(k)
+                if (rawSource.isNotBlank()) affectedNames.add(rawSource)
+                if (v.isNotBlank()) affectedNames.add(v.trim())
+            }
+        }
+
+        if (keysToRemove.isNotEmpty()) {
+            keysToRemove.forEach { aliasMap.remove(it) }
+            saveToPrefs()
+        }
+        return affectedNames.toList()
+    }
+
+    /**
+     * 등록된 모든 결제명 자동 치환 영구 규칙을 일괄 초기화합니다.
+     */
+    fun clearAllAliases() {
+        if (aliasMap.isEmpty()) return
+        aliasMap.clear()
+        saveToPrefs()
+    }
 
     companion object {
         private const val PREFS_NAME = "merchant_alias_prefs"
