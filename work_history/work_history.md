@@ -2670,3 +2670,121 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 - **단위 테스트 추가 (`VehicleRepositoryCommuteTest.kt`)**:
   - `syncAndCleanWithGolfRounds_purgesFutureAndFakeNineCcLogsAndNeverReinsertsThem`: 미래 날짜(`10/24` 등) 및 `'나인CC'` 왕복 주행 기록이 즉시 삭제되고, 미래 라운드가 전달되더라도 절대 재삽입되지 않음을 검증 통과.
 - **전체 테스트 및 APK 빌드**: `.\gradlew.bat testDebugUnitTest assembleDebug` 통과 및 루트 `lifeLog.apk` 최신화 완료.
+
+---
+
+## 72. 가계부·차계부 고도화: 비결제 누적금액 차단, 1회성/영구저장 분리, 입출금 방향(`IN`/`OUT`) 구분 저장, 카드/은행 힌트 자동 선택 및 항목별 선택 영구저장 구축 (2026-10-16)
+
+### 72.1. 주요 요구사항 및 개선 내역
+1. **비결제 안내 문자(`누적이용금액`, `결제예정금액`, `총사용금액` 등) 차단 및 오염 레코드 자가 치유 (`759a2ff`)**:
+   - [`SmsParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/SmsParser.kt) 및 [`TransactionRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt)에서 실제 건별 결제가 아닌 월간 누적/청구예정 안내 문자를 판별하여 등록을 원천 차단하고, 기존 DB에 잘못 적재된 누적금액 레코드를 자동 정제.
+2. **결제 내역 수정 모달(`EditTransactionDialog`) 저장 방식(`1회성 저장` vs `영구저장`) 직관화 및 입출금(`IN`/`OUT`) 구분 영구 규칙 분리 (`182e55c`, `57a31c0`)**:
+   - [`ExpenseCustomMetaPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/ExpenseCustomMetaPreferences.kt) 및 [`MerchantAliasPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/MerchantAliasPreferences.kt)에서 동일 거래처명이라도 **입금(`IN`)**과 **출금(`OUT`)** 방향 구분값을 키(`OUT|결제처`, `IN|결제처`)에 포함하여 결제명 별칭·카테고리·사용자 분류·고정항목 규칙이 서로 섞이지 않고 분리 저장·치환되도록 개선.
+3. **카드/은행 힌트 자동 선택, 사용자 분류 컬러 배지/수정/삭제, 주유·정비 차계부 양방향 연동 (`2e8a154`, `e4f3592`)**:
+   - 문자 원문(`originalText`)에서 추출된 카드사/은행명을 기본 선택값으로 자동 지정하고, `업무/법인` 카테고리 또는 분류 선택 시 `법인카드` 여부를 자동 활성화하며 카드별 개인/법인 여부를 영구 저장.
+   - 가계부에서 카테고리를 `주유`(`FUEL`) 또는 `차량정비`(`CAR_MAINTENANCE`)로 변경·추가하면 차계부(`vehicle_logs`)에도 즉시 양방향 동기화되도록 구현.
+4. **영구저장 시 적용 속성(`결제명`, `카테고리`, `사용자 분류`, `카드·법인여부`, `고정항목`, `메모`) 개별 체크 및 기존 내역 선택 일괄 적용 (`cf29887`)**:
+   - `PermanentSaveOptions` 모델을 도입하여 영구저장 시 원하는 속성만 선택적으로 규칙화할 수 있으며, 금액을 제외한 기존 동일 결제처 내역들을 체크박스로 선택해 일괄 반영할 수 있도록 구현.
+
+---
+
+## 73. 앱 리브랜딩(`나의일상다이어리`), 코믹 일러스트 앱 아이콘, 버전별 APK 자동 보존 체계 및 전역 하드웨어 가속 로딩 애니메이션 적용 (2026-10-16 ~ 2026-10-17, `v1.0.1` ~ `v1.0.12`)
+
+### 73.1. 주요 요구사항 및 개선 내역
+1. **빌드 시 버전 자동 증가 및 루트 폴더 버전별 APK 보존 (`1f135b0`, `a4ab468`)**:
+   - [`version.properties`](file:///c:/myWork/workspace/scratch/lifeLog/version.properties) 및 [`app/build.gradle.kts`](file:///c:/myWork/workspace/scratch/lifeLog/app/build.gradle.kts)를 구성하여 `assembleDebug` 실행 시마다 패치 버전과 `versionCode`가 자동 증가하고, 프로젝트 루트(`.\`)에 `나의일상다이어리_v1.0.X.apk` 형태로 이전 빌드 파일을 덮어쓰지 않고 모두 보존하도록 구축.
+2. **메뉴 전환 즉시 반응 및 전역 최상단 하드웨어 가속 로딩 애니메이션 (`a8c8b53`, `61bb6de`)**:
+   - 데이터 조회·동기화·필터링·저장 등 시간이 소요되는 모든 작업 시 화면 최상단(`zIndex`)에 하드웨어 가속 기반 로딩 오버레이 애니메이션이 즉시 표시되어 멈춤 현상처럼 보이지 않도록 개선.
+3. **`나의일상다이어리` 앱 이름 변경(2줄 표기) 및 코믹 배경 일러스트 아이콘·파비콘 적용 (`a4ab468`)**:
+   - 앱 표시 이름을 **`나의일상\n다이어리`**로 리브랜딩하고, 일상·다이어리 모티프의 웹툰/코믹 배경 일러스트 위에 타이포그래피를 결합한 신규 런처 아이콘(`ic_launcher`)과 `favicon.ico`를 생성·적용.
+4. **골프 필드 기록 생성 기준 엄격화 (`902012f`)**:
+   - [`AutoProcessGolfMediaUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/golf/AutoProcessGolfMediaUseCase.kt)에서 웹 이용후기나 일반 캡처 이미지가 골프 라운드로 오탐되지 않도록 실제 **라커룸 전표** 또는 **스코어카드지** 지문이 확인된 사진만 필드 기록으로 등록되도록 기준 강화.
+5. **가계부 필터 칩 48dp 왜곡 해결, 네이버페이 이력 등록 원천 제외 및 상·하단 레이아웃 여백 최적화 (`583e730`, `2b42dfc`, `c030fc8`)**:
+   - Material3 `Surface(onClick)`의 최소 터치 영역(48dp) 강제 확장으로 인한 칩 간격 왜곡을 커스텀 [`ExpenseInlineFilterChip`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt#L5131-L5179) 및 [`ExpenseUniformFilterGrid`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt#L5203-L5272)로 해결.
+   - [`SmsParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/SmsParser.kt) 및 [`NotificationParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/NotificationParser.kt), [`TransactionRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt)에서 **네이버페이(`네이버페이`, `NPay`)** 결제·알림 이력을 수집 대상에서 원천 제외하고 기존 네이버페이 내역을 자동 삭제.
+   - 상단 중복 여백 축소 및 하단 네비게이션 바와 시스템 제스처 홈 바 간 겹침 해소(`windowInsetsPadding(WindowInsets.navigationBars)`).
+
+---
+
+## 74. 사용자 분류별 통계 크로스 필터링, 0ms 낙관적(Optimistic) UI 갱신 및 소비 통계 리포트 전용 페이지·원형(도넛) 그래프 분리 (2026-10-17 ~ 2026-10-18, `v1.0.13` ~ `v1.0.15`)
+
+### 74.1. 주요 요구사항 및 개선 내역
+1. **사용자 분류별 지출 통계 크로스 필터링 및 상위 카테고리 요약 (`bce91d3`, `v1.0.13`)**:
+   - 사용자 분류별 지출 순위 카드에서 특정 사용자를 터치하면 해당 사용자의 지출 내역으로 즉시 필터링되며, 각 사용자별 상위 지출 카테고리 Top 3 요약을 함께 표출.
+2. **가계부 결제 내역 수정·삭제 시 0ms 낙관적(Optimistic) UI 반영 및 배치 DB 처리 (`caecb4c`, `v1.0.14`)**:
+   - [`ExpenseViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt)에서 결제 내역 수정 또는 삭제 시 무거운 전체 재집계를 기다리지 않고 인메모리 상태(`_uiState`)를 **0ms 즉시 낙관적 갱신**한 뒤 백그라운드 배치 트랜잭션으로 영속화하여 수정·삭제 직후 버벅거림을 완벽히 제거.
+3. **소비 통계 리포트 별도 서브 페이지 분리, 원형(도넛) 그래프 및 접이식 아코디언 UX 구현 (`c361a58`, `v1.0.15`)**:
+   - [`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt) 상단에 **`[결제 내역 | 소비 통계 리포트]`** 페이지 전환 탭을 신설하여, 기본 화면에서는 결제 내역 리스트에 집중하고 통계 탭에서는 시각적 분석 리포트를 탐색할 수 있도록 분리.
+   - **[`ExpenseDonutChartCard`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt#L2267-L2630) 신설**: 카테고리별 / 사용자별 소비 비중(%)을 인터랙티브 도넛 차트와 범례로 시각화하고, 조각 터치 시 중앙 오버레이 상세 비율 표시 및 `[해당 내역 바로 보기]` 연동 지원.
+   - 상단 도구 메뉴와 빠른 필터 영역을 접었다 펼 수 있는 아코디언 형태로 구성하고, 스크롤 중 연산을 제거하는 단일 패스 `O(N)` 사전 계산(`ExpenseQuickFilterSnapshot`, `PrecomputedRowMeta`) 적용.
+
+---
+
+## 75. `기타` 카테고리 최하단 고정 정렬 및 영구저장 데이터 통합 관리·원본 문자 복원 시스템 구축 (2026-10-18, `v1.0.16`)
+
+### 75.1. 주요 요구사항 및 개선 내역
+1. **`기타`(`ETC`) 카테고리 항상 맨 끝(최하단 우측 끝) 고정 정렬 (`2149e46`, `v1.0.16`)**:
+   - [`ExpenseCustomMetaPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/ExpenseCustomMetaPreferences.kt)의 `withEtcAlwaysAtBottom()`을 통해 사용자가 커스텀 카테고리를 새로 추가하더라도 `기타` 카테고리가 항상 카테고리 목록의 맨 마지막에 위치하도록 보장.
+2. **영구저장 데이터 통합 관리 모달(`PermanentRulesManageDialog`) 및 원본 SMS 복원 구현**:
+   - [`ExpenseMetaDialogs.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseMetaDialogs.kt)에 **`PermanentRulesManageDialog`**를 신설하여 결제처별 영구저장 규칙(결제명 치환, 카테고리, 사용자 분류, 카드·법인 여부, 고정항목, 메모), 카드사별 법인 지정 규칙, 키워드 자동분류 규칙을 한눈에 조회·개별 속성 해제·전체 초기화할 수 있도록 구현.
+   - 영구저장 규칙을 삭제하거나 해제하면 [`ExpenseViewModel.restoreTransactionsToOriginalSms`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt)가 즉시 동작하여 해당 결제처 거래들의 결제명·카테고리·카드사 정보를 원본 SMS(`originalText`) 파싱 상태로 자동 복원.
+
+---
+
+## 76. `"고정항목지정"` 버튼 명칭 변경 및 고정수입(입금) 지정·자동감지·필터·통계 전방위 지원 (2026-10-19, `v1.0.17`)
+
+### 76.1. 사용자 핵심 요청 사항
+- *"고정 지출 뿐 아니라 고정 수입인 경우도 있는데, 고정지출로 지정 버튼 하나를 버튼명칭을 '고정항목지정'으로 바꾸고, 수입도 고정으로 지정하여 기록될 수 있게 해줘."*
+
+### 76.2. 주요 개선 및 구현 내역
+1. **`"고정항목지정"` 버튼 명칭 변경 및 UI 상태 안내 ([`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt))**:
+   - `AddManualExpenseDialog`(직접 추가) 및 `EditTransactionDialog`(상세 수정)에서 기존 `"고정지출로 지정"` 버튼을 **`"고정항목지정"`**(비선택 시 `"일반 항목"`)으로 변경하고, 영구저장 적용 항목 그리드의 라벨도 `"고정항목"`으로 통일.
+   - 선택된 카테고리가 `수입/입금`(`ExpenseCategory.INCOME`)이거나 입금 내역일 때 `"고정수입으로 기록 및 고정항목에 반영됨"` 안내 문구와 에메랄드색 `고정수입` 배지가 즉시 표시되도록 구현.
+2. **고정수입 입출금 방향 판별, 양방향 영구 규칙 저장 및 정기 수입 자동 감지 ([`Transaction.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/Transaction.kt), [`RecurringExpenseDetector.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/expense/RecurringExpenseDetector.kt), [`ExpenseCustomMetaPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/ExpenseCustomMetaPreferences.kt), [`ExpenseViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt))**:
+   - `Transaction.isDepositDirection()`: 카테고리가 `ExpenseCategory.INCOME`인 내역은 항상 입금(수입) 방향으로 최우선 판별.
+   - `RecurringExpenseDetector`: 기존 수입 제외 제한을 해제하고, 동일 입출금 방향 및 금액·일자 패턴을 비교하여 정기 급여·용돈 등 **고정수입**도 자동 감지하도록 확장.
+   - `ExpenseCustomMetaPreferences.resolveIsFixedExpense()` 및 `ExpenseViewModel.updateTransactionDetails()` / `addManualTransaction()`: 거래를 `수입/입금`으로 변경하면서 동시에 `고정항목지정`을 저장할 때 입출금 방향 전환으로 인해 규칙이 누락되지 않도록 양방향 키 저장 및 폴백 조회를 적용.
+3. **내역 목록 `고정수입` / `고정지출` 배지 구분 및 빠른 필터·통계 연동 ([`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt), [`ExpenseMetaDialogs.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseMetaDialogs.kt))**:
+   - 내역 리스트에서 고정항목이 수입이면 **`고정수입`**(에메랄드 배지), 지출이면 **`고정지출`**(보라 배지)로 구분 표시.
+   - 빠른 필터 및 상세 필터의 `"정기지출"`을 **`"고정항목"`**으로 변경하고, 필터 배너 및 소비 통계 리포트 상단 요약 카드에서 고정지출 합계와 고정수입 합계(`+%,d원`)를 함께 표시.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.17.apk` (`versionCode = 18`), GitHub 커밋 `0b7e2f6`.
+
+---
+
+## 77. 스마트 차계부 상단 바 세로 더보기(`⋮`) 드롭다운 메뉴 통합 및 중복 FAB·소모품 카드 UI 정렬 개선 (2026-10-19, `v1.0.18`)
+
+### 77.1. 사용자 핵심 요청 사항
+- *"차계부 화면ui가 이상해. 상단의 메뉴들의 버튼이 너무많으면 꼭 필요한 항목만 보이고, 그 외의 항목은 ... 세로로 된 더보기 같은 버튼으로 처리해서 해당 버튼을 누르면 기능 리스트들이 보이고 거기서 선택해서 기능을 선택할 수 있게 해줘."*
+
+### 77.2. 주요 개선 및 구현 내역
+1. **차계부 상단 바 핵심 버튼 정예화 및 세로 더보기(`⋮`) 기능 리스트 드롭다운 구축 ([`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt#L230-L438), [`CommonComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/CommonComponents.kt#L68-L96))**:
+   - 상단 바 우측에 5개 버튼이 나열되어 좌측 타이틀(`스마트 차계부` / `차량·주유 관리`)이 1글자 폭으로 세로 줄바꿈되던 레이아웃 붕괴 문제를 해결.
+   - 상단 바 우측에는 핵심 버튼 2개(**`+ 주유 등록`**, **`주유 동기화`**)만 노출하고, 우측 끝에 **세로 더보기(`⋮`, `Icons.Default.MoreVert`) 버튼**을 배치.
+   - 세로 더보기(`⋮`) 버튼 클릭 시 열리는 **`차계부 전체 기능` 드롭다운 메뉴**에서 다음 8개 기능을 선택 실행하도록 통합:
+     1) **문자 복사·붙여넣기** (`카드/은행 주유 문자 직접 붙여넣기`)
+     2) **출퇴근 지도 거점 설정** (`집·회사 위치 및 차량 블루투스 연동`)
+     3) **차량 프로필 관리** (`차량 이름, 유종, 기준 유가 설정`)
+     4) **소모품 교체 주기 설정** (`엔진오일·에어컨 필터·타이어 주기`)
+     5) **주유·정비 직접 등록**
+     6) **주유 문자 자동 동기화**
+     7) **기록 선택 삭제 모드 전환/해제**
+     8) **가상 주행기록 초기화**
+2. **우측 하단 중복 플로팅 액션 버튼(FAB) 제거 ([`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt#L228-L234))**:
+   - 전역 빠른 실행 버튼(`UnifiedSpeedDialFab`, `⚡`)과 겹쳐 표시되던 차계부 자체 `ExtendedFloatingActionButton("+ 주유 기록 추가")`을 제거.
+3. **차량 소모품 교체 주기 알림 3열 카드(`MaintenanceItemCard`) 높이 및 줄바꿈 정렬 개선 ([`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt#L688-L728), [`MaintenanceItemCard`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt#L1247-L1342))**:
+   - `엔진오일`(`엔진 윤활·보호`), `에어컨 필터`(`실내 공기질 관리`), `타이어 위치 교환`(`앞↔뒤 편마모 방지`) 3열 카드 모두에 서브 라벨을 통일 부여하고, 하단 잔여 거리(`%,dkm 남음`)와 권장 주기(`권장 %,dkm`)를 상하 2단 구조로 배치하여 카드 높이와 줄바꿈 균형을 완성.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.18.apk` (`versionCode = 19`), GitHub 커밋 `1117d39`.
+
+---
+
+## 78. 월간 목표 예산 설정 팝업 숫자 입력 시 천단위 콤마(`,`) 실시간 자동 표기 구현 (2026-10-19, `v1.0.19`)
+
+### 78.1. 사용자 핵심 요청 사항
+- *"월간 목표 예산 설정 팝업에서 목표예산 값을 숫자만 입력해도 천단위 콤마(,) 가 자동으로 표기되게 해줘."*
+
+### 78.2. 주요 개선 및 구현 내역
+1. **천단위 콤마(`,`) 실시간 포매터(`formatCommaNumberFieldValue`) 구현 및 월간 목표 예산 팝업 연동 ([`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt#L2080-L2153), [`formatCommaNumberFieldValue`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt#L5312-L5370))**:
+   - 팝업 오픈 시 기존 목표 예산(`uiState.monthlyBudget`)이 즉시 천단위 콤마(예: `1,500,000`)가 적용된 상태로 표시되며, 사용자가 숫자만 입력해도 실시간으로 천단위 콤마(`,`)가 자동 표기됨.
+   - `TextFieldValue` 기반 커서 위치 추적 로직을 통해 연속 입력이나 중간 자릿수 수정 시에도 커서가 튀지 않고 정확한 위치를 유지하며, 콤마(`,`) 바로 뒤에서 백스페이스를 누른 경우에도 앞자리 숫자가 자연스럽게 삭제되도록 처리.
+   - 숫자 전용 키패드(`KeyboardType.Number`), 우측 단위 표시(`원`), 원탭 입력값 초기화(`X`) 버튼을 함께 제공.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.19.apk` (`versionCode = 20`), GitHub 커밋 `39a7dcc`.
