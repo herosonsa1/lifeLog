@@ -58,6 +58,7 @@ data class GolfStatistics(
 
 data class GolfUiState(
     val rounds: List<GolfRound> = emptyList(),
+    val allTransactions: List<com.autologue.app.domain.model.Transaction> = emptyList(),
     val averageScore: Double = 0.0,
     val bestScore: Int? = null,
     val isLoading: Boolean = true,
@@ -198,7 +199,8 @@ class GolfViewModel @Inject constructor(
     private val processGolfLockerSlipUseCase: ProcessGolfLockerSlipUseCase,
     private val autoProcessGolfMediaUseCase: com.autologue.app.domain.usecase.golf.AutoProcessGolfMediaUseCase,
     private val golfWeatherRepository: GolfWeatherRepository,
-    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
+    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences,
+    private val transactionRepository: com.autologue.app.domain.repository.TransactionRepository
 ) : ViewModel() {
 
     // [L-04] ScorecardOcrAnalyzer를 ViewModel 멤버로 관리하여 onCleared()에서 close() 호출
@@ -517,6 +519,14 @@ class GolfViewModel @Inject constructor(
     }
 
     private fun loadRounds() {
+        viewModelScope.launch {
+            transactionRepository.getAllTransactionsFlow().collectLatest { txList ->
+                val deduped = withContext(Dispatchers.Default) {
+                    com.autologue.app.domain.model.TransactionDeduplicator.deduplicate(txList)
+                }
+                _uiState.value = _uiState.value.copy(allTransactions = deduped)
+            }
+        }
         viewModelScope.launch {
             golfRepository.getAllGolfRoundsFlow().collectLatest { list ->
                 val (avg, best, updatedSelected) = withContext(Dispatchers.Default) {

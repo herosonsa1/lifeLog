@@ -127,6 +127,42 @@ fun GolfScreen(
         }
     }
 
+    // 골프 메인 탭 (라운드 기록·예약 / 기간별 골프 통계·비교) 및 기간별 분석 상태
+    var selectedGolfPageTab by remember { mutableStateOf(GolfPageTab.ROUNDS) }
+    var golfAnalyticsUnit by remember {
+        mutableStateOf(com.autologue.app.presentation.expense.AnalyticsPeriodUnit.MONTHLY)
+    }
+    var golfAnalyticsPeriod by remember {
+        mutableStateOf(
+            com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                com.autologue.app.presentation.expense.AnalyticsPeriodUnit.MONTHLY,
+                LocalDate.now()
+            )
+        )
+    }
+    var golfAnalyticsBasis by remember {
+        mutableStateOf(com.autologue.app.presentation.expense.AnalyticsComparisonBasis.PREVIOUS_PERIOD)
+    }
+    var golfAnalyticsSubTab by remember { mutableStateOf(GolfAnalyticsSubTab.OVERVIEW_INSIGHT) }
+    var hasSyncedGolfInitialPeriod by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.completedRounds.size, uiState.allTransactions.size) {
+        if (!hasSyncedGolfInitialPeriod) {
+            val latestRoundDate = uiState.completedRounds.maxOfOrNull { (it.startTime ?: it.roundDate).toLocalDate() }
+            val latestGolfTxDate = uiState.allTransactions
+                .filter { GolfAnalyticsEngine.isScreenGolfTransaction(it) || GolfAnalyticsEngine.isFieldGolfTransaction(it) }
+                .maxOfOrNull { it.timestamp.toLocalDate() }
+            val anchorDate = listOfNotNull(latestRoundDate, latestGolfTxDate).maxOrNull()
+            if (anchorDate != null) {
+                golfAnalyticsPeriod = com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                    golfAnalyticsUnit,
+                    anchorDate
+                )
+                hasSyncedGolfInitialPeriod = true
+            }
+        }
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
@@ -141,7 +177,7 @@ fun GolfScreen(
                                 style = AppTypography.h2
                             )
                             Text(
-                                text = "라운드·스코어 관리",
+                                text = "라운드·스코어·기간별 비교 통계",
                                 style = AppTypography.caption.copy(
                                     color = MenuColors.golf,
                                     fontWeight = FontWeight.Bold,
@@ -152,12 +188,27 @@ fun GolfScreen(
                     },
                     actions = {
                         AutoLogueActionChipButton(
-                            text = "통계",
+                            text = if (selectedGolfPageTab == GolfPageTab.ANALYTICS) "기간별 비교중" else "기간별 비교",
                             icon = Icons.Default.BarChart,
+                            onClick = {
+                                selectedGolfPageTab = if (selectedGolfPageTab == GolfPageTab.ANALYTICS) {
+                                    GolfPageTab.ROUNDS
+                                } else {
+                                    GolfPageTab.ANALYTICS
+                                }
+                            },
+                            containerColor = if (selectedGolfPageTab == GolfPageTab.ANALYTICS) MenuColors.golfBg else Color(0xFFEFF6FF),
+                            borderColor = if (selectedGolfPageTab == GolfPageTab.ANALYTICS) MenuColors.golfBorder else Color(0xFF93C5FD),
+                            contentColor = if (selectedGolfPageTab == GolfPageTab.ANALYTICS) MenuColors.golf else Color(0xFF1D4ED8)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        AutoLogueActionChipButton(
+                            text = "누적 요약",
+                            icon = Icons.Default.Assessment,
                             onClick = { viewModel.openStatisticsDialog() },
-                            containerColor = Color(0xFFEFF6FF),
-                            borderColor = Color(0xFF93C5FD),
-                            contentColor = Color(0xFF1D4ED8)
+                            containerColor = Slate100,
+                            borderColor = Slate300,
+                            contentColor = Slate700
                         )
                         Spacer(modifier = Modifier.width(Spacing.sm))
                     },
@@ -270,132 +321,226 @@ fun GolfScreen(
                     }
                 }
 
-                // Level 1: Natural Golf Stats
+                // 골프 메인 탭 바: [라운드 기록 · 예약] | [기간별 골프 통계 · 비교]
                 item {
-                    Row(
+                    Surface(
+                        color = Slate50,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, Slate200),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = Spacing.xl, vertical = 8.dp)
                     ) {
-                        Column {
-                            Text("평균 타수", style = AppTypography.caption)
-                            Spacer(modifier = Modifier.height(Spacing.xxs))
-                            Text(
-                                if (uiState.averageScore > 0) "%.1f타".format(uiState.averageScore) else "-타",
-                                style = AppTypography.display
-                            )
-                        }
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xl)) {
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text("라베(최저타)", style = AppTypography.caption)
-                                Spacer(modifier = Modifier.height(Spacing.xxs))
-                                Text(
-                                    if (uiState.bestScore != null) "${uiState.bestScore}타" else "-타",
-                                    style = AppTypography.h2.copy(color = AppColors.successText)
-                                )
-                            }
-
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text("총 라운드", style = AppTypography.caption)
-                                Spacer(modifier = Modifier.height(Spacing.xxs))
-                                Text(
-                                    "${uiState.rounds.size}회",
-                                    style = AppTypography.h2
-                                )
-                            }
-                        }
-                    }
-                    HairlineDivider()
-                }
-
-
-                // Level 1-A: Upcoming Golf Reservations with D-Day & KakaoGolf Weather
-                if (uiState.upcomingReservations.isNotEmpty()) {
-                    item {
-                        Column(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Text(
-                                text = "다가오는 라운드 예약 (${uiState.upcomingReservations.size}건)",
-                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
-                            )
-                            Spacer(modifier = Modifier.height(Spacing.xs))
-
-                            uiState.upcomingReservations.forEach { res ->
-                                UpcomingGolfCard(
-                                    round = res,
-                                    weather = uiState.weatherMap[res.id],
-                                    onOpenDutchPay = { viewModel.openDutchPayDialog(res) },
-                                    onScanLocker = {
-                                        globalLockerSlipPicker.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            GolfPageTab.values().forEach { tab ->
+                                val isSelected = selectedGolfPageTab == tab
+                                Surface(
+                                    onClick = { selectedGolfPageTab = tab },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) Color.White else Color.Transparent,
+                                    border = if (isSelected) BorderStroke(1.dp, MenuColors.golfBorder) else null,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = tab.label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) MenuColors.golf else Slate600
                                         )
-                                    },
-                                    onViewWeatherDetail = { viewModel.openWeatherDetail(res) },
-                                    onClick = { viewModel.selectRound(res) }
-                                )
-                                Spacer(modifier = Modifier.height(Spacing.xs))
+                                    }
+                                }
                             }
                         }
-                        HairlineDivider()
-                    }
-                }
-
-                // Level 1-B: Real Dynamic Score Trend Analytics (실제 사용자 라운드 기반)
-                item {
-                    RealScoreTrendCard(rounds = uiState.rounds)
-                    Spacer(modifier = Modifier.height(Spacing.xs))
-                    HairlineDivider()
-                }
-
-                // Feed Header
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "라운드 기록",
-                            style = AppTypography.caption
-                        )
-                        Text(
-                            text = "항목을 눌러 스코어카드 및 사진 보기",
-                            style = AppTypography.captionMuted
-                        )
                     }
                     HairlineDivider()
                 }
 
-                val displayRounds = if (uiState.completedRounds.isNotEmpty()) uiState.completedRounds else uiState.rounds
-                if (displayRounds.isEmpty()) {
+                if (selectedGolfPageTab == GolfPageTab.ANALYTICS) {
                     item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(Spacing.xxxl),
-                            contentAlignment = Alignment.Center
+                        val golfReport = remember(
+                            uiState.rounds,
+                            uiState.allTransactions,
+                            golfAnalyticsUnit,
+                            golfAnalyticsPeriod,
+                            golfAnalyticsBasis
                         ) {
-                            Text("기록된 라운드가 없습니다.", style = AppTypography.bodySecondary)
+                            GolfAnalyticsEngine.buildReport(
+                                allRounds = uiState.rounds,
+                                allTransactions = uiState.allTransactions,
+                                unit = golfAnalyticsUnit,
+                                targetPeriod = golfAnalyticsPeriod,
+                                requestedBasis = golfAnalyticsBasis
+                            )
                         }
+
+                        GolfAnalyticsSection(
+                            report = golfReport,
+                            selectedSubTab = golfAnalyticsSubTab,
+                            onSelectSubTab = { golfAnalyticsSubTab = it },
+                            onSelectPeriodUnit = { newUnit ->
+                                golfAnalyticsUnit = newUnit
+                                val latestRoundDate = uiState.completedRounds.maxOfOrNull {
+                                    (it.startTime ?: it.roundDate).toLocalDate()
+                                }
+                                val latestGolfTxDate = uiState.allTransactions
+                                    .filter {
+                                        GolfAnalyticsEngine.isScreenGolfTransaction(it) ||
+                                            GolfAnalyticsEngine.isFieldGolfTransaction(it)
+                                    }
+                                    .maxOfOrNull { it.timestamp.toLocalDate() }
+                                val anchorDate = listOfNotNull(latestRoundDate, latestGolfTxDate).maxOrNull()
+                                    ?: LocalDate.now()
+                                golfAnalyticsPeriod = com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                                    newUnit,
+                                    anchorDate
+                                )
+                            },
+                            onPreviousPeriod = {
+                                golfAnalyticsPeriod = golfAnalyticsPeriod.previousSequential()
+                            },
+                            onNextPeriod = {
+                                golfAnalyticsPeriod = golfAnalyticsPeriod.nextSequential()
+                            },
+                            onSelectComparisonBasis = { golfAnalyticsBasis = it }
+                        )
                     }
                 } else {
-                    items(
-                        items = displayRounds,
-                        key = { it.id }
-                    ) { round ->
-                        SaaSGolfRow(
-                            round = round,
-                            onClick = { viewModel.selectRound(round) }
-                        )
+                    // Level 1: Natural Golf Stats
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.xl, vertical = Spacing.lg),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("평균 타수", style = AppTypography.caption)
+                                Spacer(modifier = Modifier.height(Spacing.xxs))
+                                Text(
+                                    if (uiState.averageScore > 0) "%.1f타".format(uiState.averageScore) else "-타",
+                                    style = AppTypography.display
+                                )
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xl)) {
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("라베(최저타)", style = AppTypography.caption)
+                                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                                    Text(
+                                        if (uiState.bestScore != null) "${uiState.bestScore}타" else "-타",
+                                        style = AppTypography.h2.copy(color = AppColors.successText)
+                                    )
+                                }
+
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("총 라운드", style = AppTypography.caption)
+                                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                                    Text(
+                                        "${uiState.rounds.size}회",
+                                        style = AppTypography.h2
+                                    )
+                                }
+                            }
+                        }
                         HairlineDivider()
+                    }
+
+
+                    // Level 1-A: Upcoming Golf Reservations with D-Day & KakaoGolf Weather
+                    if (uiState.upcomingReservations.isNotEmpty()) {
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
+                            ) {
+                                Text(
+                                    text = "다가오는 라운드 예약 (${uiState.upcomingReservations.size}건)",
+                                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
+                                )
+                                Spacer(modifier = Modifier.height(Spacing.xs))
+
+                                uiState.upcomingReservations.forEach { res ->
+                                    UpcomingGolfCard(
+                                        round = res,
+                                        weather = uiState.weatherMap[res.id],
+                                        onOpenDutchPay = { viewModel.openDutchPayDialog(res) },
+                                        onScanLocker = {
+                                            globalLockerSlipPicker.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        },
+                                        onViewWeatherDetail = { viewModel.openWeatherDetail(res) },
+                                        onClick = { viewModel.selectRound(res) }
+                                    )
+                                    Spacer(modifier = Modifier.height(Spacing.xs))
+                                }
+                            }
+                            HairlineDivider()
+                        }
+                    }
+
+                    // Level 1-B: Real Dynamic Score Trend Analytics (실제 사용자 라운드 기반)
+                    item {
+                        RealScoreTrendCard(rounds = uiState.rounds)
+                        Spacer(modifier = Modifier.height(Spacing.xs))
+                        HairlineDivider()
+                    }
+
+                    // Feed Header
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "라운드 기록",
+                                style = AppTypography.caption
+                            )
+                            Text(
+                                text = "항목을 눌러 스코어카드 및 사진 보기",
+                                style = AppTypography.captionMuted
+                            )
+                        }
+                        HairlineDivider()
+                    }
+
+                    val displayRounds = if (uiState.completedRounds.isNotEmpty()) uiState.completedRounds else uiState.rounds
+                    if (displayRounds.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(Spacing.xxxl),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("기록된 라운드가 없습니다.", style = AppTypography.bodySecondary)
+                            }
+                        }
+                    } else {
+                        items(
+                            items = displayRounds,
+                            key = { it.id }
+                        ) { round ->
+                            SaaSGolfRow(
+                                round = round,
+                                onClick = { viewModel.selectRound(round) }
+                            )
+                            HairlineDivider()
+                        }
                     }
                 }
             }
