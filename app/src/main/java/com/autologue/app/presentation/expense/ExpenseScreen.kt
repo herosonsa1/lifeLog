@@ -250,7 +250,14 @@ fun ExpenseScreen(
         val map = HashMap<Long, PrecomputedRowMeta>(filteredTransactions.size.coerceAtLeast(16))
         for (tx in filteredTransactions) {
             val customCatName = uiState.customCategoryByTxId[tx.id]
-            val effectiveCatName = customCatName ?: viewModel.getEffectiveCategoryDisplayName(tx)
+            val rawCatName = customCatName ?: viewModel.getEffectiveCategoryDisplayName(tx)
+            val effectiveCatName = if (tx.amount in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON &&
+                (tx.category == ExpenseCategory.FUEL || rawCatName.contains("주유") || rawCatName.contains("주차"))
+            ) {
+                "주차"
+            } else {
+                rawCatName
+            }
             map[tx.id] = PrecomputedRowMeta(
                 matchingAccount = viewModel.getMatchingAccount(tx),
                 effectiveCatName = effectiveCatName,

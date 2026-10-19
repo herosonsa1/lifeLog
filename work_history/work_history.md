@@ -2817,5 +2817,32 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
 4. **보험사 입금 동의어 그룹 자동 매핑 및 전 구간 중복 정제 적용 ([`MerchantAliasPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/MerchantAliasPreferences.kt), [`TransactionRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt), [`ExpenseViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt))**:
    - `MerchantAliasPreferences`에 한화손해보험(`한화손해보험`, `한화손보`, `한화손해`, `한화정선우`), DB손해보험(`DB손해보험`, `DB손보`, `디비손해보험`, `디비손보`, `DB정선우`, `디비정선우`) 등 주요 보험사 동의어 사전을 내장하여 한쪽만 별칭 등록해도 교차 채널 내역에 동일 별칭이 자동 적용되도록 구현.
    - `TransactionRepositoryImpl`(`getAllTransactionsFlow`, `getTransactionsByDateRange`, `insertTransaction`, `cleanDuplicates`) 및 `ExpenseViewModel`(`computeFilteredUiState`, `findTwinTransactionsForDeletion`) 전 구간에 `TransactionDeduplicator`를 연동하여 화면 표시·총 수입/지출 집계·DB 중복 정제 모두 1건만 반영되도록 완성.
-- **산출물 및 배포**: `나의일상다이어리_v1.0.20.apk` (`versionCode = 21`).
+- **산출물 및 배포**: `나의일상다이어리_v1.0.20.apk` (`versionCode = 21`), GitHub 커밋 `567b0c2`.
+
+---
+
+## 80. 출퇴근 경로 표기 간소화(`집->회사(~~km)`), 주유/주차 3만원 미만 `'주차'` 자동 분류 및 차계부 `'전체'` 차량 조회 조건 추가 (2026-10-19, `v1.0.22`)
+
+### 80.1. 사용자 핵심 요청 사항
+1. **출퇴근 주행 경로 표기 간소화**:
+   - *"1) 출근, 퇴근으로 위치까지 지정된 경우라면, 굳이 ~구~동 으로 표시하지말고, 집->회사(~~km) 만 표기해줘."*
+2. **주유/주차 카테고리 3만원 미만 시 `'주차'`로 표시**:
+   - *"2) 또한 주유/주차 카테고리의 경우, 금액이 3만원 미만이라면 주차로 표시해. 주유는 보통 3만원 이상이어야 해."*
+3. **차계부 차량 조회 조건에 `'전체'` 추가 및 기본값을 `'전체'`로 설정**:
+   - *"3) 그리고 차계부의 조회조건이 벤츠, 볼보 이렇게 하나만 되는게 아니라, 전체 를 보는 것도 필요해. 기본값을 전체로 해줘."*
+
+### 80.2. 주요 개선 및 구현 내역
+1. **출근·퇴근 주행 경로 `집->회사(~~km)` / `회사->집(~~km)` 간결 표기 ([`VehicleLog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/VehicleLog.kt), [`CarDrivingTrackingService.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/service/CarDrivingTrackingService.kt), [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt), [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt))**:
+   - `VehicleLog.isToWorkCommuteLog()`, `VehicleLog.isToHomeCommuteLog()`, `VehicleLog.isRoundTripCommuteLog()` 판별 함수를 구현하고, `VehicleLog.getDrivingRouteTitle()`의 최우선 순위(0순위)에서 출근 주행은 **`집->회사(30.0km)`**, 퇴근 주행은 **`회사->집(27.1km)`**, 왕복 출퇴근은 **`집<->회사(54.2km)`**로 반환하도록 개편.
+   - 기존 DB에 이미 `[하남시 학암동 ➔ 영등포구 영등포동 (출근 30.0 km)]` 형태로 저장된 주행 레코드도 별도 마이그레이션 없이 즉시 **`집->회사(30.0km)`**로 변환 표출되며, 신규 블루투스/GPS 출퇴근 주행 저장 시에도 `[집->회사(%.1fkm)]` / `[회사->집(%.1fkm)]` 포맷으로 기록되도록 통일.
+2. **주유/주차 카테고리 금액 30,000원 미만 시 `'주차'` 자동 분류 및 연비·주유비 합산 제외 ([`VehicleLog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/VehicleLog.kt), [`FuelEconomyCalculator.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/util/FuelEconomyCalculator.kt), [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt), [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt), [`ExpenseCustomMetaPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/ExpenseCustomMetaPreferences.kt), [`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt), [`ExpenseViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt))**:
+   - `MIN_REFUEL_AMOUNT_WON = 30_000L` 기준 상수를 도입하여, 주유/충전(`ExpenseCategory.FUEL`) 또는 `주유/주차` 카테고리 내역 중 **결제 금액이 30,000원 미만(`0 < amount < 30,000원`)**인 내역(예: `서울어린이대공원 2,000원`)은 차계부(`VehicleLogType.PARKING`)와 가계부 모두 **`주차`**로 자동 분류·표시.
+   - 차계부(`CarLedgerScreen`)에서 주차 내역(`log.isParkingLog()`)은 상단 배지를 **`주차`**로 표시하고, `"정밀 실측"` / `"1,650원/L 추정"` 배지 및 `"N일 만에 주유"` / `"이전 주유 후 km"` 주유 간격 정보를 숨기며, 우측 금액 하단에 **`주차 요금`**을 표기.
+   - `FuelEconomyCalculator` 및 `CarLedgerViewModel`에서 3만원 미만 주차 내역을 주유 간격·리터 환산·평균 연비 계산 및 상단 `총 주유비` 합산에서 제외하여 실제 주유(3만원 이상) 내역만으로 정확한 연비와 주유비가 산출되도록 개선.
+   - 가계부(`ExpenseScreen`, `ExpenseCustomMetaPreferences.resolveDisplayCategoryLabel`)에서도 주유/주차 카테고리의 결제 금액이 3만원 미만이면 카테고리 라벨을 **`주차`**로 표시하고, 가계부에서 주유/주차 카테고리 지정 시 3만원 미만이면 차계부에 `VehicleLogType.PARKING`으로 연동.
+3. **차계부 상단 차량 조회 조건에 `'전체'` 추가 및 기본값을 `'전체'`로 설정 ([`MultiVehiclePreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/MultiVehiclePreferences.kt), [`VehicleSelectorBar.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/VehicleSelectorBar.kt), [`CarLedgerViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt), [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt))**:
+   - `MultiVehiclePreferences.ALL_VEHICLES_ID = "all"` 상수를 추가하고, 앱 시작 및 차계부 진입 시 기본 선택값을 항상 **`전체`(`"all"`)**로 초기화.
+   - `VehicleSelectorBar` 좌측 맨 앞에 **`전체`** 선택 칩을 추가(`전체` · `벤츠 (휘발유)` · `볼보 (휘발유)` · `+ 차량 추가`)하고 가로 스크롤을 지원.
+   - `CarLedgerViewModel.loadData()`에서 각 차량별로 독립적인 주유 간격·연비 계산(`FuelEconomyCalculator.calculateForVehicle`)을 먼저 수행한 뒤, `'전체'` 선택 시에는 모든 차량의 기록과 통합 통계(전체 주행거리, 전체 주유비, 통합 평균 연비)를 표시하고, 개별 차량(`벤츠`, `볼보`) 선택 시에는 해당 차량의 기록과 통계만 필터링하여 표시하도록 구현.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.22.apk` (`versionCode = 23`).
 

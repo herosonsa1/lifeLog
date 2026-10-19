@@ -28,9 +28,11 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
 import com.autologue.app.domain.model.buildUpdatedNote
 import com.autologue.app.domain.model.getExplicitUnitPrice
 import com.autologue.app.domain.model.isCustomFuel
+import com.autologue.app.domain.model.isParkingLog
 import javax.inject.Inject
 
 enum class LogFilterMode {
@@ -54,10 +56,10 @@ data class CarLedgerUiState(
     val maintenanceConfig: VehicleMaintenanceConfig = VehicleMaintenanceConfig(),
     val showMaintenanceDialog: Boolean = false,
     val vehicles: List<VehicleProfile> = emptyList(),
-    val selectedVehicleId: String = "car_1",
+    val selectedVehicleId: String = MultiVehiclePreferences.ALL_VEHICLES_ID,
     val selectedVehicleDefaultGasPrice: Double = 1650.0,
     val showVehicleManageDialog: Boolean = false,
-    val filterCurrentVehicleOnly: Boolean = true,
+    val filterCurrentVehicleOnly: Boolean = false,
     val editingRefuelLog: VehicleLog? = null,
     val logFilterMode: LogFilterMode = LogFilterMode.ALL,
     val showAddRefuelDialog: Boolean = false,
@@ -71,7 +73,12 @@ data class CarLedgerUiState(
     val filteredLogs: List<VehicleLog>
         get() = when (logFilterMode) {
             LogFilterMode.ALL -> logs
-            LogFilterMode.REFUEL_ONLY -> logs.filter { it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE }
+            LogFilterMode.REFUEL_ONLY -> logs.filter {
+                it.logType == VehicleLogType.REFUELING ||
+                    it.logType == VehicleLogType.MAINTENANCE ||
+                    it.logType == VehicleLogType.PARKING ||
+                    it.isParkingLog()
+            }
             LogFilterMode.DRIVING_ONLY -> logs.filter { it.logType == VehicleLogType.TRIP_DRIVING }
         }
 }
@@ -145,7 +152,7 @@ class CarLedgerViewModel @Inject constructor(
         viewModelScope.launch {
             multiVehiclePreferences.vehicles.collectLatest { vList ->
                 val currentSel = _uiState.value.selectedVehicleId
-                val targetProfile = vList.find { it.id == currentSel }
+                val targetProfile = vList.find { it.id == currentSel } ?: vList.firstOrNull()
                 val targetEff = targetProfile?.targetEfficiencyKmPerL ?: 12.5
                 val targetGasPrice = targetProfile?.defaultGasPrice ?: 1650.0
                 _uiState.value = _uiState.value.copy(
@@ -157,15 +164,17 @@ class CarLedgerViewModel @Inject constructor(
         }
         viewModelScope.launch {
             multiVehiclePreferences.selectedVehicleId.collectLatest { selId ->
-                val targetProfile = _uiState.value.vehicles.find { it.id == selId }
+                val isAll = selId == MultiVehiclePreferences.ALL_VEHICLES_ID
+                val targetProfile = _uiState.value.vehicles.find { it.id == selId } ?: _uiState.value.vehicles.firstOrNull()
                 val targetEff = targetProfile?.targetEfficiencyKmPerL ?: 12.5
                 val targetGasPrice = targetProfile?.defaultGasPrice ?: 1650.0
                 _uiState.value = _uiState.value.copy(
                     selectedVehicleId = selId,
+                    filterCurrentVehicleOnly = !isAll,
                     averageEfficiencyKmPerL = targetEff,
                     selectedVehicleDefaultGasPrice = targetGasPrice
                 )
-                maintenancePreferences.setCurrentVehicleId(selId)
+                maintenancePreferences.setCurrentVehicleId(if (isAll) "car_1" else selId)
             }
         }
     }
@@ -205,7 +214,8 @@ class CarLedgerViewModel @Inject constructor(
                 multiVehiclePreferences.vehicles
             ) { logs, _, selectedId, vehicleList ->
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                    val vehicleProfile = vehicleList.find { it.id == selectedId }
+                    val isAllVehicles = selectedId == MultiVehiclePreferences.ALL_VEHICLES_ID
+                    val vehicleProfile = vehicleList.find { it.id == selectedId } ?: vehicleList.firstOrNull()
                     val targetEff = vehicleProfile?.targetEfficiencyKmPerL ?: 12.5
                     val targetGasPrice = vehicleProfile?.defaultGasPrice ?: 1650.0
 
@@ -213,37 +223,42 @@ class CarLedgerViewModel @Inject constructor(
                     // 다이어리의 도보/대중교통 일반 이동은 차량 연비/소모품에 합산하지 않음
                     val diaryLookup: (LocalDateTime?, LocalDateTime) -> Double = { _, _ -> 0.0 }
 
-                    // 1. 선택된 차량에 대해 Full-to-Full 주유 주기 및 구간 연비 계산 (차량별 설정 기본 유가 전달)
-                    val calculationResult = FuelEconomyCalculator.calculateForVehicle(
-                        targetVehicleId = selectedId,
-                        allLogs = logs,
-                        gasPrice = targetGasPrice,
-                        additionalDrivingDistanceLookup = diaryLookup
-                    )
+                    // 1. 각 등록 차량(car_1, car_2)에 대해 Full-to-Full 주유 주기 및 구간 연비 계산
+                    val vehicleIds = vehicleList.map { it.id }.ifEmpty { listOf("car_1", "car_2") }
+                    val calcByVehicle = vehicleIds.associateWith { vId ->
+                        val vGasPrice = vehicleList.find { it.id == vId }?.defaultGasPrice ?: targetGasPrice
+                        FuelEconomyCalculator.calculateForVehicle(
+                            targetVehicleId = vId,
+                            allLogs = logs,
+                            gasPrice = vGasPrice,
+                            additionalDrivingDistanceLookup = diaryLookup
+                        )
+                    }
 
                     // 계산된 주유 로그 맵 생성 (ID 기준)
-                    val enrichedFuelMap = calculationResult.enrichedFuelLogs.associateBy { it.id }
+                    val enrichedFuelMap = calcByVehicle.values
+                        .flatMap { it.enrichedFuelLogs }
+                        .associateBy { it.id }
 
                     // 전체 로그 리스트에 계산된 주유 로그 치환
                     val enrichedLogs = logs.map { log ->
                         enrichedFuelMap[log.id] ?: log
                     }
 
-                    // 선택된 차량의 주유 로그 필터링 (미배정 자동 수집 주유 내역은 선택된 차량에 표시)
+                    // 선택 조건(전체 vs 개별 차량)에 따른 주유 로그(3만원 미만 주차 제외) 및 주행 로그 필터링
                     val vehicleFuelLogs = enrichedLogs.filter {
-                        it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
+                        it.logType == VehicleLogType.REFUELING &&
+                            !it.isParkingLog() &&
+                            it.fuelCost >= MIN_REFUEL_AMOUNT_WON &&
+                            (isAllVehicles || it.getAssignedVehicleId() == selectedId)
                     }
                     val totalFuel = vehicleFuelLogs.sumOf { it.fuelCost }
 
-                    // 선택된 차량의 총 주행거리 (주행 로그 및 다이어리 종합)
                     val vehicleDrivingLogs = enrichedLogs.filter {
-                        it.logType == VehicleLogType.TRIP_DRIVING && it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId
+                        it.logType == VehicleLogType.TRIP_DRIVING &&
+                            (isAllVehicles || it.getAssignedVehicleId() == selectedId)
                     }
-                    val vehicleLogDist = vehicleDrivingLogs.sumOf { it.tripDistanceKm }
-                    val diaryDist = diaryLookup(null, LocalDateTime.now())
-                    val totalDist = if (vehicleLogDist > 0.0) {
-                        if (selectedId == "car_1") maxOf(vehicleLogDist, diaryDist) else vehicleLogDist
-                    } else diaryDist
+                    val totalDist = vehicleDrivingLogs.sumOf { it.tripDistanceKm }
 
                     // 총 주유 리터 합계 (1,650원 기준 환산량 반영)
                     val totalFuelLiters = vehicleFuelLogs.sumOf { it.fuelAmountLiters }
@@ -251,33 +266,54 @@ class CarLedgerViewModel @Inject constructor(
                         Math.round((totalDist / totalFuelLiters) * 10.0) / 10.0
                     } else null
 
+                    val weightedAvgForSelection = if (isAllVehicles) {
+                        val sumDist = calcByVehicle.values.sumOf { it.totalIntervalDistanceKm }
+                        val sumLiters = calcByVehicle.values.sumOf { it.totalIntervalLiters }
+                        if (sumDist > 0.0 && sumLiters > 0.0) {
+                            Math.round((sumDist / sumLiters) * 10.0) / 10.0
+                        } else null
+                    } else {
+                        calcByVehicle[selectedId]?.weightedAverageEfficiencyKmPerL
+                    }
+
                     // 최종 평균 연비 (구간 가중평균 우선 -> 전체 누적 연비 -> 차량 프로필 목표 연비)
                     val avgEff = when {
-                        calculationResult.weightedAverageEfficiencyKmPerL != null &&
-                        calculationResult.weightedAverageEfficiencyKmPerL in 4.0..30.0 ->
-                            calculationResult.weightedAverageEfficiencyKmPerL
+                        weightedAvgForSelection != null && weightedAvgForSelection in 4.0..30.0 ->
+                            weightedAvgForSelection
                         rawEffFromTotal != null && rawEffFromTotal in 4.0..30.0 ->
                             rawEffFromTotal
                         else -> targetEff
                     }
 
-                    // 표시할 로그 목록: 현재 차량 필터 여부에 따라 분기
-                    val displayedLogs = if (_uiState.value.filterCurrentVehicleOnly) {
-                        enrichedLogs.filter { it.getAssignedVehicleId(defaultVehicleId = selectedId) == selectedId }
+                    // 표시할 로그 목록: '전체' 선택 시 전체 차량, 개별 차량 선택 시 해당 차량만 표시
+                    val filterOnlyCurrent = !isAllVehicles && _uiState.value.filterCurrentVehicleOnly
+                    val displayedLogs = if (filterOnlyCurrent) {
+                        enrichedLogs.filter { it.getAssignedVehicleId() == selectedId }
                     } else {
                         enrichedLogs
                     }
 
-                    val refuelCount = displayedLogs.count { it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE }
+                    val refuelCount = displayedLogs.count {
+                        it.logType == VehicleLogType.REFUELING ||
+                            it.logType == VehicleLogType.MAINTENANCE ||
+                            it.logType == VehicleLogType.PARKING ||
+                            it.isParkingLog()
+                    }
                     val drivingCount = displayedLogs.count { it.logType == VehicleLogType.TRIP_DRIVING }
+                    val latestDays = if (isAllVehicles) {
+                        vehicleFuelLogs.maxByOrNull { it.timestamp }?.daysSinceLastFuel
+                    } else {
+                        calcByVehicle[selectedId]?.latestIntervalDays ?: vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel
+                    }
 
                     _uiState.value.copy(
                         isLoading = false,
                         selectedVehicleId = selectedId,
+                        filterCurrentVehicleOnly = filterOnlyCurrent,
                         selectedVehicleDefaultGasPrice = targetGasPrice,
                         logs = displayedLogs,
                         totalFuelExpense = totalFuel,
-                        latestIntervalDays = calculationResult.latestIntervalDays ?: vehicleFuelLogs.firstOrNull()?.daysSinceLastFuel,
+                        latestIntervalDays = latestDays,
                         totalDrivingDistanceKm = Math.round(totalDist * 10.0) / 10.0,
                         averageEfficiencyKmPerL = avgEff,
                         totalRefuelCount = refuelCount,
@@ -291,9 +327,13 @@ class CarLedgerViewModel @Inject constructor(
     }
 
     fun toggleVehicleFilter() {
-        val newFilter = !_uiState.value.filterCurrentVehicleOnly
-        _uiState.value = _uiState.value.copy(filterCurrentVehicleOnly = newFilter)
-        loadData()
+        val currentSel = _uiState.value.selectedVehicleId
+        if (currentSel == MultiVehiclePreferences.ALL_VEHICLES_ID) {
+            val firstVehicleId = _uiState.value.vehicles.firstOrNull()?.id ?: "car_1"
+            selectVehicle(firstVehicleId)
+        } else {
+            selectVehicle(MultiVehiclePreferences.ALL_VEHICLES_ID)
+        }
     }
 
     fun toggleSelectionMode() {
@@ -427,24 +467,39 @@ class CarLedgerViewModel @Inject constructor(
                     updatedNote = "$updatedNote [one_time_edit:true]".trim()
                 }
 
+                val isParking = log.logType != VehicleLogType.MAINTENANCE && fuelCost in 1L until MIN_REFUEL_AMOUNT_WON
+                val nextLogType = when {
+                    log.logType == VehicleLogType.MAINTENANCE -> VehicleLogType.MAINTENANCE
+                    isParking -> VehicleLogType.PARKING
+                    else -> VehicleLogType.REFUELING
+                }
+
                 val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
-                val finalLiters = when {
-                    explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
-                    unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
-                    else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
+                val finalLiters = if (nextLogType == VehicleLogType.PARKING || nextLogType == VehicleLogType.MAINTENANCE) {
+                    0.0
+                } else {
+                    when {
+                        explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
+                        unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
+                        else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
+                    }
                 }
 
                 val updatedLog = log.copy(
+                    logType = nextLogType,
                     gasStationName = finalStationName,
                     fuelCost = fuelCost,
                     fuelAmountLiters = finalLiters,
+                    daysSinceLastFuel = if (nextLogType == VehicleLogType.PARKING) null else log.daysSinceLastFuel,
+                    tripDistanceKm = if (nextLogType == VehicleLogType.PARKING) 0.0 else log.tripDistanceKm,
+                    estimatedEfficiencyKmPerL = if (nextLogType == VehicleLogType.PARKING) null else log.estimatedEfficiencyKmPerL,
                     note = updatedNote
                 )
                 vehicleRepository.updateVehicleLog(updatedLog)
 
                 if (isOneTimeSave) {
                     _uiState.value = _uiState.value.copy(
-                        syncResultMessage = "주유 내역을 1회성 저장했습니다. (동일 주유소의 다른 내역에는 영향을 주지 않으며 고정 보호됩니다)"
+                        syncResultMessage = "내역을 1회성 저장했습니다. (동일 결제처의 다른 내역에는 영향을 주지 않으며 고정 보호됩니다)"
                     )
                 } else if (isStationRenamed && oldStationName.isNotBlank() && oldStationName != "주유소") {
                     val fuelRenamed = vehicleRepository.renameGasStationGlobally(
@@ -458,7 +513,7 @@ class CarLedgerViewModel @Inject constructor(
                     val totalRenamed = fuelRenamed + txRenamed
                     val extraMsg = if (totalRenamed > 0) " (동일 결제처 ${totalRenamed}건 일괄 치환 완료)" else ""
                     _uiState.value = _uiState.value.copy(
-                        syncResultMessage = "결제명(주유소명)을 '$finalStationName'(으)로 수정했습니다. 같은 결제처 항목은 계속 자동 치환됩니다.$extraMsg"
+                        syncResultMessage = "결제명을 '$finalStationName'(으)로 수정했습니다. 같은 결제처 항목은 계속 자동 치환됩니다.$extraMsg"
                     )
                 }
                 closeRefuelEditDialog()
@@ -503,37 +558,45 @@ class CarLedgerViewModel @Inject constructor(
                 message = "입력하신 주유 기록을 차계부와 가계부에 저장하고 있습니다...",
                 accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
             ) {
-                val targetVehicle = _uiState.value.vehicles.find { it.id == vehicleId }
-                val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (vehicleId == "car_2") "차량 2" else "차량 1"
+                val safeVehicleId = vehicleId.takeIf { it != MultiVehiclePreferences.ALL_VEHICLES_ID } ?: "car_1"
+                val targetVehicle = _uiState.value.vehicles.find { it.id == safeVehicleId }
+                val vName = targetVehicle?.name?.split(" ")?.firstOrNull() ?: if (safeVehicleId == "car_2") "차량 2" else "차량 1"
                 val fallbackGasPrice = targetVehicle?.defaultGasPrice ?: FuelEconomyCalculator.DEFAULT_GAS_PRICE
+                val isParking = fuelCost in 1L until MIN_REFUEL_AMOUNT_WON
 
-                val finalLiters = when {
-                    explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
-                    unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
-                    else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
+                val finalLiters = if (isParking) {
+                    0.0
+                } else {
+                    when {
+                        explicitLiters != null && explicitLiters > 0.0 -> Math.round(explicitLiters * 10.0) / 10.0
+                        unitPrice != null && unitPrice > 0.0 && fuelCost > 0L -> Math.round((fuelCost.toDouble() / unitPrice) * 10.0) / 10.0
+                        else -> Math.round((fuelCost.toDouble() / fallbackGasPrice) * 10.0) / 10.0
+                    }
                 }
 
                 val tags = mutableListOf<String>()
-                tags.add("[$vehicleId: $vName]")
-                if (unitPrice != null && unitPrice > 0.0) {
+                tags.add("[$safeVehicleId: $vName]")
+                if (!isParking && unitPrice != null && unitPrice > 0.0) {
                     tags.add("[unit_price: %.1f]".format(java.util.Locale.US, unitPrice))
                 }
-                tags.add("[custom_fuel:true]")
+                if (!isParking) {
+                    tags.add("[custom_fuel:true]")
+                }
                 val noteStr = (tags.joinToString(" ") + " 차계부 직접 등록").trim()
 
-                val lastFuel = vehicleRepository.getLatestRefuelingLog()
-                val daysSince = if (lastFuel != null) {
+                val lastFuel = if (!isParking) vehicleRepository.getLatestRefuelingLog() else null
+                val daysSince = if (!isParking && lastFuel != null) {
                     java.time.temporal.ChronoUnit.DAYS.between(lastFuel.timestamp.toLocalDate(), timestamp.toLocalDate()).toInt()
                 } else null
 
                 // 1. 차계부 VehicleLog 등록
                 val vLog = VehicleLog(
                     timestamp = timestamp,
-                    logType = VehicleLogType.REFUELING,
+                    logType = if (isParking) VehicleLogType.PARKING else VehicleLogType.REFUELING,
                     fuelCost = fuelCost,
                     fuelAmountLiters = finalLiters,
                     daysSinceLastFuel = daysSince,
-                    gasStationName = gasStationName.ifBlank { "주유소" },
+                    gasStationName = gasStationName.ifBlank { if (isParking) "주차" else "주유소" },
                     note = noteStr
                 )
                 vehicleRepository.insertVehicleLog(vLog)
@@ -541,13 +604,13 @@ class CarLedgerViewModel @Inject constructor(
                 // 2. 가계부 Transaction 동시 등록 (데이터 일관성 유지)
                 val tx = com.autologue.app.domain.model.Transaction(
                     amount = fuelCost,
-                    merchantName = gasStationName.ifBlank { "주유소" },
+                    merchantName = gasStationName.ifBlank { if (isParking) "주차" else "주유소" },
                     originalText = "[차계부 직접 입력] $gasStationName %,d원".format(fuelCost),
                     timestamp = timestamp,
                     paymentMethod = com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD,
                     category = com.autologue.app.domain.model.ExpenseCategory.FUEL,
                     cardOrBankName = "차계부 직접 입력",
-                    transferMemo = "차계부 주유 등록 연동",
+                    transferMemo = if (isParking) "차계부 주차 등록 연동" else "차계부 주유 등록 연동",
                     isAutoCategorized = true
                 )
                 transactionRepository.insertTransaction(tx)
@@ -848,15 +911,17 @@ class CarLedgerViewModel @Inject constructor(
     }
 
     fun selectVehicle(vehicleId: String) {
+        val isAll = vehicleId == MultiVehiclePreferences.ALL_VEHICLES_ID
         if (_uiState.value.selectedVehicleId != vehicleId) {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
+                filterCurrentVehicleOnly = !isAll,
                 loadingTitle = "차량 전환 중",
-                loadingMessage = "선택한 차량의 주유 및 주행 기록을 계산하고 있습니다..."
+                loadingMessage = if (isAll) "전체 차량의 주유 및 주행 기록을 계산하고 있습니다..." else "선택한 차량의 주유 및 주행 기록을 계산하고 있습니다..."
             )
         }
         multiVehiclePreferences.selectVehicle(vehicleId)
-        maintenancePreferences.setCurrentVehicleId(vehicleId)
+        maintenancePreferences.setCurrentVehicleId(if (isAll) "car_1" else vehicleId)
     }
 
     fun openVehicleManageDialog() {

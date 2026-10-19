@@ -1555,10 +1555,15 @@ class ExpenseViewModel @Inject constructor(
                 val isNowVehicleCategory = updatedTx.category == ExpenseCategory.FUEL ||
                     updatedTx.category == ExpenseCategory.CAR_MAINTENANCE
                 if (isNowVehicleCategory && updatedTx.amount > 0) {
-                    val targetLogType = if (updatedTx.category == ExpenseCategory.CAR_MAINTENANCE) {
-                        com.autologue.app.domain.model.VehicleLogType.MAINTENANCE
-                    } else {
-                        com.autologue.app.domain.model.VehicleLogType.REFUELING
+                    val isParkingTx = updatedTx.category != ExpenseCategory.CAR_MAINTENANCE &&
+                        updatedTx.amount in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
+                    val targetLogType = when {
+                        updatedTx.category == ExpenseCategory.CAR_MAINTENANCE ->
+                            com.autologue.app.domain.model.VehicleLogType.MAINTENANCE
+                        isParkingTx ->
+                            com.autologue.app.domain.model.VehicleLogType.PARKING
+                        else ->
+                            com.autologue.app.domain.model.VehicleLogType.REFUELING
                     }
                     val daysSince = if (targetLogType == com.autologue.app.domain.model.VehicleLogType.REFUELING) {
                         val lastFuel = vehicleRepository.getLatestRefuelingLog()

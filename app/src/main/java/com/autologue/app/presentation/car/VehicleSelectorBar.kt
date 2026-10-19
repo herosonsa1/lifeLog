@@ -1,7 +1,9 @@
 package com.autologue.app.presentation.car
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DirectionsCar
@@ -41,12 +43,45 @@ fun VehicleSelectorBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 차량 선택 칩 목록
+            // 차량 선택 칩 목록 ('전체' + 등록 차량 리스트)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f, fill = false)
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .horizontalScroll(rememberScrollState())
             ) {
+                val isAllSelected = selectedVehicleId == com.autologue.app.data.preferences.MultiVehiclePreferences.ALL_VEHICLES_ID
+                Surface(
+                    onClick = { onSelectVehicle(com.autologue.app.data.preferences.MultiVehiclePreferences.ALL_VEHICLES_ID) },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isAllSelected) MenuColors.carLedgerBg else Slate100,
+                    border = BorderStroke(
+                        1.dp,
+                        if (isAllSelected) MenuColors.carLedgerBorder else Color.Transparent
+                    ),
+                    shadowElevation = if (isAllSelected) 1.dp else 0.dp
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsCar,
+                            contentDescription = null,
+                            tint = if (isAllSelected) MenuColors.carLedger else Slate500,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "전체",
+                            fontSize = 12.sp,
+                            fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isAllSelected) MenuColors.carLedger else Slate700
+                        )
+                    }
+                }
+
                 vehicles.forEach { vehicle ->
                     val isSelected = vehicle.id == selectedVehicleId
                     Surface(

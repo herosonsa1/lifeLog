@@ -145,7 +145,7 @@ class LocationDistanceUtilsTest {
 
     @Test
     fun testCommuteTripTitle() {
-        val log = com.autologue.app.domain.model.VehicleLog(
+        val toWorkLog = com.autologue.app.domain.model.VehicleLog(
             id = 3L,
             timestamp = LocalDateTime.now(),
             logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
@@ -153,23 +153,55 @@ class LocationDistanceUtilsTest {
             note = "[car_2: 쏘렌토 MQ4] [우리집 ➔ 회사 (출근 24.8 km)] (35분 운행 · GPS 12개 지점)"
         )
 
-        assertEquals("우리집 ➔ 회사 (출근 24.8 km)", log.getDrivingRouteTitle())
-        assertEquals("우리집 ➔ 회사 (출근 24.8 km)", log.displayTitle())
-        assertEquals("car_2", log.getAssignedVehicleId())
+        assertEquals("집->회사(24.8km)", toWorkLog.getDrivingRouteTitle())
+        assertEquals("집->회사(24.8km)", toWorkLog.displayTitle())
+        assertEquals("car_2", toWorkLog.getAssignedVehicleId())
+
+        val dongCommuteLog = com.autologue.app.domain.model.VehicleLog(
+            id = 31L,
+            timestamp = LocalDateTime.now(),
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 30.0,
+            note = "[car_1: 벤츠] [하남시 학암동 ➔ 영등포구 영등포동 (출근 30.0 km)] (60분 운행 · GPS 18개 지점)"
+        )
+        assertEquals("집->회사(30.0km)", dongCommuteLog.getDrivingRouteTitle())
+
+        val toHomeLog = com.autologue.app.domain.model.VehicleLog(
+            id = 32L,
+            timestamp = LocalDateTime.now(),
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 27.1,
+            note = "[car_1: 벤츠] [영등포구 영등포동 ➔ 하남시 학암동 (퇴근 27.1 km)] (55분 운행 · GPS 16개 지점)"
+        )
+        assertEquals("회사->집(27.1km)", toHomeLog.getDrivingRouteTitle())
     }
 
     @Test
-    fun testRefuelingTitle() {
+    fun testRefuelingTitleAndUnder30kParkingClassification() {
         val log = com.autologue.app.domain.model.VehicleLog(
             id = 4L,
             timestamp = LocalDateTime.now(),
             logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
+            fuelCost = 55000L,
             gasStationName = "GS칼텍스 삼평주유소",
             note = "[car_1: 제네시스 G80] [custom_fuel:true]"
         )
 
         assertEquals("GS칼텍스 삼평주유소", log.displayTitle())
         assertEquals("car_1", log.getAssignedVehicleId())
+        org.junit.Assert.assertFalse(log.isParkingLog())
+        assertTrue(log.isCustomFuel())
+
+        val parkingUnder30k = com.autologue.app.domain.model.VehicleLog(
+            id = 5L,
+            timestamp = LocalDateTime.now(),
+            logType = com.autologue.app.domain.model.VehicleLogType.REFUELING,
+            fuelCost = 2000L,
+            gasStationName = "서울어린이대공원",
+            note = "[car_1: 벤츠] [tx_sync:101] 가계부 카테고리 변경 연동 (주유/주차)"
+        )
+        assertTrue(parkingUnder30k.isParkingLog())
+        org.junit.Assert.assertFalse(parkingUnder30k.isCustomFuel())
     }
 
     @Test

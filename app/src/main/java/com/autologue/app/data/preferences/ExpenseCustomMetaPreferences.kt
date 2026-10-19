@@ -1026,8 +1026,22 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     fun resolveEffectiveCategoryDisplayName(tx: Transaction): String {
-        resolveCustomCategoryLabel(tx)?.let { return it }
-        return getBuiltInCategoryDisplayName(tx.category)
+        val customLabel = resolveCustomCategoryLabel(tx)
+        if (!customLabel.isNullOrBlank()) {
+            if (tx.amount in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON &&
+                (customLabel.contains("주유") || customLabel.contains("주차"))
+            ) {
+                return "주차"
+            }
+            return customLabel
+        }
+        val builtInLabel = getBuiltInCategoryDisplayName(tx.category)
+        if (tx.amount in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON &&
+            (tx.category == ExpenseCategory.FUEL || builtInLabel.contains("주유") || builtInLabel.contains("주차"))
+        ) {
+            return "주차"
+        }
+        return builtInLabel
     }
 
     fun getBuiltInCategoryDisplayName(category: ExpenseCategory): String {

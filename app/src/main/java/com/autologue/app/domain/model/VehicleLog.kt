@@ -29,6 +29,42 @@ fun VehicleLog.getAssignedVehicleId(defaultVehicleId: String = "car_1"): String 
     }
 }
 
+const val MIN_REFUEL_AMOUNT_WON = 30_000L
+
+/**
+ * 3만원 미만의 주유/주차 카테고리 내역이거나 명시적 주차 기록인지 판별
+ * (주유는 통상 3만원 이상이므로 3만원 미만은 주차로 분류·표시)
+ */
+fun VehicleLog.isParkingLog(): Boolean {
+    if (logType == VehicleLogType.PARKING) return true
+    if (logType == VehicleLogType.REFUELING && fuelCost in 1L until MIN_REFUEL_AMOUNT_WON) return true
+    return false
+}
+
+/**
+ * 출근(집 -> 회사) 주행 기록 여부 판별
+ */
+fun VehicleLog.isToWorkCommuteLog(): Boolean {
+    if (logType != VehicleLogType.TRIP_DRIVING) return false
+    val n = note ?: return false
+    if (n.contains("출퇴근")) return false
+    if (n.contains("출근")) return true
+    if (n.contains("집->회사") || n.contains("집 -> 회사")) return true
+    return Regex("(학암동|위례동|우리집|집)[^➔\\->]*(?:➔|->)[^\\]\\)]*(영등포동|회사)").containsMatchIn(n)
+}
+
+/**
+ * 퇴근(회사 -> 집) 주행 기록 여부 판별
+ */
+fun VehicleLog.isToHomeCommuteLog(): Boolean {
+    if (logType != VehicleLogType.TRIP_DRIVING) return false
+    val n = note ?: return false
+    if (n.contains("출퇴근")) return false
+    if (n.contains("퇴근")) return true
+    if (n.contains("회사->집") || n.contains("회사 -> 집")) return true
+    return Regex("(영등포동|회사)[^➔\\->]*(?:➔|->)[^\\]\\)]*(학암동|위례동|우리집|집)").containsMatchIn(n)
+}
+
 /**
  * 주유 기록에 명시적으로 입력된 L당 주유 단가(원/L) 추출
  */
@@ -42,8 +78,10 @@ fun VehicleLog.getExplicitUnitPrice(): Double? {
  * 사용자가 직접 L당 단가나 실주유량을 입력/수정한 정밀 데이터인지 여부
  */
 fun VehicleLog.isCustomFuel(): Boolean {
+    if (isParkingLog()) return false
     val n = note ?: ""
-    return n.contains("[custom_fuel:true]") || getExplicitUnitPrice() != null || (fuelAmountLiters > 0.0 && !n.contains("가계부 결제 내역 자동 분석"))
+    val isAutoSyncedNote = n.contains("가계부 결제 내역 자동 분석") || n.contains("가계부 카테고리 변경 연동")
+    return n.contains("[custom_fuel:true]") || getExplicitUnitPrice() != null || (fuelAmountLiters > 0.0 && !isAutoSyncedNote)
 }
 
 /**
@@ -144,6 +182,17 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
     val n = normalized.note ?: return null
     val distKm = normalized.tripDistanceKm
 
+    // 0. 출근 / 퇴근 / 출퇴근 왕복 주행은 동네명(~시/구 ~동) 대신 집->회사(~~km) / 회사->집(~~km)으로 간결하게 표기
+    if (normalized.isToWorkCommuteLog()) {
+        return if (distKm > 0.0) String.format(java.util.Locale.US, "집->회사(%.1fkm)", distKm) else "집->회사"
+    }
+    if (normalized.isToHomeCommuteLog()) {
+        return if (distKm > 0.0) String.format(java.util.Locale.US, "회사->집(%.1fkm)", distKm) else "회사->집"
+    }
+    if (n.contains("출퇴근")) {
+        return if (distKm > 0.0) String.format(java.util.Locale.US, "집<->회사(%.1fkm)", distKm) else "집<->회사"
+    }
+
     // 1. 신규 포맷: "[출발지 ➔ 도착지 (거리 km)]" 대괄호 패턴 검색
     val routeBracketMatch = Regex("\\[([^\\]]+➔[^\\]]+)\\]").find(n)
     if (routeBracketMatch != null) {
@@ -159,6 +208,7 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
             inside.startsWith("unit_price") ||
             inside.startsWith("custom_fuel")
         val hasRouteKeyword = inside.contains("➔") ||
+            inside.contains("->") ||
             inside.contains("주행") ||
             inside.contains("출발") ||
             inside.contains("도착") ||
@@ -175,14 +225,6 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
         return if (distKm > 0.0 && !title.contains("km")) {
             "$title (%.1f km)".format(distKm)
         } else syncRouteTitleDistance(title, distKm)
-    }
-
-    // 3. 기존 출퇴근 패턴
-    if (n.contains("출근")) {
-        return if (distKm > 0.0) "출근 주행 (%.1f km)".format(distKm) else "출근 주행"
-    }
-    if (n.contains("퇴근")) {
-        return if (distKm > 0.0) "퇴근 주행 (%.1f km)".format(distKm) else "퇴근 주행"
     }
 
     // 3-1. 골프장 라운딩 왕복 주행 패턴 (예: "월송리 CC 라운딩 왕복 주행", "오크밸리 CC 라운딩 왕복 주행")
@@ -230,11 +272,14 @@ fun VehicleLog.getDrivingDetailSubtitle(): String? {
  * UI 리스트에서 최상단 헤드라인으로 표출할 대표 타이틀
  */
 fun VehicleLog.displayTitle(): String {
+    if (isParkingLog()) {
+        return gasStationName?.takeIf { it.isNotBlank() } ?: (note ?: "주차")
+    }
     return when (logType) {
         VehicleLogType.REFUELING -> gasStationName?.takeIf { it.isNotBlank() } ?: "주유"
         VehicleLogType.TRIP_DRIVING -> getDrivingRouteTitle() ?: (note ?: "주행 완료")
         VehicleLogType.MAINTENANCE -> gasStationName?.takeIf { it.isNotBlank() } ?: (note ?: "차량정비/세차")
-        VehicleLogType.PARKING -> gasStationName?.takeIf { it.isNotBlank() } ?: (note ?: "주차 기록")
+        VehicleLogType.PARKING -> gasStationName?.takeIf { it.isNotBlank() } ?: (note ?: "주차")
     }
 }
 

@@ -66,16 +66,29 @@ class VehicleRepositoryImpl @Inject constructor(
     }
 
     override suspend fun insertVehicleLog(log: VehicleLog): Long = withContext(Dispatchers.IO) {
-        val isFuelOrMaint = log.logType == VehicleLogType.REFUELING || log.logType == VehicleLogType.MAINTENANCE
-        val finalLog = if (isFuelOrMaint && !log.gasStationName.isNullOrBlank() && !isOneTimeFuelLog(log.note)) {
-            val resolved = merchantAliasPreferences.resolveAlias(log.gasStationName, isDeposit = false)
-            if (resolved.isNotBlank() && resolved != log.gasStationName) {
-                log.copy(gasStationName = resolved)
-            } else {
-                log
-            }
+        val normalizedTypeLog = if (log.logType == VehicleLogType.REFUELING && log.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON) {
+            log.copy(
+                logType = VehicleLogType.PARKING,
+                fuelAmountLiters = 0.0,
+                daysSinceLastFuel = null,
+                tripDistanceKm = 0.0,
+                estimatedEfficiencyKmPerL = null
+            )
         } else {
             log
+        }
+        val isFuelOrMaint = normalizedTypeLog.logType == VehicleLogType.REFUELING ||
+            normalizedTypeLog.logType == VehicleLogType.MAINTENANCE ||
+            normalizedTypeLog.logType == VehicleLogType.PARKING
+        val finalLog = if (isFuelOrMaint && !normalizedTypeLog.gasStationName.isNullOrBlank() && !isOneTimeFuelLog(normalizedTypeLog.note)) {
+            val resolved = merchantAliasPreferences.resolveAlias(normalizedTypeLog.gasStationName, isDeposit = false)
+            if (resolved.isNotBlank() && resolved != normalizedTypeLog.gasStationName) {
+                normalizedTypeLog.copy(gasStationName = resolved)
+            } else {
+                normalizedTypeLog
+            }
+        } else {
+            normalizedTypeLog
         }
 
         if (finalLog.logType == VehicleLogType.REFUELING) {
@@ -87,18 +100,24 @@ class VehicleRepositoryImpl @Inject constructor(
                 }
                 return@withContext existing.id
             }
-        } else if (finalLog.logType == VehicleLogType.MAINTENANCE) {
-            val existingMaint = vehicleLogDao.getAllVehicleLogsSync().firstOrNull {
-                it.logType == VehicleLogType.MAINTENANCE &&
+        } else if (finalLog.logType == VehicleLogType.MAINTENANCE || finalLog.logType == VehicleLogType.PARKING) {
+            val existingMaintOrPark = vehicleLogDao.getAllVehicleLogsSync().firstOrNull {
+                (it.logType == VehicleLogType.MAINTENANCE || it.logType == VehicleLogType.PARKING || it.logType == VehicleLogType.REFUELING) &&
                     it.timestamp.toLocalDate() == finalLog.timestamp.toLocalDate() &&
                     it.fuelCost == finalLog.fuelCost &&
                     (it.gasStationName == finalLog.gasStationName || it.gasStationName == log.gasStationName)
             }
-            if (existingMaint != null) {
-                if (!isOneTimeFuelLog(existingMaint.note) && existingMaint.gasStationName != finalLog.gasStationName && !finalLog.gasStationName.isNullOrBlank()) {
-                    vehicleLogDao.updateVehicleLog(existingMaint.copy(gasStationName = finalLog.gasStationName))
+            if (existingMaintOrPark != null) {
+                val updated = existingMaintOrPark.copy(
+                    logType = finalLog.logType,
+                    gasStationName = if (!isOneTimeFuelLog(existingMaintOrPark.note) && !finalLog.gasStationName.isNullOrBlank()) finalLog.gasStationName else existingMaintOrPark.gasStationName,
+                    fuelAmountLiters = if (finalLog.logType == VehicleLogType.PARKING) 0.0 else existingMaintOrPark.fuelAmountLiters,
+                    daysSinceLastFuel = if (finalLog.logType == VehicleLogType.PARKING) null else existingMaintOrPark.daysSinceLastFuel
+                )
+                if (updated != existingMaintOrPark) {
+                    vehicleLogDao.updateVehicleLog(updated)
                 }
-                return@withContext existingMaint.id
+                return@withContext existingMaintOrPark.id
             }
         }
         vehicleLogDao.insertVehicleLog(finalLog.toEntity())
@@ -152,7 +171,10 @@ class VehicleRepositoryImpl @Inject constructor(
         val all = vehicleLogDao.getAllVehicleLogsSync()
         var updatedCount = 0
         for (entity in all) {
-            if (entity.logType != VehicleLogType.REFUELING && entity.logType != VehicleLogType.MAINTENANCE) continue
+            if (entity.logType != VehicleLogType.REFUELING &&
+                entity.logType != VehicleLogType.MAINTENANCE &&
+                entity.logType != VehicleLogType.PARKING
+            ) continue
             if (isOneTimeFuelLog(entity.note)) continue
 
             val currentStation = entity.gasStationName?.trim().orEmpty()
@@ -238,23 +260,39 @@ class VehicleRepositoryImpl @Inject constructor(
             .map { "${it.timestamp.toLocalDate()}_${it.amount}" }
             .toSet()
 
-        // 0. 기존 차계부 DB에 잘못 들어간 '제목' 등 비정상 주유 로그 선제 정리 및 사용자 지정 별칭 자동 치환
+        // 0. 기존 차계부 DB에 잘못 들어간 '제목' 등 비정상 주유 로그 선제 정리, 3만원 미만 주유 내역의 주차(PARKING) 전환 및 사용자 지정 별칭 자동 치환
         val initialLogs = vehicleLogDao.getAllVehicleLogsSync()
         for (entity in initialLogs) {
-            if (entity.logType == VehicleLogType.REFUELING || entity.logType == VehicleLogType.MAINTENANCE) {
+            if (entity.logType == VehicleLogType.REFUELING ||
+                entity.logType == VehicleLogType.MAINTENANCE ||
+                entity.logType == VehicleLogType.PARKING
+            ) {
                 val rawStation = entity.gasStationName?.trim() ?: ""
                 val resolvedStation = if (isOneTimeFuelLog(entity.note)) {
                     rawStation
                 } else {
                     merchantAliasPreferences.resolveAlias(rawStation, isDeposit = false)
                 }
-                val currentEntity = if (resolvedStation.isNotBlank() && resolvedStation != rawStation) {
-                    val noteWithTag = if ((entity.note ?: "").contains("[custom_name:true]")) {
-                        entity.note
-                    } else {
+                val isUnderMinRefuel = entity.logType == VehicleLogType.REFUELING &&
+                    entity.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
+                val targetType = if (isUnderMinRefuel) VehicleLogType.PARKING else entity.logType
+
+                val currentEntity = if ((resolvedStation.isNotBlank() && resolvedStation != rawStation) || isUnderMinRefuel) {
+                    val finalStation = if (resolvedStation.isNotBlank()) resolvedStation else rawStation
+                    val noteWithTag = if (resolvedStation.isNotBlank() && resolvedStation != rawStation && !(entity.note ?: "").contains("[custom_name:true]")) {
                         "${entity.note.orEmpty()} [custom_name:true]".trim()
+                    } else {
+                        entity.note
                     }
-                    val updated = entity.copy(gasStationName = resolvedStation, note = noteWithTag)
+                    val updated = entity.copy(
+                        logType = targetType,
+                        gasStationName = finalStation,
+                        fuelAmountLiters = if (targetType == VehicleLogType.PARKING) 0.0 else entity.fuelAmountLiters,
+                        daysSinceLastFuel = if (targetType == VehicleLogType.PARKING) null else entity.daysSinceLastFuel,
+                        tripDistanceKm = if (targetType == VehicleLogType.PARKING) 0.0 else entity.tripDistanceKm,
+                        estimatedEfficiencyKmPerL = if (targetType == VehicleLogType.PARKING) null else entity.estimatedEfficiencyKmPerL,
+                        note = noteWithTag
+                    )
                     vehicleLogDao.updateVehicleLog(updated)
                     updated
                 } else {
@@ -284,7 +322,7 @@ class VehicleRepositoryImpl @Inject constructor(
 
         val currentLogs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }.toMutableList()
 
-        // 2. 주유/충전 및 차량정비/세차 관련 거래 필터링
+        // 2. 주유/충전, 주차 및 차량정비/세차 관련 거래 필터링
         val vehicleTransactions = transactions.filter { tx ->
             if (expenseCustomMetaPreferences.isTransactionDeleted(tx) ||
                 expenseCustomMetaPreferences.isRefuelingSyncDeleted(tx.timestamp.toLocalDate(), tx.amount)
@@ -304,6 +342,7 @@ class VehicleRepositoryImpl @Inject constructor(
             }
             val customCatLabel = expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx).orEmpty()
             val isCustomFuelOrMaint = customCatLabel.contains("주유") ||
+                customCatLabel.contains("주차") ||
                 customCatLabel.contains("충전") ||
                 customCatLabel.contains("정비") ||
                 customCatLabel.contains("세차")
@@ -329,13 +368,26 @@ class VehicleRepositoryImpl @Inject constructor(
             val isMaintTx = tx.category == com.autologue.app.domain.model.ExpenseCategory.CAR_MAINTENANCE ||
                 customCatLabel.contains("정비") ||
                 customCatLabel.contains("세차")
-            val targetLogType = if (isMaintTx) VehicleLogType.MAINTENANCE else VehicleLogType.REFUELING
+            // 주유/주차 카테고리의 경우 금액이 3만원 미만이면 주차(PARKING)로 분류
+            val isParkingTx = !isMaintTx && (
+                tx.amount in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON ||
+                customCatLabel == "주차"
+            )
+            val targetLogType = when {
+                isMaintTx -> VehicleLogType.MAINTENANCE
+                isParkingTx -> VehicleLogType.PARKING
+                else -> VehicleLogType.REFUELING
+            }
 
             val baseStationName = if (tx.merchantName in listOf("카드 가맹점", "가맹점", "출금 내역", "계좌 이체", "정선우", "정*우") || tx.merchantName.isBlank()) {
                 com.autologue.app.data.parser.SmsParser.parse(null, tx.originalText, tx.timestamp)?.merchantName
                     ?.takeIf { !com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(it) }
                     ?: FUEL_KEYWORDS.firstOrNull { tx.originalText.uppercase().contains(it.uppercase()) }
-                    ?: if (isMaintTx) "차량정비/세차" else continue
+                    ?: when {
+                        isMaintTx -> "차량정비/세차"
+                        isParkingTx -> "주차"
+                        else -> continue
+                    }
             } else {
                 tx.merchantName
             }
@@ -371,7 +423,7 @@ class VehicleRepositoryImpl @Inject constructor(
             }
 
             val existingMatchIdx = currentLogs.indexOfFirst {
-                (it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE) &&
+                (it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE || it.logType == VehicleLogType.PARKING) &&
                     it.timestamp.toLocalDate() == txDate &&
                     it.fuelCost == tx.amount
             }
@@ -392,6 +444,10 @@ class VehicleRepositoryImpl @Inject constructor(
                     val updatedLog = existingLog.copy(
                         logType = targetLogType,
                         gasStationName = resolvedStationName,
+                        fuelAmountLiters = if (targetLogType == VehicleLogType.PARKING) 0.0 else existingLog.fuelAmountLiters,
+                        daysSinceLastFuel = if (targetLogType == VehicleLogType.PARKING) null else existingLog.daysSinceLastFuel,
+                        tripDistanceKm = if (targetLogType == VehicleLogType.PARKING) 0.0 else existingLog.tripDistanceKm,
+                        estimatedEfficiencyKmPerL = if (targetLogType == VehicleLogType.PARKING) null else existingLog.estimatedEfficiencyKmPerL,
                         note = updatedNote
                     )
                     vehicleLogDao.updateVehicleLog(updatedLog.toEntity())
@@ -399,7 +455,7 @@ class VehicleRepositoryImpl @Inject constructor(
                 }
             } else {
                 val daysSince = if (targetLogType == VehicleLogType.REFUELING) {
-                    val lastFuel = currentLogs.filter { it.logType == VehicleLogType.REFUELING }
+                    val lastFuel = currentLogs.filter { it.logType == VehicleLogType.REFUELING && it.fuelCost >= com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON }
                         .filter { it.timestamp.isBefore(tx.timestamp) }
                         .maxByOrNull { it.timestamp }
                     if (lastFuel != null) {
@@ -436,7 +492,7 @@ class VehicleRepositoryImpl @Inject constructor(
         val logs = vehicleLogDao.getAllVehicleLogsSync().map { it.toDomain() }
         val resolvedMerchant = merchantAliasPreferences.resolveAlias(merchantName, isDeposit = false)
         val matched = logs.filter {
-            (it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE) &&
+            (it.logType == VehicleLogType.REFUELING || it.logType == VehicleLogType.MAINTENANCE || it.logType == VehicleLogType.PARKING) &&
             it.timestamp.toLocalDate() == date &&
             it.fuelCost == amount &&
             (it.gasStationName == merchantName ||
@@ -510,29 +566,46 @@ class VehicleRepositoryImpl @Inject constructor(
                 continue
             }
 
-            // 0. '제목' 등 비결제 MMS 제목 컬럼 오탐으로 생성된 가짜 주유 레코드 삭제 및 별칭 자동 치환
-            if (log.logType == VehicleLogType.REFUELING) {
+            // 0. '제목' 등 비결제 MMS 제목 컬럼 오탐으로 생성된 가짜 주유 레코드 삭제, 3만원 미만 주차(PARKING) 전환 및 별칭 자동 치환
+            if (log.logType == VehicleLogType.REFUELING || log.logType == VehicleLogType.PARKING) {
                 val rawStation = log.gasStationName?.trim() ?: ""
                 val resolvedStation = if (isOneTimeFuelLog(note)) {
                     rawStation
                 } else {
                     merchantAliasPreferences.resolveAlias(rawStation)
                 }
-                if (resolvedStation.isNotBlank() && resolvedStation != rawStation) {
-                    val updatedNote = if (note.contains("[custom_name:true]")) note else "$note [custom_name:true]".trim()
-                    log = log.copy(gasStationName = resolvedStation, note = updatedNote)
+                val isUnderMinRefuel = log.logType == VehicleLogType.REFUELING &&
+                    log.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
+                if ((resolvedStation.isNotBlank() && resolvedStation != rawStation) || isUnderMinRefuel) {
+                    val finalStation = if (resolvedStation.isNotBlank()) resolvedStation else rawStation
+                    val updatedNote = if (resolvedStation.isNotBlank() && resolvedStation != rawStation && !note.contains("[custom_name:true]")) {
+                        "$note [custom_name:true]".trim()
+                    } else {
+                        note
+                    }
+                    log = log.copy(
+                        logType = if (isUnderMinRefuel) VehicleLogType.PARKING else log.logType,
+                        gasStationName = finalStation,
+                        fuelAmountLiters = if (isUnderMinRefuel) 0.0 else log.fuelAmountLiters,
+                        daysSinceLastFuel = if (isUnderMinRefuel) null else log.daysSinceLastFuel,
+                        tripDistanceKm = if (isUnderMinRefuel) 0.0 else log.tripDistanceKm,
+                        estimatedEfficiencyKmPerL = if (isUnderMinRefuel) null else log.estimatedEfficiencyKmPerL,
+                        note = updatedNote
+                    )
                     note = updatedNote
                     vehicleLogDao.updateVehicleLog(log)
                     modifiedCount++
                 }
-                val station = log.gasStationName?.trim() ?: ""
-                val isUserAliased = isOneTimeFuelLog(note) || merchantAliasPreferences.isKnownAliasTarget(station)
-                if ((!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station)) ||
-                    !isProtectedFuelStation(station, note)
-                ) {
-                    vehicleLogDao.deleteVehicleLogById(log.id)
-                    modifiedCount++
-                    continue
+                if (log.logType == VehicleLogType.REFUELING) {
+                    val station = log.gasStationName?.trim() ?: ""
+                    val isUserAliased = isOneTimeFuelLog(note) || merchantAliasPreferences.isKnownAliasTarget(station)
+                    if ((!isUserAliased && com.autologue.app.data.parser.SmsParser.isInvalidMerchantName(station)) ||
+                        !isProtectedFuelStation(station, note)
+                    ) {
+                        vehicleLogDao.deleteVehicleLogById(log.id)
+                        modifiedCount++
+                        continue
+                    }
                 }
             }
 
@@ -735,7 +808,11 @@ class VehicleRepositoryImpl @Inject constructor(
             return@withContext -1L
         }
 
-        val direction = if (isToWork) "출근 주행 ($homeName ➔ $companyName)" else "퇴근 주행 ($companyName ➔ $homeName)"
+        val direction = if (isToWork) {
+            String.format(java.util.Locale.US, "[집->회사(%.1fkm)] 출근 주행", distanceKm)
+        } else {
+            String.format(java.util.Locale.US, "[회사->집(%.1fkm)] 퇴근 주행", distanceKm)
+        }
         val log = VehicleLog(
             timestamp = now,
             logType = VehicleLogType.TRIP_DRIVING,
@@ -821,8 +898,13 @@ class VehicleRepositoryImpl @Inject constructor(
     }
 
     private fun VehicleLogEntity.toDomain(): VehicleLog {
+        val effectiveType = if (logType == VehicleLogType.REFUELING && fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON) {
+            VehicleLogType.PARKING
+        } else {
+            logType
+        }
         val resolvedStation = if (
-            (logType == VehicleLogType.REFUELING || logType == VehicleLogType.MAINTENANCE) &&
+            (effectiveType == VehicleLogType.REFUELING || effectiveType == VehicleLogType.MAINTENANCE || effectiveType == VehicleLogType.PARKING) &&
             !isOneTimeFuelLog(note) &&
             !gasStationName.isNullOrBlank()
         ) {
@@ -831,10 +913,12 @@ class VehicleRepositoryImpl @Inject constructor(
             gasStationName
         }
         return VehicleLog(
-            id = id, timestamp = timestamp, logType = logType, fuelCost = fuelCost,
-            fuelAmountLiters = fuelAmountLiters, daysSinceLastFuel = daysSinceLastFuel,
-            tripDistanceKm = tripDistanceKm, currentOdometerKm = currentOdometerKm,
-            estimatedEfficiencyKmPerL = estimatedEfficiencyKmPerL,
+            id = id, timestamp = timestamp, logType = effectiveType, fuelCost = fuelCost,
+            fuelAmountLiters = if (effectiveType == VehicleLogType.PARKING) 0.0 else fuelAmountLiters,
+            daysSinceLastFuel = if (effectiveType == VehicleLogType.PARKING) null else daysSinceLastFuel,
+            tripDistanceKm = if (effectiveType == VehicleLogType.PARKING) 0.0 else tripDistanceKm,
+            currentOdometerKm = currentOdometerKm,
+            estimatedEfficiencyKmPerL = if (effectiveType == VehicleLogType.PARKING) null else estimatedEfficiencyKmPerL,
             gasStationName = resolvedStation, note = note
         )
     }

@@ -6,8 +6,10 @@ import com.autologue.app.domain.model.getAssignedVehicleId
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 
+import com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
 import com.autologue.app.domain.model.getExplicitUnitPrice
 import com.autologue.app.domain.model.isCustomFuel
+import com.autologue.app.domain.model.isParkingLog
 
 /**
  * 주유량 및 단가 하이브리드 계산 상세 결과
@@ -139,9 +141,12 @@ object FuelEconomyCalculator {
             } else additional
         }
 
-        // 2. 해당 차량 주유 로그 필터링 및 시간 오름차순(과거->최신) 정렬
+        // 2. 해당 차량 주유 로그 필터링 (3만원 미만 주차 내역은 주유 주기 및 연비 계산에서 제외) 및 시간 오름차순(과거->최신) 정렬
         val vehicleFuelLogs = allLogs.filter {
-            it.logType == VehicleLogType.REFUELING && it.getAssignedVehicleId(defaultVehicleId = targetVehicleId) == targetVehicleId
+            it.logType == VehicleLogType.REFUELING &&
+                !it.isParkingLog() &&
+                it.fuelCost >= MIN_REFUEL_AMOUNT_WON &&
+                it.getAssignedVehicleId(defaultVehicleId = targetVehicleId) == targetVehicleId
         }.sortedBy { it.timestamp }
 
         var prevFuelLog: VehicleLog? = null

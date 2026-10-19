@@ -954,7 +954,8 @@ fun SaaSCarLogRow(
     onAssignVehicle: ((Long, String) -> Unit)? = null,
     onEditRefuel: ((VehicleLog) -> Unit)? = null
 ) {
-    val isFuelOrMaint = log.logType == VehicleLogType.REFUELING || log.logType == VehicleLogType.MAINTENANCE
+    val isParking = log.isParkingLog()
+    val isFuelOrMaint = log.logType == VehicleLogType.REFUELING || log.logType == VehicleLogType.MAINTENANCE || isParking
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -979,8 +980,8 @@ fun SaaSCarLogRow(
             )
         }
 
-        val isToWork = log.note?.contains("출근") == true && log.note?.contains("출퇴근") != true
-        val isToHome = log.note?.contains("퇴근") == true && log.note?.contains("출퇴근") != true
+        val isToWork = log.isToWorkCommuteLog()
+        val isToHome = log.isToHomeCommuteLog()
         val isCommuteRound = log.note?.contains("출퇴근") == true
         val isGolf = log.note?.contains("골프") == true || log.note?.contains("라운딩") == true || log.note?.contains("CC") == true
         val isCustom = log.isCustomFuel()
@@ -1001,7 +1002,7 @@ fun SaaSCarLogRow(
         val drivingSubtitle = log.getDrivingDetailSubtitle()
 
         Column(modifier = Modifier.weight(1f).padding(end = Spacing.sm)) {
-            // 상단 뱃지 영역: 차량 식별 뱃지 + 주행/주유/정비 유형 뱃지
+            // 상단 뱃지 영역: 차량 식별 뱃지 + 주행/주유/주차/정비 유형 뱃지
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
@@ -1013,9 +1014,10 @@ fun SaaSCarLogRow(
                     backgroundColor = if (isCar2) Emerald50 else Indigo50
                 )
 
-                // 2. 주행 유형 / 주유 / 정비 뱃지
+                // 2. 주행 유형 / 주유 / 주차 / 정비 뱃지
                 MetricBadge(
                     text = when {
+                        isParking -> "주차"
                         log.logType == VehicleLogType.REFUELING -> "주유/충전"
                         log.logType == VehicleLogType.MAINTENANCE -> "정비/세차"
                         isToWork -> "출근"
@@ -1025,6 +1027,7 @@ fun SaaSCarLogRow(
                         else -> "일반주행"
                     },
                     textColor = when {
+                        isParking -> Indigo700
                         log.logType == VehicleLogType.REFUELING -> Amber700
                         log.logType == VehicleLogType.MAINTENANCE -> Indigo700
                         isToWork || isToHome || isCommuteRound -> Emerald700
@@ -1032,6 +1035,7 @@ fun SaaSCarLogRow(
                         else -> Slate700
                     },
                     backgroundColor = when {
+                        isParking -> Indigo50
                         log.logType == VehicleLogType.REFUELING -> Amber50
                         log.logType == VehicleLogType.MAINTENANCE -> Indigo50
                         isToWork || isToHome || isCommuteRound -> Emerald50
@@ -1048,7 +1052,7 @@ fun SaaSCarLogRow(
                     )
                 }
 
-                if (log.logType == VehicleLogType.REFUELING) {
+                if (log.logType == VehicleLogType.REFUELING && !isParking) {
                     if (isCustom) {
                         MetricBadge(
                             text = "정밀 실측",
@@ -1068,7 +1072,7 @@ fun SaaSCarLogRow(
 
             Spacer(modifier = Modifier.height(Spacing.xs))
 
-            // 메인 헤드라인: 시작지점 ➔ 종료지점 (거리 km) 또는 주유소명/정비소명
+            // 메인 헤드라인: 집->회사(~~km) / 시작지점 ➔ 종료지점 (거리 km) 또는 주유소명/주차장명/정비소명
             Text(
                 text = log.displayTitle(),
                 style = AppTypography.h2
@@ -1092,7 +1096,7 @@ fun SaaSCarLogRow(
                         style = AppTypography.captionMuted
                     )
                 }
-                if (log.daysSinceLastFuel != null && log.daysSinceLastFuel > 0) {
+                if (!isParking && log.daysSinceLastFuel != null && log.daysSinceLastFuel > 0) {
                     Text("·", style = AppTypography.captionMuted)
                     Text(
                         text = "${log.daysSinceLastFuel}일 만에 주유",
@@ -1101,8 +1105,8 @@ fun SaaSCarLogRow(
                 }
             }
 
-            // 주유 시점 간 주행거리 및 구간 실연비 뱃지
-            if (log.logType == VehicleLogType.REFUELING && (log.tripDistanceKm > 0.0 || log.estimatedEfficiencyKmPerL != null)) {
+            // 주유 시점 간 주행거리 및 구간 실연비 뱃지 (주차 내역 제외)
+            if (!isParking && log.logType == VehicleLogType.REFUELING && (log.tripDistanceKm > 0.0 || log.estimatedEfficiencyKmPerL != null)) {
                 Spacer(modifier = Modifier.height(Spacing.xxs))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1177,7 +1181,12 @@ fun SaaSCarLogRow(
                         text = "%,d원".format(log.fuelCost),
                         style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
                     )
-                    if (log.logType == VehicleLogType.REFUELING && log.fuelAmountLiters > 0) {
+                    if (isParking) {
+                        Text(
+                            text = "주차 요금",
+                            style = AppTypography.captionMuted.copy(fontSize = 11.sp)
+                        )
+                    } else if (log.logType == VehicleLogType.REFUELING && log.fuelAmountLiters > 0) {
                         val assignedVehicle = vehicles.find { it.id == log.getAssignedVehicleId() }
                         val defPrice = assignedVehicle?.defaultGasPrice ?: 1650.0
                         val unitPrice = explicitUnitPrice ?: if (log.fuelAmountLiters > 0) log.fuelCost / log.fuelAmountLiters else defPrice
@@ -1391,6 +1400,7 @@ fun RefuelDetailEditDialog(
                         .verticalScroll(rememberScrollState())
                 ) {
                     // 헤더
+                    val isParkingEdit = log.isParkingLog() || (costText.toLongOrNull() ?: log.fuelCost) in 1L until MIN_REFUEL_AMOUNT_WON
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1398,7 +1408,11 @@ fun RefuelDetailEditDialog(
                     ) {
                         Column {
                             Text(
-                                text = if (log.logType == VehicleLogType.MAINTENANCE) "정비/세차 결제명 및 상세 설정" else "주유 결제명 및 상세 설정",
+                                text = when {
+                                    log.logType == VehicleLogType.MAINTENANCE -> "정비/세차 결제명 및 상세 설정"
+                                    isParkingEdit -> "주차 결제명 및 상세 설정"
+                                    else -> "주유 결제명 및 상세 설정"
+                                },
                                 style = AppTypography.h2
                             )
                             Text(
@@ -1413,16 +1427,20 @@ fun RefuelDetailEditDialog(
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
-                    // 결제명 / 주유소·정비소 상호명 수정
+                    // 결제명 / 주유소·주차장·정비소 상호명 수정
                     Text(
-                        text = if (log.logType == VehicleLogType.MAINTENANCE) "결제명 (정비소 / 세차장 상호명)" else "결제명 (주유소 상호명)",
+                        text = when {
+                            log.logType == VehicleLogType.MAINTENANCE -> "결제명 (정비소 / 세차장 상호명)"
+                            isParkingEdit -> "결제명 (주차장 상호명)"
+                            else -> "결제명 (주유소 상호명)"
+                        },
                         style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
                     )
                     Spacer(modifier = Modifier.height(Spacing.xxs))
                     OutlinedTextField(
                         value = stationNameText,
                         onValueChange = { stationNameText = it },
-                        placeholder = { Text("예: GS칼텍스 위례주유소, 오토오아시스, 스피드메이트", style = AppTypography.captionMuted) },
+                        placeholder = { Text("예: GS칼텍스 위례주유소, 서울어린이대공원, 스피드메이트", style = AppTypography.captionMuted) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
@@ -1472,7 +1490,11 @@ fun RefuelDetailEditDialog(
 
                     // 총 결제 금액
                     Text(
-                        text = if (log.logType == VehicleLogType.MAINTENANCE) "정비/세차 총 결제 금액 (원)" else "주유 총 결제 금액 (원)",
+                        text = when {
+                            log.logType == VehicleLogType.MAINTENANCE -> "정비/세차 총 결제 금액 (원)"
+                            isParkingEdit -> "주차 총 결제 금액 (원) - 3만원 미만은 주차로 분류"
+                            else -> "주유 총 결제 금액 (원)"
+                        },
                         style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
                     )
                     Spacer(modifier = Modifier.height(Spacing.xxs))
@@ -1485,7 +1507,7 @@ fun RefuelDetailEditDialog(
                         trailingIcon = { Text("원", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                     )
 
-                    if (log.logType == VehicleLogType.REFUELING) {
+                    if (log.logType == VehicleLogType.REFUELING && !isParkingEdit) {
                         Spacer(modifier = Modifier.height(Spacing.md))
 
                         // L당 단가
@@ -1720,7 +1742,12 @@ fun AddRefuelLogDialog(
     onDismiss: () -> Unit,
     onSave: (vehicleId: String, station: String, cost: Long, liters: Double?, unitPrice: Double?, dateTime: LocalDateTime) -> Unit
 ) {
-    var curVehicleId by remember { mutableStateOf(selectedVehicleId) }
+    val initialVehicleId = if (selectedVehicleId == com.autologue.app.data.preferences.MultiVehiclePreferences.ALL_VEHICLES_ID) {
+        vehicles.firstOrNull()?.id ?: "car_1"
+    } else {
+        selectedVehicleId
+    }
+    var curVehicleId by remember { mutableStateOf(initialVehicleId) }
     var stationText by remember { mutableStateOf("") }
     var costText by remember { mutableStateOf("") }
     var unitPriceText by remember { mutableStateOf("") }

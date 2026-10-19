@@ -33,14 +33,19 @@ class MultiVehiclePreferences @Inject constructor(
 ) {
     private val prefs: SharedPreferences = context.getSharedPreferences("multi_vehicle_prefs", Context.MODE_PRIVATE)
 
+    companion object {
+        const val ALL_VEHICLES_ID = "all"
+    }
+
     private val _vehicles = MutableStateFlow(loadVehicles())
     val vehicles: StateFlow<List<VehicleProfile>> = _vehicles.asStateFlow()
 
-    private val _selectedVehicleId = MutableStateFlow(loadSelectedVehicleId())
+    // 차계부 진입 시 기본 조회 조건을 항상 '전체("all")'로 시작
+    private val _selectedVehicleId = MutableStateFlow(ALL_VEHICLES_ID)
     val selectedVehicleId: StateFlow<String> = _selectedVehicleId.asStateFlow()
 
     private fun loadSelectedVehicleId(): String {
-        return prefs.getString("selected_vehicle_id", "car_1") ?: "car_1"
+        return ALL_VEHICLES_ID
     }
 
     private fun loadVehicles(): List<VehicleProfile> {
