@@ -75,13 +75,15 @@ fun AutoLogueCompactTopBar(
         modifier = modifier
             .fillMaxWidth()
             .background(containerColor)
-            .heightIn(min = 42.dp)
-            .padding(start = 16.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+            .heightIn(min = 44.dp)
+            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
             contentAlignment = Alignment.CenterStart
         ) {
             title()

@@ -211,19 +211,26 @@ fun CarLedgerScreen(
         }
     }
 
+    var isMoreMenuExpanded by remember { mutableStateOf(false) }
+
+    val triggerSmsSync = {
+        val hasPerm = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_SMS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasPerm) {
+            viewModel.manualSyncRefueling()
+        } else {
+            smsPermissionLauncher.launch(
+                arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+            )
+        }
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
         snackbarHost = { AppSnackbarHost(snackbarHostState) },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { viewModel.openAddRefuelDialog() },
-                containerColor = MenuColors.carLedger,
-                contentColor = androidx.compose.ui.graphics.Color.White,
-                icon = { Icon(Icons.Default.Add, contentDescription = "주유 기록 추가") },
-                text = { Text("주유 기록 추가", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
-            )
-        },
         topBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 TopMenuAccentBar(color = MenuColors.carLedger)
@@ -232,7 +239,9 @@ fun CarLedgerScreen(
                         Column {
                             Text(
                                 text = "스마트 차계부",
-                                style = AppTypography.h2
+                                style = AppTypography.h2,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                             Text(
                                 text = "차량·주유 관리",
@@ -240,7 +249,9 @@ fun CarLedgerScreen(
                                     color = MenuColors.carLedger,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 11.sp
-                                )
+                                ),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                         }
                     },
@@ -253,54 +264,178 @@ fun CarLedgerScreen(
                             containerColor = MenuColors.carLedgerBg,
                             borderColor = MenuColors.carLedgerBorder
                         )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        AutoLogueOutlinedButton(
-                            text = "지도 거점",
-                            icon = Icons.Default.LocationOn,
-                            onClick = { viewModel.openLocationDialog() },
-                            contentColor = MenuColors.carLedger,
-                            containerColor = MenuColors.carLedgerBg,
-                            borderColor = MenuColors.carLedgerBorder
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        Spacer(modifier = Modifier.width(6.dp))
                         AutoLogueOutlinedButton(
                             text = "주유 동기화",
                             icon = Icons.Default.Sync,
-                            onClick = {
-                                val hasPerm = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.READ_SMS
-                                ) == PackageManager.PERMISSION_GRANTED
-                                if (hasPerm) {
-                                    viewModel.manualSyncRefueling()
-                                } else {
-                                    smsPermissionLauncher.launch(
-                                        arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+                            onClick = triggerSmsSync,
+                            contentColor = MenuColors.carLedger,
+                            containerColor = MenuColors.carLedgerBg,
+                            borderColor = MenuColors.carLedgerBorder
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Box {
+                            Surface(
+                                onClick = { isMoreMenuExpanded = true },
+                                shape = RoundedCornerShape(8.dp),
+                                color = MenuColors.carLedgerBg,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder),
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.MoreVert,
+                                        contentDescription = "차계부 기능 더보기",
+                                        tint = MenuColors.carLedger,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
-                            },
-                            contentColor = MenuColors.carLedger,
-                            containerColor = MenuColors.carLedgerBg,
-                            borderColor = MenuColors.carLedgerBorder
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        AutoLogueOutlinedButton(
-                            text = "문자 붙여넣기",
-                            icon = Icons.Default.ContentPaste,
-                            onClick = { viewModel.openPasteSmsDialog() },
-                            contentColor = MenuColors.carLedger,
-                            containerColor = MenuColors.carLedgerBg,
-                            borderColor = MenuColors.carLedgerBorder
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        IconButton(onClick = { viewModel.clearAllDummyLogs() }, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteOutline,
-                                contentDescription = "가상 주행기록 삭제",
-                                tint = Slate400
-                            )
+                            }
+
+                            DropdownMenu(
+                                expanded = isMoreMenuExpanded,
+                                onDismissRequest = { isMoreMenuExpanded = false },
+                                modifier = Modifier
+                                    .widthIn(min = 230.dp)
+                                    .background(AppColors.surface)
+                            ) {
+                                Text(
+                                    text = "차계부 전체 기능",
+                                    style = AppTypography.caption.copy(
+                                        color = Slate500,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                )
+                                HorizontalDivider(color = Slate100)
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("문자 복사·붙여넣기", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = Slate900)
+                                            Text("카드/은행 주유 문자 직접 붙여넣기", fontSize = 11.sp, color = Slate500)
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.ContentPaste, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        viewModel.openPasteSmsDialog()
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("출퇴근 지도 거점 설정", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = Slate900)
+                                            Text("집·회사 위치 및 차량 블루투스 연동", fontSize = 11.sp, color = Slate500)
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.LocationOn, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        viewModel.openLocationDialog()
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("차량 프로필 관리", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = Slate900)
+                                            Text("차량 이름, 유종, 기준 유가 설정", fontSize = 11.sp, color = Slate500)
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.DirectionsCar, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        viewModel.openVehicleManageDialog()
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("소모품 교체 주기 설정", fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp, color = Slate900)
+                                            Text("엔진오일·에어컨 필터·타이어 주기", fontSize = 11.sp, color = Slate500)
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Settings, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        viewModel.openMaintenanceDialog()
+                                    }
+                                )
+
+                                HorizontalDivider(color = Slate100)
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Text("주유·정비 직접 등록", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Slate800)
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Add, contentDescription = null, tint = Slate600, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        viewModel.openAddRefuelDialog()
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Text("주유 문자 자동 동기화", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Slate800)
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Sync, contentDescription = null, tint = Slate600, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        triggerSmsSync()
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (uiState.isSelectionMode) "선택 삭제 모드 해제" else "기록 선택 삭제 모드",
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 13.sp,
+                                            color = Slate800
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Slate600, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        viewModel.toggleSelectionMode()
+                                    }
+                                )
+
+                                HorizontalDivider(color = Slate100)
+
+                                DropdownMenuItem(
+                                    text = {
+                                        Text("가상 주행기록 초기화", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = androidx.compose.ui.graphics.Color(0xFFDC2626))
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = androidx.compose.ui.graphics.Color(0xFFDC2626), modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        isMoreMenuExpanded = false
+                                        viewModel.clearAllDummyLogs()
+                                    }
+                                )
+                            }
                         }
-                        Spacer(modifier = Modifier.width(Spacing.xs))
                     },
                     containerColor = AppColors.background
                 )
@@ -557,6 +692,7 @@ fun CarLedgerScreen(
                     ) {
                         MaintenanceItemCard(
                             title = "엔진오일",
+                            subLabel = "엔진 윤활·보호",
                             remainingKm = mCfg.engineOil.getRemainingKm(currentKm),
                             ratio = mCfg.engineOil.getProgressRatio(currentKm),
                             recommendedIntervalKm = mCfg.engineOil.recommendedIntervalKm,
@@ -567,6 +703,7 @@ fun CarLedgerScreen(
                         )
                         MaintenanceItemCard(
                             title = "에어컨 필터",
+                            subLabel = "실내 공기질 관리",
                             remainingKm = mCfg.airconFilter.getRemainingKm(currentKm),
                             ratio = mCfg.airconFilter.getProgressRatio(currentKm),
                             recommendedIntervalKm = mCfg.airconFilter.recommendedIntervalKm,
@@ -1138,31 +1275,37 @@ private fun MaintenanceItemCard(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = title,
-                        fontSize = 12.sp,
+                        fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = androidx.compose.ui.graphics.Color(0xFF1E293B)
+                        color = androidx.compose.ui.graphics.Color(0xFF1E293B),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     if (subLabel != null) {
                         Text(
                             text = subLabel,
                             fontSize = 8.5.sp,
-                            color = Slate500
+                            color = Slate500,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                     }
                 }
+                Spacer(modifier = Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
+                        .padding(top = 4.dp)
                         .size(7.dp)
                         .clip(androidx.compose.foundation.shape.CircleShape)
                         .background(statusColor)
                 )
             }
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             LinearProgressIndicator(
                 progress = { ratio },
                 modifier = Modifier
@@ -1174,36 +1317,27 @@ private fun MaintenanceItemCard(
             )
             Spacer(modifier = Modifier.height(6.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom
+            Text(
+                text = "%,dkm 남음".format(remainingKm),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (remainingKm <= 1000) androidx.compose.ui.graphics.Color(0xFFDC2626) else androidx.compose.ui.graphics.Color(0xFF0F172A),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            androidx.compose.material3.Surface(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                color = androidx.compose.ui.graphics.Color(0xFFF1F5F9)
             ) {
-                Column {
-                    Text(
-                        text = "%,dkm".format(remainingKm),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (remainingKm <= 1000) androidx.compose.ui.graphics.Color(0xFFDC2626) else androidx.compose.ui.graphics.Color(0xFF0F172A)
-                    )
-                    Text(
-                        text = "남음",
-                        fontSize = 9.sp,
-                        color = androidx.compose.ui.graphics.Color(0xFF64748B)
-                    )
-                }
-
-                androidx.compose.material3.Surface(
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
-                    color = androidx.compose.ui.graphics.Color(0xFFF1F5F9)
-                ) {
-                    Text(
-                        text = "권장 %,dkm".format(recommendedIntervalKm),
-                        fontSize = 8.sp,
-                        color = Slate600,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-                }
+                Text(
+                    text = "권장 %,dkm".format(recommendedIntervalKm),
+                    fontSize = 8.5.sp,
+                    color = Slate600,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
             }
         }
     }
