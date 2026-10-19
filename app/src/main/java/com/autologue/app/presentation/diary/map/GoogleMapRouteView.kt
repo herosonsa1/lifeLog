@@ -7,13 +7,13 @@ import android.net.Uri
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import kotlinx.coroutines.delay
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -28,7 +28,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,12 +47,15 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
 import com.autologue.app.presentation.common.HairlineDivider
 import com.autologue.app.presentation.diary.MapPeriodFilter
 import com.autologue.app.presentation.theme.*
+import com.autologue.app.util.LocationDistanceUtils
+import kotlinx.coroutines.delay
 import java.time.format.DateTimeFormatter
 import java.util.*
 
@@ -70,6 +72,16 @@ data class RouteTripGroup(
     val totalDistanceKm: Double = 0.0
 )
 
+fun isDepartureStep(step: RouteStep): Boolean {
+    return step.tags.any { it.contains("출발") || it.contains("승차") } ||
+        step.title.contains("출발") || step.title.contains("승차")
+}
+
+fun isArrivalStep(step: RouteStep): Boolean {
+    return step.tags.any { it.contains("도착") || it.contains("하차") } ||
+        step.title.contains("도착") || step.title.contains("하차")
+}
+
 fun segmentRouteIntoTrips(steps: List<RouteStep>): List<RouteTripGroup> {
     val valid = steps.filter { it.latitude != null && it.longitude != null }.sortedBy { it.time }
     if (valid.isEmpty()) return emptyList()
@@ -80,17 +92,29 @@ fun segmentRouteIntoTrips(steps: List<RouteStep>): List<RouteTripGroup> {
     for (step in valid) {
         val lastStep = currentGroupSteps.lastOrNull()
         val isDifferentDay = lastStep != null && lastStep.time.toLocalDate() != step.time.toLocalDate()
-        val isTimeGap = lastStep != null && java.time.Duration.between(lastStep.time, step.time).abs().toMinutes() > 40
-        val isNewDeparture = step.tags.contains("출발지점") || step.title.contains("출발")
+        val minutesGap = if (lastStep != null) {
+            java.time.Duration.between(lastStep.time, step.time).abs().toMinutes()
+        } else 0L
 
-        if (currentGroupSteps.isNotEmpty() && (isDifferentDay || isTimeGap || (isNewDeparture && lastStep?.tags?.contains("도착지점") == true))) {
+        val isNewDeparture = isDepartureStep(step)
+        val isCurrentArrival = isArrivalStep(step)
+        val isLastDeparture = lastStep != null && isDepartureStep(lastStep)
+
+        // 출발(승차) 직후 도착(하차)으로 이어지는 1회 주행 세션(최대 4시간 이내)은
+        // 주행 시간이 40분을 넘더라도 절대 1지점씩 쪼개지 않고 하나의 주행 트립(출발➔도착)으로 묶음
+        val isPairedDriveSession = isLastDeparture && isCurrentArrival && !isDifferentDay && minutesGap <= 240L
+        val isTimeGap = lastStep != null && !isPairedDriveSession && minutesGap > 60L
+
+        if (currentGroupSteps.isNotEmpty() &&
+            (isDifferentDay || isTimeGap || (isNewDeparture && lastStep != null && isArrivalStep(lastStep)))
+        ) {
             groups.add(createTripGroup(currentGroupSteps))
             currentGroupSteps = mutableListOf()
         }
 
         currentGroupSteps.add(step)
 
-        if (step.tags.contains("도착지점") || step.title.contains("도착")) {
+        if (isCurrentArrival) {
             groups.add(createTripGroup(currentGroupSteps))
             currentGroupSteps = mutableListOf()
         }
@@ -111,14 +135,14 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
     val brandEmoji = steps.mapNotNull { s ->
         val tag = s.tags.firstOrNull {
             it.startsWith("⭐") || it.startsWith("🛡️") || it.startsWith("🔵") ||
-            it.startsWith("🔗") || it.startsWith("🪽") || it.startsWith("🚗")
+                it.startsWith("🔗") || it.startsWith("🪽") || it.startsWith("🚗")
         }
         tag ?: com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(s.title)
     }.firstOrNull() ?: "🚗"
 
     val hasGolf = steps.any { it.stepType == RouteStepType.GOLF || it.title.contains("골프") || it.title.contains("CC") }
-    val isCommuteToWork = steps.any { it.title.contains("회사") && (it.title.contains("도착") || it.tags.contains("도착지점")) }
-    val isCommuteToHome = steps.any { it.title.contains("집") && (it.title.contains("도착") || it.tags.contains("도착지점")) }
+    val isCommuteToWork = steps.any { it.title.contains("회사") && isArrivalStep(it) }
+    val isCommuteToHome = steps.any { it.title.contains("집") && isArrivalStep(it) }
 
     val tripName = when {
         hasGolf -> "골프 라운드"
@@ -129,12 +153,12 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
         else -> "야간 주행"
     }
 
-    val distKm = com.autologue.app.util.LocationDistanceUtils.calculateRouteDrivingDistanceKm(steps)
+    val distKm = LocationDistanceUtils.calculateRouteDrivingDistanceKm(steps)
     val startPlace = first.locationName ?: first.title.replace(Regex("\\[.*?\\]"), "").trim()
     val endPlace = last.locationName ?: last.title.replace(Regex("\\[.*?\\]"), "").trim()
 
     val subtitle = if (steps.size > 1) "$startPlace ➔ $endPlace" else startPlace
-    val timeStr = first.time.format(java.time.format.DateTimeFormatter.ofPattern("M/d a h:mm", java.util.Locale.KOREAN))
+    val timeStr = first.time.format(DateTimeFormatter.ofPattern("M/d a h:mm", Locale.KOREAN))
     val title = "$timeStr $tripName"
 
     return RouteTripGroup(
@@ -146,6 +170,54 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
         steps = steps,
         totalDistanceKm = distKm
     )
+}
+
+/**
+ * 경로 열기 시 왕복 동선(집 출발 ➔ 목적지 ➔ 집 도착)으로 인해
+ * 출발지(first)와 최종 도착지(last)가 동일 구역(반경 400m 이내)인 경우,
+ * 가장 멀리 이동한 주요 방문 거점을 목적지(destination)로 자동 선택하여
+ * 지도 앱에서 "출발지와 도착지가 같음 / 경로를 찾을 수 없음" 오류가 발생하지 않도록 보정합니다.
+ */
+fun resolveEffectiveRouteEndpoints(steps: List<RouteStep>): Pair<RouteStep, RouteStep>? {
+    val validSteps = steps.filter {
+        it.latitude != null && it.longitude != null &&
+            (it.latitude != 0.0 || it.longitude != 0.0)
+    }
+    if (validSteps.size < 2) return null
+
+    val startStep = validSteps.first()
+    val rawEndStep = validSteps.last()
+
+    val startToLastKm = LocationDistanceUtils.calculateStraightDistanceKm(
+        startStep.latitude!!, startStep.longitude!!,
+        rawEndStep.latitude!!, rawEndStep.longitude!!
+    )
+
+    // 출발지와 마지막 지점이 400m 이상 떨어져 있으면 정상 편도/이동 경로
+    if (startToLastKm >= 0.4) {
+        return startStep to rawEndStep
+    }
+
+    // 출발지와 마지막 지점이 400m 이내(예: 집 출발 -> 직장/방문지 -> 집 귀가 왕복 동선)인 경우,
+    // 출발지로부터 가장 멀리 떨어진 핵심 방문 지점을 도착지로 선정
+    val furthestStep = validSteps.maxByOrNull { step ->
+        LocationDistanceUtils.calculateStraightDistanceKm(
+            startStep.latitude, startStep.longitude,
+            step.latitude!!, step.longitude!!
+        )
+    } ?: rawEndStep
+
+    val maxDistKm = LocationDistanceUtils.calculateStraightDistanceKm(
+        startStep.latitude, startStep.longitude,
+        furthestStep.latitude!!, furthestStep.longitude!!
+    )
+
+    // 모든 지점이 반경 200m 이내(실제 이동 없이 한 장소에 머문 경우)이면 null 반환 -> 단일 위치 핀 열기로 유도
+    if (maxDistKm < 0.2) {
+        return null
+    }
+
+    return startStep to furthestStep
 }
 
 @Composable
@@ -163,8 +235,8 @@ fun GoogleMapRouteView(
     val nonTransactionSteps = remember(routeSteps) {
         routeSteps.filter {
             it.stepType != RouteStepType.TRANSACTION &&
-            !it.title.contains("입금") && !it.title.contains("출금") &&
-            !it.title.contains("이체") && !it.title.contains("송금")
+                !it.title.contains("입금") && !it.title.contains("출금") &&
+                !it.title.contains("이체") && !it.title.contains("송금")
         }
     }
     val validCoordinateSteps = remember(nonTransactionSteps) {
@@ -173,7 +245,9 @@ fun GoogleMapRouteView(
 
     var mapFocusStep by remember { mutableStateOf<RouteStep?>(selectedStep) }
     var selectedTripGroupId by remember { mutableStateOf<String?>(null) }
-    var isOnlineMapMode by remember { mutableStateOf(false) } // 기본값: 0초 로딩 중부권 광역 정적 맵
+    // 기본값: 실제 구글 한국지도 타일 + 시·군·구 지역 구분선 + 실제 도로 경로가 나오는 상세 한국 지도 모드
+    var isOnlineMapMode by remember { mutableStateOf(true) }
+    var isMapExpanded by remember { mutableStateOf(false) }
     var isWebViewLoading by remember { mutableStateOf(false) }
 
     val tripGroups = remember(validCoordinateSteps) { segmentRouteIntoTrips(validCoordinateSteps) }
@@ -184,17 +258,17 @@ fun GoogleMapRouteView(
         selectedTripGroup?.steps ?: validCoordinateSteps
     }
 
-    // 하단 상세 목록: 차량 주행(DRIVING)이 다수일 경우 중간 GPS 경유지는 제외하고 출발 시점과 도착 시점만 정예화하여 표시
+    // 하단 상세 목록 및 지도 표시 거점:
+    // 단순 10분 단위 중간 주행 경유지(isIntermediateDrivingStep)만 제외하고,
+    // 모든 승차(출발)·하차(도착) 거점 및 사진/골프/메모 활동 거점은 하나도 누락 없이 모두 표시합니다.
     val bottomDisplaySteps = remember(activeDisplaySteps) {
-        val drivingSteps = activeDisplaySteps.filter { it.stepType == RouteStepType.DRIVING }
-        if (drivingSteps.size > 2) {
-            val startDriving = drivingSteps.first()
-            val endDriving = drivingSteps.last()
-            val nonDriving = activeDisplaySteps.filter { it.stepType != RouteStepType.DRIVING }
-            (nonDriving + listOf(startDriving, endDriving)).sortedBy { it.time }
-        } else {
-            activeDisplaySteps
+        val keySteps = activeDisplaySteps.filter { step ->
+            step.stepType != RouteStepType.DRIVING ||
+                isDepartureStep(step) ||
+                isArrivalStep(step) ||
+                !com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(step)
         }
+        if (keySteps.isNotEmpty()) keySteps.sortedBy { it.time } else activeDisplaySteps
     }
 
     LaunchedEffect(periodFilter) {
@@ -237,14 +311,14 @@ fun GoogleMapRouteView(
                 }
             }
 
-            // Google Maps Open Button (전체 이동 경로 또는 거점 핀 열기)
-            if (validCoordinateSteps.isNotEmpty()) {
+            // 상단 우측 지도 앱 열기 버튼
+            if (bottomDisplaySteps.isNotEmpty()) {
                 IconButton(
                     onClick = {
-                        if (validCoordinateSteps.size > 1) {
-                            openGoogleMapsRoute(context, validCoordinateSteps)
+                        if (bottomDisplaySteps.size > 1) {
+                            openGoogleMapsRoute(context, bottomDisplaySteps)
                         } else {
-                            val step = validCoordinateSteps.first()
+                            val step = bottomDisplaySteps.first()
                             openGoogleMapsLocation(
                                 context = context,
                                 latitude = step.latitude!!,
@@ -258,7 +332,7 @@ fun GoogleMapRouteView(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Map,
-                        contentDescription = "Google 지도 앱에서 전체 이동 경로 열기",
+                        contentDescription = "지도 앱에서 전체 이동 경로 열기",
                         tint = AppColors.primary,
                         modifier = Modifier.size(20.dp)
                     )
@@ -266,7 +340,7 @@ fun GoogleMapRouteView(
             }
         }
 
-        // 1-2. 스마트 운행 트립(Trip) & 일자별 세그먼트 칩 바 (원하는 주행 경로만 분리 확인)
+        // 1-2. 스마트 운행 트립(Trip) & 일자별 세그먼트 칩 바
         if (tripGroups.size > 1) {
             Surface(
                 color = Color(0xFF0F172A),
@@ -280,7 +354,6 @@ fun GoogleMapRouteView(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 전체 모아보기 칩
                     val isAllSelected = selectedTripGroupId == null
                     Surface(
                         shape = AppShapes.pill,
@@ -299,7 +372,7 @@ fun GoogleMapRouteView(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         ) {
                             Text(
-                                text = "🌐 전체 모아보기 (${validCoordinateSteps.size}개)",
+                                text = "🌐 전체 모아보기 (${bottomDisplaySteps.size}개)",
                                 fontSize = 11.sp,
                                 fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
                                 color = if (isAllSelected) PureWhite else Color(0xFF94A3B8)
@@ -307,7 +380,6 @@ fun GoogleMapRouteView(
                         }
                     }
 
-                    // 개별 트립/일자별 칩들
                     tripGroups.forEach { group ->
                         val isSelected = selectedTripGroupId == group.id
                         Surface(
@@ -349,19 +421,20 @@ fun GoogleMapRouteView(
 
         HairlineDivider()
 
-        // 2. Interactive Google Maps Embed Area (옵션 C: 0초 로딩 중부권 광역 정적 맵 ↔ 전국 온라인 인터랙티브 맵 듀얼 모드)
+        // 2. Interactive Korea Map Area (기본 340dp / 확대 시 480dp, 구글 한국 지도 타일 + 시·군·구 행정경계 + 실제 도로 경로)
+        val mapHeight = if (isMapExpanded) 480.dp else 340.dp
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(280.dp)
+                .height(mapHeight)
                 .clipToBounds()
-                .background(Color(0xFF0F172A))
+                .background(Color(0xFFEEF2F6))
         ) {
-            if (activeDisplaySteps.isNotEmpty()) {
+            if (bottomDisplaySteps.isNotEmpty()) {
                 if (!isOnlineMapMode) {
-                    // [옵션 C 기본 모드] 중부권 광역(수도권·인천·강원·충청) 고화질 정적 벡터 지도 (0.001초 즉시 렌더링, 오프라인 100%)
+                    // 오프라인 행정구역 벡터 맵 (자동 확대 + 시·군·구 경계 다각형 + 한강/탄천/고속도로)
                     MidKoreaStaticMapView(
-                        steps = activeDisplaySteps,
+                        steps = bottomDisplaySteps,
                         focusedStep = mapFocusStep,
                         onStepClick = { step ->
                             mapFocusStep = step
@@ -370,15 +443,14 @@ fun GoogleMapRouteView(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    // [옵션 C 전국 모드] 인라인 HTML5 Leaflet + CartoDB 전국 인터랙티브 지도 (API 키 0원, 전국/제주/영호남 정밀 탐색)
-                    val targetMapHtml = remember(activeDisplaySteps, mapFocusStep) {
-                        buildInteractiveHtmlMap(activeDisplaySteps, mapFocusStep)
+                    // 기본 모드: Google API Key 없이 동작하는 고정밀 한국 상세 지도 (mt0~3.google.com 한글 타일 + 시·군·구 경계선 + OSRM 실제 도로 경로)
+                    val targetMapHtml = remember(bottomDisplaySteps, mapFocusStep) {
+                        buildInteractiveHtmlMap(bottomDisplaySteps, mapFocusStep)
                     }
 
-                    // 800ms 동안만 부드럽게 스피너 노출 후 자동 해제 (무한 루프 원천 차단)
                     LaunchedEffect(targetMapHtml) {
                         isWebViewLoading = true
-                        delay(800L)
+                        delay(550L)
                         isWebViewLoading = false
                     }
 
@@ -403,13 +475,13 @@ fun GoogleMapRouteView(
                                 }
 
                                 tag = targetMapHtml
-                                loadDataWithBaseURL("https://cdnjs.cloudflare.com", targetMapHtml, "text/html", "UTF-8", null)
+                                loadDataWithBaseURL("https://mt1.google.com", targetMapHtml, "text/html", "UTF-8", null)
                             }
                         },
                         update = { webView ->
                             if (webView.tag != targetMapHtml) {
                                 webView.tag = targetMapHtml
-                                webView.loadDataWithBaseURL("https://cdnjs.cloudflare.com", targetMapHtml, "text/html", "UTF-8", null)
+                                webView.loadDataWithBaseURL("https://mt1.google.com", targetMapHtml, "text/html", "UTF-8", null)
                             }
                         },
                         modifier = Modifier.fillMaxSize()
@@ -422,9 +494,9 @@ fun GoogleMapRouteView(
                         ) {
                             Surface(
                                 shape = AppShapes.pill,
-                                color = Color(0xFF1E293B).copy(alpha = 0.92f),
+                                color = Color(0xFF0F172A).copy(alpha = 0.88f),
                                 border = BorderStroke(1.dp, Color(0xFF334155)),
-                                shadowElevation = 8.dp
+                                shadowElevation = 6.dp
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -436,67 +508,89 @@ fun GoogleMapRouteView(
                                         color = Color(0xFF60A5FA)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("지도 불러오는 중...", fontSize = 11.sp, color = Color(0xFFE2E8F0))
+                                    Text("상세 한국 지도 불러오는 중...", fontSize = 11.sp, color = Color(0xFFE2E8F0))
                                 }
                             }
                         }
                     }
                 }
 
-                // Top Status Badge Overlay (좌측 상단: 선택된 트립/지점 상태)
-                Surface(
+                // 좌측 상단: 현재 선택된 트립/지점 상태 배지 + 지도 크기 확대/축소 버튼
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
                         .padding(Spacing.sm)
-                        .align(Alignment.TopStart),
-                    shape = AppShapes.pill,
-                    color = Color(0xFF0F172A).copy(alpha = 0.92f),
-                    border = BorderStroke(1.dp, Color(0xFF334155)),
-                    shadowElevation = 4.dp
+                        .align(Alignment.TopStart)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 5.dp)
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = Color(0xFF0F172A).copy(alpha = 0.90f),
+                        border = BorderStroke(1.dp, Color(0xFF334155)),
+                        shadowElevation = 4.dp
                     ) {
-                        val badgeText = when {
-                            mapFocusStep != null -> "📍 ${mapFocusStep?.locationName ?: mapFocusStep?.title} (지점 포커스)"
-                            selectedTripGroup != null -> "${selectedTripGroup.brandEmoji} [${selectedTripGroup.title}] ${selectedTripGroup.subtitle} (${activeDisplaySteps.size}개 지점)"
-                            else -> "🚗 조회된 차량 이동 동선 (${activeDisplaySteps.size}개 지점)"
-                        }
-                        Text(
-                            text = badgeText,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF60A5FA)
-                        )
-                        if (mapFocusStep != null || selectedTripGroup != null) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFF2563EB).copy(alpha = 0.25f),
-                                modifier = Modifier.clickable {
-                                    if (mapFocusStep != null) {
-                                        mapFocusStep = null
-                                    } else {
-                                        selectedTripGroupId = null
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 5.dp)
+                        ) {
+                            val badgeText = when {
+                                mapFocusStep != null -> "📍 ${mapFocusStep?.locationName ?: mapFocusStep?.title}"
+                                selectedTripGroup != null -> "${selectedTripGroup.brandEmoji} ${selectedTripGroup.subtitle} (${bottomDisplaySteps.size}지점)"
+                                else -> "🚗 이동 동선 (${bottomDisplaySteps.size}개 거점)"
+                            }
+                            Text(
+                                text = badgeText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF93C5FD)
+                            )
+                            if (mapFocusStep != null || selectedTripGroup != null) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF2563EB).copy(alpha = 0.35f),
+                                    modifier = Modifier.clickable {
+                                        if (mapFocusStep != null) {
+                                            mapFocusStep = null
+                                        } else {
+                                            selectedTripGroupId = null
+                                        }
                                     }
+                                ) {
+                                    Text(
+                                        text = if (mapFocusStep != null) "전체 경로" else "전체 복귀",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = PureWhite,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
                                 }
-                            ) {
-                                Text(
-                                    text = if (mapFocusStep != null) "경로 복귀" else "전체 복귀",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF93C5FD),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
                             }
                         }
                     }
+
+                    // 지도 높이 확대/축소 버튼
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = Color(0xFF0F172A).copy(alpha = 0.90f),
+                        border = BorderStroke(1.dp, Color(0xFF334155)),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.clickable { isMapExpanded = !isMapExpanded }
+                    ) {
+                        Text(
+                            text = if (isMapExpanded) "⤡ 기본 크기" else "⤢ 크게 보기",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE2E8F0),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                        )
+                    }
                 }
 
-                // Top Mode Switcher Segmented Control (우측 상단: [🗺️ 중부권 정적 맵] | [🌐 전국 온라인 맵])
+                // 우측 상단: [🇰🇷 상세 한국 지도] | [🧭 행정구역 벡터 맵] 전환 스위치
                 Surface(
                     shape = AppShapes.pill,
-                    color = Color(0xFF0F172A).copy(alpha = 0.95f),
+                    color = Color(0xFF0F172A).copy(alpha = 0.92f),
                     border = BorderStroke(1.dp, Color(0xFF334155)),
                     shadowElevation = 4.dp,
                     modifier = Modifier
@@ -509,43 +603,79 @@ fun GoogleMapRouteView(
                     ) {
                         Surface(
                             shape = AppShapes.pill,
-                            color = if (!isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
-                            modifier = Modifier.clickable { isOnlineMapMode = false }
-                        ) {
-                            Text(
-                                text = "🗺️ 중부권 정적 맵",
-                                fontSize = 11.sp,
-                                fontWeight = if (!isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
-                                color = if (!isOnlineMapMode) PureWhite else Color(0xFF94A3B8),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Surface(
-                            shape = AppShapes.pill,
                             color = if (isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
                             modifier = Modifier.clickable { isOnlineMapMode = true }
                         ) {
                             Text(
-                                text = "🌐 전국 온라인 맵",
+                                text = "🗺️ 상세 한국 지도",
                                 fontSize = 11.sp,
                                 fontWeight = if (isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
                                 color = if (isOnlineMapMode) PureWhite else Color(0xFF94A3B8),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Surface(
+                            shape = AppShapes.pill,
+                            color = if (!isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
+                            modifier = Modifier.clickable { isOnlineMapMode = false }
+                        ) {
+                            Text(
+                                text = "🧭 행정구역 벡터",
+                                fontSize = 11.sp,
+                                fontWeight = if (!isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
+                                color = if (!isOnlineMapMode) PureWhite else Color(0xFF94A3B8),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                 }
 
-                // Floating Google Maps App Open Button (우측 하단: 공식 구글맵 앱에서 열기)
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFF0F172A).copy(alpha = 0.9f),
-                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                // 우측 하단: 외부 지도 앱 열기 버튼 모음 ([🚗 자동차 길찾기] + [🗺️ 구글맵 경로 열기])
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(10.dp)
-                        .clickable {
+                ) {
+                    if (mapFocusStep == null && bottomDisplaySteps.size > 1) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF1D4ED8).copy(alpha = 0.94f),
+                            border = BorderStroke(1.dp, Color(0xFF60A5FA)),
+                            shadowElevation = 4.dp,
+                            modifier = Modifier.clickable {
+                                openCarNavigationApp(context, bottomDisplaySteps)
+                            }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DirectionsCar,
+                                    contentDescription = "자동차 내비 길찾기",
+                                    tint = PureWhite,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "자동차 길찾기",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PureWhite
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF0F172A).copy(alpha = 0.92f),
+                        border = BorderStroke(1.dp, Color(0xFF334155)),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.clickable {
                             if (mapFocusStep != null) {
                                 openGoogleMapsLocation(
                                     context = context,
@@ -555,27 +685,28 @@ fun GoogleMapRouteView(
                                     address = mapFocusStep!!.address
                                 )
                             } else {
-                                openGoogleMapsRoute(context, activeDisplaySteps)
+                                openGoogleMapsRoute(context, bottomDisplaySteps)
                             }
                         }
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.OpenInNew,
-                            contentDescription = "앱에서 열기",
-                            tint = Color(0xFF60A5FA),
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (mapFocusStep != null) "지점 앱에서 열기" else "전체 경로 앱에서 열기",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = PureWhite
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OpenInNew,
+                                contentDescription = "앱에서 열기",
+                                tint = Color(0xFF60A5FA),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (mapFocusStep != null) "지점 앱에서 열기" else "구글맵 경로 열기",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PureWhite
+                            )
+                        }
                     }
                 }
             } else {
@@ -589,7 +720,7 @@ fun GoogleMapRouteView(
                         Spacer(modifier = Modifier.height(Spacing.xs))
                         Text(
                             text = "해당 기간에 등록된 GPS 위치 정보가 없습니다.",
-                            style = AppTypography.bodySecondary.copy(color = Color(0xFF94A3B8))
+                            style = AppTypography.bodySecondary.copy(color = Color(0xFF475569))
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -603,7 +734,7 @@ fun GoogleMapRouteView(
 
         HairlineDivider()
 
-        // 3. Staggered Vertical List: 지점 1, 2, 3... 모든 항목 아래로 펼쳐진 리스트
+        // 3. Staggered Vertical List: 모든 출발·도착 거점 및 방문 장소 리스트
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
@@ -611,7 +742,6 @@ fun GoogleMapRouteView(
                 .background(AppColors.background),
             contentPadding = PaddingValues(vertical = Spacing.sm)
         ) {
-            // Staggered Items: 출발 시점, 도착 시점 및 기타 활동 거점
             itemsIndexed(bottomDisplaySteps) { index, step ->
                 val isFocused = mapFocusStep?.id == step.id || (mapFocusStep == null && selectedStep?.id == step.id)
                 val isFirst = index == 0
@@ -643,13 +773,9 @@ fun GoogleMapRouteView(
                                     isFocused -> AppColors.primary
                                     isFirst -> Color(0xFF16A34A)
                                     isLast -> Color(0xFFDC2626)
-                                    else -> Color(0xFF64748B)
+                                    else -> Color(0xFF2563EB)
                                 }
-                                val badgeText = when {
-                                    isFirst -> "1"
-                                    isLast -> "${activeDisplaySteps.size}"
-                                    else -> "${index + 1}"
-                                }
+                                val badgeText = "${index + 1}"
 
                                 Box(
                                     modifier = Modifier
@@ -678,7 +804,9 @@ fun GoogleMapRouteView(
                                     RouteStepType.PHOTO -> Triple("📸 사진 기록", Indigo50, Indigo700)
                                     RouteStepType.GOLF -> Triple("⛳ 골프 라운드", Forest50, Forest700)
                                     RouteStepType.DRIVING -> {
-                                        val carTag = step.tags.firstOrNull { it != "차량주행" && it != "차량" }
+                                        val carTag = step.tags.firstOrNull {
+                                            it != "차량주행" && it != "차량" && it != "승차" && it != "하차" && it != "출발지점" && it != "도착지점"
+                                        }
                                         val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(carTag ?: step.title)
                                         if (carTag != null) {
                                             val cleanTag = if (carTag.startsWith("⭐") || carTag.startsWith("🛡️") || carTag.startsWith("🚗")) carTag else "$brandEmoji $carTag"
@@ -688,7 +816,6 @@ fun GoogleMapRouteView(
                                         }
                                     }
                                     RouteStepType.MEMO -> Triple("📝 메모 기록", Slate100, Slate700)
-                                    else -> Triple("📍 이동 거점", Slate100, Slate700)
                                 }
 
                                 Box(
@@ -703,18 +830,20 @@ fun GoogleMapRouteView(
 
                             val pointSubtitle = when {
                                 isFirst -> "🟢 출발 지점"
-                                isLast -> "🔴 최종 도착지 (${activeDisplaySteps.size})"
+                                isLast -> "🔴 최종 도착지 (${bottomDisplaySteps.size})"
+                                isArrivalStep(step) -> "🔵 경유 도착 (${index + 1})"
+                                isDepartureStep(step) -> "🟢 경유 출발 (${index + 1})"
                                 else -> "지점 ${index + 1} / ${bottomDisplaySteps.size}"
                             }
 
                             Text(
                                 text = pointSubtitle,
                                 fontSize = 11.sp,
-                                fontWeight = if (isFirst || isLast) FontWeight.Bold else FontWeight.Normal,
+                                fontWeight = if (isFirst || isLast) FontWeight.Bold else FontWeight.Medium,
                                 color = when {
                                     isFirst -> Color(0xFF16A34A)
                                     isLast -> Color(0xFFDC2626)
-                                    else -> Color(0xFF64748B)
+                                    else -> Color(0xFF2563EB)
                                 }
                             )
                         }
@@ -868,31 +997,52 @@ fun GoogleMapRouteView(
                     }
                 }
 
-                // Intermediate Route Indicator (도로 주행 이동 뱃지)
-                if (index < activeDisplaySteps.size - 1) {
-                    val nextStep = activeDisplaySteps[index + 1]
+                // Intermediate Route Indicator (두 거점 사이의 이동 거리 표시 및 구간 길찾기 실행 지원)
+                if (index < bottomDisplaySteps.size - 1) {
+                    val nextStep = bottomDisplaySteps[index + 1]
+                    val segKm = if (step.latitude != null && step.longitude != null &&
+                        nextStep.latitude != null && nextStep.longitude != null
+                    ) {
+                        LocationDistanceUtils.calculateDrivingDistanceKm(
+                            step.latitude, step.longitude,
+                            nextStep.latitude, nextStep.longitude
+                        )
+                    } else 0.0
+
                     Surface(
                         shape = AppShapes.pill,
                         color = Color(0xFFF1F5F9),
-                        border = BorderStroke(0.5.dp, Color(0xFFE2E8F0)),
+                        border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = Spacing.xl, vertical = 3.dp)
                             .clickable {
-                                // 두 지점 사이의 구간으로 지도 포커스 리셋
                                 mapFocusStep = null
+                                openGoogleMapsRoute(context, listOf(step, nextStep))
                             }
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 차량 이동 구간",
-                                fontSize = 10.sp,
-                                color = Color(0xFF475569),
+                                text = if (segKm >= 0.1) {
+                                    "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 이동 구간 (약 %.1f km)".format(segKm)
+                                } else {
+                                    "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 이동 구간"
+                                },
+                                fontSize = 10.5.sp,
+                                color = Color(0xFF334155),
                                 fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "구간 경로 열기 →",
+                                fontSize = 10.sp,
+                                color = Color(0xFF2563EB),
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
@@ -903,7 +1053,7 @@ fun GoogleMapRouteView(
 }
 
 /**
- * 순수 Jetpack Compose 기반 Interactive Route Map (레이더 & 지형 그리드 캔버스)
+ * 순수 Jetpack Compose 기반 Interactive Route Map (하위 호환 유지)
  */
 @Composable
 fun InteractiveRouteMapView(
@@ -912,320 +1062,20 @@ fun InteractiveRouteMapView(
     onStepSelected: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var zoomLevel by remember { mutableFloatStateOf(1.0f) }
-    var panOffset by remember { mutableStateOf(Offset.Zero) }
-
-    // Pulsing radar animation for selected waypoint
-    val infiniteTransition = rememberInfiniteTransition(label = "RadarPulse")
-    val pulseRadius by infiniteTransition.animateFloat(
-        initialValue = 16f,
-        targetValue = 60f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pulseRadius"
-    )
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.8f,
-        targetValue = 0.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pulseAlpha"
-    )
-
-    val coordinates = remember(steps) {
-        steps.mapNotNull {
-            if (it.latitude != null && it.longitude != null) {
-                it to (it.latitude to it.longitude)
-            } else null
-        }
-    }
-
-    BoxWithConstraints(
+    val focused = steps.getOrNull(selectedIndex)
+    MidKoreaStaticMapView(
+        steps = steps,
+        focusedStep = focused,
+        onStepClick = { clicked ->
+            val idx = steps.indexOfFirst { it.id == clicked.id }
+            if (idx >= 0) onStepSelected(idx)
+        },
         modifier = modifier
-            .fillMaxSize()
-            .clipToBounds()
-            .background(Color(0xFF0F172A))
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan: Offset, zoom: Float, _ ->
-                    zoomLevel = (zoomLevel * zoom).coerceIn(0.5f, 4.0f)
-                    panOffset = Offset(panOffset.x + pan.x, panOffset.y + pan.y)
-                }
-            }
-    ) {
-        val widthPx = constraints.maxWidth.toFloat()
-        val heightPx = constraints.maxHeight.toFloat()
-        val centerX = widthPx / 2f + panOffset.x
-        val centerY = heightPx / 2f + panOffset.y
-
-        // Calculate points in screen space
-        val pointOffsets = remember(coordinates, zoomLevel, panOffset, widthPx, heightPx) {
-            if (coordinates.isEmpty()) emptyList()
-            else {
-                val minLat = coordinates.minOf { it.second.first }
-                val maxLat = coordinates.maxOf { it.second.first }
-                val minLng = coordinates.minOf { it.second.second }
-                val maxLng = coordinates.maxOf { it.second.second }
-
-                val latSpan = (maxLat - minLat).coerceAtLeast(0.008)
-                val lngSpan = (maxLng - minLng).coerceAtLeast(0.008)
-
-                val mapW = widthPx * 0.7f * zoomLevel
-                val mapH = heightPx * 0.6f * zoomLevel
-
-                coordinates.mapIndexed { idx, (_, latLng) ->
-                    val normX = if (maxLng == minLng) 0.5f else ((latLng.second - minLng) / lngSpan).toFloat()
-                    val normY = if (maxLat == minLat) 0.5f else (1f - ((latLng.first - minLat) / latSpan).toFloat())
-
-                    val ptX = centerX + (normX - 0.5f) * mapW
-                    val ptY = centerY + (normY - 0.5f) * mapH
-                    idx to Offset(ptX, ptY)
-                }
-            }
-        }
-
-        // [GC 최적화] 펄스 레이더 애니메이션에 의해 매 프레임 실행되는 Canvas 내부에서
-        // Path() 및 PathEffect 객체가 수백 회 무한 생성되어 GC 랙을 일으키는 현상을 원천 방어
-        val cachedRoutePath = remember(pointOffsets) {
-            if (pointOffsets.size > 1) {
-                Path().apply {
-                    pointOffsets.forEachIndexed { i, (_, pt) ->
-                        if (i == 0) moveTo(pt.x, pt.y) else lineTo(pt.x, pt.y)
-                    }
-                }
-            } else null
-        }
-        val radarDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f) }
-        val routeDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f) }
-
-        // 1. Vector Map Canvas (Blueprint grid, radar circles, route path)
-        // clipToBounds 및 clipRect를 적용하여 동심원/경로선이 지도 영역 밖(상단 메뉴/필터바)으로 침범하지 않도록 완벽 차단
-        Canvas(modifier = Modifier.fillMaxSize().clipToBounds()) {
-            clipRect {
-                // Draw Coordinate Grid
-                val gridSize = 36.dp.toPx() * zoomLevel
-                val startX = ((panOffset.x % gridSize) + gridSize) % gridSize
-                val startY = ((panOffset.y % gridSize) + gridSize) % gridSize
-
-                var gx = startX
-                while (gx < widthPx) {
-                    drawLine(
-                        color = Color(0xFF1E293B),
-                        start = Offset(gx, 0f),
-                        end = Offset(gx, heightPx),
-                        strokeWidth = 1f
-                    )
-                    gx += gridSize
-                }
-
-                var gy = startY
-                while (gy < heightPx) {
-                    drawLine(
-                        color = Color(0xFF1E293B),
-                        start = Offset(0f, gy),
-                        end = Offset(widthPx, gy),
-                        strokeWidth = 1f
-                    )
-                    gy += gridSize
-                }
-
-                // Radar concentric circles around center
-                for (r in 1..4) {
-                    drawCircle(
-                        color = Color(0xFF334155).copy(alpha = 0.4f),
-                        radius = r * 70.dp.toPx() * zoomLevel,
-                        center = Offset(centerX, centerY),
-                        style = Stroke(
-                            width = 1.2f,
-                            pathEffect = radarDashEffect
-                        )
-                    )
-                }
-
-                // Draw Route Polyline (캐시된 Path 재사용)
-                if (cachedRoutePath != null) {
-                    // Ambient Route Glow
-                    drawPath(
-                        path = cachedRoutePath,
-                        color = Color(0xFF2563EB).copy(alpha = 0.35f),
-                        style = Stroke(
-                            width = 10.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round
-                        )
-                    )
-                    // Crisp Dashed Vector Path
-                    drawPath(
-                        path = cachedRoutePath,
-                        color = Color(0xFF60A5FA),
-                        style = Stroke(
-                            width = 3.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round,
-                            pathEffect = routeDashEffect
-                        )
-                    )
-                }
-
-                // Draw Pulsing Radar Circle on Selected Waypoint
-                val selectedOffset = pointOffsets.getOrNull(selectedIndex)?.second ?: pointOffsets.firstOrNull()?.second
-                if (selectedOffset != null) {
-                    drawCircle(
-                        color = Color(0xFFF59E0B).copy(alpha = pulseAlpha),
-                        radius = pulseRadius * zoomLevel,
-                        center = selectedOffset
-                    )
-                    drawCircle(
-                        color = Color(0xFF3B82F6).copy(alpha = pulseAlpha * 0.4f),
-                        radius = pulseRadius * 1.6f * zoomLevel,
-                        center = selectedOffset
-                    )
-                }
-            }
-        }
-
-        // 2. Interactive Pin Badges Overlay
-        pointOffsets.forEach { (idx, pt) ->
-            val step = steps.getOrNull(idx) ?: return@forEach
-            val isSelected = idx == selectedIndex
-            val isStart = idx == 0
-            val isEnd = idx == pointOffsets.size - 1 && pointOffsets.size > 1
-            val isKeyPoint = isStart || isEnd || isSelected || step.stepType != RouteStepType.DRIVING
-
-            val density = LocalDensity.current
-            val xDp = with(density) { pt.x.toDp() }
-            val yDp = with(density) { pt.y.toDp() }
-
-            if (isKeyPoint) {
-                val badgeColor = when {
-                    isSelected -> Color(0xFFF59E0B)
-                    isStart -> Color(0xFF16A34A)
-                    isEnd -> Color(0xFFDC2626)
-                    else -> Color(0xFF3B82F6)
-                }
-                val badgeText = when {
-                    isStart -> "1"
-                    isEnd -> "${pointOffsets.size}"
-                    else -> "${idx + 1}"
-                }
-                val title = when {
-                    isStart -> "🟢 출발: ${step.locationName ?: step.title}"
-                    isEnd -> "🔴 도착: ${step.locationName ?: step.title}"
-                    else -> step.locationName ?: step.title
-                }
-
-                Box(
-                    modifier = Modifier
-                        .offset(x = xDp - 50.dp, y = yDp - 20.dp)
-                        .clickable { onStepSelected(idx) }
-                ) {
-                    Surface(
-                        shape = AppShapes.pill,
-                        color = if (isSelected) Color(0xFF0F172A) else Color(0xFF1E293B),
-                        border = androidx.compose.foundation.BorderStroke(
-                            width = if (isSelected) 2.dp else 1.dp,
-                            color = if (isSelected) Color(0xFFF59E0B) else Color(0xFF475569)
-                        ),
-                        shadowElevation = if (isSelected) 8.dp else 3.dp
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            // Badge Number Dot
-                            Box(
-                                modifier = Modifier
-                                    .size(18.dp)
-                                    .clip(CircleShape)
-                                    .background(badgeColor),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = badgeText,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = PureWhite
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(6.dp))
-
-                            Text(
-                                text = title,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = PureWhite
-                            )
-                        }
-                    }
-                }
-            } else {
-                // 중간 GPS 경유지: 번호/라벨 없는 7.dp 파란색 작은 도트로 직선 경로선 상에 깔끔하게 표기
-                Box(
-                    modifier = Modifier
-                        .offset(x = xDp - 3.5.dp, y = yDp - 3.5.dp)
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF38BDF8))
-                        .border(1.dp, PureWhite, CircleShape)
-                        .clickable { onStepSelected(idx) }
-                )
-            }
-        }
-
-        // 3. Floating Zoom & Navigation Controls
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(Spacing.md),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalAlignment = Alignment.End
-        ) {
-            // Recenter Button
-            SmallFloatingActionButton(
-                onClick = {
-                    zoomLevel = 1.0f
-                    panOffset = Offset.Zero
-                },
-                containerColor = Color(0xFF1E293B),
-                contentColor = PureWhite,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(Icons.Default.MyLocation, contentDescription = "중심 맞추기", modifier = Modifier.size(18.dp))
-            }
-
-            // Zoom In Button
-            SmallFloatingActionButton(
-                onClick = { zoomLevel = (zoomLevel * 1.3f).coerceAtMost(4.0f) },
-                containerColor = Color(0xFF1E293B),
-                contentColor = PureWhite,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "확대", modifier = Modifier.size(18.dp))
-            }
-
-            // Zoom Out Button
-            SmallFloatingActionButton(
-                onClick = { zoomLevel = (zoomLevel / 1.3f).coerceAtLeast(0.5f) },
-                containerColor = Color(0xFF1E293B),
-                contentColor = PureWhite,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(Icons.Default.Remove, contentDescription = "축소", modifier = Modifier.size(18.dp))
-            }
-        }
-    }
+    )
 }
 
 /**
  * 특정 거점(스텝)을 Google 지도에 마커(Pin)와 장소명으로 정확하게 표기하여 엽니다.
- * geo:0,0?q=latitude,longitude(label) 표준 사양을 적용하여 핀이 지도 정중앙에 선명하게 꽂힙니다.
  */
 fun openGoogleMapsLocation(
     context: Context,
@@ -1235,17 +1085,15 @@ fun openGoogleMapsLocation(
     address: String? = null
 ) {
     try {
+        val cleanLabel = label.replace(Regex("\\[.*?\\]"), "").trim().ifBlank { "방문 위치" }
         val pinTitle = buildString {
-            append(label)
-            if (!address.isNullOrBlank() && address != label) {
+            append(cleanLabel)
+            if (!address.isNullOrBlank() && address != cleanLabel) {
                 append(" (").append(address).append(")")
             }
         }
         val encodedTitle = Uri.encode(pinTitle)
 
-        // Google Maps 공식 마커 핀 생성 URI 사양:
-        // geo:0,0?q=latitude,longitude(label)
-        // geo:lat,lng는 마커 없이 카메라만 이동하지만, geo:0,0?q=lat,lng(label)은 해당 좌표에 핀을 꽂고 라벨을 표시합니다.
         val geoUri = Uri.parse("geo:0,0?q=$latitude,$longitude($encodedTitle)")
         val mapIntent = Intent(Intent.ACTION_VIEW, geoUri).apply {
             setPackage("com.google.android.apps.maps")
@@ -1255,8 +1103,7 @@ fun openGoogleMapsLocation(
         try {
             context.startActivity(mapIntent)
         } catch (e: Exception) {
-            // Google Maps 앱이 없거나 실행 실패 시 웹 브라우저 Google 지도 열기
-            val webQuery = Uri.encode("$latitude,$longitude ($pinTitle)")
+            val webQuery = Uri.encode("$latitude,$longitude")
             val webUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$webQuery")
             val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1269,41 +1116,44 @@ fun openGoogleMapsLocation(
 }
 
 /**
- * 하루 동안 이동한 여러 거점들을 Google 지도의 길찾기(Directions)로 열어 전체 이동 경로와 지점들을 표시합니다.
+ * 이동 거점들을 외부 Google 지도 앱의 경로(Directions)로 엽니다.
+ *
+ * [핵심 수정 사항]
+ * 1. 대한민국 내에서 Google 지도는 법적·정책적 제한으로 자동차(travelmode=driving) 및 도보 길찾기를 제공하지 않으며,
+ *    travelmode=driving 호출 시 100% "자동차 — 경로를 찾을 수 없음" 오류가 발생합니다.
+ *    따라서 한국 Google 지도에서 유일하게 정상 경로 탐색이 지원되는 대중교통 경로 모드(travelmode=transit&dirflg=r)로 호출하며,
+ *    Google 지도 대중교통 모드에서 오류를 유발하는 waypoints 파라미터를 제거해 즉시 경로가 표시되도록 합니다.
+ * 2. 아침 집 출발 ➔ 직장/방문지 ➔ 저녁 집 도착처럼 첫 지점과 마지막 지점이 동일 구역(왕복 동선)인 경우,
+ *    resolveEffectiveRouteEndpoints()를 통해 가장 멀리 이동한 주요 목적지를 도착지로 자동 선정합니다.
+ * 3. 모든 지점이 반경 200m 이내의 동일 장소인 경우 길찾기 오류 대신 해당 위치 마커 핀 화면으로 엽니다.
  */
 fun openGoogleMapsRoute(context: Context, steps: List<RouteStep>) {
     try {
-        val validSteps = steps.filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
+        val validSteps = steps.filter {
+            it.latitude != null && it.longitude != null &&
+                (it.latitude != 0.0 || it.longitude != 0.0)
+        }
         if (validSteps.isEmpty()) return
 
-        if (validSteps.size == 1) {
-            val step = validSteps.first()
+        val endpoints = resolveEffectiveRouteEndpoints(validSteps)
+        if (endpoints == null) {
+            val single = validSteps.first()
             openGoogleMapsLocation(
                 context = context,
-                latitude = step.latitude!!,
-                longitude = step.longitude!!,
-                label = step.locationName ?: step.title,
-                address = step.address
+                latitude = single.latitude!!,
+                longitude = single.longitude!!,
+                label = single.locationName ?: single.title,
+                address = single.address
             )
             return
         }
 
-        val origin = "${validSteps.first().latitude},${validSteps.first().longitude}"
-        val destination = "${validSteps.last().latitude},${validSteps.last().longitude}"
+        val (startStep, endStep) = endpoints
+        val origin = "${startStep.latitude},${startStep.longitude}"
+        val destination = "${endStep.latitude},${endStep.longitude}"
 
-        // 한국 구글맵 라우팅은 중간 경유지가 너무 많으면 자동차 경로 계산 실패로 대중교통 탭으로 강제 전환됨.
-        // 따라서 출발지-도착지 간 핵심 경유지는 최대 2개만 선별하고 파이프(|)만 %7C로 결합 (위경도 간 쉼표는 인코딩 금지)
-        val intermediate = if (validSteps.size > 2) {
-            val sub = validSteps.drop(1).dropLast(1)
-            if (sub.size <= 2) sub else listOf(sub[sub.size / 3], sub[sub.size * 2 / 3])
-        } else emptyList()
-
-        val waypointsParam = if (intermediate.isNotEmpty()) {
-            "&waypoints=" + intermediate.joinToString("%7C") { "${it.latitude},${it.longitude}" }
-        } else ""
-
-        // 공식 Google Maps Universal Directions URL (travelmode=driving & dirflg=d로 차량 경로 강제 지정)
-        val directionsUrl = "https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destination$waypointsParam&travelmode=driving&dirflg=d"
+        // 한국 구글 지도에서 100% 경로가 인식되는 공식 URL (travelmode=transit&dirflg=r)
+        val directionsUrl = "https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destination&travelmode=transit&dirflg=r"
 
         val routeUri = Uri.parse(directionsUrl)
         val mapIntent = Intent(Intent.ACTION_VIEW, routeUri).apply {
@@ -1325,43 +1175,115 @@ fun openGoogleMapsRoute(context: Context, steps: List<RouteStep>) {
 }
 
 /**
+ * 한국 실제 도로 자동차 길찾기(카카오맵 / 네이버지도 / 티맵 앱 또는 카카오맵 웹 자동차 경로)를 실행합니다.
+ * 국내에서는 구글맵이 자동차 길찾기를 지원하지 않으므로, [자동차 길찾기] 버튼 클릭 시
+ * 설치된 국내 내비게이션 앱(카카오맵·네이버지도·티맵) 또는 카카오맵 자동차 길찾기 웹 화면으로 실제 차량 주행 경로를 즉시 보여줍니다.
+ */
+fun openCarNavigationApp(context: Context, steps: List<RouteStep>) {
+    try {
+        val validSteps = steps.filter {
+            it.latitude != null && it.longitude != null &&
+                (it.latitude != 0.0 || it.longitude != 0.0)
+        }
+        if (validSteps.isEmpty()) return
+
+        val endpoints = resolveEffectiveRouteEndpoints(validSteps)
+        if (endpoints == null) {
+            val single = validSteps.first()
+            openGoogleMapsLocation(
+                context = context,
+                latitude = single.latitude!!,
+                longitude = single.longitude!!,
+                label = single.locationName ?: single.title,
+                address = single.address
+            )
+            return
+        }
+
+        val (startStep, endStep) = endpoints
+        val sLat = startStep.latitude!!
+        val sLng = startStep.longitude!!
+        val eLat = endStep.latitude!!
+        val eLng = endStep.longitude!!
+
+        val sName = (startStep.locationName ?: startStep.title)
+            .replace(Regex("\\[.*?\\]"), "")
+            .replace(",", " ")
+            .trim()
+            .ifBlank { "출발지" }
+        val eName = (endStep.locationName ?: endStep.title)
+            .replace(Regex("\\[.*?\\]"), "")
+            .replace(",", " ")
+            .trim()
+            .ifBlank { "도착지" }
+
+        // 1순위: 카카오맵 앱 자동차 길찾기 스킴
+        val kakaoAppUri = Uri.parse("kakaomap://route?sp=$sLat,$sLng&ep=$eLat,$eLng&by=CAR")
+        val kakaoIntent = Intent(Intent.ACTION_VIEW, kakaoAppUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (kakaoIntent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(kakaoIntent)
+            return
+        }
+
+        // 2순위: 네이버 지도 앱 자동차 길찾기 스킴
+        val naverAppUri = Uri.parse(
+            "nmap://route/car?slat=$sLat&slng=$sLng&sname=${Uri.encode(sName)}&dlat=$eLat&dlng=$eLng&dname=${Uri.encode(eName)}&appname=${context.packageName}"
+        )
+        val naverIntent = Intent(Intent.ACTION_VIEW, naverAppUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (naverIntent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(naverIntent)
+            return
+        }
+
+        // 3순위: 무설치 카카오맵 웹 자동차 길찾기 (별도 앱 설치 없이도 한국 자동차 도로 경로 100% 표시)
+        val kakaoWebUrl = "https://map.kakao.com/link/from/${Uri.encode(sName)},$sLat,$sLng/to/${Uri.encode(eName)},$eLat,$eLng"
+        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(kakaoWebUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(webIntent)
+    } catch (e: Exception) {
+        Toast.makeText(context, "자동차 길찾기 화면을 열 수 없습니다.", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/**
  * 인앱 WebView에서 구글 지도를 로드하기 위한 iframe/embed 표준 URL을 생성합니다.
- * - 단일 지점 포커스 시: 해당 지점 마커 핀 중심 표시 (zoom 16)
- * - 전체 경로 표시 시: 출발지(saddr), 경유지/도착지(daddr) 차량 경로(dirflg=d) 임베드
  */
 fun buildGoogleMapsEmbedUrl(steps: List<RouteStep>, focusStep: RouteStep? = null): String {
     val validSteps = steps.filter {
         it.latitude != null && it.longitude != null &&
-        (it.latitude != 0.0 || it.longitude != 0.0)
+            (it.latitude != 0.0 || it.longitude != 0.0)
     }
 
     if (validSteps.isEmpty()) {
         return "about:blank"
     }
 
-    // 단일 지점 포커스인 경우
     if (focusStep != null && focusStep.latitude != null && focusStep.longitude != null) {
-        val lat = focusStep.latitude!!
-        val lng = focusStep.longitude!!
+        val lat = focusStep.latitude
+        val lng = focusStep.longitude
         val label = Uri.encode(focusStep.locationName ?: focusStep.title)
         return "https://maps.google.com/maps?q=$lat,$lng($label)&hl=ko&z=16&output=embed"
     }
 
-    // 전체 유효 지점이 1개인 경우
-    if (validSteps.size == 1) {
+    val endpoints = resolveEffectiveRouteEndpoints(validSteps)
+    if (endpoints == null) {
         val single = validSteps.first()
         val lat = single.latitude
         val lng = single.longitude
         val label = Uri.encode(single.locationName ?: single.title)
-        return "https://maps.google.com/maps?q=$lat,$lng($label)&hl=ko&z=15&output=embed"
+        return "https://maps.google.com/maps?q=$lat,$lng($label)&hl=ko&z=16&output=embed"
     }
 
-    // 전체 경로(출발지 ~ 경유지 ~ 도착지) 차량 이동 모드 임베드
-    val origin = "${validSteps.first().latitude},${validSteps.first().longitude}"
-    val remaining = validSteps.drop(1)
-    val destAndWaypoints = remaining.joinToString("+to:") { "${it.latitude},${it.longitude}" }
+    val (startStep, endStep) = endpoints
+    val origin = "${startStep.latitude},${startStep.longitude}"
+    val destination = "${endStep.latitude},${endStep.longitude}"
 
-    return "https://maps.google.com/maps?saddr=$origin&daddr=$destAndWaypoints&dirflg=d&hl=ko&output=embed"
+    return "https://maps.google.com/maps?saddr=$origin&daddr=$destination&dirflg=r&hl=ko&output=embed"
 }
 
 // 하위 호환성을 위해 유지
@@ -1370,22 +1292,25 @@ fun openGoogleMaps(context: Context, latitude: Double, longitude: Double, label:
 }
 
 /**
- * 에뮬레이터 및 실기기에서 쿠키 차단/CSP/WebGL 미지원 문제를 원천 해결하는
- * 인라인 HTML5 Leaflet + CartoDB 인터랙티브 지도 생성 함수.
- * - 번호 핀([1], [2], [3]...) 및 파란색 경로선(Polyline) 100% 렌더링
- * - 자동 fitBounds 지원으로 모든 이동 거점이 한 화면에 선명하게 정렬됨
+ * 유료 Google Maps API Key 없이 실제 구글 한국어 지도 타일(mt0~3.google.com/vt/lyrs=m&hl=ko&gl=kr&scale=2)과
+ * 시·군·구 행정구역 경계선 오버레이, 그리고 OSRM 실제 도로망 주행 경로(Road Polyline)를 결합한
+ * 고정밀 한국 인터랙티브 지도 HTML 생성기.
+ *
+ * - 처음 열릴 때 이동 경로 구역이 한눈에 확대되어 보이도록 tight fitBounds (maxZoom 16) 적용
+ * - 출발지(1)와 귀가 도착지(4) 등 동일/인접 좌표 핀이 겹치지 않도록 자동 오프셋 분리
+ * - [일반지도] / [위성지도] / [지역경계선 ON·OFF] 실시간 레이어 스위치 내장
  */
 fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null): String {
     val validSteps = steps.filter {
         it.latitude != null && it.longitude != null &&
-        (it.latitude != 0.0 || it.longitude != 0.0)
+            (it.latitude != 0.0 || it.longitude != 0.0)
     }
 
     if (validSteps.isEmpty()) {
         return """
             <!DOCTYPE html>
             <html>
-            <head><meta charset="utf-8"/><style>body{margin:0;background:#0f172a;color:#94a3b8;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:14px;}</style></head>
+            <head><meta charset="utf-8"/><style>body{margin:0;background:#f1f5f9;color:#475569;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;font-size:14px;}</style></head>
             <body><div>등록된 위치 정보가 없습니다.</div></body>
             </html>
         """.trimIndent()
@@ -1399,7 +1324,19 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
         append("[")
         validSteps.forEachIndexed { index, step ->
             if (index > 0) append(",")
-            val title = (step.locationName ?: step.title)
+            val rawName = (step.locationName ?: step.title)
+                .replace(Regex("\\[.*?\\]"), "")
+                .replace("승차 (출발)", "")
+                .replace("하차", "")
+                .trim()
+                .ifBlank { step.locationName ?: step.title }
+            val title = rawName
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", "")
+                .replace("'", "\\'")
+            val addressStr = (step.address ?: "")
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", " ")
@@ -1409,7 +1346,24 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"")
             val isFocus = (index == focusIndex)
-            append("""{"lat":${step.latitude},"lng":${step.longitude},"title":"$title","time":"$timeStr","num":${index + 1},"isFocus":$isFocus}""")
+            val isKey = (index == 0) ||
+                (index == validSteps.lastIndex) ||
+                isFocus ||
+                isDepartureStep(step) ||
+                isArrivalStep(step) ||
+                step.stepType != RouteStepType.DRIVING
+            append("""{"lat":${step.latitude},"lng":${step.longitude},"title":"$title","addr":"$addressStr","time":"$timeStr","num":${index + 1},"isFocus":$isFocus,"isKey":$isKey}""")
+        }
+        append("]")
+    }
+
+    // 수도권 및 주요 시·군·구 행정구역 경계 폴리곤 JSON (지도 위에 지역 구분선을 선명하게 표시)
+    val districtsJson = buildString {
+        append("[")
+        MidKoreaBounds.DISTRICT_BOUNDARIES.forEachIndexed { idx, d ->
+            if (idx > 0) append(",")
+            val coordsStr = d.polygon.joinToString(",") { "[${it.first},${it.second}]" }
+            append("""{"name":"${d.name}","group":"${d.regionGroup}","coords":[$coordsStr]}""")
         }
         append("]")
     }
@@ -1423,59 +1377,107 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
           <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
           <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
           <style>
-            html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #0f172a; overflow: hidden; }
-            .leaflet-container { background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #eef2f6; overflow: hidden; }
+            .leaflet-container { background: #eef2f6; font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
+            .pin-wrapper {
+              position: relative;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              pointer-events: auto;
+            }
             .custom-pin {
               display: flex;
               align-items: center;
               justify-content: center;
-              width: 26px;
-              height: 26px;
+              width: 28px;
+              height: 28px;
               border-radius: 50%;
               background: #2563eb;
               color: #ffffff;
               font-weight: 800;
               font-size: 12px;
-              box-shadow: 0 3px 8px rgba(0,0,0,0.5);
-              border: 2px solid #ffffff;
+              box-shadow: 0 3px 8px rgba(15,23,42,0.45);
+              border: 2.5px solid #ffffff;
               transition: transform 0.2s ease;
             }
-            .custom-pin.start {
-              background: #16a34a;
-              border-color: #bbf7d0;
-            }
-            .custom-pin.end {
-              background: #dc2626;
-              border-color: #fecaca;
-            }
+            .custom-pin.start { background: #16a34a; }
+            .custom-pin.end { background: #dc2626; }
             .custom-pin.focus {
               background: #ea580c;
               border-color: #fef08a;
-              box-shadow: 0 0 14px #f97316;
-              transform: scale(1.25);
+              box-shadow: 0 0 14px rgba(234,88,12,0.85);
+              transform: scale(1.2);
             }
+            .pin-caption {
+              margin-top: 2px;
+              background: rgba(255, 255, 255, 0.95);
+              color: #0f172a;
+              font-size: 10px;
+              font-weight: 700;
+              padding: 1px 6px;
+              border-radius: 6px;
+              border: 1px solid #cbd5e1;
+              white-space: nowrap;
+              box-shadow: 0 2px 5px rgba(0,0,0,0.18);
+            }
+            .pin-caption.start { border-color: #16a34a; color: #15803d; }
+            .pin-caption.end { border-color: #dc2626; color: #b91c1c; }
+            .pin-caption.focus { border-color: #ea580c; color: #9a3412; background: #fff7ed; }
             .custom-pin-dot {
-              width: 8px;
-              height: 8px;
+              width: 10px;
+              height: 10px;
               border-radius: 50%;
-              background: #38bdf8;
-              border: 1.5px solid #ffffff;
-              box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+              background: #2563eb;
+              border: 2px solid #ffffff;
+              box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+            }
+            .district-label {
+              color: #475569;
+              font-size: 10px;
+              font-weight: 700;
+              text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+              white-space: nowrap;
+              pointer-events: none;
+              opacity: 0.82;
+            }
+            .map-layer-bar {
+              position: absolute;
+              bottom: 10px;
+              left: 52px;
+              z-index: 1000;
+              display: flex;
+              gap: 4px;
+              background: rgba(15, 23, 42, 0.88);
+              padding: 3px;
+              border-radius: 999px;
+              border: 1px solid #334155;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+            }
+            .layer-btn {
+              border: none;
+              background: transparent;
+              color: #cbd5e1;
+              font-size: 10px;
+              font-weight: 700;
+              padding: 4px 8px;
+              border-radius: 999px;
+              cursor: pointer;
+            }
+            .layer-btn.active {
+              background: #2563eb;
+              color: #ffffff;
             }
             .leaflet-popup-content-wrapper {
-              background: #1e293b;
-              color: #f8fafc;
+              background: #ffffff;
+              color: #0f172a;
               border-radius: 10px;
-              border: 1px solid #334155;
-              box-shadow: 0 8px 20px rgba(0,0,0,0.4);
-              padding: 4px;
+              border: 1px solid #cbd5e1;
+              box-shadow: 0 8px 20px rgba(15,23,42,0.22);
+              padding: 2px;
             }
-            .leaflet-popup-tip {
-              background: #1e293b;
-            }
-            .popup-card {
-              padding: 4px 6px;
-            }
+            .leaflet-popup-tip { background: #ffffff; }
+            .popup-card { padding: 4px 6px; }
             .popup-num {
               display: inline-block;
               background: #2563eb;
@@ -1486,216 +1488,278 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
               border-radius: 999px;
               margin-bottom: 4px;
             }
-            .popup-title {
-              font-weight: 700;
-              font-size: 13px;
-              color: #60a5fa;
-              line-height: 1.3;
-            }
-            .popup-time {
-              font-size: 11px;
-              color: #94a3b8;
-              margin-top: 3px;
-            }
-            .leaflet-control-attribution {
-              background: rgba(15, 23, 42, 0.75) !important;
-              color: #64748b !important;
-              font-size: 9px !important;
-            }
-            .leaflet-control-attribution a {
-              color: #94a3b8 !important;
-            }
+            .popup-title { font-weight: 800; font-size: 13px; color: #0f172a; line-height: 1.3; }
+            .popup-addr { font-size: 11px; color: #475569; margin-top: 2px; }
+            .popup-time { font-size: 11px; color: #2563eb; font-weight: 600; margin-top: 3px; }
           </style>
         </head>
         <body>
           <div id="map"></div>
+          <div class="map-layer-bar">
+            <button id="btnRoad" class="layer-btn active" onclick="switchTile('road')">구글 한국지도</button>
+            <button id="btnSat" class="layer-btn" onclick="switchTile('sat')">위성+지명</button>
+            <button id="btnBorder" class="layer-btn active" onclick="toggleBorders()">지역경계선</button>
+          </div>
           <script>
             var points = $pointsJson;
+            var districts = $districtsJson;
             var focusIdx = $focusIndex;
             var mapInitialized = false;
+            var mapInstance = null;
+            var googleRoadLayer = null;
+            var googleSatLayer = null;
+            var osmFallbackLayer = null;
+            var borderLayerGroup = null;
+            var bordersVisible = true;
 
-            function renderSvgFallback() {
-              var container = document.getElementById('map');
-              if (!container) return;
-              var w = container.clientWidth || window.innerWidth || 360;
-              var h = container.clientHeight || window.innerHeight || 260;
-              if (!points || points.length === 0) return;
-
-              var minLat = points[0].lat, maxLat = points[0].lat;
-              var minLng = points[0].lng, maxLng = points[0].lng;
-              points.forEach(function(p) {
-                if (p.lat < minLat) minLat = p.lat;
-                if (p.lat > maxLat) maxLat = p.lat;
-                if (p.lng < minLng) minLng = p.lng;
-                if (p.lng > maxLng) maxLng = p.lng;
-              });
-              var latSpan = Math.max(maxLat - minLat, 0.008);
-              var lngSpan = Math.max(maxLng - minLng, 0.008);
-              var pad = 40;
-
-              var svg = '<svg width="100%" height="100%" viewBox="0 0 ' + w + ' ' + h + '" style="background:#0f172a;display:block;">';
-              for (var x = 30; x < w; x += 40) {
-                svg += '<line x1="' + x + '" y1="0" x2="' + x + '" y2="' + h + '" stroke="#1e293b" stroke-width="1"/>';
+            function switchTile(mode) {
+              if (!mapInstance) return;
+              var btnRoad = document.getElementById('btnRoad');
+              var btnSat = document.getElementById('btnSat');
+              if (mode === 'sat') {
+                if (googleRoadLayer && mapInstance.hasLayer(googleRoadLayer)) mapInstance.removeLayer(googleRoadLayer);
+                if (osmFallbackLayer && mapInstance.hasLayer(osmFallbackLayer)) mapInstance.removeLayer(osmFallbackLayer);
+                if (googleSatLayer && !mapInstance.hasLayer(googleSatLayer)) googleSatLayer.addTo(mapInstance);
+                if (btnRoad) btnRoad.className = 'layer-btn';
+                if (btnSat) btnSat.className = 'layer-btn active';
+              } else {
+                if (googleSatLayer && mapInstance.hasLayer(googleSatLayer)) mapInstance.removeLayer(googleSatLayer);
+                if (googleRoadLayer && !mapInstance.hasLayer(googleRoadLayer)) googleRoadLayer.addTo(mapInstance);
+                if (btnRoad) btnRoad.className = 'layer-btn active';
+                if (btnSat) btnSat.className = 'layer-btn';
               }
-              for (var y = 30; y < h; y += 40) {
-                svg += '<line x1="0" y1="' + y + '" x2="' + w + '" y2="' + y + '" stroke="#1e293b" stroke-width="1"/>';
+            }
+
+            function toggleBorders() {
+              if (!mapInstance || !borderLayerGroup) return;
+              var btnBorder = document.getElementById('btnBorder');
+              if (bordersVisible) {
+                mapInstance.removeLayer(borderLayerGroup);
+                bordersVisible = false;
+                if (btnBorder) btnBorder.className = 'layer-btn';
+              } else {
+                borderLayerGroup.addTo(mapInstance);
+                bordersVisible = true;
+                if (btnBorder) btnBorder.className = 'layer-btn active';
               }
+            }
 
-              var screenPts = points.map(function(p) {
-                var nx = lngSpan === 0 ? 0.5 : (p.lng - minLng) / lngSpan;
-                var ny = latSpan === 0 ? 0.5 : 1.0 - (p.lat - minLat) / latSpan;
-                return {
-                  x: pad + nx * (w - pad * 2),
-                  y: pad + ny * (h - pad * 2),
-                  p: p
-                };
-              });
-
-              if (screenPts.length > 1) {
-                var d = 'M ' + screenPts[0].x + ' ' + screenPts[0].y;
-                for (var i = 1; i < screenPts.length; i++) {
-                  d += ' L ' + screenPts[i].x + ' ' + screenPts[i].y;
+            // 동일하거나 인접한 좌표(예: 집 출발 1번 핀과 귀가 도착 4번 핀)가 겹치지 않도록 미세 분리
+            function computeDisplayLatLngs(pts) {
+              var result = pts.map(function(p) { return { lat: p.lat, lng: p.lng, origLat: p.lat, origLng: p.lng, p: p }; });
+              var eps = 0.0006; // 약 55m 이내
+              for (var i = 0; i < result.length; i++) {
+                var group = [];
+                for (var j = 0; j < result.length; j++) {
+                  var dLat = Math.abs(result[i].origLat - result[j].origLat);
+                  var dLng = Math.abs(result[i].origLng - result[j].origLng);
+                  if (dLat < eps && dLng < eps) {
+                    group.push(j);
+                  }
                 }
-                svg += '<path d="' + d + '" stroke="#2563eb" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>';
-                svg += '<path d="' + d + '" stroke="#60a5fa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6,4"/>';
-              }
-
-              screenPts.forEach(function(sp, idx) {
-                var isStart = (idx === 0);
-                var isEnd = (idx === screenPts.length - 1 && screenPts.length > 1);
-                var isKey = isStart || isEnd || sp.p.isFocus;
-
-                if (isKey) {
-                  var color = sp.p.isFocus ? '#ea580c' : (isStart ? '#16a34a' : '#dc2626');
-                  var numText = isStart ? '1' : (isEnd ? '' + screenPts.length : '' + sp.p.num);
-                  var r = sp.p.isFocus ? 15 : 12;
-                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + (r + 2) + '" fill="#ffffff"/>';
-                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="' + r + '" fill="' + color + '"/>';
-                  svg += '<text x="' + sp.x + '" y="' + (sp.y + 4) + '" fill="#ffffff" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + numText + '</text>';
-
-                  var lbl = (sp.p.title || '').substring(0, 8);
-                  svg += '<rect x="' + (sp.x - 38) + '" y="' + (sp.y + r + 3) + '" width="76" height="17" rx="4" fill="#1e293b" stroke="#334155"/>';
-                  svg += '<text x="' + sp.x + '" y="' + (sp.y + r + 15) + '" fill="#e2e8f0" font-size="9" font-weight="bold" text-anchor="middle" font-family="sans-serif">' + lbl + '</text>';
-                } else {
-                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="5" fill="#ffffff"/>';
-                  svg += '<circle cx="' + sp.x + '" cy="' + sp.y + '" r="4" fill="#38bdf8"/>';
+                if (group.length > 1) {
+                  var pos = group.indexOf(i);
+                  var offsetIdx = pos - (group.length - 1) / 2.0;
+                  result[i].lng = result[i].origLng + offsetIdx * 0.00055;
+                  result[i].lat = result[i].origLat + ((pos % 2 === 0) ? 0.00018 : -0.00018);
                 }
-              });
-
-              svg += '</svg>';
-              container.innerHTML = svg;
+              }
+              return result;
             }
 
             function initMap() {
               if (mapInitialized) return;
-              if (typeof L === 'undefined') {
-                renderSvgFallback();
-                return;
-              }
+              if (typeof L === 'undefined') return;
               try {
                 mapInitialized = true;
-                var initialCenter = points.length > 0 ? [points[0].lat, points[0].lng] : [37.5665, 126.9780];
+                var initialCenter = points.length > 0 ? [points[0].lat, points[0].lng] : [37.5265, 127.0480];
                 var map = L.map('map', {
                   center: initialCenter,
-                  zoom: 13,
+                  zoom: 14,
                   zoomControl: false,
                   attributionControl: false
                 });
+                mapInstance = map;
 
                 L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
-                var tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-                  maxZoom: 19,
-                  subdomains: 'abcd',
-                  timeout: 4000
+                // 1. Google 한국어 표준 상세 지도 타일 (API 키 불필요, 시·군·구·동/도로/건물/지하철 한글 완벽 표시, 고해상도 scale=2)
+                googleRoadLayer = L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=ko&gl=kr&x={x}&y={y}&z={z}&scale=2', {
+                  maxZoom: 20,
+                  subdomains: ['0', '1', '2', '3']
                 }).addTo(map);
 
-                tileLayer.on('tileerror', function() {
-                  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+                // 2. Google 한국어 위성+지명 하이브리드 타일
+                googleSatLayer = L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&hl=ko&gl=kr&x={x}&y={y}&z={z}&scale=2', {
+                  maxZoom: 20,
+                  subdomains: ['0', '1', '2', '3']
                 });
 
-                var latlngs = [];
-                var markers = [];
+                // 3. 타일 로드 실패 대비 OpenStreetMap 폴백
+                osmFallbackLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+                var errorCount = 0;
+                googleRoadLayer.on('tileerror', function() {
+                  errorCount++;
+                  if (errorCount > 6 && !map.hasLayer(osmFallbackLayer)) {
+                    osmFallbackLayer.addTo(map);
+                  }
+                });
 
-                points.forEach(function(p, i) {
-                  var pos = [p.lat, p.lng];
-                  latlngs.push(pos);
+                // 4. 시·군·구 지역 구분 경계선 오버레이 레이어 (구글지도 지역 경계 스타일)
+                borderLayerGroup = L.layerGroup().addTo(map);
+                districts.forEach(function(d) {
+                  if (!d.coords || d.coords.length < 3) return;
+                  var isSeoul = d.group === 'SEOUL';
+                  L.polygon(d.coords, {
+                    color: isSeoul ? '#dc2626' : '#475569',
+                    weight: isSeoul ? 1.6 : 1.3,
+                    opacity: 0.65,
+                    dashArray: '5, 5',
+                    fillColor: isSeoul ? '#fee2e2' : '#e2e8f0',
+                    fillOpacity: 0.05,
+                    interactive: false
+                  }).addTo(borderLayerGroup);
+                });
 
+                var displayPts = computeDisplayLatLngs(points);
+                var rawLatLngs = points.map(function(p) { return [p.lat, p.lng]; });
+
+                // 5. 기본 경로선 (즉시 렌더링) + OSRM 실제 도로망 주행 경로 비동기 업데이트
+                var routeCasing = null;
+                var routeCore = null;
+                var routeDash = null;
+
+                function drawRoutePolylines(coords) {
+                  if (routeCasing) map.removeLayer(routeCasing);
+                  if (routeCore) map.removeLayer(routeCore);
+                  if (routeDash) map.removeLayer(routeDash);
+
+                  routeCasing = L.polyline(coords, {
+                    color: '#1e3a8a',
+                    weight: 8,
+                    opacity: 0.85,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                  }).addTo(map);
+
+                  routeCore = L.polyline(coords, {
+                    color: '#3b82f6',
+                    weight: 5,
+                    opacity: 0.95,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                  }).addTo(map);
+
+                  routeDash = L.polyline(coords, {
+                    color: '#ffffff',
+                    weight: 1.8,
+                    opacity: 0.8,
+                    dashArray: '8, 10',
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                  }).addTo(map);
+                }
+
+                if (rawLatLngs.length > 1) {
+                  drawRoutePolylines(rawLatLngs);
+
+                  // OSRM 공개 라우팅 서버를 통해 실제 한국 도로망(고속도로/간선도로) 주행 궤적으로 정밀 보정
+                  var osrmCoords = points.map(function(p) { return p.lng + ',' + p.lat; }).join(';');
+                  var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/' + osrmCoords + '?overview=full&geometries=geojson';
+                  fetch(osrmUrl)
+                    .then(function(res) { return res.json(); })
+                    .then(function(data) {
+                      if (data && data.routes && data.routes.length > 0 && data.routes[0].geometry && data.routes[0].geometry.coordinates) {
+                        var roadLatLngs = data.routes[0].geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
+                        if (roadLatLngs.length > 1) {
+                          drawRoutePolylines(roadLatLngs);
+                        }
+                      }
+                    })
+                    .catch(function() {});
+                }
+
+                // 6. 거점 번호 핀 및 장소명 라벨 렌더링
+                displayPts.forEach(function(item, i) {
+                  var p = item.p;
+                  var pos = [item.lat, item.lng];
                   var isStart = (i === 0);
-                  var isEnd = (i === points.length - 1 && points.length > 1);
-                  var isKey = isStart || isEnd || p.isFocus;
+                  var isEnd = (i === displayPts.length - 1 && displayPts.length > 1);
 
                   var icon;
-                  if (isKey) {
+                  if (p.isKey) {
                     var pinClass = 'custom-pin';
+                    var capClass = 'pin-caption';
                     if (p.isFocus) {
                       pinClass += ' focus';
+                      capClass += ' focus';
                     } else if (isStart) {
                       pinClass += ' start';
+                      capClass += ' start';
                     } else if (isEnd) {
                       pinClass += ' end';
+                      capClass += ' end';
                     }
-                    var labelNum = isStart ? '1' : (isEnd ? '' + points.length : '' + p.num);
+                    var shortTitle = (p.title || '').substring(0, 8);
+                    var prefix = isStart ? '출발·' : (isEnd ? '도착·' : '');
+                    var html = '<div class="pin-wrapper">' +
+                               '<div class="' + pinClass + '">' + p.num + '</div>' +
+                               '<div class="' + capClass + '">' + prefix + shortTitle + '</div>' +
+                               '</div>';
                     icon = L.divIcon({
                       className: '',
-                      html: '<div class="' + pinClass + '">' + labelNum + '</div>',
-                      iconSize: [26, 26],
-                      iconAnchor: [13, 13]
+                      html: html,
+                      iconSize: [96, 48],
+                      iconAnchor: [48, 14]
                     });
                   } else {
                     icon = L.divIcon({
                       className: '',
                       html: '<div class="custom-pin-dot"></div>',
-                      iconSize: [8, 8],
-                      iconAnchor: [4, 4]
+                      iconSize: [10, 10],
+                      iconAnchor: [5, 5]
                     });
                   }
 
                   var marker = L.marker(pos, { icon: icon }).addTo(map);
-                  var subtitle = isStart ? '🟢 출발 지점' : (isEnd ? '🔴 최종 도착지' : ('지점 ' + p.num));
+                  var subtitle = isStart ? '🟢 출발 지점 (' + p.num + ')' : (isEnd ? '🔴 최종 도착지 (' + p.num + ')' : ('🔵 이동 거점 (' + p.num + ')'));
                   var content = '<div class="popup-card">' +
                                 '<span class="popup-num">' + subtitle + '</span>' +
                                 '<div class="popup-title">' + p.title + '</div>' +
+                                (p.addr ? '<div class="popup-addr">📍 ' + p.addr + '</div>' : '') +
                                 (p.time ? '<div class="popup-time">⏰ ' + p.time + '</div>' : '') +
                                 '</div>';
                   marker.bindPopup(content);
-                  markers.push(marker);
 
                   if (p.isFocus) {
                     marker.openPopup();
                   }
                 });
 
-                if (latlngs.length > 1) {
-                  L.polyline(latlngs, {
-                    color: '#3b82f6',
-                    weight: 4,
-                    opacity: 0.88,
-                    dashArray: '8, 6',
-                    lineJoin: 'round'
-                  }).addTo(map);
-                }
-
-                if (focusIdx >= 0 && focusIdx < latlngs.length) {
-                  map.setView(latlngs[focusIdx], 16);
-                } else if (latlngs.length === 1) {
-                  map.setView(latlngs[0], 15);
-                } else if (latlngs.length > 1) {
-                  map.fitBounds(L.latLngBounds(latlngs), { padding: [35, 35] });
+                // 7. 초기 카메라 확대 (사용자 요청: 지도를 좀 더 확대된 채로 표시)
+                if (focusIdx >= 0 && focusIdx < displayPts.length) {
+                  map.setView([displayPts[focusIdx].lat, displayPts[focusIdx].lng], 16);
+                } else if (rawLatLngs.length === 1) {
+                  map.setView(rawLatLngs[0], 16);
+                } else if (rawLatLngs.length > 1) {
+                  var bounds = L.latLngBounds(rawLatLngs);
+                  var sw = bounds.getSouthWest();
+                  var ne = bounds.getNorthEast();
+                  var latDiff = Math.abs(ne.lat - sw.lat);
+                  var lngDiff = Math.abs(ne.lng - sw.lng);
+                  if (latDiff < 0.005 && lngDiff < 0.005) {
+                    // 모든 지점이 인근 동네(500m 이내)에 모여 있으면 동/아파트 단위가 보이도록 줌 16으로 즉시 확대
+                    map.setView(bounds.getCenter(), 16);
+                  } else {
+                    map.fitBounds(bounds, { padding: [26, 26], maxZoom: 16 });
+                  }
                 }
               } catch (e) {
-                console.error("Leaflet init error:", e);
-                renderSvgFallback();
+                console.error("Map init error:", e);
               }
             }
 
-            // 600ms 후에도 지도가 초기화되지 않으면 즉시 SVG 폴백으로 지도 표출 보장
-            setTimeout(function() {
-              if (!mapInitialized) {
-                initMap();
-              }
-            }, 600);
-
+            setTimeout(function() { if (!mapInitialized) initMap(); }, 400);
             if (document.readyState === 'complete' || document.readyState === 'interactive') {
               initMap();
             } else {

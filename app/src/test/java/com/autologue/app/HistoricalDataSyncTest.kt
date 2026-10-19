@@ -65,4 +65,72 @@ class HistoricalDataSyncTest {
         assertEquals(32, cleaned[0].photoUris.size)
         assertEquals("사진 32장 촬영", cleaned[0].description)
     }
+
+    @Test
+    fun segmentRouteIntoTrips_and_resolveEffectiveRouteEndpoints_handlesCommuteRoundTripCorrectly() {
+        val steps = listOf(
+            com.autologue.app.domain.model.RouteStep(
+                id = "1",
+                time = java.time.LocalDateTime.of(2026, 10, 19, 6, 15),
+                stepType = com.autologue.app.domain.model.RouteStepType.DRIVING,
+                title = "⭐ [벤츠] 승차 (출발)",
+                locationName = "하남시 학암동",
+                address = "대한민국 경기도 하남시 학암동 652",
+                latitude = 37.4785,
+                longitude = 127.1465,
+                tags = listOf("차량주행", "⭐ 벤츠", "승차", "출발지점")
+            ),
+            com.autologue.app.domain.model.RouteStep(
+                id = "2",
+                time = java.time.LocalDateTime.of(2026, 10, 19, 7, 15),
+                stepType = com.autologue.app.domain.model.RouteStepType.DRIVING,
+                title = "⭐ [벤츠] 하차 (총 28.5 km)",
+                locationName = "서울 영등포구",
+                address = "대한민국 서울특별시 영등포구 여의도동",
+                latitude = 37.5187,
+                longitude = 126.9098,
+                tags = listOf("차량주행", "⭐ 벤츠", "하차", "도착지점")
+            ),
+            com.autologue.app.domain.model.RouteStep(
+                id = "3",
+                time = java.time.LocalDateTime.of(2026, 10, 19, 17, 30),
+                stepType = com.autologue.app.domain.model.RouteStepType.DRIVING,
+                title = "⭐ [벤츠] 승차 (출발)",
+                locationName = "서울 영등포구",
+                address = "대한민국 서울특별시 영등포구 여의도동",
+                latitude = 37.5187,
+                longitude = 126.9098,
+                tags = listOf("차량주행", "⭐ 벤츠", "승차", "출발지점")
+            ),
+            com.autologue.app.domain.model.RouteStep(
+                id = "4",
+                time = java.time.LocalDateTime.of(2026, 10, 19, 18, 32),
+                stepType = com.autologue.app.domain.model.RouteStepType.DRIVING,
+                title = "⭐ [벤츠] 하차 (총 28.5 km)",
+                locationName = "하남시 학암동",
+                address = "대한민국 경기도 하남시 학암동 652",
+                latitude = 37.4785,
+                longitude = 127.1465,
+                tags = listOf("차량주행", "⭐ 벤츠", "하차", "도착지점")
+            )
+        )
+
+        // 1. 60분이 소요된 출근/퇴근 주행이 각각 1지점씩 쪼개지지 않고 2지점씩 2개의 트립으로 묶여야 함
+        val tripGroups = com.autologue.app.presentation.diary.map.segmentRouteIntoTrips(steps)
+        assertEquals(2, tripGroups.size)
+        assertEquals(2, tripGroups[0].steps.size)
+        assertEquals(2, tripGroups[1].steps.size)
+
+        // 2. 전체 왕복 동선(하남 출발 -> 서울 -> 하남 도착)에서 경로 앱 실행 시 출발지(하남)와 주요 목적지(서울)가 선택되어야 함
+        val endpoints = com.autologue.app.presentation.diary.map.resolveEffectiveRouteEndpoints(steps)
+        assertNotNull(endpoints)
+        assertEquals("하남시 학암동", endpoints!!.first.locationName)
+        assertEquals("서울 영등포구", endpoints.second.locationName)
+
+        // 3. 상세 한국 지도 HTML에 구글 한국 지도 타일(hl=ko&gl=kr)과 시·군·구 지역경계선 데이터가 포함되어야 함
+        val html = com.autologue.app.presentation.diary.map.buildInteractiveHtmlMap(steps, null)
+        org.junit.Assert.assertTrue(html.contains("hl=ko&gl=kr"))
+        org.junit.Assert.assertTrue(html.contains("하남시"))
+        org.junit.Assert.assertTrue(html.contains("송파구"))
+    }
 }
