@@ -69,6 +69,8 @@ fun isDepositDirection(
     transferMemo: String? = null,
     merchantName: String? = null
 ): Boolean {
+    if (category == ExpenseCategory.INCOME) return true
+
     val orig = originalText.orEmpty()
     val memo = transferMemo.orEmpty()
     val mer = merchantName.orEmpty()
@@ -81,7 +83,7 @@ fun isDepositDirection(
     if (hasExplicitDeposit && !hasExplicitWithdraw) return true
     if (hasExplicitWithdraw && !hasExplicitDeposit) return false
 
-    return category == ExpenseCategory.INCOME
+    return false
 }
 
 /**

@@ -122,6 +122,7 @@ private data class DonutSliceData(
 private data class ExpenseQuickFilterSnapshot(
     val recurringCount: Int,
     val recurringAmount: Long,
+    val recurringIncomeAmount: Long,
     val builtInCatCounts: Map<ExpenseCategory, Int>,
     val customCatCounts: Map<String, Int>,
     val userCounts: Map<String, Int>,
@@ -176,8 +177,11 @@ fun ExpenseScreen(
     val filteredExpenseTotal = remember(filteredTransactions) {
         filteredTransactions.filter { !it.isDepositTransaction() && !it.isSelfTransfer() }.sumOf { it.amount }
     }
+    val filteredIncomeTotal = remember(filteredTransactions) {
+        filteredTransactions.filter { it.category == ExpenseCategory.INCOME || it.isDepositTransaction() }.sumOf { it.amount }
+    }
 
-    // 단일 패스 O(N) 필터 카운트 및 고정/법인 합계 사전 계산 (리컴포지션 시 다중 루프 완전 제거)
+    // 단일 패스 O(N) 필터 카운트 및 고정(지출·수입)/법인 합계 사전 계산 (리컴포지션 시 다중 루프 완전 제거)
     val quickFilterSnapshot = remember(
         uiState.transactions,
         uiState.recurringTransactionIds,
@@ -187,6 +191,7 @@ fun ExpenseScreen(
     ) {
         var recCount = 0
         var recAmt = 0L
+        var recIncAmt = 0L
         val builtInMap = HashMap<ExpenseCategory, Int>(16)
         val customMap = HashMap<String, Int>(16)
         val userMap = HashMap<String, Int>(16)
@@ -195,10 +200,15 @@ fun ExpenseScreen(
         var corpAmt = 0L
 
         for (tx in uiState.transactions) {
-            val isRealExpense = !tx.isDepositTransaction() && !tx.isSelfTransfer()
+            val isIncomeTx = tx.category == ExpenseCategory.INCOME || tx.isDepositTransaction()
+            val isRealExpense = !isIncomeTx && !tx.isSelfTransfer()
             if (tx.id in uiState.recurringTransactionIds) {
                 recCount++
-                if (isRealExpense) recAmt += tx.amount
+                if (isIncomeTx) {
+                    recIncAmt += tx.amount
+                } else if (isRealExpense) {
+                    recAmt += tx.amount
+                }
             }
             val customCat = uiState.customCategoryByTxId[tx.id]
             if (!customCat.isNullOrBlank()) {
@@ -220,6 +230,7 @@ fun ExpenseScreen(
         ExpenseQuickFilterSnapshot(
             recurringCount = recCount,
             recurringAmount = recAmt,
+            recurringIncomeAmount = recIncAmt,
             builtInCatCounts = builtInMap,
             customCatCounts = customMap,
             userCounts = userMap,
@@ -888,8 +899,16 @@ fun ExpenseScreen(
                                                     fontWeight = FontWeight.Bold,
                                                     color = Color(0xFF1E40AF)
                                                 )
+                                                val summaryLine = when {
+                                                    filteredExpenseTotal > 0L && filteredIncomeTotal > 0L ->
+                                                        "지출 %,d원 · 수입 +%,d원 (${filteredTransactions.size}건)".format(filteredExpenseTotal, filteredIncomeTotal)
+                                                    filteredIncomeTotal > 0L ->
+                                                        "조건 해당 수입 합계: +%,d원 (${filteredTransactions.size}건)".format(filteredIncomeTotal)
+                                                    else ->
+                                                        "조건 해당 지출 합계: %,d원 (${filteredTransactions.size}건)".format(filteredExpenseTotal)
+                                                }
                                                 Text(
-                                                    text = "조건 해당 지출 합계: %,d원 (${filteredTransactions.size}건)".format(filteredExpenseTotal),
+                                                    text = summaryLine,
                                                     fontSize = 11.5.sp,
                                                     fontWeight = FontWeight.SemiBold,
                                                     color = Color(0xFF1D4ED8)
@@ -1003,11 +1022,11 @@ fun ExpenseScreen(
                                                 .height(30.dp)
                                                 .clip(RoundedCornerShape(8.dp))
                                                 .background(if (uiState.isSelectionMode) Color(0xFFFEE2E2) else Slate100)
-                                                .border(
-                                                    1.dp,
-                                                    if (uiState.isSelectionMode) Color(0xFFFCA5A5) else Slate300,
-                                                    RoundedCornerShape(8.dp)
-                                                )
+                                            .border(
+                                                1.dp,
+                                                if (uiState.isSelectionMode) Color(0xFFFCA5A5) else Slate300,
+                                                RoundedCornerShape(8.dp)
+                                            )
                                                 .clickable { viewModel.toggleSelectionMode() }
                                                 .padding(horizontal = 8.dp),
                                             contentAlignment = Alignment.Center
@@ -1136,7 +1155,7 @@ fun ExpenseScreen(
                                                 )
 
                                                 ExpenseInlineFilterChip(
-                                                    text = "정기지출 (${quickFilterSnapshot.recurringCount})",
+                                                    text = "고정항목 (${quickFilterSnapshot.recurringCount})",
                                                     isSelected = uiState.isRecurringFilterOnly,
                                                     onClick = { viewModel.toggleRecurringFilter() },
                                                     selectedContainerColor = Color(0xFF4338CA),
@@ -1426,7 +1445,7 @@ fun ExpenseScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // 고정지출 비중 카드
+                                    // 고정항목(지출·수입) 요약 카드
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
                                         color = PureWhite,
@@ -1439,21 +1458,31 @@ fun ExpenseScreen(
                                             }
                                     ) {
                                         Column(modifier = Modifier.padding(10.dp)) {
-                                            Text("고정지출 비중", fontSize = 11.sp, color = Slate500, fontWeight = FontWeight.Medium)
+                                            Text("고정항목(지출·수입)", fontSize = 11.sp, color = Slate500, fontWeight = FontWeight.Medium)
                                             Spacer(modifier = Modifier.height(3.dp))
                                             Text(
-                                                text = "%.1f%%".format(recurringPct),
-                                                fontSize = 15.sp,
+                                                text = "지출 %.1f%%".format(recurringPct),
+                                                fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color(0xFF4338CA)
                                             )
                                             Text(
-                                                text = "%,d원 (${quickFilterSnapshot.recurringCount}건)".format(quickFilterSnapshot.recurringAmount),
-                                                fontSize = 10.5.sp,
+                                                text = "지출 %,d원".format(quickFilterSnapshot.recurringAmount),
+                                                fontSize = 10.sp,
                                                 color = Slate600,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
+                                            if (quickFilterSnapshot.recurringIncomeAmount > 0L) {
+                                                Text(
+                                                    text = "수입 +%,d원".format(quickFilterSnapshot.recurringIncomeAmount),
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = Color(0xFF047857),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
                                         }
                                     }
 
@@ -2656,10 +2685,11 @@ fun SaaSTransactionRow(
                     )
                 }
                 if (isRecurring) {
+                    val isIncomeRecurring = transaction.category == ExpenseCategory.INCOME || transaction.isDepositTransaction()
                     MetricBadge(
-                        text = "고정지출",
-                        textColor = Color(0xFF5B21B6),
-                        backgroundColor = Color(0xFFEDE9FE)
+                        text = if (isIncomeRecurring) "고정수입" else "고정지출",
+                        textColor = if (isIncomeRecurring) Color(0xFF047857) else Color(0xFF5B21B6),
+                        backgroundColor = if (isIncomeRecurring) Color(0xFFD1FAE5) else Color(0xFFEDE9FE)
                     )
                 }
                 if (isSelf) {
@@ -2713,7 +2743,7 @@ fun SaaSTransactionRow(
         }
 
         Column(horizontalAlignment = Alignment.End) {
-            val isIncome = transaction.category == ExpenseCategory.INCOME
+            val isIncome = transaction.category == ExpenseCategory.INCOME || transaction.isDepositTransaction()
             Text(
                 text = (if (isIncome) "+" else "") + "%,d원".format(transaction.amount),
                 style = AppTypography.h2.copy(
@@ -2953,7 +2983,7 @@ fun DateRangeFilterDialog(
                             )
                             add(
                                 ExpenseGridOptionItem(
-                                    label = "정기지출만",
+                                    label = "고정항목만",
                                     isSelected = isRecurringFilterOnly,
                                     selectedContainerColor = Color(0xFF4338CA),
                                     selectedBorderColor = Color(0xFF3730A3),
@@ -3324,23 +3354,38 @@ fun AddManualExpenseDialog(
                     }
                 }
 
-                // 4. 고정지출(정기지출) 지정
+                // 4. 고정항목(고정지출·고정수입) 지정
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = "고정지출 지정",
-                        style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "고정항목 지정 (고정지출 · 고정수입)",
+                            style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
+                        )
+                        if (isFixedExpense) {
+                            val isIncomeManual = selectedCategory == ExpenseCategory.INCOME
+                            Text(
+                                text = if (isIncomeManual) "고정수입으로 기록됨" else "고정지출로 기록됨",
+                                fontSize = 10.sp,
+                                color = if (isIncomeManual) Color(0xFF047857) else Color(0xFF5B21B6),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                     ExpenseUniformFilterGrid(
                         options = listOf(
                             ExpenseGridOptionItem(
-                                label = "일반 지출",
+                                label = "일반 항목",
                                 isSelected = !isFixedExpense,
                                 selectedContainerColor = Slate800,
                                 selectedBorderColor = Slate900,
                                 onClick = { isFixedExpense = false }
                             ),
                             ExpenseGridOptionItem(
-                                label = "고정지출로 지정",
+                                label = "고정항목지정",
                                 isSelected = isFixedExpense,
                                 selectedContainerColor = Color(0xFF5B21B6),
                                 selectedBorderColor = Color(0xFF4C1D95),
@@ -3743,10 +3788,11 @@ fun EditTransactionDialog(
     var editingCatItemTarget by remember { mutableStateOf<com.autologue.app.data.preferences.ManagedCategoryItem?>(null) }
     var editingCatNewName by remember { mutableStateOf("") }
 
+    val isEffectiveIncome = isDeposit || selectedCategory == ExpenseCategory.INCOME
     val isBankTx = transaction.isBankAccountTransaction(selectedCategory)
-    val txDirLabel = if (isDeposit) "입금" else "출금"
+    val txDirLabel = if (isEffectiveIncome) "입금" else "출금"
     val txTypeBadgeLabel = when {
-        isDeposit -> "입금 내역"
+        isEffectiveIncome -> "입금 내역"
         isBankTx -> "출금/이체"
         else -> "카드 결제"
     }
@@ -3791,28 +3837,28 @@ fun EditTransactionDialog(
                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
-                                        color = if (isDeposit) Color(0xFFECFDF5) else Color(0xFFEFF6FF),
-                                        border = BorderStroke(1.dp, if (isDeposit) Color(0xFF6EE7B7) else Color(0xFFBFDBFE))
+                                        color = if (isEffectiveIncome) Color(0xFFECFDF5) else Color(0xFFEFF6FF),
+                                        border = BorderStroke(1.dp, if (isEffectiveIncome) Color(0xFF6EE7B7) else Color(0xFFBFDBFE))
                                     ) {
                                         Text(
                                             text = txTypeBadgeLabel,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (isDeposit) Color(0xFF047857) else Color(0xFF1D4ED8),
+                                            color = if (isEffectiveIncome) Color(0xFF047857) else Color(0xFF1D4ED8),
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
                                     }
                                     if (isFixedExpense) {
                                         Surface(
                                             shape = RoundedCornerShape(4.dp),
-                                            color = Color(0xFFEDE9FE),
-                                            border = BorderStroke(1.dp, Color(0xFFC4B5FD))
+                                            color = if (isEffectiveIncome) Color(0xFFD1FAE5) else Color(0xFFEDE9FE),
+                                            border = BorderStroke(1.dp, if (isEffectiveIncome) Color(0xFF6EE7B7) else Color(0xFFC4B5FD))
                                         ) {
                                             Text(
-                                                text = "고정지출",
+                                                text = if (isEffectiveIncome) "고정수입" else "고정지출",
                                                 fontSize = 10.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = Color(0xFF5B21B6),
+                                                color = if (isEffectiveIncome) Color(0xFF047857) else Color(0xFF5B21B6),
                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                             )
                                         }
@@ -3904,7 +3950,9 @@ fun EditTransactionDialog(
                                     if (!activePermanentRule.userClassificationName.isNullOrBlank()) {
                                         add("분류: ${activePermanentRule.userClassificationName}")
                                     }
-                                    if (activePermanentRule.isFixedExpense == true) add("고정지출")
+                                    if (activePermanentRule.isFixedExpense == true) {
+                                        add(if (activePermanentRule.isDeposit || activePermanentRule.baseCategory == ExpenseCategory.INCOME) "고정수입" else "고정지출")
+                                    }
                                 }.joinToString(" · ")
                                 if (summaryText.isNotEmpty()) {
                                     Text(
@@ -4058,7 +4106,7 @@ fun EditTransactionDialog(
                         }
                     }
 
-                    // 3. 고정지출 지정 및 저장
+                    // 3. 고정항목(고정지출·고정수입) 지정 및 저장
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -4066,14 +4114,14 @@ fun EditTransactionDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "고정지출(정기지출) 지정",
+                                text = "고정항목 지정 (고정지출 · 고정수입)",
                                 style = AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                             )
                             if (isFixedExpense) {
                                 Text(
-                                    text = "고정지출 모아보기 및 통계에 반영됨",
+                                    text = if (isEffectiveIncome) "고정수입으로 기록 및 고정항목에 반영됨" else "고정지출로 기록 및 고정항목에 반영됨",
                                     fontSize = 10.sp,
-                                    color = Color(0xFF5B21B6),
+                                    color = if (isEffectiveIncome) Color(0xFF047857) else Color(0xFF5B21B6),
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -4081,14 +4129,14 @@ fun EditTransactionDialog(
                         ExpenseUniformFilterGrid(
                             options = listOf(
                                 ExpenseGridOptionItem(
-                                    label = "일반 지출",
+                                    label = "일반 항목",
                                     isSelected = !isFixedExpense,
                                     selectedContainerColor = Slate800,
                                     selectedBorderColor = Slate900,
                                     onClick = { isFixedExpense = false }
                                 ),
                                 ExpenseGridOptionItem(
-                                    label = "고정지출로 지정",
+                                    label = "고정항목지정",
                                     isSelected = isFixedExpense,
                                     selectedContainerColor = Color(0xFF5B21B6),
                                     selectedBorderColor = Color(0xFF4C1D95),
@@ -4732,7 +4780,7 @@ fun EditTransactionDialog(
                                         Triple("카테고리", applyCategory) { v: Boolean -> applyCategory = v },
                                         Triple("사용자 분류", applyUserClassification) { v: Boolean -> applyUserClassification = v },
                                         Triple(if (isBankTx) "은행 정보" else "카드·법인여부", applyCardAndCorporate) { v: Boolean -> applyCardAndCorporate = v },
-                                        Triple("고정지출", applyFixedExpense) { v: Boolean -> applyFixedExpense = v },
+                                        Triple("고정항목", applyFixedExpense) { v: Boolean -> applyFixedExpense = v },
                                         Triple("메모", applyMemo) { v: Boolean -> applyMemo = v }
                                     )
 

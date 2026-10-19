@@ -2,6 +2,7 @@ package com.autologue.app.domain.usecase.expense
 
 import com.autologue.app.domain.model.ExpenseCategory
 import com.autologue.app.domain.model.Transaction
+import com.autologue.app.domain.model.isDepositTransaction
 import com.autologue.app.domain.model.isSelfTransfer
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -9,22 +10,22 @@ import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 
 /**
- * 지난달과 비교하여 동일 금액 및 동일 날짜(휴일 대체 평일 보정)에 결제/출금된 내역을
- * 정기지출(구독료, 학원비, 통신비, 보험료, 적금, 월세 등)로 자동 판별하는 엔진
+ * 지난달과 비교하여 동일 금액 및 동일 날짜(휴일 대체 평일 보정)에 결제/출금/입금된 내역을
+ * 고정항목(고정지출: 구독료·학원비·통신비·보험료·적금·월세 등 / 고정수입: 급여·정기수당·용돈 등)으로 자동 판별하는 엔진
  */
 object RecurringExpenseDetector {
 
     /**
-     * 주어진 트랜잭션 목록 전체를 분석하여, 각 트랜잭션이 정기지출인지 여부를 Set<Long>(트랜잭션 ID)으로 반환합니다.
+     * 주어진 트랜잭션 목록 전체를 분석하여, 각 트랜잭션이 고정항목(정기지출/정기수입)인지 여부를 Set<Long>(트랜잭션 ID)으로 반환합니다.
      */
     fun detectRecurringTransactionIds(allTransactions: List<Transaction>): Set<Long> {
         val recurringIds = mutableSetOf<Long>()
-        val expenseTransactions = allTransactions.filter { 
-            it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() && it.amount > 0L 
+        val validTransactions = allTransactions.filter {
+            !it.isSelfTransfer() && it.amount > 0L
         }
 
-        for (tx in expenseTransactions) {
-            val isRecurring = isRecurringTransaction(tx, expenseTransactions)
+        for (tx in validTransactions) {
+            val isRecurring = isRecurringTransaction(tx, validTransactions)
             if (isRecurring) {
                 recurringIds.add(tx.id)
             }
@@ -33,7 +34,7 @@ object RecurringExpenseDetector {
     }
 
     /**
-     * 특정 트랜잭션이 직전 달(또는 직후 달)의 동일 금액/날짜 패턴과 일치하는 정기지출인지 검사
+     * 특정 트랜잭션이 직전 달(또는 직후 달)의 동일 금액/날짜 패턴과 일치하는 고정항목인지 검사
      */
     fun isRecurringTransaction(target: Transaction, allExpenses: List<Transaction>): Boolean {
         val targetDate = target.timestamp.toLocalDate()
@@ -41,12 +42,14 @@ object RecurringExpenseDetector {
         val targetYear = targetDate.year
         val targetDay = targetDate.dayOfMonth
         val targetAmount = target.amount
+        val targetIsDeposit = target.isDepositTransaction()
         val cleanTargetMerchant = cleanMerchantForComparison(target.merchantName)
 
-        // 비교 대상: 직전 1개월 전(또는 다음 1개월 후) 범위의 거래들
+        // 비교 대상: 직전 1개월 전(또는 다음 1개월 후) 범위의 동일 입출금 방향 거래들
         val candidates = allExpenses.filter { candidate ->
             if (candidate.id == target.id) return@filter false
             if (candidate.amount != targetAmount) return@filter false
+            if (candidate.isDepositTransaction() != targetIsDeposit) return@filter false
 
             val cDate = candidate.timestamp.toLocalDate()
             val monthsDiff = ChronoUnit.MONTHS.between(cDate.withDayOfMonth(1), targetDate.withDayOfMonth(1))

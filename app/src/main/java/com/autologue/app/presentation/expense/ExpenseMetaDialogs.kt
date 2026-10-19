@@ -995,9 +995,14 @@ fun PermanentRulesManageDialog(
                                             )
                                         }
                                         rule.isFixedExpense?.let { isFixed ->
+                                            val isIncomeRule = rule.isDeposit || rule.baseCategory == ExpenseCategory.INCOME
                                             RemovableRuleAttributeChip(
-                                                prefix = "고정지출",
-                                                value = if (isFixed) "고정지출 지정" else "고정지출 제외",
+                                                prefix = "고정항목",
+                                                value = if (isFixed) {
+                                                    if (isIncomeRule) "고정수입 지정" else "고정지출 지정"
+                                                } else {
+                                                    "고정항목 제외"
+                                                },
                                                 textColor = Color(0xFFB45309),
                                                 bgColor = Color(0xFFFEF3C7),
                                                 borderColor = Color(0xFFFDE68A),

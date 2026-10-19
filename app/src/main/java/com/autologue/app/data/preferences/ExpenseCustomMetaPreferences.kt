@@ -763,7 +763,7 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     // =========================================================================
-    // 1-2. 고정지출(정기지출) 수동 및 영구 지정
+    // 1-2. 고정항목(고정지출·고정수입) 수동 및 영구 지정
     // =========================================================================
 
     fun setFixedExpense(
@@ -796,6 +796,7 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     fun resolveIsFixedExpense(tx: Transaction, autoRecurringIds: Set<Long> = emptySet()): Boolean {
+        val isDeposit = tx.isDepositTransaction() || tx.category == ExpenseCategory.INCOME
         if (isOneTimeEdited(tx)) {
             if (tx.id > 0L && txFixedExpenseMap.containsKey(tx.id)) {
                 return txFixedExpenseMap[tx.id] == true
@@ -804,11 +805,16 @@ class ExpenseCustomMetaPreferences private constructor(
             lookupDirectionalRule(
                 merchantFixedExpenseMap,
                 tx.merchantName,
-                tx.isDepositTransaction()
+                isDeposit
             )?.let { return it == "true" }
             if (tx.id > 0L && txFixedExpenseMap.containsKey(tx.id)) {
                 return txFixedExpenseMap[tx.id] == true
             }
+            lookupDirectionalRule(
+                merchantFixedExpenseMap,
+                tx.merchantName,
+                !isDeposit
+            )?.let { return it == "true" }
         }
         return tx.id in autoRecurringIds
     }

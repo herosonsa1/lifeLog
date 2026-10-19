@@ -120,10 +120,11 @@ data class ExpenseUiState(
     // 선택적 일괄 삭제 모드 상태
     val isSelectionMode: Boolean = false,
     val selectedTransactionIds: Set<Long> = emptySet(),
-    // 정기지출(고정지출) 상태
+    // 정기항목(고정지출·고정수입) 상태
     val recurringTransactionIds: Set<Long> = emptySet(),
     val isRecurringFilterOnly: Boolean = false,
     val recurringExpenseTotal: Long = 0L,
+    val recurringIncomeTotal: Long = 0L,
     // 문자 간편 붙여넣기 다이얼로그 상태
     val isPasteSmsDialogOpen: Boolean = false,
     val syncResultMessage: String? = null
@@ -169,9 +170,14 @@ data class ExpenseUiState(
             .filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
             .sumOf { it.amount }
 
+    val filteredIncomeTotal: Long
+        get() = filteredTransactions
+            .filter { it.category == ExpenseCategory.INCOME || it.isDepositTransaction() }
+            .sumOf { it.amount }
+
     fun buildActiveFilterLabel(getBuiltInName: (ExpenseCategory) -> String): String {
         val parts = mutableListOf<String>()
-        if (isRecurringFilterOnly) parts.add("정기지출")
+        if (isRecurringFilterOnly) parts.add("고정항목")
         if (!selectedCustomCategoryName.isNullOrBlank()) {
             parts.add("카테고리: $selectedCustomCategoryName")
         } else if (selectedCategory != null) {
@@ -515,8 +521,10 @@ class ExpenseViewModel @Inject constructor(
 
         val expenseOnly = filtered.filter { it.category != ExpenseCategory.INCOME && !it.isSelfTransfer() }
         val totalExp = expenseOnly.sumOf { it.amount }
-        val totalInc = filtered.filter { it.category == ExpenseCategory.INCOME }.sumOf { it.amount }
+        val incomeOnly = filtered.filter { it.category == ExpenseCategory.INCOME || it.isDepositTransaction() }
+        val totalInc = incomeOnly.sumOf { it.amount }
         val recurringExp = expenseOnly.filter { it.id in recurringIds }.sumOf { it.amount }
+        val recurringInc = incomeOnly.filter { it.id in recurringIds }.sumOf { it.amount }
 
         val etcBuiltInName = expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(ExpenseCategory.ETC)
 
@@ -564,7 +572,8 @@ class ExpenseViewModel @Inject constructor(
             categoryTotals = byCat,
             effectiveCategoryTotals = byEffectiveCat,
             userClassificationTotals = byUserClass,
-            recurringExpenseTotal = recurringExp
+            recurringExpenseTotal = recurringExp,
+            recurringIncomeTotal = recurringInc
         )
     }
 
@@ -636,7 +645,7 @@ class ExpenseViewModel @Inject constructor(
             }
         }
 
-        // 지난달 동일 금액/날짜 자동 감지 + 사용자의 고정지출 수동/영구 지정 통합 산출
+        // 지난달 동일 금액/날짜 자동 감지 + 사용자의 고정항목(고정지출·고정수입) 수동/영구 지정 통합 산출
         val autoRecurringIds = RecurringExpenseDetector.detectRecurringTransactionIds(dedupedAll)
         val recurringIds = HashSet<Long>(autoRecurringIds.size + 16)
 
@@ -743,6 +752,7 @@ class ExpenseViewModel @Inject constructor(
                         userClassificationTotals = computed.userClassificationTotals,
                         recurringTransactionIds = computed.recurringTransactionIds,
                         recurringExpenseTotal = computed.recurringExpenseTotal,
+                        recurringIncomeTotal = computed.recurringIncomeTotal,
                         userClassByTxId = computed.userClassByTxId,
                         customCategoryByTxId = computed.customCategoryByTxId,
                         corporateByTxId = computed.corporateByTxId,
@@ -929,10 +939,15 @@ class ExpenseViewModel @Inject constructor(
                 )
             }
 
+            val isIncomeEntry = finalCategory == ExpenseCategory.INCOME
             val tx = Transaction(
                 amount = amount,
                 merchantName = merchantName,
-                originalText = "[직접 입력] $merchantName %,d원".format(amount),
+                originalText = if (isIncomeEntry) {
+                    "[직접 입력] 입금 $merchantName %,d원".format(amount)
+                } else {
+                    "[직접 입력] $merchantName %,d원".format(amount)
+                },
                 timestamp = LocalDateTime.now(),
                 paymentMethod = when {
                     isBankTx -> PaymentMethod.BANK_TRANSFER
@@ -956,7 +971,7 @@ class ExpenseViewModel @Inject constructor(
                         cardCompany = effectiveCardOrBank,
                         isCorporate = if (isBankTx) false else isCorporate,
                         applyToMerchantRule = false,
-                        isDeposit = finalCategory == ExpenseCategory.INCOME,
+                        isDeposit = isIncomeEntry,
                         isBankAccountTx = isBankTx
                     )
                     if (!customCategoryName.isNullOrBlank()) {
@@ -965,7 +980,7 @@ class ExpenseViewModel @Inject constructor(
                             merchantName = merchantName,
                             customCategoryName = customCategoryName,
                             applyToMerchantRule = false,
-                            isDeposit = finalCategory == ExpenseCategory.INCOME
+                            isDeposit = isIncomeEntry
                         )
                     }
                     if (!userClassificationName.isNullOrBlank()) {
@@ -974,7 +989,7 @@ class ExpenseViewModel @Inject constructor(
                             merchantName = merchantName,
                             userClassificationName = userClassificationName,
                             applyToMerchantRule = false,
-                            isDeposit = finalCategory == ExpenseCategory.INCOME
+                            isDeposit = isIncomeEntry
                         )
                     }
                     if (isFixedExpense) {
@@ -982,9 +997,17 @@ class ExpenseViewModel @Inject constructor(
                             txId = insertedId,
                             merchantName = merchantName,
                             isFixed = true,
-                            applyToMerchantRule = false,
-                            isDeposit = finalCategory == ExpenseCategory.INCOME
+                            applyToMerchantRule = true,
+                            isDeposit = isIncomeEntry
                         )
+                        if (isIncomeEntry) {
+                            expenseCustomMetaPreferences.assignBaseCategory(
+                                merchantName = merchantName,
+                                category = ExpenseCategory.INCOME,
+                                applyToMerchantRule = true,
+                                isDeposit = true
+                            )
+                        }
                     }
                 }
             }
@@ -1341,6 +1364,8 @@ class ExpenseViewModel @Inject constructor(
                         expenseCustomMetaPreferences.resolveDisplayCardOrBankName(currentTx).ifBlank { currentTx.cardOrBankName }
                     }
 
+                    val effectiveIsDeposit = isDeposit || resolvedCategory == ExpenseCategory.INCOME
+
                     expenseCustomMetaPreferences.assignBaseCategory(
                         merchantName = finalMerchantName,
                         category = resolvedCategory,
@@ -1348,6 +1373,15 @@ class ExpenseViewModel @Inject constructor(
                         isDeposit = isDeposit,
                         extraMerchantNames = extraRuleKeysArray
                     )
+                    if (effectiveIsDeposit != isDeposit) {
+                        expenseCustomMetaPreferences.assignBaseCategory(
+                            merchantName = finalMerchantName,
+                            category = resolvedCategory,
+                            applyToMerchantRule = applyCategoryRule,
+                            isDeposit = effectiveIsDeposit,
+                            extraMerchantNames = extraRuleKeysArray
+                        )
+                    }
 
                     expenseCustomMetaPreferences.assignCustomCategory(
                         txId = transactionId,
@@ -1358,6 +1392,18 @@ class ExpenseViewModel @Inject constructor(
                         extraMerchantNames = extraRuleKeysArray,
                         targetTxIds = if (applyCategoryRule) targetExistingIds else emptySet()
                     )
+                    if (effectiveIsDeposit != isDeposit) {
+                        expenseCustomMetaPreferences.assignCustomCategory(
+                            txId = transactionId,
+                            merchantName = finalMerchantName,
+                            customCategoryName = customCategoryName,
+                            applyToMerchantRule = applyCategoryRule,
+                            isDeposit = effectiveIsDeposit,
+                            extraMerchantNames = extraRuleKeysArray,
+                            targetTxIds = if (applyCategoryRule) targetExistingIds else emptySet()
+                        )
+                    }
+
                     expenseCustomMetaPreferences.assignUserClassification(
                         txId = transactionId,
                         merchantName = finalMerchantName,
@@ -1367,6 +1413,17 @@ class ExpenseViewModel @Inject constructor(
                         extraMerchantNames = extraRuleKeysArray,
                         targetTxIds = if (applyUserClassRule) targetExistingIds else emptySet()
                     )
+                    if (effectiveIsDeposit != isDeposit) {
+                        expenseCustomMetaPreferences.assignUserClassification(
+                            txId = transactionId,
+                            merchantName = finalMerchantName,
+                            userClassificationName = userClassificationName,
+                            applyToMerchantRule = applyUserClassRule,
+                            isDeposit = effectiveIsDeposit,
+                            extraMerchantNames = extraRuleKeysArray,
+                            targetTxIds = if (applyUserClassRule) targetExistingIds else emptySet()
+                        )
+                    }
 
                     if (isFixedExpense != null) {
                         expenseCustomMetaPreferences.setFixedExpense(
@@ -1378,6 +1435,17 @@ class ExpenseViewModel @Inject constructor(
                             extraMerchantNames = extraRuleKeysArray,
                             targetTxIds = if (applyFixedRule) targetExistingIds else emptySet()
                         )
+                        if (effectiveIsDeposit != isDeposit) {
+                            expenseCustomMetaPreferences.setFixedExpense(
+                                txId = transactionId,
+                                merchantName = finalMerchantName,
+                                isFixed = isFixedExpense,
+                                applyToMerchantRule = applyFixedRule,
+                                isDeposit = effectiveIsDeposit,
+                                extraMerchantNames = extraRuleKeysArray,
+                                targetTxIds = if (applyFixedRule) targetExistingIds else emptySet()
+                            )
+                        }
                     }
 
                     val txToSave = currentTx.copy(
