@@ -2079,7 +2079,15 @@ fun ExpenseScreen(
 
     // Budget Edit Dialog
     if (uiState.isBudgetDialogOpen) {
-        var budgetText by remember { mutableStateOf(uiState.monthlyBudget.toString()) }
+        val initialBudgetFormatted = if (uiState.monthlyBudget > 0L) "%,d".format(uiState.monthlyBudget) else ""
+        var budgetFieldValue by remember {
+            mutableStateOf(
+                androidx.compose.ui.text.input.TextFieldValue(
+                    text = initialBudgetFormatted,
+                    selection = androidx.compose.ui.text.TextRange(initialBudgetFormatted.length)
+                )
+            )
+        }
         AlertDialog(
             onDismissRequest = { viewModel.closeBudgetDialog() },
             title = { Text("월간 목표 예산 설정", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
@@ -2088,9 +2096,36 @@ fun ExpenseScreen(
                     Text("해당 월의 총 지출 한도를 설정하세요.", fontSize = 13.sp, color = Color(0xFF64748B))
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
-                        value = budgetText,
-                        onValueChange = { budgetText = it.filter { c -> c.isDigit() } },
+                        value = budgetFieldValue,
+                        onValueChange = { newValue ->
+                            budgetFieldValue = formatCommaNumberFieldValue(budgetFieldValue, newValue)
+                        },
                         label = { Text("목표 예산 (원)") },
+                        placeholder = { Text("예: 1,500,000") },
+                        suffix = { Text("원", color = Slate600, fontWeight = FontWeight.SemiBold) },
+                        trailingIcon = {
+                            if (budgetFieldValue.text.isNotEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        budgetFieldValue = androidx.compose.ui.text.input.TextFieldValue(
+                                            text = "",
+                                            selection = androidx.compose.ui.text.TextRange(0)
+                                        )
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "입력값 지우기",
+                                        tint = Slate400,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done
+                        ),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -2099,7 +2134,7 @@ fun ExpenseScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val amount = budgetText.toLongOrNull() ?: 1500000L
+                        val amount = budgetFieldValue.text.filter { it.isDigit() }.toLongOrNull() ?: 1500000L
                         viewModel.updateMonthlyBudget(amount)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
@@ -5271,3 +5306,65 @@ fun ExpenseUniformFilterGrid(
     }
 }
 
+/**
+ * 숫자만 입력해도 천단위 콤마(,)를 자동으로 표기하고 커서 위치를 정확히 유지하는 헬퍼 함수
+ */
+private fun formatCommaNumberFieldValue(
+    oldValue: androidx.compose.ui.text.input.TextFieldValue,
+    newValue: androidx.compose.ui.text.input.TextFieldValue,
+    maxDigits: Int = 15
+): androidx.compose.ui.text.input.TextFieldValue {
+    val oldDigits = oldValue.text.filter { it.isDigit() }
+    var rawDigits = newValue.text.filter { it.isDigit() }
+    var targetDigitsBeforeCursor = newValue.text
+        .take(newValue.selection.end.coerceIn(0, newValue.text.length))
+        .count { it.isDigit() }
+
+    // 사용자가 콤마(,) 바로 뒤에서 백스페이스를 눌러 콤마만 지워진 경우 앞자리 숫자 함께 삭제
+    if (newValue.text.length == oldValue.text.length - 1 && rawDigits == oldDigits && targetDigitsBeforeCursor > 0) {
+        val deleteIdx = (targetDigitsBeforeCursor - 1).coerceIn(0, rawDigits.length - 1)
+        rawDigits = rawDigits.removeRange(deleteIdx, deleteIdx + 1)
+        targetDigitsBeforeCursor -= 1
+    }
+
+    if (rawDigits.length > maxDigits) {
+        rawDigits = rawDigits.take(maxDigits)
+        targetDigitsBeforeCursor = targetDigitsBeforeCursor.coerceAtMost(maxDigits)
+    }
+
+    if (rawDigits.isEmpty()) {
+        return androidx.compose.ui.text.input.TextFieldValue(
+            text = "",
+            selection = androidx.compose.ui.text.TextRange(0)
+        )
+    }
+
+    val parsed = rawDigits.toLongOrNull() ?: 0L
+    val formatted = "%,d".format(parsed)
+
+    val formattedDigitCount = formatted.count { it.isDigit() }
+    val removedLeadingZeros = (rawDigits.length - formattedDigitCount).coerceAtLeast(0)
+    val adjustedDigitsBeforeCursor = (targetDigitsBeforeCursor - removedLeadingZeros).coerceIn(0, formattedDigitCount)
+
+    val cursorOffset = if (adjustedDigitsBeforeCursor <= 0) {
+        0
+    } else {
+        var seenDigits = 0
+        var offset = formatted.length
+        for (i in formatted.indices) {
+            if (formatted[i].isDigit()) {
+                seenDigits++
+                if (seenDigits == adjustedDigitsBeforeCursor) {
+                    offset = i + 1
+                    break
+                }
+            }
+        }
+        offset
+    }
+
+    return androidx.compose.ui.text.input.TextFieldValue(
+        text = formatted,
+        selection = androidx.compose.ui.text.TextRange(cursorOffset)
+    )
+}
