@@ -1288,25 +1288,27 @@ class ExpenseCustomMetaPreferences private constructor(
         // 정규화 키 -> 가독성 높은 원래 표기명 매핑 사전 구축
         val prettyNameByNorm = HashMap<String, String>()
         for (name in knownMerchantNames) {
-            val clean = name.trim()
+            val clean = MerchantAliasPreferences.sanitizeSingleLine(name)
             if (clean.isBlank()) continue
             val norm = MerchantAliasPreferences.normalizeMerchantKey(clean)
             if (norm.isNotBlank()) {
                 val existing = prettyNameByNorm[norm]
-                if (existing == null || clean.count { it.isWhitespace() } > existing.count { it.isWhitespace() }) {
+                if (existing == null || clean.count { it == ' ' } > existing.count { it == ' ' }) {
                     prettyNameByNorm[norm] = clean
                 }
             }
         }
         for (group in aliasGroups) {
-            val normTarget = MerchantAliasPreferences.normalizeMerchantKey(group.targetName)
+            val cleanTarget = MerchantAliasPreferences.sanitizeSingleLine(group.targetName)
+            val normTarget = MerchantAliasPreferences.normalizeMerchantKey(cleanTarget)
             if (normTarget.isNotBlank()) {
-                prettyNameByNorm[normTarget] = group.targetName
+                prettyNameByNorm[normTarget] = cleanTarget
             }
             for (src in group.sourceNames) {
-                val normSrc = MerchantAliasPreferences.normalizeMerchantKey(src)
+                val cleanSrc = MerchantAliasPreferences.sanitizeSingleLine(src)
+                val normSrc = MerchantAliasPreferences.normalizeMerchantKey(cleanSrc)
                 if (normSrc.isNotBlank()) {
-                    prettyNameByNorm.putIfAbsent(normSrc, src)
+                    prettyNameByNorm.putIfAbsent(normSrc, cleanSrc)
                 }
             }
         }
@@ -1317,16 +1319,18 @@ class ExpenseCustomMetaPreferences private constructor(
 
         // 1) 결제명 자동 치환 그룹 먼저 등록
         for (group in aliasGroups) {
-            val normTarget = MerchantAliasPreferences.normalizeMerchantKey(group.targetName)
+            val cleanTarget = MerchantAliasPreferences.sanitizeSingleLine(group.targetName)
+            val normTarget = MerchantAliasPreferences.normalizeMerchantKey(cleanTarget)
             if (normTarget.isBlank()) continue
             val bKey = BucketKey(isDeposit = group.isDeposit, canonicalNorm = normTarget)
-            bucketDisplayNames[bKey] = group.targetName
+            bucketDisplayNames[bKey] = cleanTarget
             val srcSet = bucketSourceSets.getOrPut(bKey) { LinkedHashSet() }
             group.sourceNames.forEach { src ->
-                if (!src.equals(group.targetName, ignoreCase = true) &&
-                    MerchantAliasPreferences.normalizeMerchantKey(src) != normTarget
+                val cleanSrc = MerchantAliasPreferences.sanitizeSingleLine(src)
+                if (!cleanSrc.equals(cleanTarget, ignoreCase = true) &&
+                    MerchantAliasPreferences.normalizeMerchantKey(cleanSrc) != normTarget
                 ) {
-                    srcSet.add(src)
+                    srcSet.add(cleanSrc)
                 }
             }
         }
@@ -1342,10 +1346,12 @@ class ExpenseCustomMetaPreferences private constructor(
 
         for (rawKey in allMetaKeys) {
             val isDeposit = rawKey.startsWith(MerchantAliasPreferences.PREFIX_IN)
-            val stripped = MerchantAliasPreferences.stripDirectionPrefix(rawKey).trim()
+            val stripped = MerchantAliasPreferences.sanitizeSingleLine(MerchantAliasPreferences.stripDirectionPrefix(rawKey))
             if (stripped.isBlank()) continue
 
-            val resolvedTarget = aliasPreferences.resolveAlias(stripped, isDeposit).ifBlank { stripped }
+            val resolvedTarget = MerchantAliasPreferences.sanitizeSingleLine(
+                aliasPreferences.resolveAlias(stripped, isDeposit).ifBlank { stripped }
+            )
             val canonicalNorm = MerchantAliasPreferences.normalizeMerchantKey(resolvedTarget)
             if (canonicalNorm.isBlank()) continue
 
@@ -1354,7 +1360,7 @@ class ExpenseCustomMetaPreferences private constructor(
                 val bestDisplay = prettyNameByNorm[canonicalNorm]
                     ?: resolvedTarget.takeIf { it != canonicalNorm }
                     ?: stripped
-                bucketDisplayNames[bKey] = bestDisplay
+                bucketDisplayNames[bKey] = MerchantAliasPreferences.sanitizeSingleLine(bestDisplay)
             }
             bucketSourceSets.putIfAbsent(bKey, LinkedHashSet())
         }

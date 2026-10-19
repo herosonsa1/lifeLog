@@ -97,6 +97,14 @@ fun AutoLogueCompactTopBar(
     }
 }
 
+private val SINGLE_LINE_BREAK_REGEX = Regex("""[\r\n\t]+""")
+private val MULTI_SPACE_INPUT_REGEX = Regex(""" {2,}""")
+
+private fun normalizeSingleLineFieldText(raw: String): String {
+    if (!raw.contains('\n') && !raw.contains('\r') && !raw.contains('\t')) return raw
+    return raw.replace(SINGLE_LINE_BREAK_REGEX, " ").replace(MULTI_SPACE_INPUT_REGEX, " ")
+}
+
 /**
  * 표준 Input 텍스트필드 (상단 라벨 + 기존 톤의 소프트 배경 + 그림자 입체 효과 + 슬레이트 테두리)
  * isCompact = true 설정 시 입력필드 높이를 컴팩트하게 줄여 다이얼로그나 그리드 내에서 깔끔하게 표출합니다.
@@ -118,6 +126,18 @@ fun AutoLogueTextField(
     isCompact: Boolean = false,
     visualTransformation: VisualTransformation = VisualTransformation.None
 ) {
+    val displayValue = if (singleLine) normalizeSingleLineFieldText(value) else value
+    val effectiveKeyboardOptions = if (singleLine && keyboardOptions.imeAction == androidx.compose.ui.text.input.ImeAction.Default) {
+        keyboardOptions.copy(imeAction = androidx.compose.ui.text.input.ImeAction.Done)
+    } else {
+        keyboardOptions
+    }
+    val effectiveOnValueChange: (String) -> Unit = if (singleLine) {
+        { next -> onValueChange(normalizeSingleLineFieldText(next)) }
+    } else {
+        onValueChange
+    }
+
     Column(modifier = modifier) {
         if (label != null) {
             Text(
@@ -136,12 +156,12 @@ fun AutoLogueTextField(
         ) {
             if (isCompact) {
                 BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
+                    value = displayValue,
+                    onValueChange = effectiveOnValueChange,
                     singleLine = singleLine,
                     maxLines = maxLines,
                     minLines = minLines,
-                    keyboardOptions = keyboardOptions,
+                    keyboardOptions = effectiveKeyboardOptions,
                     keyboardActions = keyboardActions,
                     visualTransformation = visualTransformation,
                     textStyle = AppTypography.body.copy(
@@ -162,7 +182,7 @@ fun AutoLogueTextField(
                                 Spacer(modifier = Modifier.width(4.dp))
                             }
                             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                                if (value.isEmpty() && placeholder != null) {
+                                if (displayValue.isEmpty() && placeholder != null) {
                                     Text(
                                         text = placeholder,
                                         fontSize = 12.sp,
@@ -181,13 +201,13 @@ fun AutoLogueTextField(
                 )
             } else {
                 OutlinedTextField(
-                    value = value,
-                    onValueChange = onValueChange,
+                    value = displayValue,
+                    onValueChange = effectiveOnValueChange,
                     placeholder = if (placeholder != null) { { Text(placeholder, fontSize = 13.sp, color = Slate400) } } else null,
                     singleLine = singleLine,
                     maxLines = maxLines,
                     minLines = minLines,
-                    keyboardOptions = keyboardOptions,
+                    keyboardOptions = effectiveKeyboardOptions,
                     keyboardActions = keyboardActions,
                     leadingIcon = leadingIcon,
                     trailingIcon = trailingIcon,

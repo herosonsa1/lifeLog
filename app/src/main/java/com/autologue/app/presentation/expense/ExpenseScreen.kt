@@ -2692,7 +2692,7 @@ fun SaaSTransactionRow(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
                 Text(
-                    text = transaction.merchantName,
+                    text = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(transaction.merchantName),
                     style = AppTypography.h2
                 )
                 // 사용자 분류 지정 시 다른 색상의 배지로 표기
@@ -3790,7 +3790,9 @@ fun EditTransactionDialog(
         )
     }
 
-    var merchantName by remember(transaction.id) { mutableStateOf(transaction.merchantName) }
+    var merchantName by remember(transaction.id) {
+        mutableStateOf(com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(transaction.merchantName))
+    }
     var selectedCategory by remember(transaction.id) { mutableStateOf(transaction.category) }
     var selectedCustomCategoryName by remember(transaction.id) { mutableStateOf(initialCustomCategoryName) }
     var newPermanentCategoryInput by remember(transaction.id) { mutableStateOf("") }

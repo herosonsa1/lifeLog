@@ -1073,8 +1073,8 @@ class ExpenseViewModel @Inject constructor(
         editedMerchantName: String? = null
     ): List<Transaction> {
         val isDeposit = targetTx.isDepositTransaction()
-        val oldMerchantName = targetTx.merchantName.trim()
-        val newMerchant = editedMerchantName?.trim().orEmpty()
+        val oldMerchantName = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(targetTx.merchantName)
+        val newMerchant = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(editedMerchantName)
 
         val isManual = targetTx.originalText.startsWith("[직접 입력]") || targetTx.originalText.startsWith("[차계부 직접 입력]")
         val rawParsedName = if (!isManual && targetTx.originalText.isNotBlank()) {
@@ -1168,8 +1168,12 @@ class ExpenseViewModel @Inject constructor(
             ?: return
 
         val isDeposit = currentTx.isDepositTransaction()
-        val oldMerchantName = currentTx.merchantName.trim()
-        val finalMerchantName = newMerchantName.trim().ifBlank { oldMerchantName }
+        val oldMerchantName = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(currentTx.merchantName)
+        val finalMerchantName = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(newMerchantName)
+            .ifBlank { oldMerchantName }
+        val sanitizedMemo = memo?.let { com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
+        val sanitizedCustomCat = customCategoryName?.let { com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
+        val sanitizedUserClass = userClassificationName?.let { com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
 
         val applyMerchantRule = !isOneTimeSave && permanentSaveOptions.applyMerchantName
         val applyCategoryRule = !isOneTimeSave && permanentSaveOptions.applyCategory
@@ -1184,8 +1188,8 @@ class ExpenseViewModel @Inject constructor(
             com.autologue.app.data.repository.VehicleRepositoryImpl.isMaintenanceMerchant(oldMerchantName)
         val wasVehicleCategory = wasFuel || wasMaint
 
-        val isCustomFuel = customCategoryName?.let { it.contains("주유") || it.contains("충전") } == true
-        val isCustomMaint = customCategoryName?.let { it.contains("정비") || it.contains("세차") } == true
+        val isCustomFuel = sanitizedCustomCat?.let { it.contains("주유") || it.contains("충전") } == true
+        val isCustomMaint = sanitizedCustomCat?.let { it.contains("정비") || it.contains("세차") } == true
 
         val isNowFuel = category == ExpenseCategory.FUEL || isCustomFuel ||
             (category == currentTx.category && !isCustomMaint && wasFuel) ||
@@ -1207,11 +1211,12 @@ class ExpenseViewModel @Inject constructor(
         val isBankTx = currentTx.isBankAccountTransaction(resolvedCategory)
         val effectiveCorporate = if (isBankTx) false else isCorporate
         val optimisticCard = if (cardCompany != null) {
+            val cleanCardCompany = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(cardCompany)
             if (isBankTx) {
-                ExpenseCustomMetaPreferences.inferCanonicalBankName(cardCompany)
-                    ?: cardCompany.trim().ifBlank { currentTx.cardOrBankName }
+                ExpenseCustomMetaPreferences.inferCanonicalBankName(cleanCardCompany)
+                    ?: cleanCardCompany.ifBlank { currentTx.cardOrBankName }
             } else {
-                expenseCustomMetaPreferences.formatCardDesignation(cardCompany, effectiveCorporate)
+                expenseCustomMetaPreferences.formatCardDesignation(cleanCardCompany, effectiveCorporate)
             }
         } else {
             currentTx.cardOrBankName
@@ -1221,7 +1226,7 @@ class ExpenseViewModel @Inject constructor(
             merchantName = finalMerchantName,
             category = resolvedCategory,
             cardOrBankName = optimisticCard,
-            transferMemo = memo?.ifBlank { null }
+            transferMemo = sanitizedMemo
         )
 
         val selectedExistingSet = if (!isOneTimeSave) {
@@ -1240,7 +1245,7 @@ class ExpenseViewModel @Inject constructor(
                         merchantName = if (applyMerchantRule) finalMerchantName else tx.merchantName,
                         category = if (applyCategoryRule) resolvedCategory else tx.category,
                         cardOrBankName = if (applyCardAndCorpRule) optimisticCard else tx.cardOrBankName,
-                        transferMemo = if (applyMemoRule) memo?.ifBlank { null } else tx.transferMemo
+                        transferMemo = if (applyMemoRule) sanitizedMemo else tx.transferMemo
                     )
                 }
                 return tx
@@ -1250,7 +1255,7 @@ class ExpenseViewModel @Inject constructor(
             val nextAllTransactions = state.allTransactions.map(::transformTx)
 
             val nextCustomCatMap = state.customCategoryByTxId.toMutableMap()
-            val cleanCustomCat = customCategoryName?.trim().orEmpty()
+            val cleanCustomCat = sanitizedCustomCat.orEmpty()
             val catTargetIds = if (applyCategoryRule) targetIdsToUpdate else setOf(transactionId)
             for (id in catTargetIds) {
                 if (cleanCustomCat.isNotBlank() && resolvedCategory == ExpenseCategory.ETC) {
@@ -1261,7 +1266,7 @@ class ExpenseViewModel @Inject constructor(
             }
 
             val nextUserClassMap = state.userClassByTxId.toMutableMap()
-            val cleanUserName = userClassificationName?.trim().orEmpty()
+            val cleanUserName = sanitizedUserClass.orEmpty()
             val matchedUc = if (cleanUserName.isNotBlank()) {
                 state.userClassifications.firstOrNull { it.name.equals(cleanUserName, ignoreCase = true) }
                     ?: UserClassificationItem(name = cleanUserName, colorIndex = state.userClassifications.size)
@@ -1402,7 +1407,7 @@ class ExpenseViewModel @Inject constructor(
                     expenseCustomMetaPreferences.assignCustomCategory(
                         txId = transactionId,
                         merchantName = finalMerchantName,
-                        customCategoryName = customCategoryName,
+                        customCategoryName = sanitizedCustomCat,
                         applyToMerchantRule = applyCategoryRule,
                         isDeposit = isDeposit,
                         extraMerchantNames = extraRuleKeysArray,
@@ -1412,7 +1417,7 @@ class ExpenseViewModel @Inject constructor(
                         expenseCustomMetaPreferences.assignCustomCategory(
                             txId = transactionId,
                             merchantName = finalMerchantName,
-                            customCategoryName = customCategoryName,
+                            customCategoryName = sanitizedCustomCat,
                             applyToMerchantRule = applyCategoryRule,
                             isDeposit = effectiveIsDeposit,
                             extraMerchantNames = extraRuleKeysArray,
@@ -1423,7 +1428,7 @@ class ExpenseViewModel @Inject constructor(
                     expenseCustomMetaPreferences.assignUserClassification(
                         txId = transactionId,
                         merchantName = finalMerchantName,
-                        userClassificationName = userClassificationName,
+                        userClassificationName = sanitizedUserClass,
                         applyToMerchantRule = applyUserClassRule,
                         isDeposit = isDeposit,
                         extraMerchantNames = extraRuleKeysArray,
@@ -1433,7 +1438,7 @@ class ExpenseViewModel @Inject constructor(
                         expenseCustomMetaPreferences.assignUserClassification(
                             txId = transactionId,
                             merchantName = finalMerchantName,
-                            userClassificationName = userClassificationName,
+                            userClassificationName = sanitizedUserClass,
                             applyToMerchantRule = applyUserClassRule,
                             isDeposit = effectiveIsDeposit,
                             extraMerchantNames = extraRuleKeysArray,
@@ -1468,7 +1473,7 @@ class ExpenseViewModel @Inject constructor(
                         merchantName = finalMerchantName,
                         category = resolvedCategory,
                         cardOrBankName = formattedCard,
-                        transferMemo = memo?.ifBlank { null }
+                        transferMemo = sanitizedMemo
                     )
 
                     if (isOneTimeSave) {
@@ -1492,7 +1497,7 @@ class ExpenseViewModel @Inject constructor(
                         val exNewMerchant = if (applyMerchantRule) finalMerchantName else exTx.merchantName
                         val exNewCategory = if (applyCategoryRule) resolvedCategory else exTx.category
                         val exNewCard = if (applyCardAndCorpRule) formattedCard else exTx.cardOrBankName
-                        val exNewMemo = if (applyMemoRule) memo?.ifBlank { null } else exTx.transferMemo
+                        val exNewMemo = if (applyMemoRule) sanitizedMemo else exTx.transferMemo
 
                         if (applyMerchantRule && exTx.merchantName.isNotBlank() &&
                             !exTx.merchantName.equals(finalMerchantName, ignoreCase = true)

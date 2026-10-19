@@ -432,6 +432,27 @@ class SmsParserTest {
              com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(promoAdMerchant)
         )
     }
+
+    @Test
+    fun `결제명에 엔터나 줄바꿈이 포함된 경우 단일 공백으로 정규화되어 중간 빈칸 없이 표시 및 수정 가능해야 한다`() {
+        val multilineMerchant = "퇴직연금\n\nETF 분배금"
+        val sanitized = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(multilineMerchant)
+        assertEquals("퇴직연금 ETF 분배금", sanitized)
+
+        // 줄바꿈이 들어간 문자열과 정규화된 문자열은 동일한 정규화 키를 가져 기존 사용자 분류([정선우]) 및 카테고리 규칙이 100% 보존됨
+        assertEquals(
+            com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(multilineMerchant),
+            com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(sanitized)
+        )
+
+        val aliasPrefs = com.autologue.app.data.preferences.MerchantAliasPreferences()
+        aliasPrefs.registerAlias(
+            oldName = "입금 내역",
+            newName = "퇴직연금\r\n\nETF\t분배금",
+            isDeposit = true
+        )
+        assertEquals("퇴직연금 ETF 분배금", aliasPrefs.resolveAlias("입금 내역", isDeposit = true))
+        assertEquals("퇴직연금 ETF 분배금", aliasPrefs.resolveAlias("퇴직연금\n\nETF 분배금", isDeposit = true))
+        assertTrue(aliasPrefs.isSameMerchant(multilineMerchant, sanitized))
+    }
 }
-
-

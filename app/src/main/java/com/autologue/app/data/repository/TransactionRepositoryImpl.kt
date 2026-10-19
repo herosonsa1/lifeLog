@@ -271,7 +271,7 @@ class TransactionRepositoryImpl @Inject constructor(
         targetCategory: ExpenseCategory?,
         targetCardOrBankName: String?
     ): Int = withContext(Dispatchers.IO) {
-        val targetName = newMerchantName.trim()
+        val targetName = MerchantAliasPreferences.sanitizeSingleLine(newMerchantName)
         if (targetName.isBlank()) return@withContext 0
 
         if (!oldMerchantName.equals(targetName, ignoreCase = true) ||
@@ -452,6 +452,25 @@ class TransactionRepositoryImpl @Inject constructor(
                 continue
             }
 
+            // DB에 저장된 결제명·카드/은행명·메모에 줄바꿈(\r, \n, \t)이나 연속 공백이 포함된 경우 1회성 저장 여부와 무관하게 즉시 단일 공백으로 정제
+            val cleanDbMerchant = MerchantAliasPreferences.sanitizeSingleLine(rawTx.merchantName)
+            val cleanDbCard = MerchantAliasPreferences.sanitizeSingleLine(rawTx.cardOrBankName)
+            val cleanDbMemo = rawTx.transferMemo?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
+            val sanitizedRawTx = if (cleanDbMerchant != rawTx.merchantName ||
+                cleanDbCard != rawTx.cardOrBankName ||
+                cleanDbMemo != rawTx.transferMemo
+            ) {
+                val healedLineBreakTx = rawTx.copy(
+                    merchantName = cleanDbMerchant.ifBlank { rawTx.merchantName.trim() },
+                    cardOrBankName = cleanDbCard,
+                    transferMemo = cleanDbMemo
+                )
+                transactionDao.updateTransaction(healedLineBreakTx)
+                healedLineBreakTx
+            } else {
+                rawTx
+            }
+
             // 1회성 저장으로 수정된 항목은 가맹점명/카테고리/카드명 자동 치환 및 재분류에서 완전히 보호
             if (expenseCustomMetaPreferences.isOneTimeEdited(domainRawTx)) {
                 continue
@@ -460,31 +479,31 @@ class TransactionRepositoryImpl @Inject constructor(
             val isDeposit = domainRawTx.isDepositTransaction()
 
             // 1-0. 사용자가 등록한 결제처 별칭(입금/출금 방향별 자동 치환 규칙) 및 영구 카테고리/카드 설정 + 카드/은행 표준명 최우선 반영
-            val baseMerForAlias = if (isDeposit && rawTx.merchantName == "출금 내역") "입금 내역" else rawTx.merchantName
-            val aliasedMerchant = resolveMerchantWithAlias(baseMerForAlias, raw, rawTx.cardOrBankName, rawTx.timestamp, isDeposit)
+            val baseMerForAlias = if (isDeposit && sanitizedRawTx.merchantName == "출금 내역") "입금 내역" else sanitizedRawTx.merchantName
+            val aliasedMerchant = resolveMerchantWithAlias(baseMerForAlias, raw, sanitizedRawTx.cardOrBankName, sanitizedRawTx.timestamp, isDeposit)
             val savedBaseCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(aliasedMerchant, isDeposit)
                 ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(baseMerForAlias, isDeposit)
             val effectiveCat = savedBaseCategory
-                ?: if (isDeposit && rawTx.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else rawTx.category
+                ?: if (isDeposit && sanitizedRawTx.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else sanitizedRawTx.category
             val savedCard = expenseCustomMetaPreferences.resolveMerchantCardDesignation(aliasedMerchant, isDeposit)
                 ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(baseMerForAlias, isDeposit)
                 ?: expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
                     domainRawTx.copy(merchantName = aliasedMerchant.ifBlank { baseMerForAlias }, category = effectiveCat)
                 )
 
-            val tx = if ((aliasedMerchant.isNotBlank() && aliasedMerchant != rawTx.merchantName) ||
-                (effectiveCat != rawTx.category) ||
-                (!savedCard.isNullOrBlank() && savedCard != rawTx.cardOrBankName)
+            val tx = if ((aliasedMerchant.isNotBlank() && aliasedMerchant != sanitizedRawTx.merchantName) ||
+                (effectiveCat != sanitizedRawTx.category) ||
+                (!savedCard.isNullOrBlank() && savedCard != sanitizedRawTx.cardOrBankName)
             ) {
-                val updated = rawTx.copy(
+                val updated = sanitizedRawTx.copy(
                     merchantName = aliasedMerchant.ifBlank { baseMerForAlias },
                     category = effectiveCat,
-                    cardOrBankName = savedCard?.ifBlank { rawTx.cardOrBankName } ?: rawTx.cardOrBankName
+                    cardOrBankName = savedCard?.ifBlank { sanitizedRawTx.cardOrBankName } ?: sanitizedRawTx.cardOrBankName
                 )
                 transactionDao.updateTransaction(updated)
                 updated
             } else {
-                rawTx
+                sanitizedRawTx
             }
             val isUserAliased = merchantAliasPreferences.isKnownAliasTarget(tx.merchantName, isDeposit) || savedBaseCategory != null
 
@@ -639,16 +658,30 @@ class TransactionRepositoryImpl @Inject constructor(
     }
 
     private fun TransactionEntity.toDomain() = Transaction(
-        id = id, amount = amount, merchantName = merchantName, originalText = originalText,
-        timestamp = timestamp, paymentMethod = paymentMethod, category = category,
-        cardOrBankName = cardOrBankName, transferMemo = transferMemo,
-        isAutoCategorized = isAutoCategorized, ruleIdApplied = ruleIdApplied
+        id = id,
+        amount = amount,
+        merchantName = MerchantAliasPreferences.sanitizeSingleLine(merchantName),
+        originalText = originalText,
+        timestamp = timestamp,
+        paymentMethod = paymentMethod,
+        category = category,
+        cardOrBankName = MerchantAliasPreferences.sanitizeSingleLine(cardOrBankName),
+        transferMemo = transferMemo?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } },
+        isAutoCategorized = isAutoCategorized,
+        ruleIdApplied = ruleIdApplied
     )
 
     private fun Transaction.toEntity() = TransactionEntity(
-        id = id, amount = amount, merchantName = merchantName, originalText = originalText,
-        timestamp = timestamp, paymentMethod = paymentMethod, category = category,
-        cardOrBankName = cardOrBankName, transferMemo = transferMemo,
-        isAutoCategorized = isAutoCategorized, ruleIdApplied = ruleIdApplied
+        id = id,
+        amount = amount,
+        merchantName = MerchantAliasPreferences.sanitizeSingleLine(merchantName),
+        originalText = originalText,
+        timestamp = timestamp,
+        paymentMethod = paymentMethod,
+        category = category,
+        cardOrBankName = MerchantAliasPreferences.sanitizeSingleLine(cardOrBankName),
+        transferMemo = transferMemo?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } },
+        isAutoCategorized = isAutoCategorized,
+        ruleIdApplied = ruleIdApplied
     )
 }

@@ -970,9 +970,11 @@ class VehicleRepositoryImpl @Inject constructor(
             !isOneTimeFuelLog(note) &&
             !gasStationName.isNullOrBlank()
         ) {
-            merchantAliasPreferences.resolveAlias(gasStationName, isDeposit = false).ifBlank { gasStationName }
+            merchantAliasPreferences.resolveAlias(gasStationName, isDeposit = false).ifBlank {
+                MerchantAliasPreferences.sanitizeSingleLine(gasStationName)
+            }
         } else {
-            gasStationName
+            gasStationName?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
         }
         return VehicleLog(
             id = id, timestamp = timestamp, logType = effectiveType, fuelCost = fuelCost,
@@ -990,6 +992,7 @@ class VehicleRepositoryImpl @Inject constructor(
         fuelAmountLiters = fuelAmountLiters, daysSinceLastFuel = daysSinceLastFuel,
         tripDistanceKm = tripDistanceKm, currentOdometerKm = currentOdometerKm,
         estimatedEfficiencyKmPerL = estimatedEfficiencyKmPerL,
-        gasStationName = gasStationName, note = note
+        gasStationName = gasStationName?.let { MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } },
+        note = note
     )
 }

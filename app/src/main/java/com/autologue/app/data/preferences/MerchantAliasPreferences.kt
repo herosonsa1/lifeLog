@@ -54,11 +54,21 @@ class MerchantAliasPreferences private constructor(
             val rawJson = prefs?.getString(KEY_ALIAS_MAP_JSON, null) ?: return
             val json = JSONObject(rawJson)
             aliasMap.clear()
+            var healedLineBreak = false
             val keys = json.keys()
             while (keys.hasNext()) {
-                val k = keys.next()
-                val v = json.optString(k, "").trim()
-                if (k.isNotBlank() && v.isNotBlank()) {
+                val rawKey = keys.next()
+                val rawVal = json.optString(rawKey, "")
+                val v = sanitizeSingleLine(rawVal)
+                val k = when {
+                    rawKey.startsWith(PREFIX_IN) -> "$PREFIX_IN${sanitizeSingleLine(rawKey.removePrefix(PREFIX_IN))}"
+                    rawKey.startsWith(PREFIX_OUT) -> "$PREFIX_OUT${sanitizeSingleLine(rawKey.removePrefix(PREFIX_OUT))}"
+                    else -> sanitizeSingleLine(rawKey)
+                }
+                if (k != rawKey || v != rawVal.trim()) {
+                    healedLineBreak = true
+                }
+                if (k.isNotBlank() && k != PREFIX_IN && k != PREFIX_OUT && v.isNotBlank()) {
                     aliasMap[k] = v
                     // 로드 시점에 정규화 키도 함께 인덱싱하여 resolveAlias O(1) 조회 보장
                     when {
@@ -77,7 +87,11 @@ class MerchantAliasPreferences private constructor(
                     }
                 }
             }
-            _aliasesFlow.value = aliasMap.toMap()
+            if (healedLineBreak) {
+                saveToPrefs()
+            } else {
+                _aliasesFlow.value = aliasMap.toMap()
+            }
         }
     }
 
@@ -103,10 +117,11 @@ class MerchantAliasPreferences private constructor(
 
         for ((legacyKey, legacyVal) in legacyEntries) {
             aliasMap.remove(legacyKey)
-            val inKey = "$PREFIX_IN$legacyKey"
-            val outKey = "$PREFIX_OUT$legacyKey"
-            aliasMap.putIfAbsent(inKey, legacyVal)
-            aliasMap.putIfAbsent(outKey, legacyVal)
+            val cleanVal = sanitizeSingleLine(legacyVal)
+            val inKey = "$PREFIX_IN${sanitizeSingleLine(legacyKey)}"
+            val outKey = "$PREFIX_OUT${sanitizeSingleLine(legacyKey)}"
+            aliasMap.putIfAbsent(inKey, cleanVal)
+            aliasMap.putIfAbsent(outKey, cleanVal)
         }
     }
 
@@ -123,18 +138,18 @@ class MerchantAliasPreferences private constructor(
         rawOriginalName: String? = null,
         isDeposit: Boolean = false
     ) {
-        val target = newName.trim()
+        val target = sanitizeSingleLine(newName)
         if (target.isBlank()) return
 
         migrateLegacyUnprefixedKeys()
 
         val prefix = directionPrefix(isDeposit)
-        val cleanOld = oldName.trim()
+        val cleanOld = sanitizeSingleLine(oldName)
         val baseOld = stripTxDirectionSuffix(cleanOld)
         val normOld = normalizeMerchantKey(cleanOld)
         val normBaseOld = normalizeMerchantKey(baseOld)
 
-        val cleanRaw = rawOriginalName?.trim().orEmpty()
+        val cleanRaw = sanitizeSingleLine(rawOriginalName)
         val baseRaw = stripTxDirectionSuffix(cleanRaw)
 
         // 동일 방향(입금 또는 출금)의 기존 체인(A -> oldName)만 (A -> target)으로 연쇄 갱신
@@ -156,7 +171,7 @@ class MerchantAliasPreferences private constructor(
         }
 
         fun putDirectionalPair(candidate: String) {
-            val c = candidate.trim()
+            val c = sanitizeSingleLine(candidate)
             if (c.isBlank()) return
             val n = normalizeMerchantKey(c)
             val normTarget = normalizeMerchantKey(target)
@@ -197,24 +212,24 @@ class MerchantAliasPreferences private constructor(
      * 사용자가 지정한 치환 결제명이 있으면 반환하고, 없으면 원본 결제처명을 그대로 반환합니다. (O(1) 해시맵 조회)
      */
     fun resolveAlias(merchantName: String?, isDeposit: Boolean = false): String {
-        val raw = merchantName?.trim() ?: return ""
+        val raw = sanitizeSingleLine(merchantName)
         if (raw.isBlank() || aliasMap.isEmpty()) return raw
 
         val prefix = directionPrefix(isDeposit)
         // 1. 해당 입금/출금 방향의 정확 일치 조회
-        aliasMap["$prefix$raw"]?.let { return it }
+        aliasMap["$prefix$raw"]?.let { return sanitizeSingleLine(it) }
 
         val norm = normalizeMerchantKey(raw)
         if (norm.isNotBlank()) {
-            aliasMap["$prefix$norm"]?.let { return it }
+            aliasMap["$prefix$norm"]?.let { return sanitizeSingleLine(it) }
         }
 
         val baseRaw = stripTxDirectionSuffix(raw)
         if (baseRaw.isNotBlank() && baseRaw != raw) {
-            aliasMap["$prefix$baseRaw"]?.let { return it }
+            aliasMap["$prefix$baseRaw"]?.let { return sanitizeSingleLine(it) }
             val normBase = normalizeMerchantKey(baseRaw)
             if (normBase.isNotBlank() && normBase != norm) {
-                aliasMap["$prefix$normBase"]?.let { return it }
+                aliasMap["$prefix$normBase"]?.let { return sanitizeSingleLine(it) }
             }
         }
 
@@ -223,17 +238,17 @@ class MerchantAliasPreferences private constructor(
             val synonyms = getDepositInstitutionSynonyms(raw, baseRaw)
             for (syn in synonyms) {
                 val synNorm = normalizeMerchantKey(syn)
-                aliasMap["$prefix$syn"]?.let { return it }
+                aliasMap["$prefix$syn"]?.let { return sanitizeSingleLine(it) }
                 if (synNorm.isNotBlank()) {
-                    aliasMap["$prefix$synNorm"]?.let { return it }
+                    aliasMap["$prefix$synNorm"]?.let { return sanitizeSingleLine(it) }
                 }
             }
         }
 
         // 레거시 무접두사 키 폴백
-        aliasMap[raw]?.let { return it }
+        aliasMap[raw]?.let { return sanitizeSingleLine(it) }
         if (norm.isNotBlank()) {
-            aliasMap[norm]?.let { return it }
+            aliasMap[norm]?.let { return sanitizeSingleLine(it) }
         }
 
         return raw
@@ -265,7 +280,7 @@ class MerchantAliasPreferences private constructor(
      * isDeposit이 지정되면 해당 입금/출금 방향에서 치환된 값인지 확인합니다.
      */
     fun isKnownAliasTarget(name: String?, isDeposit: Boolean? = null): Boolean {
-        val clean = name?.trim() ?: return false
+        val clean = sanitizeSingleLine(name)
         if (clean.isBlank() || aliasMap.isEmpty()) return false
         val norm = normalizeMerchantKey(clean)
         val prefix = isDeposit?.let { directionPrefix(it) }
@@ -281,7 +296,7 @@ class MerchantAliasPreferences private constructor(
      * 치환된 새 결제명(targetName)에 매핑되어 있는 원본 결제처명 목록을 반환합니다.
      */
     fun getOriginalNamesForTarget(targetName: String?, isDeposit: Boolean? = null): List<String> {
-        val clean = targetName?.trim() ?: return emptyList()
+        val clean = sanitizeSingleLine(targetName)
         if (clean.isBlank() || aliasMap.isEmpty()) return emptyList()
         val norm = normalizeMerchantKey(clean)
         val prefix = isDeposit?.let { directionPrefix(it) }
@@ -292,7 +307,8 @@ class MerchantAliasPreferences private constructor(
                     (!k.startsWith(PREFIX_IN) && !k.startsWith(PREFIX_OUT))
                 dirMatch && (v.equals(clean, ignoreCase = true) || normalizeMerchantKey(v) == norm)
             }
-            .map { stripDirectionPrefix(it.key) }
+            .map { sanitizeSingleLine(stripDirectionPrefix(it.key)) }
+            .filter { it.isNotBlank() }
             .distinct()
     }
 
@@ -300,8 +316,8 @@ class MerchantAliasPreferences private constructor(
      * 두 결제처명이 동일 결제처(정확 일치 또는 공백/입출금 접미사 무시 정규화 일치)인지 판별합니다.
      */
     fun isSameMerchant(nameA: String?, nameB: String?): Boolean {
-        val a = nameA?.trim().orEmpty()
-        val b = nameB?.trim().orEmpty()
+        val a = sanitizeSingleLine(nameA)
+        val b = sanitizeSingleLine(nameB)
         if (a.isBlank() || b.isBlank()) return false
         if (a.equals(b, ignoreCase = true)) return true
         val normA = normalizeMerchantKey(a)
@@ -323,10 +339,10 @@ class MerchantAliasPreferences private constructor(
         val grouped = LinkedHashMap<GroupKey, MutableList<Pair<String, String>>>()
 
         for ((rawKey, targetVal) in aliasMap.entries) {
-            val cleanTarget = targetVal.trim()
+            val cleanTarget = sanitizeSingleLine(targetVal)
             if (cleanTarget.isBlank()) continue
             val isDeposit = rawKey.startsWith(PREFIX_IN)
-            val sourceRaw = stripDirectionPrefix(rawKey).trim()
+            val sourceRaw = sanitizeSingleLine(stripDirectionPrefix(rawKey))
             if (sourceRaw.isBlank()) continue
             val normSource = normalizeMerchantKey(sourceRaw)
             val normTarget = normalizeMerchantKey(cleanTarget)
@@ -344,7 +360,7 @@ class MerchantAliasPreferences private constructor(
                 .groupBy { normalizeMerchantKey(it) }
                 .map { (_, candidates) ->
                     candidates.maxByOrNull { cand ->
-                        cand.count { it.isWhitespace() } * 10 + cand.length
+                        cand.count { it == ' ' } * 10 + cand.length
                     } ?: candidates.first()
                 }
                 .distinct()
@@ -362,7 +378,7 @@ class MerchantAliasPreferences private constructor(
      * 반환값: 해제된 규칙에 포함되어 있던 모든 원본/대상 결제처명 목록 (기존 내역 원본 복원용)
      */
     fun removeAliasByMerchant(merchantOrSourceName: String, isDeposit: Boolean? = null): List<String> {
-        val clean = merchantOrSourceName.trim()
+        val clean = sanitizeSingleLine(merchantOrSourceName)
         if (clean.isBlank() || aliasMap.isEmpty()) return emptyList()
 
         val norm = normalizeMerchantKey(clean)
@@ -384,7 +400,7 @@ class MerchantAliasPreferences private constructor(
                 (!k.startsWith(PREFIX_IN) && !k.startsWith(PREFIX_OUT))
             if (!dirMatch) continue
 
-            val rawSource = stripDirectionPrefix(k).trim()
+            val rawSource = sanitizeSingleLine(stripDirectionPrefix(k))
             val normSource = normalizeMerchantKey(rawSource)
             val normBaseSource = normalizeMerchantKey(stripTxDirectionSuffix(rawSource))
             val normVal = normalizeMerchantKey(v)
@@ -397,7 +413,8 @@ class MerchantAliasPreferences private constructor(
             ) {
                 keysToRemove.add(k)
                 if (rawSource.isNotBlank()) affectedNames.add(rawSource)
-                if (v.isNotBlank()) affectedNames.add(v.trim())
+                val cleanVal = sanitizeSingleLine(v)
+                if (cleanVal.isNotBlank()) affectedNames.add(cleanVal)
             }
         }
 
@@ -424,6 +441,17 @@ class MerchantAliasPreferences private constructor(
         const val PREFIX_OUT = "OUT::"
 
         private val DIRECTION_SUFFIX_REGEX = Regex("""\s*\((?:출금|입금)\)\s*$""")
+        private val LINE_BREAK_OR_TAB_REGEX = Regex("""[\r\n\t]+""")
+        private val MULTI_SPACE_REGEX = Regex("""\s{2,}""")
+
+        /**
+         * 결제처명·카드/은행명·분류명 등 단일 행 텍스트에서 엔터(\r, \n), 탭(\t) 및 연속 공백을
+         * 단일 공백(" ")으로 정규화하고 앞뒤 공백을 제거합니다.
+         */
+        fun sanitizeSingleLine(raw: String?): String {
+            if (raw.isNullOrBlank()) return ""
+            return raw.replace(LINE_BREAK_OR_TAB_REGEX, " ").replace(MULTI_SPACE_REGEX, " ").trim()
+        }
 
         fun directionPrefix(isDeposit: Boolean): String = if (isDeposit) PREFIX_IN else PREFIX_OUT
 
@@ -432,7 +460,7 @@ class MerchantAliasPreferences private constructor(
         }
 
         fun stripTxDirectionSuffix(name: String): String {
-            val trimmed = name.trim()
+            val trimmed = sanitizeSingleLine(name)
             if (!trimmed.endsWith(")")) return trimmed
             return trimmed.replace(DIRECTION_SUFFIX_REGEX, "").trim()
         }
