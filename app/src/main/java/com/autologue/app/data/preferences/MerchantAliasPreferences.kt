@@ -181,6 +181,14 @@ class MerchantAliasPreferences private constructor(
             if (baseRaw != cleanRaw) putDirectionalPair(baseRaw)
         }
 
+        // 입금(isDeposit == true)일 때 보험사 다중 채널 표기("한화정선우" <-> "한화손해보험", "DB정선우" <-> "DB손해보험" 등) 동시 매핑
+        if (isDeposit) {
+            val synonyms = getDepositInstitutionSynonyms(cleanOld, cleanRaw, target)
+            for (syn in synonyms) {
+                putDirectionalPair(syn)
+            }
+        }
+
         saveToPrefs()
     }
 
@@ -210,6 +218,18 @@ class MerchantAliasPreferences private constructor(
             }
         }
 
+        // 입금(isDeposit == true)일 때 통장 축약 인자명("한화정선우", "DB정선우" 등)과 보험사 공식명 동의어 그룹 교차 조회
+        if (isDeposit) {
+            val synonyms = getDepositInstitutionSynonyms(raw, baseRaw)
+            for (syn in synonyms) {
+                val synNorm = normalizeMerchantKey(syn)
+                aliasMap["$prefix$syn"]?.let { return it }
+                if (synNorm.isNotBlank()) {
+                    aliasMap["$prefix$synNorm"]?.let { return it }
+                }
+            }
+        }
+
         // 레거시 무접두사 키 폴백
         aliasMap[raw]?.let { return it }
         if (norm.isNotBlank()) {
@@ -217,6 +237,27 @@ class MerchantAliasPreferences private constructor(
         }
 
         return raw
+    }
+
+    private fun getDepositInstitutionSynonyms(vararg names: String?): List<String> {
+        val combined = names.filterNotNull().joinToString(" ").uppercase()
+        if (combined.isBlank()) return emptyList()
+        return when {
+            combined.contains("한화손") || combined.contains("한화정선우") || combined.contains("한화실비") ->
+                listOf("한화손해보험", "한화손보", "한화손해", "한화정선우", "한화정*우")
+            combined.contains("DB손") || combined.contains("디비손") || combined.contains("DB정선우") ||
+                combined.contains("디비정선우") || combined.contains("동부화재") ->
+                listOf("DB손해보험", "DB손보", "디비손해보험", "디비손보", "DB정선우", "디비정선우", "DB정*우")
+            combined.contains("삼성화재") || combined.contains("삼성정선우") ->
+                listOf("삼성화재", "삼성화재해상보험", "삼성정선우")
+            combined.contains("현대해상") || combined.contains("현대정선우") ->
+                listOf("현대해상", "현대해상화재보험", "현대정선우")
+            combined.contains("메리츠") || combined.contains("메리츠정선우") ->
+                listOf("메리츠화재", "메리츠손해보험", "메리츠손보", "메리츠정선우")
+            combined.contains("KB손") || combined.contains("KB정선우") ->
+                listOf("KB손해보험", "KB손보", "KB정선우")
+            else -> emptyList()
+        }
     }
 
     /**

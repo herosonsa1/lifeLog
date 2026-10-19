@@ -78,9 +78,32 @@ class TransactionRepositoryImpl @Inject constructor(
         return false
     }
 
+    private fun isKnownAliasOrCustomRule(tx: Transaction): Boolean {
+        val isDep = tx.isDepositTransaction()
+        val resolvedMer = merchantAliasPreferences.resolveAlias(tx.merchantName, isDep).ifBlank { tx.merchantName }
+        return resolvedMer != tx.merchantName ||
+            merchantAliasPreferences.isKnownAliasTarget(resolvedMer, isDep) ||
+            merchantAliasPreferences.isKnownAliasTarget(tx.merchantName, isDep) ||
+            expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMer, isDep) != null ||
+            expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDep) != null ||
+            expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx) != null ||
+            expenseCustomMetaPreferences.resolveUserClassification(tx) != null
+    }
+
+    private fun deduplicateDomainList(list: List<Transaction>): List<Transaction> {
+        if (list.size <= 1) return list
+        return com.autologue.app.domain.model.TransactionDeduplicator.deduplicate(
+            transactions = list,
+            isSameMerchantAlias = merchantAliasPreferences::isSameMerchant,
+            isOneTimeEditedProvider = expenseCustomMetaPreferences::isOneTimeEdited,
+            isKnownAliasOrRuleProvider = ::isKnownAliasOrCustomRule
+        )
+    }
+
     override fun getAllTransactionsFlow(): Flow<List<Transaction>> {
         return transactionDao.getAllTransactions().map { entities ->
-            entities.map { it.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+            val validList = entities.map { it.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+            deduplicateDomainList(validList)
         }.flowOn(Dispatchers.Default)
     }
 
@@ -88,13 +111,15 @@ class TransactionRepositoryImpl @Inject constructor(
         val startMilli = start.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val endMilli = end.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         return transactionDao.getTransactionsByDateRange(startMilli, endMilli).map { list ->
-            list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+            val validList = list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+            deduplicateDomainList(validList)
         }.flowOn(Dispatchers.Default)
     }
 
     override fun getTransactionsByCategory(category: ExpenseCategory): Flow<List<Transaction>> {
         return transactionDao.getTransactionsByCategory(category).map { list ->
-            list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+            val validList = list.map { e -> e.toDomain() }.filterNot { shouldExcludeTransaction(it) }
+            deduplicateDomainList(validList)
         }.flowOn(Dispatchers.Default)
     }
 
@@ -148,7 +173,8 @@ class TransactionRepositoryImpl @Inject constructor(
                 ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(transaction.merchantName, isDeposit)
         } else null
 
-        val effectiveCategory = savedBaseCategory ?: transaction.category
+        val effectiveCategory = savedBaseCategory
+            ?: if (isDeposit && transaction.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else transaction.category
         val canonicalCardOrBank = savedCardDesignation
             ?: expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
                 transaction.copy(merchantName = resolvedMerchantName, category = effectiveCategory)
@@ -175,8 +201,8 @@ class TransactionRepositoryImpl @Inject constructor(
             }
         }
 
-        // 5분 윈도우 기반 지능형 중복 방지 (동일 금액 + 동일 입금/출금 방향 + ±5분 이내 동일/유사 가맹점)
-        val windowMilli = 5 * 60 * 1000L
+        // 다중 채널(문자 + 보험사 알림톡 + 은행 알림톡) 시간·금액·입출금 내역 통합 중복 방지
+        val windowMilli = 30 * 60 * 1000L
         val candidates = transactionDao.findTransactionsByAmountAndDateRange(
             amount = aliasedTransaction.amount,
             start = timestampMillis - windowMilli,
@@ -184,23 +210,38 @@ class TransactionRepositoryImpl @Inject constructor(
         )
 
         val duplicate = candidates.firstOrNull { existing ->
-            if (existing.toDomain().isDepositTransaction() != isDeposit) return@firstOrNull false
-            val isExactMerchant = existing.merchantName == aliasedTransaction.merchantName ||
-                existing.merchantName == transaction.merchantName
-            val isSimilarMerchant = existing.merchantName.isNotBlank() && aliasedTransaction.merchantName.isNotBlank() &&
-                    (existing.merchantName.contains(aliasedTransaction.merchantName) || aliasedTransaction.merchantName.contains(existing.merchantName))
-            val existingMillis = existing.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-            val timeDiff = Math.abs(existingMillis - timestampMillis)
-
-            isExactMerchant || (isSimilarMerchant && timeDiff <= 3 * 60 * 1000L)
+            com.autologue.app.domain.model.TransactionDeduplicator.areSameTransactionEvent(
+                a = existing.toDomain(),
+                b = aliasedTransaction,
+                isSameMerchantAlias = merchantAliasPreferences::isSameMerchant
+            )
         }
 
         if (duplicate != null) {
-            if (!expenseCustomMetaPreferences.isOneTimeEditedId(duplicate.id) &&
-                duplicate.merchantName != aliasedTransaction.merchantName &&
-                merchantAliasPreferences.isKnownAliasTarget(aliasedTransaction.merchantName, isDeposit)
-            ) {
-                transactionDao.updateTransaction(duplicate.copy(merchantName = aliasedTransaction.merchantName))
+            val existingDomain = duplicate.toDomain()
+            if (!expenseCustomMetaPreferences.isOneTimeEdited(existingDomain)) {
+                val forceDep = isDeposit || existingDomain.isDepositTransaction()
+                val existingScore = com.autologue.app.domain.model.TransactionDeduplicator.scoreTransactionQuality(
+                    tx = existingDomain,
+                    isOneTimeEdited = false,
+                    isKnownAliasOrCustomRule = isKnownAliasOrCustomRule(existingDomain),
+                    forceDepositCluster = forceDep
+                )
+                val incomingScore = com.autologue.app.domain.model.TransactionDeduplicator.scoreTransactionQuality(
+                    tx = aliasedTransaction,
+                    isOneTimeEdited = isOneTime,
+                    isKnownAliasOrCustomRule = isKnownAliasOrCustomRule(aliasedTransaction),
+                    forceDepositCluster = forceDep
+                )
+                if (incomingScore > existingScore) {
+                    transactionDao.updateTransaction(
+                        duplicate.copy(
+                            merchantName = aliasedTransaction.merchantName,
+                            category = if (forceDep) ExpenseCategory.INCOME else aliasedTransaction.category,
+                            cardOrBankName = aliasedTransaction.cardOrBankName.ifBlank { duplicate.cardOrBankName }
+                        )
+                    )
+                }
             }
             return@withContext duplicate.id
         }
@@ -419,22 +460,24 @@ class TransactionRepositoryImpl @Inject constructor(
             val isDeposit = domainRawTx.isDepositTransaction()
 
             // 1-0. 사용자가 등록한 결제처 별칭(입금/출금 방향별 자동 치환 규칙) 및 영구 카테고리/카드 설정 + 카드/은행 표준명 최우선 반영
-            val aliasedMerchant = resolveMerchantWithAlias(rawTx.merchantName, raw, rawTx.cardOrBankName, rawTx.timestamp, isDeposit)
+            val baseMerForAlias = if (isDeposit && rawTx.merchantName == "출금 내역") "입금 내역" else rawTx.merchantName
+            val aliasedMerchant = resolveMerchantWithAlias(baseMerForAlias, raw, rawTx.cardOrBankName, rawTx.timestamp, isDeposit)
             val savedBaseCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(aliasedMerchant, isDeposit)
-                ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(rawTx.merchantName, isDeposit)
-            val effectiveCat = savedBaseCategory ?: rawTx.category
+                ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(baseMerForAlias, isDeposit)
+            val effectiveCat = savedBaseCategory
+                ?: if (isDeposit && rawTx.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else rawTx.category
             val savedCard = expenseCustomMetaPreferences.resolveMerchantCardDesignation(aliasedMerchant, isDeposit)
-                ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(rawTx.merchantName, isDeposit)
+                ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(baseMerForAlias, isDeposit)
                 ?: expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
-                    domainRawTx.copy(merchantName = aliasedMerchant.ifBlank { rawTx.merchantName }, category = effectiveCat)
+                    domainRawTx.copy(merchantName = aliasedMerchant.ifBlank { baseMerForAlias }, category = effectiveCat)
                 )
 
             val tx = if ((aliasedMerchant.isNotBlank() && aliasedMerchant != rawTx.merchantName) ||
-                (savedBaseCategory != null && savedBaseCategory != rawTx.category) ||
+                (effectiveCat != rawTx.category) ||
                 (!savedCard.isNullOrBlank() && savedCard != rawTx.cardOrBankName)
             ) {
                 val updated = rawTx.copy(
-                    merchantName = aliasedMerchant.ifBlank { rawTx.merchantName },
+                    merchantName = aliasedMerchant.ifBlank { baseMerForAlias },
                     category = effectiveCat,
                     cardOrBankName = savedCard?.ifBlank { rawTx.cardOrBankName } ?: rawTx.cardOrBankName
                 )
@@ -544,31 +587,36 @@ class TransactionRepositoryImpl @Inject constructor(
             }
         }
 
-        // 2. 퍼지 시간 윈도우 중복 탐지 (동일 금액 + 10분 이내 + 동일/유사 가맹점)
+        // 2. 다중 채널(문자 + 보험사 알림톡 + 은행 알림톡) 시간·금액·입출금 방향 기반 통합 중복 제거 및 대표 항목 보존
         val refreshedAll = transactionDao.getAllTransactionsSync()
-        val sortedList = refreshedAll.sortedBy { it.id }
-        for (i in sortedList.indices) {
-            val a = sortedList[i]
-            if (a.id in toDeleteIds) continue
-            val aMillis = a.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            .filterNot { it.id in toDeleteIds }
+        val domainMap = refreshedAll.associateBy { it.id }
+        val domainList = refreshedAll.map { it.toDomain() }
 
-            for (j in (i + 1) until sortedList.size) {
-                val b = sortedList[j]
-                if (b.id in toDeleteIds) continue
-                if (a.amount != b.amount) continue
-                if (a.toDomain().isDepositTransaction() != b.toDomain().isDepositTransaction()) continue
+        val clusters = com.autologue.app.domain.model.TransactionDeduplicator.clusterDuplicates(
+            transactions = domainList,
+            isSameMerchantAlias = merchantAliasPreferences::isSameMerchant
+        )
 
-                val bMillis = b.timestamp.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                val timeDiff = Math.abs(aMillis - bMillis)
-                val isTimeClose = timeDiff <= 10 * 60 * 1000L
-
-                val isSameOriginalText = a.originalText.isNotBlank() && a.originalText == b.originalText
-                val isSameMerchant = a.merchantName == b.merchantName ||
-                        (a.merchantName.isNotBlank() && b.merchantName.isNotBlank() &&
-                                (a.merchantName.contains(b.merchantName) || b.merchantName.contains(a.merchantName)))
-
-                if (isSameOriginalText || (isTimeClose && isSameMerchant)) {
-                    toDeleteIds.add(b.id)
+        for (cluster in clusters) {
+            if (cluster.size <= 1) continue
+            val winner = com.autologue.app.domain.model.TransactionDeduplicator.selectWinner(
+                cluster = cluster,
+                isOneTimeEditedProvider = expenseCustomMetaPreferences::isOneTimeEdited,
+                isKnownAliasOrRuleProvider = ::isKnownAliasOrCustomRule
+            )
+            val winnerEntity = domainMap[winner.id]
+            if (winnerEntity != null && (winnerEntity.merchantName != winner.merchantName || winnerEntity.category != winner.category)) {
+                transactionDao.updateTransaction(
+                    winnerEntity.copy(
+                        merchantName = winner.merchantName,
+                        category = winner.category
+                    )
+                )
+            }
+            for (member in cluster) {
+                if (member.id != winner.id) {
+                    toDeleteIds.add(member.id)
                 }
             }
         }

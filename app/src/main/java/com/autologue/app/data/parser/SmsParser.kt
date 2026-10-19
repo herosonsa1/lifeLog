@@ -344,10 +344,12 @@ object SmsParser {
         val nhBankResult = parseNhBank(cleanBody, year, fallbackDateTime)
         if (nhBankResult != null) return nhBankResult
 
-        // 8-2. 계좌번호 또는 입금/출금/송금/이체/잔액 패턴 기반 은행 입출금 SMS 정밀 파싱 (카드 승인 문자가 아닌 경우에만 수행)
+        // 8-2. 계좌번호 또는 입금/출금/송금/이체/잔액/보험금 지급 패턴 기반 은행 입출금 SMS 정밀 파싱 (카드 승인 문자가 아닌 경우에만 수행)
         val isBankTransferSms = !isCardApprovalMessage(cleanBody) && (
             cleanBody.contains("출금") || cleanBody.contains("입금") || cleanBody.contains("송금") ||
                 cleanBody.contains("이체") || cleanBody.contains("잔액") ||
+                cleanBody.contains("보험금") || cleanBody.contains("실비") || cleanBody.contains("실손") ||
+                cleanBody.contains("보상금") || cleanBody.contains("지급완료") || cleanBody.contains("지급되었") ||
                 Regex("""\d{3,}[-\d*]{5,}""").containsMatchIn(cleanBody)
             )
         if (isBankTransferSms) {
@@ -672,7 +674,12 @@ object SmsParser {
     private fun parseBankTransferSms(body: String, sender: String?, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
         if (isCardApprovalMessage(body)) return null
 
-        val isDeposit = body.contains("입금") && !body.contains("출금")
+        val cleanDirBody = com.autologue.app.domain.model.stripNeutralTransferTerms(body)
+        val isInsurancePayout = cleanDirBody.contains("보험금") || cleanDirBody.contains("실비") ||
+            cleanDirBody.contains("실손") || cleanDirBody.contains("보상금") ||
+            cleanDirBody.contains("지급완료") || cleanDirBody.contains("지급금액") ||
+            cleanDirBody.contains("지급되었") || cleanDirBody.contains("환급금")
+        val isDeposit = (cleanDirBody.contains("입금") || isInsurancePayout) && !cleanDirBody.contains("출금")
 
         // 잔액 정보 사전 분리 (거래 금액과 잔액 혼동 원천 차단)
         val balanceMatch = Regex("""잔액\s*(?<balance>[\d,]+)원?""").find(body)
@@ -680,13 +687,13 @@ object SmsParser {
         val textWithoutBalance = if (balanceMatch != null) body.replace(balanceMatch.value, "") else body
 
         // 1. 거래 금액 추출
-        val amtMatch = Regex("""(?:출금|입금|송금|이체)?\s*(?<amt>[\d,]+)원\s*(?:출금|입금|송금|이체)?""").find(textWithoutBalance)
+        val amtMatch = Regex("""(?:출금|입금|송금|이체|지급|금액)?\s*[:：]?\s*(?<amt>[\d,]+)원\s*(?:출금|입금|송금|이체|지급)?""").find(textWithoutBalance)
             ?: Regex("""\b(?<amt>[\d,]+)원\b""").find(textWithoutBalance)
         val amount = amtMatch?.groups?.get("amt")?.value?.replace(",", "")?.toLongOrNull() ?: return null
         if (amount <= 0) return null
 
         // 2. 날짜/시간 추출
-        val dateMatch = Regex("""(?<month>\d{1,2})/(?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})""").find(body)
+        val dateMatch = Regex("""(?<month>\d{1,2})[./-](?<day>\d{1,2})\s*(?<hour>\d{1,2}):(?<minute>\d{1,2})""").find(body)
         val timestamp = if (dateMatch != null) {
             val mo = dateMatch.groups["month"]?.value?.toIntOrNull() ?: fallbackDateTime.monthValue
             val da = dateMatch.groups["day"]?.value?.toIntOrNull() ?: fallbackDateTime.dayOfMonth
@@ -698,29 +705,56 @@ object SmsParser {
         }
 
         // 3. 은행명 추출 (표준 은행명으로 정규화)
-        val bankBracketMatch = Regex("""\[(?<bank>[^\]]+)\]""").find(body)
-        val bankCandidate = bankBracketMatch?.groups?.get("bank")?.value?.trim()
+        val allBracketMatches = Regex("""\[(?<tag>[^\]]+)\]""").findAll(body).toList()
+        val bracketTags = allBracketMatches.mapNotNull { it.groups["tag"]?.value?.trim() }
+            .filter { it.isNotBlank() && !it.equals("Web발신", ignoreCase = true) }
+        val bankCandidate = bracketTags.firstOrNull {
+            ExpenseCustomMetaPreferences.inferCanonicalBankName(it, null) in ExpenseCustomMetaPreferences.DEFAULT_BANK_NAMES
+        } ?: bracketTags.firstOrNull()
         val bankName = ExpenseCustomMetaPreferences.inferCanonicalBankName(bankCandidate ?: sender, body)
-            ?: bankCandidate ?: sender ?: "은행 이체"
+
+        // 대괄호 안에 은행명이 아닌 보험사/기관명(예: [한화손해보험], [DB손해보험])이 들어있는 경우 보존
+        val bracketInstitution = bracketTags.firstOrNull { tag ->
+            ExpenseCustomMetaPreferences.inferCanonicalBankName(tag, null) !in ExpenseCustomMetaPreferences.DEFAULT_BANK_NAMES &&
+                !tag.contains("입출금") && !tag.contains("알림") &&
+                tag !in setOf("입금", "출금", "송금", "이체")
+        }
 
         // 4. 계좌번호 추출
         val accMatch = Regex("""(?<acc>\d{3,}[-\d*]{5,})""").find(body)
         val accNo = accMatch?.groups?.get("acc")?.value
 
         // 5. 수취인/입금자/가맹점 추출: 잔액, 금액, 일시, 계좌번호, 은행명, 특수문자 제거 후 남은 이름 추출
-        var remain = body
-        if (bankBracketMatch != null) remain = remain.replace(bankBracketMatch.value, "")
-        if (balanceMatch != null) remain = remain.replace(balanceMatch.value, "")
-        remain = remain.replace(amtMatch.value, "")
-        remain = remain.replace(Regex("""\d{1,2}/\d{1,2}\s*\d{1,2}:\d{1,2}"""), "")
-        if (accNo != null) remain = remain.replace(accNo, "")
-        remain = remain.replace(Regex("""(?:NH농협은행|NH농협|농협은행|농협|KB국민은행|KB국민|국민은행|신한은행|우리은행|하나은행|카카오뱅크|토스뱅크|기업은행|IBK기업|Web발신)"""), "")
-        remain = remain.replace(Regex("""(?:출금|입금|송금|이체|결제|승인|완료|잔액|원)\b"""), "")
-        remain = remain.replace("출금", "").replace("입금", "").replace("송금", "").replace("이체", "")
+        var remain = com.autologue.app.domain.model.stripNeutralTransferTerms(body)
+        for (bm in allBracketMatches) {
+            val tag = bm.groups["tag"]?.value?.trim().orEmpty()
+            if (tag != bracketInstitution) {
+                remain = remain.replace(bm.value, " ")
+            } else {
+                remain = remain.replace(bm.value, " $tag ")
+            }
+        }
+        if (balanceMatch != null) remain = remain.replace(balanceMatch.value, " ")
+        remain = remain.replace(amtMatch.value, " ")
+        remain = remain.replace(Regex("""\d{1,2}[./-]\d{1,2}\s*\d{1,2}:\d{1,2}"""), " ")
+        if (accNo != null) remain = remain.replace(accNo, " ")
+        remain = remain.replace(Regex("""(?:NH농협은행|NH농협|농협은행|농협|KB국민은행|KB국민|국민은행|신한은행|우리은행|하나은행|카카오뱅크|토스뱅크|기업은행|IBK기업|Web발신)"""), " ")
+        remain = remain.replace(Regex("""(?:입출금알림|입출금|입금안내|출금안내|보험금지급|지급완료|지급안내|지급금액|출금|입금|송금|이체|결제|승인|완료|잔액|계좌|안내|알림톡|알림|원)"""), " ")
         remain = remain.trim()
 
-        val nameCandidateMatch = Regex("""([가-힣a-zA-Z\s]{2,10})""").find(remain)
-        val receiverName = nameCandidateMatch?.value?.trim()?.takeIf { it.isNotBlank() && !it.contains("은행") && !it.contains("알림") }
+        val nameCandidates = Regex("""([가-힣a-zA-Z0-9\s()]{2,14})""").findAll(remain)
+            .map { it.value.trim() }
+            .filter { cand ->
+                cand.length >= 2 &&
+                    !cand.contains("은행") &&
+                    !cand.contains("알림") &&
+                    !cand.matches(Regex("""^[\d\s-]+$"""))
+            }
+            .toList()
+
+        val receiverName = bracketInstitution
+            ?: nameCandidates.firstOrNull { it != "정선우" && it != "정*우" && it != "고객님" && it != "정선우님" }
+            ?: nameCandidates.firstOrNull()
 
         // [핵심] 계좌번호는 merchantName(제목)에 절대 노출하지 않고 상대방 이름 또는 입금/출금 내역으로 설정
         val merchant = if (!receiverName.isNullOrBlank()) {

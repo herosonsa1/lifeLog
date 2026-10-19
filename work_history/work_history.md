@@ -2788,3 +2788,34 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - `TextFieldValue` 기반 커서 위치 추적 로직을 통해 연속 입력이나 중간 자릿수 수정 시에도 커서가 튀지 않고 정확한 위치를 유지하며, 콤마(`,`) 바로 뒤에서 백스페이스를 누른 경우에도 앞자리 숫자가 자연스럽게 삭제되도록 처리.
    - 숫자 전용 키패드(`KeyboardType.Number`), 우측 단위 표시(`원`), 원탭 입력값 초기화(`X`) 버튼을 함께 제공.
 - **산출물 및 배포**: `나의일상다이어리_v1.0.19.apk` (`versionCode = 20`), GitHub 커밋 `39a7dcc`.
+
+---
+
+## 79. 다중 채널(문자·보험사 알림톡·은행 알림톡) 동일 시각·동일 금액 입출금 내역 지능형 중복 제거 및 한화손해보험·DB손해보험 실비보상 1건 통합 집계 (2026-10-19, `v1.0.20`)
+
+### 79.1. 사용자 핵심 요청 사항
+- *"입금내역이 3건이 동일한 시간에 같은 금액으로 집계된 것이라면 한건만 집계되고 표기되어야 해. 지금의 경우, 한화손해(실비보상) 으로 집계해뒀는데, 이 부분이 문자로, 그리고 한화손보알림톡으로, 그리고 농협알림톡으로 여러건이 와서 그렇게 되는것 같아. 또한 DB손해보험에서 실비보상을 받을때도 마찬가지야. 집계된 시간과 금액, 그리고 입/출금 내역을 비교해서, 같은 항목이면, 한건만 집계/표시되게 해줘."*
+
+### 79.2. 원인 규명 (Root Cause Analysis)
+1. **다중 채널(SMS + 보험사 알림톡 + 은행 알림톡) 수신 시 상호 표기 차이**:
+   - 보험금 지급 시 ① 보험사 문자/알림톡(`[한화손해보험]`, `[DB손해보험]`), ② 은행 입금 문자(`농협 입금 309,289원 한화정선우`), ③ 은행 알림톡(`[NH농협은행] 입출금 알림 입금 309,289원`) 최대 3건이 동시에 수신됨.
+   - 기존 중복 제거 키는 가맹점명/적요 문자열이 일치해야 동일 거래로 판단했기 때문에, 사용자가 지정한 별칭(`한화손해(실비보상)`), 은행 인자명(`한화정선우`, `DB정선우`), 플레이스홀더(`입금 내역`, `출금 내역`)가 서로 다른 3건의 거래로 분리 노출 및 중복 합산됨.
+2. **은행 알림톡 헤더 `[입출금]` 내 `"출금"` 단어로 인한 입출금 방향 오판**:
+   - `[NH농협은행] 입출금 알림`처럼 제목에 `"입출금"` 복합어가 포함된 경우 `"출금"` 부분 문자열이 매칭되어 실제 입금(`입금 309,289원`) 내역이 `"출금 내역"`(`TRANSFER` 지출 방향)으로 잘못 분류되는 현상 발생.
+3. **`"한화정선우"`, `"DB정선우"`의 본인 계좌 간 이동(`[내 계좌간 이동]`) 오탐**:
+   - 은행 입금 적요에 보험사 약칭과 수신자 성명이 결합된 `"한화정선우"`, `"DB정선우"`가 `contains("정선우")` 조건에 걸려 본인 계좌 간 이체로 오판됨.
+
+### 79.3. 주요 개선 및 구현 내역
+1. **`"입출금"` 중립 복합어 선제 제거 및 입출금 방향 복원 ([`Transaction.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/Transaction.kt), [`SmsParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/SmsParser.kt), [`NotificationParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/NotificationParser.kt))**:
+   - `stripNeutralTransferTerms()`를 도입하여 `"입출금"`, `"입/출금"`, `"입·출금"`, `"출금계좌"`, `"출금가능"` 등 중립 복합어를 제거한 뒤 입금/출금 키워드를 판별하도록 수정.
+   - 기존 DB에 `"출금 내역"`으로 잘못 저장된 레코드도 `originalText`에 `"입금"` 또는 `"보험금 지급"`이 명시되어 있으면 입금(`isDepositDirection == true`)으로 자동 보정하고 대표 거래와 통합.
+2. **보험사+성명 결합 입금자명(`한화정선우`, `DB정선우`)의 본인 계좌 이동 오탐 해제 ([`Transaction.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/Transaction.kt))**:
+   - `Transaction.isSelfTransfer()`가 단순 부분 문자열 포함이 아닌, 순수 성명 토큰이 `"정선우"`, `"정*우"`, `"본인"`과 정확히 일치할 때만 본인 계좌 간 이동으로 판별하도록 정밀화.
+3. **다중 채널 입출금 내역 지능형 클러스터링 및 대표 항목 1건 선정 엔진 ([`TransactionDeduplicator`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/Transaction.kt))**:
+   - 동일 금액(`amount`) · 근접 시각(동일 분 또는 10분 이내) · 동일 입출금 방향(또는 동일 잔액) 내역에 대해 사용자 지정 별칭, 보험사/기관 시맨틱 토큰(`INS_HANWHA`, `INS_DB`, `INS_SAMSUNG`, `INS_HYUNDAI`, `INS_KB`, `INS_MERITZ` 등), 일반 입출금 플레이스홀더 여부를 비교하여 동일 거래 클러스터로 묶음.
+   - 클러스터 내 대표 항목 선정 시 **`1회성 직접 수정` > `영구 별칭/규칙 지정 항목(예: 한화손해(실비보상), DB손해보험(실비보상))` > `구체적 기관명(예: 한화손해보험, DB손해보험)` > `축약 인자명(예: 한화정선우, DB정선우)` > `일반 플레이스홀더(입금 내역, 출금 내역)`** 순으로 점수를 산정하여 가장 구체적인 1건만 남기고 계좌/잔액 메모를 병합.
+4. **보험사 입금 동의어 그룹 자동 매핑 및 전 구간 중복 정제 적용 ([`MerchantAliasPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/MerchantAliasPreferences.kt), [`TransactionRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt), [`ExpenseViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt))**:
+   - `MerchantAliasPreferences`에 한화손해보험(`한화손해보험`, `한화손보`, `한화손해`, `한화정선우`), DB손해보험(`DB손해보험`, `DB손보`, `디비손해보험`, `디비손보`, `DB정선우`, `디비정선우`) 등 주요 보험사 동의어 사전을 내장하여 한쪽만 별칭 등록해도 교차 채널 내역에 동일 별칭이 자동 적용되도록 구현.
+   - `TransactionRepositoryImpl`(`getAllTransactionsFlow`, `getTransactionsByDateRange`, `insertTransaction`, `cleanDuplicates`) 및 `ExpenseViewModel`(`computeFilteredUiState`, `findTwinTransactionsForDeletion`) 전 구간에 `TransactionDeduplicator`를 연동하여 화면 표시·총 수입/지출 집계·DB 중복 정제 모두 1건만 반영되도록 완성.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.20.apk` (`versionCode = 21`).
+

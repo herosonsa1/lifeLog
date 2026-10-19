@@ -581,9 +581,21 @@ class ExpenseViewModel @Inject constructor(
      * 주어진 baseState를 기반으로 삭제 항목·네이버페이·중복 내역을 제거하고
      * 월간/기간 필터 및 카테고리·사용자 통계를 계산한 최신 ExpenseUiState를 반환합니다.
      */
+    private fun isKnownAliasOrCustomRuleForTx(tx: Transaction): Boolean {
+        val isDep = tx.isDepositTransaction()
+        val resolvedMer = merchantAliasPreferences.resolveAlias(tx.merchantName, isDep).ifBlank { tx.merchantName }
+        return resolvedMer != tx.merchantName ||
+            merchantAliasPreferences.isKnownAliasTarget(resolvedMer, isDep) ||
+            merchantAliasPreferences.isKnownAliasTarget(tx.merchantName, isDep) ||
+            expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMer, isDep) != null ||
+            expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDep) != null ||
+            expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx) != null ||
+            expenseCustomMetaPreferences.resolveUserClassification(tx) != null
+    }
+
     private fun computeFilteredUiState(baseState: ExpenseUiState): ExpenseUiState {
         var state = baseState
-        val dedupedAll = state.allTransactions
+        val mappedCandidates = state.allTransactions
             .asSequence()
             .filterNot { tx ->
                 tx.id in deletedTxIdsInSession ||
@@ -600,11 +612,13 @@ class ExpenseViewModel @Inject constructor(
                     }
                 } else {
                     val isDeposit = tx.isDepositTransaction()
-                    val resolvedMerchant = merchantAliasPreferences.resolveAlias(tx.merchantName, isDeposit)
-                        .ifBlank { tx.merchantName }
+                    val baseMerchant = if (isDeposit && tx.merchantName == "출금 내역") "입금 내역" else tx.merchantName
+                    val resolvedMerchant = merchantAliasPreferences.resolveAlias(baseMerchant, isDeposit)
+                        .ifBlank { baseMerchant }
+                    val fallbackCat = if (isDeposit && tx.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else tx.category
                     val resolvedCategory = expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMerchant, isDeposit)
-                        ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDeposit)
-                        ?: tx.category
+                        ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(baseMerchant, isDeposit)
+                        ?: fallbackCat
                     val baseAdjusted = if (resolvedMerchant != tx.merchantName || resolvedCategory != tx.category) {
                         tx.copy(
                             merchantName = resolvedMerchant,
@@ -628,12 +642,14 @@ class ExpenseViewModel @Inject constructor(
                         cardOrBankName = adjustedTx.cardOrBankName
                     )
             }
-            .distinctBy { tx ->
-                val minuteStamp = "${tx.timestamp.year}_${tx.timestamp.monthValue}_${tx.timestamp.dayOfMonth}_${tx.timestamp.hour}_${tx.timestamp.minute}"
-                val dirTag = if (tx.isDepositTransaction()) "IN" else "OUT"
-                "${dirTag}_${minuteStamp}_${tx.amount}_${com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(tx.merchantName)}"
-            }
             .toList()
+
+        val dedupedAll = com.autologue.app.domain.model.TransactionDeduplicator.deduplicate(
+            transactions = mappedCandidates,
+            isSameMerchantAlias = merchantAliasPreferences::isSameMerchant,
+            isOneTimeEditedProvider = expenseCustomMetaPreferences::isOneTimeEdited,
+            isKnownAliasOrRuleProvider = ::isKnownAliasOrCustomRuleForTx
+        )
 
         // [월 변경 자동 포커싱] 최초 진입 시 현재 월에 내역이 0건이고 이전 월에 거래 내역이 존재하면 가장 최근 거래 연월로 자동 포커싱
         if (!hasAutoFocusedMonth && dedupedAll.isNotEmpty() && state.filterMode == ExpenseDateFilterMode.MONTH) {
@@ -1635,6 +1651,14 @@ class ExpenseViewModel @Inject constructor(
         return sourceList.filter { other ->
             if (other.id == targetTx.id) return@filter true
             if (other.amount != targetTx.amount) return@filter false
+            if (com.autologue.app.domain.model.TransactionDeduplicator.areSameTransactionEvent(
+                    a = targetTx,
+                    b = other,
+                    isSameMerchantAlias = merchantAliasPreferences::isSameMerchant
+                )
+            ) {
+                return@filter true
+            }
             if (other.isDepositTransaction() != targetIsDeposit) return@filter false
             if (other.timestamp.toLocalDate() != targetDate) return@filter false
 

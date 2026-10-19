@@ -1,6 +1,7 @@
 package com.autologue.app.data.parser
 
 import com.autologue.app.domain.model.isBankAccountTransaction
+import com.autologue.app.domain.model.isSelfTransfer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -272,6 +273,121 @@ class SmsParserTest {
 
         assertTrue(prefs.isTransactionDeleted(txPrimary))
         assertTrue(prefs.isTransactionDeleted(txTwin))
+    }
+
+    @Test
+    fun `한화손해보험 및 DB손해보험 실비보상 다중 채널(문자, 보험사 알림톡, 농협 입출금 알림톡) 수신 시 1건만 집계 및 표시되어야 한다`() {
+        val aliasPrefs = com.autologue.app.data.preferences.MerchantAliasPreferences()
+        aliasPrefs.registerAlias(
+            oldName = "한화손해보험",
+            newName = "한화손해(실비보상)",
+            isDeposit = true
+        )
+
+        // 1. 농협 '[입출금]' 알림톡 파싱 시 '입출금' 헤더 때문에 '출금 내역'으로 오분류되지 않고 입금(INCOME)으로 파싱되는지 검증
+        val nhAlimTalk = NotificationParser.parse(
+            packageName = "com.kakao.talk",
+            title = "[NH농협은행] 입출금 알림",
+            text = "입금 309,289원\n10/19 13:47\n312-0000-9414-21\n한화정선우\n잔액 1,027,838원"
+        ) as? NotificationParser.ParsedNotificationResult.TxResult
+        assertNotNull(nhAlimTalk)
+        assertEquals(com.autologue.app.domain.model.ExpenseCategory.INCOME, nhAlimTalk!!.transaction.category)
+        assertEquals("한화정선우", nhAlimTalk.transaction.merchantName)
+        assertTrue(com.autologue.app.domain.model.isDepositDirection(
+            category = nhAlimTalk.transaction.category,
+            originalText = nhAlimTalk.transaction.originalText,
+            transferMemo = nhAlimTalk.transaction.transferMemo,
+            merchantName = nhAlimTalk.transaction.merchantName
+        ))
+
+        // 2. '한화정선우', 'DB정선우'는 본인 계좌 간 이동(isSelfTransfer)이 아니어야 하며, 순수 '정선우'만 계좌 간 이동이어야 함
+        val txHanwhaSender = com.autologue.app.domain.model.Transaction(
+            id = 2L,
+            amount = 309289L,
+            merchantName = "한화정선우",
+            originalText = "농협 입금 309,289원 10/19 13:47 312-****-9414-21 한화정선우 잔액 1,027,838원",
+            timestamp = LocalDateTime.of(2026, 10, 19, 13, 47),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER,
+            category = com.autologue.app.domain.model.ExpenseCategory.INCOME,
+            cardOrBankName = "NH농협은행",
+            transferMemo = "계좌: 312-****-9414-21 · 잔액 1,027,838원"
+        )
+        assertEquals(false, txHanwhaSender.isSelfTransfer())
+
+        // 3. 사용자 스크린샷과 동일한 3건(한화손해(실비보상), 한화정선우, 출금 내역 오탐 레코드) 중복 통합 테스트
+        val txHanwhaMain = com.autologue.app.domain.model.Transaction(
+            id = 1L,
+            amount = 309289L,
+            merchantName = "한화손해(실비보상)",
+            originalText = "[한화손해보험] 보험금 지급 안내 309,289원 10/19 13:47 계좌 26051804592",
+            timestamp = LocalDateTime.of(2026, 10, 19, 13, 47),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER,
+            category = com.autologue.app.domain.model.ExpenseCategory.INCOME,
+            cardOrBankName = "NH농협은행",
+            transferMemo = "계좌: 26051804592"
+        )
+        val txPhantomWithdraw = com.autologue.app.domain.model.Transaction(
+            id = 3L,
+            amount = 309289L,
+            merchantName = "출금 내역",
+            originalText = "[NH농협은행] 입출금 알림 입금 309,289원 10/19 13:47 계좌 312-****-9414-21 잔액 1,027,838원",
+            timestamp = LocalDateTime.of(2026, 10, 19, 13, 47),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER,
+            category = com.autologue.app.domain.model.ExpenseCategory.TRANSFER,
+            cardOrBankName = "NH농협은행",
+            transferMemo = "계좌: 312-****-9414-21 · 잔액 1,027,838원"
+        )
+
+        val dedupedHanwha = com.autologue.app.domain.model.TransactionDeduplicator.deduplicate(
+            transactions = listOf(txPhantomWithdraw, txHanwhaSender, txHanwhaMain),
+            isSameMerchantAlias = aliasPrefs::isSameMerchant,
+            isKnownAliasOrRuleProvider = { it.merchantName == "한화손해(실비보상)" }
+        )
+        assertEquals(1, dedupedHanwha.size)
+        assertEquals("한화손해(실비보상)", dedupedHanwha.first().merchantName)
+        assertEquals(com.autologue.app.domain.model.ExpenseCategory.INCOME, dedupedHanwha.first().category)
+
+        // 4. DB손해보험 실비보상 3건(DB손해보험, DB정선우, 농협 입금 내역) 중복 통합 테스트
+        val txDbMain = com.autologue.app.domain.model.Transaction(
+            id = 11L,
+            amount = 185000L,
+            merchantName = "DB손해보험(실비보상)",
+            originalText = "[DB손해보험] 실손의료비 보험금 185,000원이 지급되었습니다. 10/19 14:10",
+            timestamp = LocalDateTime.of(2026, 10, 19, 14, 10),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER,
+            category = com.autologue.app.domain.model.ExpenseCategory.INCOME,
+            cardOrBankName = "NH농협은행"
+        )
+        val txDbBankSms = com.autologue.app.domain.model.Transaction(
+            id = 12L,
+            amount = 185000L,
+            merchantName = "DB정선우",
+            originalText = "농협 입금 185,000원 10/19 14:10 DB정선우 잔액 1,212,838원",
+            timestamp = LocalDateTime.of(2026, 10, 19, 14, 10),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER,
+            category = com.autologue.app.domain.model.ExpenseCategory.INCOME,
+            cardOrBankName = "NH농협은행",
+            transferMemo = "잔액 1,212,838원"
+        )
+        val txDbBankAlim = com.autologue.app.domain.model.Transaction(
+            id = 13L,
+            amount = 185000L,
+            merchantName = "입금 내역",
+            originalText = "[NH농협은행] 입출금 알림 입금 185,000원 10/19 14:10 잔액 1,212,838원",
+            timestamp = LocalDateTime.of(2026, 10, 19, 14, 10),
+            paymentMethod = com.autologue.app.domain.model.PaymentMethod.BANK_TRANSFER,
+            category = com.autologue.app.domain.model.ExpenseCategory.INCOME,
+            cardOrBankName = "NH농협은행",
+            transferMemo = "잔액 1,212,838원"
+        )
+
+        val dedupedDb = com.autologue.app.domain.model.TransactionDeduplicator.deduplicate(
+            transactions = listOf(txDbBankAlim, txDbBankSms, txDbMain),
+            isSameMerchantAlias = aliasPrefs::isSameMerchant,
+            isKnownAliasOrRuleProvider = { it.merchantName == "DB손해보험(실비보상)" }
+        )
+        assertEquals(1, dedupedDb.size)
+        assertEquals("DB손해보험(실비보상)", dedupedDb.first().merchantName)
     }
 }
 
