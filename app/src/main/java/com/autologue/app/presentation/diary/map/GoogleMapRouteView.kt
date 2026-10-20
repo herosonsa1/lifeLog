@@ -301,11 +301,14 @@ fun GoogleMapRouteView(
             .filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
     }
 
-    var mapFocusStep by remember { mutableStateOf<RouteStep?>(selectedStep) }
+    var mapFocusStep by remember(validCoordinateSteps) {
+        mutableStateOf<RouteStep?>(selectedStep ?: validCoordinateSteps.firstOrNull())
+    }
+    var isSingleStepZoomed by remember(validCoordinateSteps, periodFilter) { mutableStateOf(false) }
     var selectedTripGroupId by remember { mutableStateOf<String?>(null) }
-    // 기본값: 실제 구글 한국지도 타일 + 시·군·구 지역 구분선 + 실제 도로 경로가 나오는 상세 한국 지도 모드
+    // 기본값: 캡처 화면 설정과 동일하게 상세 한국 지도 모드(true) + 지도 확대 보기(true, 480dp, '⤡ 기본 크기' 표시)
     var isOnlineMapMode by remember { mutableStateOf(true) }
-    var isMapExpanded by remember { mutableStateOf(false) }
+    var isMapExpanded by remember { mutableStateOf(true) }
 
     val tripGroups = remember(validCoordinateSteps) { segmentRouteIntoTrips(validCoordinateSteps) }
     val selectedTripGroup = remember(tripGroups, selectedTripGroupId) {
@@ -330,7 +333,7 @@ fun GoogleMapRouteView(
 
     LaunchedEffect(periodFilter) {
         selectedTripGroupId = null
-        mapFocusStep = null
+        isSingleStepZoomed = false
     }
 
     Column(modifier = Modifier.fillMaxSize().background(AppColors.background)) {
@@ -491,8 +494,10 @@ fun GoogleMapRouteView(
                 MidKoreaStaticMapView(
                     steps = bottomDisplaySteps,
                     focusedStep = mapFocusStep,
+                    zoomToFocusedStep = isSingleStepZoomed,
                     onStepClick = { step ->
                         mapFocusStep = step
+                        isSingleStepZoomed = true
                         onStepSelected(step)
                     },
                     useRealMapTiles = isOnlineMapMode,
@@ -536,8 +541,10 @@ fun GoogleMapRouteView(
                                     modifier = Modifier.clickable {
                                         if (mapFocusStep != null) {
                                             mapFocusStep = null
+                                            isSingleStepZoomed = false
                                         } else {
                                             selectedTripGroupId = null
+                                            isSingleStepZoomed = false
                                         }
                                     }
                                 ) {
@@ -930,6 +937,7 @@ fun GoogleMapRouteView(
                             OutlinedButton(
                                 onClick = {
                                     mapFocusStep = step
+                                    isSingleStepZoomed = true
                                     onStepSelected(step)
                                 },
                                 shape = AppShapes.button,
@@ -1394,19 +1402,19 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
               transform: scale(1.2);
             }
             .pin-caption {
-              margin-top: 2px;
-              background: rgba(255, 255, 255, 0.95);
+              margin-top: 4px;
+              background: #ffffff;
               color: #0f172a;
-              font-size: 10px;
-              font-weight: 700;
-              padding: 1px 6px;
+              font-size: 12.5px;
+              font-weight: 800;
+              padding: 4px 9px;
               border-radius: 6px;
-              border: 1px solid #cbd5e1;
+              border: 2.4px solid #2563eb;
               white-space: nowrap;
-              box-shadow: 0 2px 5px rgba(0,0,0,0.18);
+              box-shadow: 0 0 0 2px #ffffff, 0 4px 10px rgba(15,23,42,0.42);
             }
-            .pin-caption.start { border-color: #16a34a; color: #15803d; }
-            .pin-caption.end { border-color: #dc2626; color: #b91c1c; }
+            .pin-caption.start { border-color: #16a34a; color: #14532d; background: #f0fdf4; }
+            .pin-caption.end { border-color: #dc2626; color: #991b1b; background: #fef2f2; }
             .pin-caption.focus { border-color: #ea580c; color: #9a3412; background: #fff7ed; }
             .custom-pin-dot {
               width: 10px;

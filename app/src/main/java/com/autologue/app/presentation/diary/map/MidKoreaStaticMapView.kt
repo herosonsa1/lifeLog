@@ -511,6 +511,7 @@ private data class PinPlacement(
 fun MidKoreaStaticMapView(
     steps: List<RouteStep>,
     focusedStep: RouteStep? = null,
+    zoomToFocusedStep: Boolean = false,
     onStepClick: (RouteStep) -> Unit = {},
     useRealMapTiles: Boolean = false,
     modifier: Modifier = Modifier
@@ -526,14 +527,16 @@ fun MidKoreaStaticMapView(
             .filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
     }
 
-    val initialCamera = remember(validSteps, focusedStep) {
-        WebMercator.computeAutoFitCamera(validSteps, focusedStep)
+    val effectiveCameraStep = if (zoomToFocusedStep) focusedStep else null
+
+    val initialCamera = remember(validSteps, effectiveCameraStep) {
+        WebMercator.computeAutoFitCamera(validSteps, effectiveCameraStep)
     }
 
     var centerLat by remember { mutableDoubleStateOf(initialCamera.first.first) }
     var centerLng by remember { mutableDoubleStateOf(initialCamera.first.second) }
     var zoomLevel by remember { mutableFloatStateOf(initialCamera.second) }
-    var selectedStep by remember(focusedStep) { mutableStateOf(focusedStep) }
+    var selectedStep by remember(effectiveCameraStep) { mutableStateOf(effectiveCameraStep) }
 
     // 타일 스타일 ("road": 구글 한국지도, "sat": 위성+지명) 및 지역경계선 표시 토글
     var tileStyle by remember { mutableStateOf("road") }
@@ -541,9 +544,9 @@ fun MidKoreaStaticMapView(
     var tileRedrawTick by remember { mutableIntStateOf(0) }
     var roadGeometry by remember(validSteps) { mutableStateOf<List<Pair<Double, Double>>?>(null) }
 
-    // 경로나 포커스 지점이 바뀌면 카메라를 자동으로 해당 구역에 맞춰 확대
-    LaunchedEffect(validSteps, focusedStep) {
-        val (center, z) = WebMercator.computeAutoFitCamera(validSteps, focusedStep)
+    // 경로나 포커스 지점이 바뀌면 카메라를 자동으로 해당 구역(기본값: 전체 경로)에 맞춰 확대
+    LaunchedEffect(validSteps, effectiveCameraStep) {
+        val (center, z) = WebMercator.computeAutoFitCamera(validSteps, effectiveCameraStep)
         centerLat = center.first
         centerLng = center.second
         zoomLevel = z
@@ -625,6 +628,26 @@ fun MidKoreaStaticMapView(
             val tick = tileRedrawTick
             if (tick < 0) return@Canvas
 
+            val placements = computePinPlacements(
+                steps = validSteps,
+                centerLat = centerLat,
+                centerLng = centerLng,
+                zoom = zoomLevel,
+                w = w,
+                h = h,
+                baseTilePx = baseTilePx
+            )
+            val pinAvoidRects = placements.map { p ->
+                val boxHalfW = 72.dp.toPx()
+                val boxHalfH = 44.dp.toPx()
+                androidx.compose.ui.geometry.Rect(
+                    left = p.displayPoint.x - boxHalfW,
+                    top = p.displayPoint.y - boxHalfH,
+                    right = p.displayPoint.x + boxHalfW,
+                    bottom = p.displayPoint.y + boxHalfH
+                )
+            }
+
             // 1. 베이스로 구글지도 스타일 행정구역 다각형·수계·고속도로 벡터 맵을 먼저 그려서
             //    타일 로딩 중이거나 오프라인일 때도 빈 화면이 절대 발생하지 않도록 보장
             drawGoogleStyleKoreaBaseMap(
@@ -635,7 +658,8 @@ fun MidKoreaStaticMapView(
                 zoom = zoomLevel,
                 baseTilePx = baseTilePx,
                 textMeasurer = textMeasurer,
-                drawLabelsAndBorders = !useRealMapTiles
+                drawLabelsAndBorders = !useRealMapTiles,
+                avoidRects = pinAvoidRects
             )
 
             // 2. [상세 한국 지도 모드] 실제 구글 한국어 고해상도 지도 타일 렌더링
@@ -697,20 +721,12 @@ fun MidKoreaStaticMapView(
                     baseTilePx = baseTilePx,
                     textMeasurer = textMeasurer,
                     isOverTileMap = useRealMapTiles,
-                    isSatellite = useRealMapTiles && tileStyle == "sat"
+                    isSatellite = useRealMapTiles && tileStyle == "sat",
+                    avoidRects = pinAvoidRects
                 )
             }
 
             // 4. 주행 경로선(Polyline) 렌더링 (OSRM 실제 도로망 경로가 로드되면 실제 도로 굴곡으로, 로드 전에는 즉시 직선/곡선 경로로 표시)
-            val placements = computePinPlacements(
-                steps = validSteps,
-                centerLat = centerLat,
-                centerLng = centerLng,
-                zoom = zoomLevel,
-                w = w,
-                h = h,
-                baseTilePx = baseTilePx
-            )
 
             if (validSteps.size > 1) {
                 val pathCoords = roadGeometry ?: validSteps.map { it.latitude!! to it.longitude!! }
@@ -806,17 +822,17 @@ fun MidKoreaStaticMapView(
                     )
                 }
 
-                val radius = if (isFocus) 14.5.dp.toPx() else 12.5.dp.toPx()
+                val radius = if (isFocus) 15.dp.toPx() else 13.5.dp.toPx()
 
                 // 마커 그림자 및 흰색 테두리 + 원형 배지
                 drawCircle(
-                    color = Color.Black.copy(alpha = 0.28f),
-                    radius = radius + 3.dp.toPx(),
-                    center = Offset(pt.x, pt.y + 2.dp.toPx())
+                    color = Color.Black.copy(alpha = 0.34f),
+                    radius = radius + 3.2.dp.toPx(),
+                    center = Offset(pt.x, pt.y + 2.2.dp.toPx())
                 )
                 drawCircle(
                     color = Color.White,
-                    radius = radius + 2.2.dp.toPx(),
+                    radius = radius + 2.5.dp.toPx(),
                     center = pt
                 )
                 drawCircle(
@@ -830,7 +846,7 @@ fun MidKoreaStaticMapView(
                     text = AnnotatedString(numStr),
                     style = TextStyle(
                         color = Color.White,
-                        fontSize = 11.5.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.ExtraBold,
                         textAlign = TextAlign.Center
                     )
@@ -849,50 +865,86 @@ fun MidKoreaStaticMapView(
                     .replace("승차 (출발)", "")
                     .replace("하차", "")
                     .trim()
-                    .ifBlank { rawLabel.take(8) }
+                    .ifBlank { rawLabel.take(10) }
                 val rolePrefix = when {
                     isStart -> "출발·"
                     isEnd -> "도착·"
                     else -> ""
                 }
-                val placeLabel = (rolePrefix + cleanPlace).take(11)
+                val placeLabel = (rolePrefix + cleanPlace).take(14)
 
+                val labelTextColor = when {
+                    isFocus -> Color(0xFF9A3412)
+                    isStart -> Color(0xFF14532D)
+                    isEnd -> Color(0xFF991B1B)
+                    else -> Color(0xFF0F172A)
+                }
                 val labelLayout = textMeasurer.measure(
                     text = AnnotatedString(placeLabel),
                     style = TextStyle(
-                        color = if (isFocus) Color(0xFF9A3412) else Color(0xFF0F172A),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
+                        color = labelTextColor,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.ExtraBold
                     )
                 )
-                val labelW = labelLayout.size.width + 14f
-                val labelH = labelLayout.size.height + 6f
+                val padH = 9.dp.toPx()
+                val padV = 4.5.dp.toPx()
+                val labelW = labelLayout.size.width + padH * 2f
+                val labelH = labelLayout.size.height + padV * 2f
+                val gapY = 5.dp.toPx()
+                val screenMargin = 6.dp.toPx()
                 val labelTopY = if (placement.labelAbove) {
-                    pt.y - radius - labelH - 5f
+                    pt.y - radius - labelH - gapY
                 } else {
-                    pt.y + radius + 5f
+                    pt.y + radius + gapY
                 }
                 val labelTopLeft = Offset(
-                    x = (pt.x - labelW / 2f).coerceIn(4f, (w - labelW - 4f).coerceAtLeast(4f)),
-                    y = labelTopY.coerceIn(4f, (h - labelH - 4f).coerceAtLeast(4f))
+                    x = (pt.x - labelW / 2f).coerceIn(screenMargin, (w - labelW - screenMargin).coerceAtLeast(screenMargin)),
+                    y = labelTopY.coerceIn(screenMargin, (h - labelH - screenMargin).coerceAtLeast(screenMargin))
                 )
+                val boxCorner = CornerRadius(6.5.dp.toPx(), 6.5.dp.toPx())
+                val haloExpand = 2.2.dp.toPx()
+                val borderColor = if (isFocus) Color(0xFFEA580C) else pinColor
+                val boxBgColor = when {
+                    isFocus -> Color(0xFFFFF7ED)
+                    isStart -> Color(0xFFF0FDF4)
+                    isEnd -> Color(0xFFFEF2F2)
+                    else -> Color.White
+                }
 
+                // 1) 네모 텍스트 박스 하단 그림자 (지도 배경과 입체 분리)
                 drawRoundRect(
-                    color = Color.White.copy(alpha = 0.96f),
+                    color = Color(0xFF0F172A).copy(alpha = 0.36f),
+                    topLeft = Offset(labelTopLeft.x - 1.dp.toPx(), labelTopLeft.y + 2.5.dp.toPx()),
+                    size = Size(labelW + 2.dp.toPx(), labelH + 1.dp.toPx()),
+                    cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                )
+                // 2) 외곽 순백색 헤일로(Halo) 테두리 (도로선·행정경계 점선이 겹쳐도 텍스트 박스가 선명하게 부각됨)
+                drawRoundRect(
+                    color = Color.White,
+                    topLeft = Offset(labelTopLeft.x - haloExpand, labelTopLeft.y - haloExpand),
+                    size = Size(labelW + haloExpand * 2f, labelH + haloExpand * 2f),
+                    cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                )
+                // 3) 고대비 불투명 배경 채우기
+                drawRoundRect(
+                    color = boxBgColor,
                     topLeft = labelTopLeft,
                     size = Size(labelW, labelH),
-                    cornerRadius = CornerRadius(6f, 6f)
+                    cornerRadius = boxCorner
                 )
+                // 4) 굵은 컬러 강조 테두리 (2.4dp)
                 drawRoundRect(
-                    color = if (isFocus) Color(0xFFEA580C) else pinColor,
+                    color = borderColor,
                     topLeft = labelTopLeft,
                     size = Size(labelW, labelH),
-                    cornerRadius = CornerRadius(6f, 6f),
-                    style = Stroke(width = 1.6f)
+                    cornerRadius = boxCorner,
+                    style = Stroke(width = 2.4.dp.toPx())
                 )
+                // 5) 굵고 선명한 지점명 텍스트
                 drawText(
                     textLayoutResult = labelLayout,
-                    topLeft = Offset(labelTopLeft.x + 7f, labelTopLeft.y + 3f)
+                    topLeft = Offset(labelTopLeft.x + padH, labelTopLeft.y + padV)
                 )
             }
         }
@@ -1146,7 +1198,8 @@ private fun DrawScope.drawDistrictBoundariesOverlay(
     baseTilePx: Float,
     textMeasurer: TextMeasurer,
     isOverTileMap: Boolean,
-    isSatellite: Boolean
+    isSatellite: Boolean,
+    avoidRects: List<androidx.compose.ui.geometry.Rect> = emptyList()
 ) {
     fun pt(lat: Double, lng: Double): Offset =
         WebMercator.toScreenOffset(lat, lng, centerLat, centerLng, zoom, w, h, baseTilePx)
@@ -1212,8 +1265,10 @@ private fun DrawScope.drawDistrictBoundariesOverlay(
         style = Stroke(width = 2.2.dp.toPx())
     )
 
-    // 계층형 시·군·구 및 동 라벨 렌더링
-    val placedRects = mutableListOf<androidx.compose.ui.geometry.Rect>()
+    // 계층형 시·군·구 및 동 라벨 렌더링 (거점 네모 텍스트 박스와 겹치는 배경 지명은 자동 숨김)
+    val placedRects = mutableListOf<androidx.compose.ui.geometry.Rect>().apply {
+        addAll(avoidRects)
+    }
     MidKoreaBounds.ANCHORS.sortedBy { it.tier }.forEach { anchor ->
         val shouldShow = when (anchor.tier) {
             1 -> zoom <= 12.8f
@@ -1290,7 +1345,8 @@ private fun DrawScope.drawGoogleStyleKoreaBaseMap(
     zoom: Float,
     baseTilePx: Float,
     textMeasurer: TextMeasurer,
-    drawLabelsAndBorders: Boolean
+    drawLabelsAndBorders: Boolean,
+    avoidRects: List<androidx.compose.ui.geometry.Rect> = emptyList()
 ) {
     fun pt(lat: Double, lng: Double): Offset =
         WebMercator.toScreenOffset(lat, lng, centerLat, centerLng, zoom, w, h, baseTilePx)
@@ -1414,7 +1470,8 @@ private fun DrawScope.drawGoogleStyleKoreaBaseMap(
             baseTilePx = baseTilePx,
             textMeasurer = textMeasurer,
             isOverTileMap = false,
-            isSatellite = false
+            isSatellite = false,
+            avoidRects = avoidRects
         )
     }
 }
