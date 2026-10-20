@@ -69,7 +69,8 @@ data class RouteTripGroup(
     val brandEmoji: String,
     val date: java.time.LocalDate,
     val steps: List<RouteStep>,
-    val totalDistanceKm: Double = 0.0
+    val totalDistanceKm: Double = 0.0,
+    val isCommuteTrip: Boolean = false
 )
 
 fun isDepartureStep(step: RouteStep): Boolean {
@@ -80,6 +81,138 @@ fun isDepartureStep(step: RouteStep): Boolean {
 fun isArrivalStep(step: RouteStep): Boolean {
     return step.tags.any { it.contains("도착") || it.contains("하차") } ||
         step.title.contains("도착") || step.title.contains("하차")
+}
+
+/**
+ * 집(거주지: 하남시 학암동/위례동/수서/더샵 등) 텍스트 또는 좌표(반경 2.3km) 여부 판별
+ */
+fun isHomePlaceOrCoord(text: String, lat: Double? = null, lng: Double? = null): Boolean {
+    if (text.contains("학암") || text.contains("위례") || text.contains("우리집") ||
+        text.contains("수서") || text.contains("더샵") || text.contains("광평로") ||
+        text.contains("자곡") || text.contains("세곡") ||
+        Regex("(^|[^가-힣a-zA-Z0-9])집($|[^가-힣a-zA-Z0-9])").containsMatchIn(text)
+    ) {
+        return true
+    }
+    if (lat != null && lng != null && (lat != 0.0 || lng != 0.0)) {
+        val distWirye = LocationDistanceUtils.calculateStraightDistanceKm(lat, lng, 37.4785, 127.1465)
+        val distSuseo = LocationDistanceUtils.calculateStraightDistanceKm(lat, lng, 37.4847, 127.0945)
+        if (distWirye <= 2.3 || distSuseo <= 2.3) return true
+    }
+    return false
+}
+
+/**
+ * 직장(회사: 영등포구 영등포동/여의도/문래/당산 등) 텍스트 또는 좌표(반경 2.5km) 여부 판별
+ */
+fun isOfficePlaceOrCoord(text: String, lat: Double? = null, lng: Double? = null): Boolean {
+    if (text.contains("영등포") || text.contains("여의도") || text.contains("문래") ||
+        text.contains("당산") || text.contains("회사") || text.contains("직장") || text.contains("사옥")
+    ) {
+        return true
+    }
+    if (lat != null && lng != null && (lat != 0.0 || lng != 0.0)) {
+        val distYdp = LocationDistanceUtils.calculateStraightDistanceKm(lat, lng, 37.5172, 126.9068)
+        val distYeouido = LocationDistanceUtils.calculateStraightDistanceKm(lat, lng, 37.5219, 126.9245)
+        if (distYdp <= 2.5 || distYeouido <= 2.5) return true
+    }
+    return false
+}
+
+/**
+ * 개별 RouteStep이 출퇴근(출근/퇴근/왕복) 주행 지점인지 판별합니다.
+ * - 골프 라운드(GOLF)나 제3의 외출 목적지(강남, 분당, 춘천 등)로 향하는 주행은 출퇴근에서 제외하여 보존합니다.
+ */
+fun isCommuteStep(step: RouteStep, contextSteps: List<RouteStep> = emptyList()): Boolean {
+    if (step.stepType == RouteStepType.GOLF) return false
+    val fullText = buildString {
+        append(step.title).append(" ")
+        if (!step.description.isNullOrBlank()) append(step.description).append(" ")
+        if (!step.locationName.isNullOrBlank()) append(step.locationName).append(" ")
+        if (!step.address.isNullOrBlank()) append(step.address).append(" ")
+        append(step.tags.joinToString(" "))
+    }
+    if (fullText.contains("골프") || fullText.contains("CC") || fullText.contains("라운딩") || fullText.contains("라운드")) {
+        return false
+    }
+    if (fullText.contains("출근") || fullText.contains("퇴근") || fullText.contains("출퇴근") ||
+        fullText.contains("집->회사") || fullText.contains("회사->집") ||
+        fullText.contains("집 ➔ 회사") || fullText.contains("회사 ➔ 집")
+    ) {
+        return true
+    }
+    if (step.stepType != RouteStepType.DRIVING) return false
+
+    // 1. 설명/제목에 화살표(➔ 또는 ->)가 있는 경우 출발지와 도착지가 [집 <-> 회사] 조합인지 직접 확인
+    val routeSource = step.description?.takeIf { it.contains("➔") || it.contains("->") }
+        ?: step.title.takeIf { it.contains("➔") || it.contains("->") }
+    if (routeSource != null) {
+        val delimiter = if (routeSource.contains("➔")) "➔" else "->"
+        val startPart = routeSource.substringBefore(delimiter)
+        val endPart = routeSource.substringAfter(delimiter).substringBefore("(")
+        val startIsHome = isHomePlaceOrCoord(startPart)
+        val startIsOffice = isOfficePlaceOrCoord(startPart)
+        val endIsHome = isHomePlaceOrCoord(endPart)
+        val endIsOffice = isOfficePlaceOrCoord(endPart)
+        if ((startIsHome && endIsOffice) || (startIsOffice && endIsHome)) {
+            return true
+        }
+        // 화살표 양쪽이 명확히 다른 제3의 장소(예: 학암동 ➔ 강남구 역삼동)인 경우 출퇴근이 아님
+        if (startPart.isNotBlank() && endPart.isNotBlank() && !endIsOffice && !startIsOffice) {
+            return false
+        }
+    }
+
+    val selfIsHome = isHomePlaceOrCoord(fullText, step.latitude, step.longitude)
+    val selfIsOffice = isOfficePlaceOrCoord(fullText, step.latitude, step.longitude)
+    if (!selfIsHome && !selfIsOffice) return false
+
+    // 2. 동일 일자의 주행 컨텍스트에서 집<->회사 이동 세션인지 판별
+    val sameDayDriving = contextSteps.filter {
+        it.stepType == RouteStepType.DRIVING && it.time.toLocalDate() == step.time.toLocalDate()
+    }
+    if (sameDayDriving.isNotEmpty()) {
+        val nearbySteps = sameDayDriving.filter {
+            it.id != step.id && java.time.Duration.between(it.time, step.time).abs().toMinutes() <= 240L
+        }
+        if (nearbySteps.isNotEmpty()) {
+            val pairedWithOffice = selfIsHome && nearbySteps.any {
+                val t = listOfNotNull(it.title, it.description, it.locationName, it.address).joinToString(" ")
+                isOfficePlaceOrCoord(t, it.latitude, it.longitude)
+            }
+            val pairedWithHome = selfIsOffice && nearbySteps.any {
+                val t = listOfNotNull(it.title, it.description, it.locationName, it.address).joinToString(" ")
+                isHomePlaceOrCoord(t, it.latitude, it.longitude)
+            }
+            if (pairedWithOffice || pairedWithHome) return true
+
+            val pairedWithNonCommute = nearbySteps.any {
+                val t = listOfNotNull(it.title, it.description, it.locationName, it.address).joinToString(" ")
+                !isHomePlaceOrCoord(t, it.latitude, it.longitude) && !isOfficePlaceOrCoord(t, it.latitude, it.longitude)
+            }
+            if (pairedWithNonCommute) return false
+        }
+
+        val dayHasOffice = sameDayDriving.any {
+            val t = listOfNotNull(it.title, it.description, it.locationName, it.address).joinToString(" ")
+            isOfficePlaceOrCoord(t, it.latitude, it.longitude)
+        }
+        val dayAllHomeOrOffice = sameDayDriving.all {
+            val t = listOfNotNull(it.title, it.description, it.locationName, it.address).joinToString(" ")
+            isHomePlaceOrCoord(t, it.latitude, it.longitude) || isOfficePlaceOrCoord(t, it.latitude, it.longitude)
+        }
+        if (dayHasOffice && dayAllHomeOrOffice) return true
+    }
+
+    return selfIsOffice && com.autologue.app.util.KoreanHolidayUtils.isCommuteEligibleWorkday(step.time.toLocalDate())
+}
+
+/**
+ * 전체 거점 리스트에서 출퇴근 경로에 해당하는 지점들을 제외한 리스트를 반환합니다.
+ */
+fun filterOutCommuteSteps(steps: List<RouteStep>): List<RouteStep> {
+    if (steps.isEmpty()) return emptyList()
+    return steps.filterNot { isCommuteStep(it, steps) }
 }
 
 fun segmentRouteIntoTrips(steps: List<RouteStep>): List<RouteTripGroup> {
@@ -141,8 +274,23 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
     }.firstOrNull() ?: "🚗"
 
     val hasGolf = steps.any { it.stepType == RouteStepType.GOLF || it.title.contains("골프") || it.title.contains("CC") }
-    val isCommuteToWork = steps.any { it.title.contains("회사") && isArrivalStep(it) }
-    val isCommuteToHome = steps.any { it.title.contains("집") && isArrivalStep(it) }
+    val firstText = listOfNotNull(first.title, first.description, first.locationName, first.address).joinToString(" ")
+    val lastText = listOfNotNull(last.title, last.description, last.locationName, last.address).joinToString(" ")
+    val firstIsHome = isHomePlaceOrCoord(firstText, first.latitude, first.longitude)
+    val firstIsOffice = isOfficePlaceOrCoord(firstText, first.latitude, first.longitude)
+    val lastIsHome = isHomePlaceOrCoord(lastText, last.latitude, last.longitude)
+    val lastIsOffice = isOfficePlaceOrCoord(lastText, last.latitude, last.longitude)
+
+    val isCommuteToWork = !hasGolf && (
+        steps.any { (it.title.contains("회사") || it.title.contains("출근")) && isArrivalStep(it) } ||
+            (firstIsHome && lastIsOffice) ||
+            (steps.size == 1 && firstIsOffice && first.time.hour < 12)
+        )
+    val isCommuteToHome = !hasGolf && (
+        steps.any { (it.title.contains("집") || it.title.contains("퇴근")) && isArrivalStep(it) } ||
+            (firstIsOffice && lastIsHome)
+        )
+    val isCommuteGroup = !hasGolf && (isCommuteToWork || isCommuteToHome || steps.all { isCommuteStep(it, steps) })
 
     val tripName = when {
         hasGolf -> "골프 라운드"
@@ -168,7 +316,8 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
         brandEmoji = brandEmoji,
         date = date,
         steps = steps,
-        totalDistanceKm = distKm
+        totalDistanceKm = distKm,
+        isCommuteTrip = isCommuteGroup
     )
 }
 
@@ -301,21 +450,38 @@ fun GoogleMapRouteView(
             .filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
     }
 
-    var mapFocusStep by remember(validCoordinateSteps) {
-        mutableStateOf<RouteStep?>(selectedStep ?: validCoordinateSteps.firstOrNull())
+    var isCommuteExcluded by remember { mutableStateOf(false) }
+    var pointDisplayMode by remember { mutableStateOf(MapPointDisplayMode.AUTO) }
+
+    val commuteStepCount = remember(validCoordinateSteps) {
+        validCoordinateSteps.count { isCommuteStep(it, validCoordinateSteps) }
     }
-    var isSingleStepZoomed by remember(validCoordinateSteps, periodFilter) { mutableStateOf(false) }
+    val filteredCoordinateSteps = remember(validCoordinateSteps, isCommuteExcluded) {
+        if (isCommuteExcluded) {
+            filterOutCommuteSteps(validCoordinateSteps)
+        } else {
+            validCoordinateSteps
+        }
+    }
+
+    var mapFocusStep by remember(filteredCoordinateSteps) {
+        val candidate = selectedStep?.takeIf { s -> filteredCoordinateSteps.any { it.id == s.id } }
+        mutableStateOf<RouteStep?>(candidate ?: filteredCoordinateSteps.firstOrNull())
+    }
+    var isSingleStepZoomed by remember(filteredCoordinateSteps, periodFilter, isCommuteExcluded) {
+        mutableStateOf(false)
+    }
     var selectedTripGroupId by remember { mutableStateOf<String?>(null) }
     // 기본값: 캡처 화면 설정과 동일하게 상세 한국 지도 모드(true) + 지도 확대 보기(true, 480dp, '⤡ 기본 크기' 표시)
     var isOnlineMapMode by remember { mutableStateOf(true) }
     var isMapExpanded by remember { mutableStateOf(true) }
 
-    val tripGroups = remember(validCoordinateSteps) { segmentRouteIntoTrips(validCoordinateSteps) }
+    val tripGroups = remember(filteredCoordinateSteps) { segmentRouteIntoTrips(filteredCoordinateSteps) }
     val selectedTripGroup = remember(tripGroups, selectedTripGroupId) {
         tripGroups.firstOrNull { it.id == selectedTripGroupId }
     }
-    val activeDisplaySteps = remember(validCoordinateSteps, selectedTripGroup) {
-        selectedTripGroup?.steps ?: validCoordinateSteps
+    val activeDisplaySteps = remember(filteredCoordinateSteps, selectedTripGroup) {
+        selectedTripGroup?.steps ?: filteredCoordinateSteps
     }
 
     // 하단 상세 목록 및 지도 표시 거점:
@@ -331,7 +497,11 @@ fun GoogleMapRouteView(
         if (keySteps.isNotEmpty()) keySteps.sortedBy { it.time } else activeDisplaySteps
     }
 
-    LaunchedEffect(periodFilter) {
+    val effectivePointDisplayMode = remember(pointDisplayMode, bottomDisplaySteps.size) {
+        resolveEffectivePointDisplayMode(pointDisplayMode, bottomDisplaySteps.size)
+    }
+
+    LaunchedEffect(periodFilter, isCommuteExcluded) {
         selectedTripGroupId = null
         isSingleStepZoomed = false
     }
@@ -396,6 +566,86 @@ fun GoogleMapRouteView(
                         tint = AppColors.primary,
                         modifier = Modifier.size(20.dp)
                     )
+                }
+            }
+        }
+
+        // 1-1. 출퇴근 경로 제외 토글 + 지점 표기 모드(자동 / 기본 / 작은숫자 / 점·경로) 컨트롤 바
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            // 좌측: 출퇴근 경로 제외 토글 칩
+            Surface(
+                shape = AppShapes.pill,
+                color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFF1F5F9),
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFCBD5E1)
+                ),
+                modifier = Modifier.clickable { isCommuteExcluded = !isCommuteExcluded }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    val commuteBtnText = when {
+                        isCommuteExcluded && commuteStepCount > 0 -> "✓ 출퇴근 제외됨 ($commuteStepCount)"
+                        isCommuteExcluded -> "✓ 출퇴근 제외됨"
+                        commuteStepCount > 0 -> "출퇴근 제외 ($commuteStepCount)"
+                        else -> "출퇴근 제외"
+                    }
+                    Text(
+                        text = commuteBtnText,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isCommuteExcluded) PureWhite else Color(0xFF334155)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // 우측: 지점 표시 모드 스위치 ([자동] | [기본] | [작은숫자] | [점·경로])
+            Surface(
+                shape = AppShapes.pill,
+                color = Color(0xFFF1F5F9),
+                border = BorderStroke(1.dp, Color(0xFFCBD5E1))
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(2.dp)
+                ) {
+                    MapPointDisplayMode.values().forEach { mode ->
+                        val isModeSelected = pointDisplayMode == mode
+                        val labelText = if (mode == MapPointDisplayMode.AUTO && isModeSelected) {
+                            when (effectivePointDisplayMode) {
+                                MapPointDisplayMode.DOT_ONLY -> "자동·점만"
+                                MapPointDisplayMode.COMPACT -> "자동·작게"
+                                else -> "자동·기본"
+                            }
+                        } else {
+                            mode.title
+                        }
+                        Surface(
+                            shape = AppShapes.pill,
+                            color = if (isModeSelected) Color(0xFF0F172A) else Color.Transparent,
+                            modifier = Modifier.clickable { pointDisplayMode = mode }
+                        ) {
+                            Text(
+                                text = labelText,
+                                fontSize = 10.5.sp,
+                                fontWeight = if (isModeSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isModeSelected) PureWhite else Color(0xFF475569),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -495,6 +745,7 @@ fun GoogleMapRouteView(
                     steps = bottomDisplaySteps,
                     focusedStep = mapFocusStep,
                     zoomToFocusedStep = isSingleStepZoomed,
+                    pointDisplayMode = pointDisplayMode,
                     onStepClick = { step ->
                         mapFocusStep = step
                         isSingleStepZoomed = true
@@ -701,23 +952,69 @@ fun GoogleMapRouteView(
                     }
                 }
             } else {
-                // Empty Coordinates State
+                // Empty Coordinates State (출퇴근 제외 필터로 인해 비어있는 경우와 원래 위치 기록이 없는 경우를 구분)
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("📍", fontSize = 36.sp)
-                        Spacer(modifier = Modifier.height(Spacing.xs))
-                        Text(
-                            text = "해당 기간에 등록된 GPS 위치 정보가 없습니다.",
-                            style = AppTypography.bodySecondary.copy(color = Color(0xFF475569))
+                    if (isCommuteExcluded && commuteStepCount > 0) {
+                        MidKoreaStaticMapView(
+                            steps = emptyList(),
+                            useRealMapTiles = isOnlineMapMode,
+                            modifier = Modifier.fillMaxSize()
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "사진(GPS) 또는 실제 이동 기록의 위치가 자동으로 표시됩니다.",
-                            style = AppTypography.captionMuted.copy(color = Color(0xFF64748B))
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color.White.copy(alpha = 0.96f),
+                            border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)
+                            ) {
+                                Text(
+                                    text = "출퇴근 경로 ${commuteStepCount}개 지점이 제외되었습니다",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0F172A)
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "선택한 기간에는 출퇴근 외 다른 외출·방문 기록이 없습니다.",
+                                    style = AppTypography.captionMuted.copy(color = Color(0xFF475569))
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(
+                                    onClick = { isCommuteExcluded = false },
+                                    shape = AppShapes.pill,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = "출퇴근 경로 포함해서 보기",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = PureWhite
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("📍", fontSize = 36.sp)
+                            Spacer(modifier = Modifier.height(Spacing.xs))
+                            Text(
+                                text = "해당 기간에 등록된 GPS 위치 정보가 없습니다.",
+                                style = AppTypography.bodySecondary.copy(color = Color(0xFF475569))
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "사진(GPS) 또는 실제 이동 기록의 위치가 자동으로 표시됩니다.",
+                                style = AppTypography.captionMuted.copy(color = Color(0xFF64748B))
+                            )
+                        }
                     }
                 }
             }

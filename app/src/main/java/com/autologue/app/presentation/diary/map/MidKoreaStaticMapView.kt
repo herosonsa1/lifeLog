@@ -500,6 +500,32 @@ private data class PinPlacement(
 )
 
 /**
+ * 지도 위 지점(마커/숫자/점) 표시 방식
+ * - AUTO: 경로 지점 수에 따라 자동 전환 (1~5개: 기본 숫자+박스, 6~12개: 작은 O·숫자, 13개 이상: 점+경로만)
+ * - FULL: 기본 크기 번호 원 + 강조 네모 텍스트 박스 모두 표시
+ * - COMPACT: 지점 원(O)과 숫자를 작게 축소 표기 (텍스트 박스는 터치/집중 지점만 표시)
+ * - DOT_ONLY: 숫자 표기를 제거하고 깔끔한 점(●)과 경로선만 표기
+ */
+enum class MapPointDisplayMode(val title: String) {
+    AUTO("자동"),
+    FULL("기본"),
+    COMPACT("작은숫자"),
+    DOT_ONLY("점·경로")
+}
+
+fun resolveEffectivePointDisplayMode(
+    mode: MapPointDisplayMode,
+    stepCount: Int
+): MapPointDisplayMode {
+    if (mode != MapPointDisplayMode.AUTO) return mode
+    return when {
+        stepCount >= 13 -> MapPointDisplayMode.DOT_ONLY
+        stepCount >= 6 -> MapPointDisplayMode.COMPACT
+        else -> MapPointDisplayMode.FULL
+    }
+}
+
+/**
  * WebView에 의존하지 않는 100% 네이티브 Jetpack Compose 한국 상세 지도 & 행정구역 벡터 맵 뷰.
  *
  * - [상세 한국 지도 모드 (useRealMapTiles = true)]:
@@ -512,6 +538,7 @@ fun MidKoreaStaticMapView(
     steps: List<RouteStep>,
     focusedStep: RouteStep? = null,
     zoomToFocusedStep: Boolean = false,
+    pointDisplayMode: MapPointDisplayMode = MapPointDisplayMode.AUTO,
     onStepClick: (RouteStep) -> Unit = {},
     useRealMapTiles: Boolean = false,
     modifier: Modifier = Modifier
@@ -525,6 +552,10 @@ fun MidKoreaStaticMapView(
         steps
             .map { ensureStepCoordinates(it) }
             .filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
+    }
+
+    val effectiveDisplayMode = remember(pointDisplayMode, validSteps.size) {
+        resolveEffectivePointDisplayMode(pointDisplayMode, validSteps.size)
     }
 
     val effectiveCameraStep = if (zoomToFocusedStep) focusedStep else null
@@ -583,7 +614,7 @@ fun MidKoreaStaticMapView(
             modifier = Modifier
                 .fillMaxSize()
                 .transformable(state = transformableState)
-                .pointerInput(validSteps, centerLat, centerLng, zoomLevel) {
+                .pointerInput(validSteps, centerLat, centerLng, zoomLevel, effectiveDisplayMode) {
                     detectTapGestures(
                         onTap = { tapOffset ->
                             val w = size.width.toFloat()
@@ -595,7 +626,8 @@ fun MidKoreaStaticMapView(
                                 zoom = zoomLevel,
                                 w = w,
                                 h = h,
-                                baseTilePx = baseTilePx
+                                baseTilePx = baseTilePx,
+                                displayMode = effectiveDisplayMode
                             )
 
                             var hitStep: RouteStep? = null
@@ -635,9 +667,13 @@ fun MidKoreaStaticMapView(
                 zoom = zoomLevel,
                 w = w,
                 h = h,
-                baseTilePx = baseTilePx
+                baseTilePx = baseTilePx,
+                displayMode = effectiveDisplayMode
             )
-            val pinAvoidRects = placements.map { p ->
+            val pinAvoidRects = placements.mapNotNull { p ->
+                val isManuallySelected = p.step.id == selectedStep?.id || (zoomToFocusedStep && p.step.id == focusedStep?.id)
+                val showBox = effectiveDisplayMode == MapPointDisplayMode.FULL || isManuallySelected
+                if (!showBox) return@mapNotNull null
                 val boxHalfW = 72.dp.toPx()
                 val boxHalfH = 44.dp.toPx()
                 androidx.compose.ui.geometry.Rect(
@@ -776,7 +812,7 @@ fun MidKoreaStaticMapView(
                 }
             }
 
-            // 5. 거점 번호 마커 핀 오버레이 (1, 2, 3, 4 모든 거점 100% 표시 + 동일 좌표 대각선 분리 및 지시선 연결)
+            // 5. 거점 마커 핀 오버레이 (표시 모드: FULL 기본 숫자+박스 / COMPACT 작은 O·숫자 / DOT_ONLY 숫자 제거 점+경로만)
             placements.forEach { placement ->
                 val step = placement.step
                 val index = placement.index
@@ -784,6 +820,7 @@ fun MidKoreaStaticMapView(
                 val rawPt = placement.rawPoint
 
                 val isFocus = step.id == selectedStep?.id || step.id == focusedStep?.id
+                val isManuallySelected = step.id == selectedStep?.id || (zoomToFocusedStep && step.id == focusedStep?.id)
                 val isStart = index == 0
                 val isEnd = index == placements.lastIndex && placements.size > 1
 
@@ -795,44 +832,58 @@ fun MidKoreaStaticMapView(
                 }
 
                 // 동일 좌표에서 분리된 마커인 경우 실제 GPS 위치(rawPt)와 마커(pt) 사이에 지시선 표시
-                if (placement.isClustered) {
+                if (placement.isClustered && effectiveDisplayMode != MapPointDisplayMode.DOT_ONLY) {
                     drawLine(
                         color = Color.White,
                         start = rawPt,
                         end = pt,
-                        strokeWidth = 3.5.dp.toPx(),
+                        strokeWidth = 3.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                     drawLine(
                         color = pinColor,
                         start = rawPt,
                         end = pt,
-                        strokeWidth = 1.8.dp.toPx(),
+                        strokeWidth = 1.6.dp.toPx(),
                         cap = StrokeCap.Round
                     )
                     drawCircle(
                         color = Color.White,
-                        radius = 4.dp.toPx(),
+                        radius = 3.5.dp.toPx(),
                         center = rawPt
                     )
                     drawCircle(
                         color = pinColor,
-                        radius = 2.5.dp.toPx(),
+                        radius = 2.2.dp.toPx(),
                         center = rawPt
                     )
                 }
 
-                val radius = if (isFocus) 15.dp.toPx() else 13.5.dp.toPx()
+                val radius = when (effectiveDisplayMode) {
+                    MapPointDisplayMode.DOT_ONLY -> when {
+                        isFocus -> 7.2.dp.toPx()
+                        isStart || isEnd -> 6.0.dp.toPx()
+                        else -> 4.8.dp.toPx()
+                    }
+                    MapPointDisplayMode.COMPACT -> if (isFocus) 11.0.dp.toPx() else 9.0.dp.toPx()
+                    else -> if (isFocus) 15.dp.toPx() else 13.5.dp.toPx()
+                }
 
-                // 마커 그림자 및 흰색 테두리 + 원형 배지
+                val whiteBorderWidth = when (effectiveDisplayMode) {
+                    MapPointDisplayMode.DOT_ONLY -> 2.0.dp.toPx()
+                    MapPointDisplayMode.COMPACT -> 2.0.dp.toPx()
+                    else -> 2.5.dp.toPx()
+                }
+
+                // 마커 그림자 및 흰색 테두리 + 원형 배지(또는 도트 점)
                 drawCircle(
-                    color = Color.Black.copy(alpha = 0.34f),
-                    radius = radius + 3.2.dp.toPx(),
-                    center = Offset(pt.x, pt.y + 2.2.dp.toPx())
+                    color = Color.Black.copy(alpha = 0.32f),
+                    radius = radius + whiteBorderWidth + 0.8.dp.toPx(),
+                    center = Offset(pt.x, pt.y + 1.8.dp.toPx())
                 )
                 drawCircle(
                     color = Color.White,
-                    radius = radius + 2.5.dp.toPx(),
+                    radius = radius + whiteBorderWidth,
                     center = pt
                 )
                 drawCircle(
@@ -841,111 +892,131 @@ fun MidKoreaStaticMapView(
                     center = pt
                 )
 
-                val numStr = "${index + 1}"
-                val numLayout = textMeasurer.measure(
-                    text = AnnotatedString(numStr),
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        textAlign = TextAlign.Center
-                    )
-                )
-                drawText(
-                    textLayoutResult = numLayout,
-                    topLeft = Offset(
-                        pt.x - numLayout.size.width / 2f,
-                        pt.y - numLayout.size.height / 2f
-                    )
-                )
-
-                val rawLabel = step.locationName ?: step.title
-                val cleanPlace = rawLabel
-                    .replace(Regex("\\[.*?\\]"), "")
-                    .replace("승차 (출발)", "")
-                    .replace("하차", "")
-                    .trim()
-                    .ifBlank { rawLabel.take(10) }
-                val rolePrefix = when {
-                    isStart -> "출발·"
-                    isEnd -> "도착·"
-                    else -> ""
-                }
-                val placeLabel = (rolePrefix + cleanPlace).take(14)
-
-                val labelTextColor = when {
-                    isFocus -> Color(0xFF9A3412)
-                    isStart -> Color(0xFF14532D)
-                    isEnd -> Color(0xFF991B1B)
-                    else -> Color(0xFF0F172A)
-                }
-                val labelLayout = textMeasurer.measure(
-                    text = AnnotatedString(placeLabel),
-                    style = TextStyle(
-                        color = labelTextColor,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                )
-                val padH = 9.dp.toPx()
-                val padV = 4.5.dp.toPx()
-                val labelW = labelLayout.size.width + padH * 2f
-                val labelH = labelLayout.size.height + padV * 2f
-                val gapY = 5.dp.toPx()
-                val screenMargin = 6.dp.toPx()
-                val labelTopY = if (placement.labelAbove) {
-                    pt.y - radius - labelH - gapY
+                if (effectiveDisplayMode == MapPointDisplayMode.DOT_ONLY) {
+                    // 점+경로만 모드: 숫자 표기 없이 출발/도착/선택 지점 중심에 깔끔한 미니 코어(◎)만 표시
+                    if (isStart || isEnd || isFocus) {
+                        drawCircle(
+                            color = Color.White,
+                            radius = 2.0.dp.toPx(),
+                            center = pt
+                        )
+                    }
                 } else {
-                    pt.y + radius + gapY
-                }
-                val labelTopLeft = Offset(
-                    x = (pt.x - labelW / 2f).coerceIn(screenMargin, (w - labelW - screenMargin).coerceAtLeast(screenMargin)),
-                    y = labelTopY.coerceIn(screenMargin, (h - labelH - screenMargin).coerceAtLeast(screenMargin))
-                )
-                val boxCorner = CornerRadius(6.5.dp.toPx(), 6.5.dp.toPx())
-                val haloExpand = 2.2.dp.toPx()
-                val borderColor = if (isFocus) Color(0xFFEA580C) else pinColor
-                val boxBgColor = when {
-                    isFocus -> Color(0xFFFFF7ED)
-                    isStart -> Color(0xFFF0FDF4)
-                    isEnd -> Color(0xFFFEF2F2)
-                    else -> Color.White
+                    val numStr = "${index + 1}"
+                    val numFontSize = if (effectiveDisplayMode == MapPointDisplayMode.COMPACT) {
+                        if (numStr.length >= 2) 8.5.sp else 9.5.sp
+                    } else {
+                        12.5.sp
+                    }
+                    val numLayout = textMeasurer.measure(
+                        text = AnnotatedString(numStr),
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = numFontSize,
+                            fontWeight = FontWeight.ExtraBold,
+                            textAlign = TextAlign.Center
+                        )
+                    )
+                    drawText(
+                        textLayoutResult = numLayout,
+                        topLeft = Offset(
+                            pt.x - numLayout.size.width / 2f,
+                            pt.y - numLayout.size.height / 2f
+                        )
+                    )
                 }
 
-                // 1) 네모 텍스트 박스 하단 그림자 (지도 배경과 입체 분리)
-                drawRoundRect(
-                    color = Color(0xFF0F172A).copy(alpha = 0.36f),
-                    topLeft = Offset(labelTopLeft.x - 1.dp.toPx(), labelTopLeft.y + 2.5.dp.toPx()),
-                    size = Size(labelW + 2.dp.toPx(), labelH + 1.dp.toPx()),
-                    cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
-                )
-                // 2) 외곽 순백색 헤일로(Halo) 테두리 (도로선·행정경계 점선이 겹쳐도 텍스트 박스가 선명하게 부각됨)
-                drawRoundRect(
-                    color = Color.White,
-                    topLeft = Offset(labelTopLeft.x - haloExpand, labelTopLeft.y - haloExpand),
-                    size = Size(labelW + haloExpand * 2f, labelH + haloExpand * 2f),
-                    cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
-                )
-                // 3) 고대비 불투명 배경 채우기
-                drawRoundRect(
-                    color = boxBgColor,
-                    topLeft = labelTopLeft,
-                    size = Size(labelW, labelH),
-                    cornerRadius = boxCorner
-                )
-                // 4) 굵은 컬러 강조 테두리 (2.4dp)
-                drawRoundRect(
-                    color = borderColor,
-                    topLeft = labelTopLeft,
-                    size = Size(labelW, labelH),
-                    cornerRadius = boxCorner,
-                    style = Stroke(width = 2.4.dp.toPx())
-                )
-                // 5) 굵고 선명한 지점명 텍스트
-                drawText(
-                    textLayoutResult = labelLayout,
-                    topLeft = Offset(labelTopLeft.x + padH, labelTopLeft.y + padV)
-                )
+                // 네모 텍스트 박스는 FULL(기본) 모드이거나 사용자가 직접 터치/선택한 지점일 때만 표시
+                val shouldDrawLabelBox = effectiveDisplayMode == MapPointDisplayMode.FULL || isManuallySelected
+                if (shouldDrawLabelBox) {
+                    val rawLabel = step.locationName ?: step.title
+                    val cleanPlace = rawLabel
+                        .replace(Regex("\\[.*?\\]"), "")
+                        .replace("승차 (출발)", "")
+                        .replace("하차", "")
+                        .trim()
+                        .ifBlank { rawLabel.take(10) }
+                    val rolePrefix = when {
+                        isStart -> "출발·"
+                        isEnd -> "도착·"
+                        else -> ""
+                    }
+                    val placeLabel = (rolePrefix + cleanPlace).take(14)
+
+                    val labelTextColor = when {
+                        isFocus -> Color(0xFF9A3412)
+                        isStart -> Color(0xFF14532D)
+                        isEnd -> Color(0xFF991B1B)
+                        else -> Color(0xFF0F172A)
+                    }
+                    val labelLayout = textMeasurer.measure(
+                        text = AnnotatedString(placeLabel),
+                        style = TextStyle(
+                            color = labelTextColor,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    )
+                    val padH = 9.dp.toPx()
+                    val padV = 4.5.dp.toPx()
+                    val labelW = labelLayout.size.width + padH * 2f
+                    val labelH = labelLayout.size.height + padV * 2f
+                    val gapY = 5.dp.toPx()
+                    val screenMargin = 6.dp.toPx()
+                    val labelTopY = if (placement.labelAbove) {
+                        pt.y - radius - labelH - gapY
+                    } else {
+                        pt.y + radius + gapY
+                    }
+                    val labelTopLeft = Offset(
+                        x = (pt.x - labelW / 2f).coerceIn(screenMargin, (w - labelW - screenMargin).coerceAtLeast(screenMargin)),
+                        y = labelTopY.coerceIn(screenMargin, (h - labelH - screenMargin).coerceAtLeast(screenMargin))
+                    )
+                    val boxCorner = CornerRadius(6.5.dp.toPx(), 6.5.dp.toPx())
+                    val haloExpand = 2.2.dp.toPx()
+                    val borderColor = if (isFocus) Color(0xFFEA580C) else pinColor
+                    val boxBgColor = when {
+                        isFocus -> Color(0xFFFFF7ED)
+                        isStart -> Color(0xFFF0FDF4)
+                        isEnd -> Color(0xFFFEF2F2)
+                        else -> Color.White
+                    }
+
+                    // 1) 네모 텍스트 박스 하단 그림자 (지도 배경과 입체 분리)
+                    drawRoundRect(
+                        color = Color(0xFF0F172A).copy(alpha = 0.36f),
+                        topLeft = Offset(labelTopLeft.x - 1.dp.toPx(), labelTopLeft.y + 2.5.dp.toPx()),
+                        size = Size(labelW + 2.dp.toPx(), labelH + 1.dp.toPx()),
+                        cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                    )
+                    // 2) 외곽 순백색 헤일로(Halo) 테두리 (도로선·행정경계 점선이 겹쳐도 텍스트 박스가 선명하게 부각됨)
+                    drawRoundRect(
+                        color = Color.White,
+                        topLeft = Offset(labelTopLeft.x - haloExpand, labelTopLeft.y - haloExpand),
+                        size = Size(labelW + haloExpand * 2f, labelH + haloExpand * 2f),
+                        cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                    )
+                    // 3) 고대비 불투명 배경 채우기
+                    drawRoundRect(
+                        color = boxBgColor,
+                        topLeft = labelTopLeft,
+                        size = Size(labelW, labelH),
+                        cornerRadius = boxCorner
+                    )
+                    // 4) 굵은 컬러 강조 테두리 (2.4dp)
+                    drawRoundRect(
+                        color = borderColor,
+                        topLeft = labelTopLeft,
+                        size = Size(labelW, labelH),
+                        cornerRadius = boxCorner,
+                        style = Stroke(width = 2.4.dp.toPx())
+                    )
+                    // 5) 굵고 선명한 지점명 텍스트
+                    drawText(
+                        textLayoutResult = labelLayout,
+                        topLeft = Offset(labelTopLeft.x + padH, labelTopLeft.y + padV)
+                    )
+                }
             }
         }
 
@@ -1121,7 +1192,8 @@ private fun computePinPlacements(
     zoom: Float,
     w: Float,
     h: Float,
-    baseTilePx: Float
+    baseTilePx: Float,
+    displayMode: MapPointDisplayMode = MapPointDisplayMode.FULL
 ): List<PinPlacement> {
     val rawPoints = steps.map { step ->
         WebMercator.toScreenOffset(
@@ -1141,7 +1213,21 @@ private fun computePinPlacements(
         }
     }
 
-    val clusterRadiusPx = 42f
+    val clusterRadiusPx = when (displayMode) {
+        MapPointDisplayMode.DOT_ONLY -> 14f
+        MapPointDisplayMode.COMPACT -> 26f
+        else -> 42f
+    }
+    val spreadX = when (displayMode) {
+        MapPointDisplayMode.DOT_ONLY -> 8f
+        MapPointDisplayMode.COMPACT -> 15f
+        else -> 24f
+    }
+    val spreadY = when (displayMode) {
+        MapPointDisplayMode.DOT_ONLY -> 5f
+        MapPointDisplayMode.COMPACT -> 7f
+        else -> 11f
+    }
     val result = ArrayList<PinPlacement>(steps.size)
 
     for (i in steps.indices) {
@@ -1167,10 +1253,9 @@ private fun computePinPlacements(
             val posInGroup = group.indexOf(i)
             val total = group.size
             // 짝수 순번은 위쪽+좌측(라벨 위), 홀수 순번은 아래쪽+우측(라벨 아래)으로 분리해 캡션 충돌 원천 방지
-            val spreadX = 24f
             val offsetX = (posInGroup - (total - 1) / 2f) * spreadX
             val isUpper = posInGroup % 2 == 0
-            val offsetY = if (isUpper) -11f else 11f
+            val offsetY = if (isUpper) -spreadY else spreadY
             result.add(
                 PinPlacement(
                     step = steps[i],
