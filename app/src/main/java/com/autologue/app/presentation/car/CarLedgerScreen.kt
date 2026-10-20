@@ -149,8 +149,8 @@ fun CarLedgerScreen(
             log = uiState.editingRefuelLog!!,
             vehicles = uiState.vehicles,
             onDismiss = { viewModel.closeRefuelEditDialog() },
-            onSave = { logId, stationName, vId, cost, liters, unitPrice, isOneTimeSave ->
-                viewModel.updateRefuelDetail(logId, stationName, vId, cost, liters, unitPrice, isOneTimeSave)
+            onSave = { logId, stationName, vId, cost, liters, unitPrice, isOneTimeSave, selectedCategory, tripDistanceKm ->
+                viewModel.updateRefuelDetail(logId, stationName, vId, cost, liters, unitPrice, isOneTimeSave, selectedCategory, tripDistanceKm)
             },
             onDelete = { logId ->
                 viewModel.deleteSingleLog(logId)
@@ -725,120 +725,182 @@ fun CarLedgerScreen(
                                 }
                             }
                         }
-                        Spacer(modifier = Modifier.height(Spacing.xs))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            AutoLoguePrimaryButton(
-                                text = "오늘 출근 기록",
-                                modifier = Modifier.weight(1f),
-                                onClick = { viewModel.recordManualCommute(isToWork = true) }
-                            )
-                            AutoLogueSecondaryButton(
-                                text = "오늘 퇴근 기록",
-                                modifier = Modifier.weight(1f),
-                                onClick = { viewModel.recordManualCommute(isToWork = false) }
-                            )
-                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "평일(법정공휴일 제외) 출퇴근 시간대 운행만 출근·퇴근으로 자동 적용되며, 개별 기록 클릭 시 항목을 직접 수정할 수 있습니다.",
+                            style = AppTypography.captionMuted.copy(fontSize = 10.5.sp)
+                        )
                     }
                 }
                 HairlineDivider()
             }
 
-            // Consumable Maintenance Reminder Section
+            // Consumable Maintenance Reminder Section (평상시 기본 접힘, 교체주기 도래 시 강조 및 자동 펼침)
             item {
                 val mCfg = uiState.maintenanceConfig
                 val currentKm = uiState.totalDrivingDistanceKm
 
-                Column(
+                val oilRem = mCfg.engineOil.getRemainingKm(currentKm)
+                val oilRatio = mCfg.engineOil.getProgressRatio(currentKm)
+                val airconRem = mCfg.airconFilter.getRemainingKm(currentKm)
+                val airconRatio = mCfg.airconFilter.getProgressRatio(currentKm)
+                val tireRem = mCfg.tireRotation.getRemainingKm(currentKm)
+                val tireRatio = mCfg.tireRotation.getProgressRatio(currentKm)
+
+                val dueItems = remember(oilRem, oilRatio, airconRem, airconRatio, tireRem, tireRatio) {
+                    buildList {
+                        if (oilRem <= 1000 || oilRatio >= 0.9f) add("엔진오일")
+                        if (airconRem <= 1000 || airconRatio >= 0.9f) add("에어컨 필터")
+                        if (tireRem <= 1000 || tireRatio >= 0.9f) add("타이어 위치 교환")
+                    }
+                }
+                val hasDueConsumable = dueItems.isNotEmpty()
+                var isMaintenanceExpanded by remember(hasDueConsumable) { mutableStateOf(hasDueConsumable) }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFFEF2F2) else androidx.compose.ui.graphics.Color(0xFFF8FAFC),
+                    border = androidx.compose.foundation.BorderStroke(
+                        if (hasDueConsumable) 1.5.dp else 1.dp,
+                        if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFDC2626) else Slate200
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.sm)
+                        .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.md, vertical = Spacing.sm)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "🔧 차량 소모품 교체 주기 알림",
-                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "(주행 %,d km 기준)".format(currentKm.toInt()),
-                                style = AppTypography.captionMuted.copy(fontSize = 11.sp)
-                            )
-                        }
-
-                        // 설정 버튼
-                        androidx.compose.material3.Surface(
-                            onClick = { viewModel.openMaintenanceDialog() },
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
-                            color = MenuColors.carLedgerBg,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isMaintenanceExpanded = !isMaintenanceExpanded },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = if (hasDueConsumable) "차량 소모품 교체 주기 도래" else "차량 소모품 교체 주기 알림",
+                                        style = AppTypography.caption.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFB91C1C) else Slate800
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFDC2626) else Emerald50,
+                                        border = if (hasDueConsumable) null else androidx.compose.foundation.BorderStroke(1.dp, Emerald700.copy(alpha = 0.25f))
+                                    ) {
+                                        Text(
+                                            text = if (hasDueConsumable) "점검 필요 ${dueItems.size}건" else "전체 양호",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (hasDueConsumable) PureWhite else Emerald700,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (hasDueConsumable) {
+                                        "교체 임박·도래 항목: ${dueItems.joinToString(", ")} (누적 주행 %,d km)".format(currentKm.toInt())
+                                    } else {
+                                        "누적 주행 %,d km 기준 · 터치하여 소모품 잔여 주기 펼치기".format(currentKm.toInt())
+                                    },
+                                    style = AppTypography.captionMuted.copy(
+                                        fontSize = 10.5.sp,
+                                        color = if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFF991B1B) else Slate500
+                                    )
+                                )
+                            }
+
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
+                                androidx.compose.material3.Surface(
+                                    onClick = { viewModel.openMaintenanceDialog() },
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+                                    color = if (hasDueConsumable) PureWhite else MenuColors.carLedgerBg,
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFFCA5A5) else MenuColors.carLedgerBorder
+                                    )
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Settings,
+                                            contentDescription = "교체 주기 설정",
+                                            tint = if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFDC2626) else MenuColors.carLedger,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(
+                                            text = "주기 설정",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFDC2626) else MenuColors.carLedger
+                                        )
+                                    }
+                                }
+
                                 Icon(
-                                    Icons.Default.Settings,
-                                    contentDescription = "교체 주기 설정",
-                                    tint = MenuColors.carLedger,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = "주기/교체 설정",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MenuColors.carLedger
+                                    imageVector = if (isMaintenanceExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = if (isMaintenanceExpanded) "접기" else "펼치기",
+                                    tint = if (hasDueConsumable) androidx.compose.ui.graphics.Color(0xFFB91C1C) else Slate500,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
-                    }
-                    Spacer(modifier = Modifier.height(Spacing.xs))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        MaintenanceItemCard(
-                            title = "엔진오일",
-                            subLabel = "엔진 윤활·보호",
-                            remainingKm = mCfg.engineOil.getRemainingKm(currentKm),
-                            ratio = mCfg.engineOil.getProgressRatio(currentKm),
-                            recommendedIntervalKm = mCfg.engineOil.recommendedIntervalKm,
-                            lastReplacedKm = mCfg.engineOil.lastReplacedKm,
-                            lastDate = mCfg.engineOil.lastReplacedDate,
-                            onClick = { viewModel.openMaintenanceDialog() },
-                            modifier = Modifier.weight(1f)
-                        )
-                        MaintenanceItemCard(
-                            title = "에어컨 필터",
-                            subLabel = "실내 공기질 관리",
-                            remainingKm = mCfg.airconFilter.getRemainingKm(currentKm),
-                            ratio = mCfg.airconFilter.getProgressRatio(currentKm),
-                            recommendedIntervalKm = mCfg.airconFilter.recommendedIntervalKm,
-                            lastReplacedKm = mCfg.airconFilter.lastReplacedKm,
-                            lastDate = mCfg.airconFilter.lastReplacedDate,
-                            onClick = { viewModel.openMaintenanceDialog() },
-                            modifier = Modifier.weight(1f)
-                        )
-                        MaintenanceItemCard(
-                            title = "타이어 위치 교환",
-                            subLabel = "앞↔뒤 편마모 방지",
-                            remainingKm = mCfg.tireRotation.getRemainingKm(currentKm),
-                            ratio = mCfg.tireRotation.getProgressRatio(currentKm),
-                            recommendedIntervalKm = mCfg.tireRotation.recommendedIntervalKm,
-                            lastReplacedKm = mCfg.tireRotation.lastReplacedKm,
-                            lastDate = mCfg.tireRotation.lastReplacedDate,
-                            onClick = { viewModel.openMaintenanceDialog() },
-                            modifier = Modifier.weight(1f)
-                        )
+                        if (isMaintenanceExpanded) {
+                            Spacer(modifier = Modifier.height(Spacing.xs))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                MaintenanceItemCard(
+                                    title = "엔진오일",
+                                    subLabel = "엔진 윤활·보호",
+                                    remainingKm = oilRem,
+                                    ratio = oilRatio,
+                                    recommendedIntervalKm = mCfg.engineOil.recommendedIntervalKm,
+                                    lastReplacedKm = mCfg.engineOil.lastReplacedKm,
+                                    lastDate = mCfg.engineOil.lastReplacedDate,
+                                    onClick = { viewModel.openMaintenanceDialog() },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MaintenanceItemCard(
+                                    title = "에어컨 필터",
+                                    subLabel = "실내 공기질 관리",
+                                    remainingKm = airconRem,
+                                    ratio = airconRatio,
+                                    recommendedIntervalKm = mCfg.airconFilter.recommendedIntervalKm,
+                                    lastReplacedKm = mCfg.airconFilter.lastReplacedKm,
+                                    lastDate = mCfg.airconFilter.lastReplacedDate,
+                                    onClick = { viewModel.openMaintenanceDialog() },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                MaintenanceItemCard(
+                                    title = "타이어 위치 교환",
+                                    subLabel = "앞↔뒤 편마모 방지",
+                                    remainingKm = tireRem,
+                                    ratio = tireRatio,
+                                    recommendedIntervalKm = mCfg.tireRotation.recommendedIntervalKm,
+                                    lastReplacedKm = mCfg.tireRotation.lastReplacedKm,
+                                    lastDate = mCfg.tireRotation.lastReplacedDate,
+                                    onClick = { viewModel.openMaintenanceDialog() },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
                     }
                 }
                 HairlineDivider()
@@ -969,17 +1031,18 @@ fun CarLedgerScreen(
                         }
                     }
 
-                    // [세련된 필터 탭 바] 전체 / ⛽ 주유 기록 / 🚗 주행 기록
+                    // [필터 탭 바] 전체 / 출퇴근 외 운행 / 주유·정비 / 전체 운행
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = Spacing.xl, vertical = Spacing.xs),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         val filterOptions = listOf(
                             Triple(LogFilterMode.ALL, "전체", uiState.logs.size),
-                            Triple(LogFilterMode.REFUEL_ONLY, "⛽ 주유/정비", uiState.totalRefuelCount),
-                            Triple(LogFilterMode.DRIVING_ONLY, "🚗 주행", uiState.totalDrivingCount)
+                            Triple(LogFilterMode.NON_COMMUTE_DRIVING, "출퇴근 외 운행", uiState.nonCommuteDrivingCount),
+                            Triple(LogFilterMode.REFUEL_ONLY, "주유/정비", uiState.totalRefuelCount),
+                            Triple(LogFilterMode.DRIVING_ONLY, "전체 운행", uiState.totalDrivingCount)
                         )
                         filterOptions.forEach { (mode, label, count) ->
                             val isSelected = uiState.logFilterMode == mode
@@ -990,13 +1053,15 @@ fun CarLedgerScreen(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(vertical = 6.dp),
+                                    modifier = Modifier.padding(vertical = 6.dp, horizontal = 2.dp),
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
                                         text = "$label ($count)",
-                                        fontSize = 11.5.sp,
+                                        fontSize = 10.5.sp,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                         color = if (isSelected) androidx.compose.ui.graphics.Color.White else Slate700
                                     )
@@ -1019,7 +1084,8 @@ fun CarLedgerScreen(
                     ) {
                         val emptyMsg = when (uiState.logFilterMode) {
                             LogFilterMode.ALL -> "기록된 차량 운행 및 주유·정비 내역이 없습니다."
-                            LogFilterMode.REFUEL_ONLY -> "기록된 주유·정비 내역이 없습니다.\n우측 하단의 [+ 주유 기록 추가] 버튼이나 가계부 카테고리 연동으로 등록할 수 있습니다."
+                            LogFilterMode.NON_COMMUTE_DRIVING -> "출퇴근을 제외한 외출·일반·골프 운행 내역이 없습니다."
+                            LogFilterMode.REFUEL_ONLY -> "기록된 주유·정비 내역이 없습니다.\n상단의 [주유 등록] 버튼이나 가계부 카테고리 연동으로 등록할 수 있습니다."
                             LogFilterMode.DRIVING_ONLY -> "기록된 차량 주행 내역이 없습니다."
                         }
                         Text(
@@ -1080,7 +1146,7 @@ fun SaaSCarLogRow(
             .then(
                 when {
                     isSelectionMode && onToggleSelect != null -> Modifier.clickable { onToggleSelect() }
-                    isFuelOrMaint && onEditRefuel != null -> Modifier.clickable { onEditRefuel(log) }
+                    onEditRefuel != null -> Modifier.clickable { onEditRefuel(log) }
                     else -> Modifier
                 }
             )
@@ -1099,8 +1165,8 @@ fun SaaSCarLogRow(
 
         val isToWork = log.isToWorkCommuteLog()
         val isToHome = log.isToHomeCommuteLog()
-        val isCommuteRound = log.note?.contains("출퇴근") == true
-        val isGolf = log.note?.contains("골프") == true || log.note?.contains("라운딩") == true || log.note?.contains("CC") == true
+        val isCommuteRound = log.isCommuteDrivingLog() && !isToWork && !isToHome
+        val isGolf = log.isGolfDrivingLog()
         val isCustom = log.isCustomFuel()
         val isOneTimeEdited = log.note?.contains("[one_time_edit:true]") == true
         val explicitUnitPrice = log.getExplicitUnitPrice()
@@ -1353,8 +1419,22 @@ fun SaaSCarLogRow(
                         style = AppTypography.captionMuted
                     )
                 }
-                if (onDeleteLog != null) {
+                if (onEditRefuel != null) {
                     Spacer(modifier = Modifier.width(Spacing.xs))
+                    IconButton(
+                        onClick = { onEditRefuel(log) },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "항목 및 상세 수정",
+                            tint = MenuColors.carLedger,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+                if (onDeleteLog != null) {
+                    Spacer(modifier = Modifier.width(2.dp))
                     IconButton(
                         onClick = onDeleteLog,
                         modifier = Modifier.size(28.dp)
@@ -1474,11 +1554,38 @@ fun RefuelDetailEditDialog(
     log: VehicleLog,
     vehicles: List<VehicleProfile>,
     onDismiss: () -> Unit,
-    onSave: (logId: Long, stationName: String, vehicleId: String, cost: Long, liters: Double?, unitPrice: Double?, isOneTimeSave: Boolean) -> Unit,
+    onSave: (
+        logId: Long,
+        stationName: String,
+        vehicleId: String,
+        cost: Long,
+        liters: Double?,
+        unitPrice: Double?,
+        isOneTimeSave: Boolean,
+        selectedCategory: CarLogItemCategory?,
+        tripDistanceKm: Double?
+    ) -> Unit,
     onDelete: (logId: Long) -> Unit = {}
 ) {
-    var stationNameText by remember(log.id) { mutableStateOf(log.gasStationName ?: "주유소") }
+    var selectedCategory by remember(log.id) { mutableStateOf(log.resolveCarLogItemCategory()) }
+    var stationNameText by remember(log.id) {
+        val initialTitle = if (log.logType == VehicleLogType.TRIP_DRIVING) {
+            log.getUserCustomRouteTitle()
+                ?: log.getDrivingRouteTitle()
+                    ?.replace(Regex("\\s*\\([0-9.]+\\s*km\\)", RegexOption.IGNORE_CASE), "")
+                    ?.trim()
+                ?: ""
+        } else {
+            log.gasStationName ?: "주유소"
+        }
+        mutableStateOf(initialTitle)
+    }
     var selectedVehicleId by remember(log.id) { mutableStateOf(log.getAssignedVehicleId()) }
+    var distanceKmText by remember(log.id) {
+        mutableStateOf(
+            if (log.tripDistanceKm > 0.0) "%.1f".format(Locale.US, log.tripDistanceKm) else ""
+        )
+    }
     var costText by remember(log.id) { mutableStateOf(if (log.fuelCost > 0) log.fuelCost.toString() else "") }
     var isOneTimeSave by remember(log.id) { mutableStateOf(true) }
     var unitPriceText by remember(log.id) {
@@ -1517,7 +1624,6 @@ fun RefuelDetailEditDialog(
                         .verticalScroll(rememberScrollState())
                 ) {
                     // 헤더
-                    val isParkingEdit = log.isParkingLog() || (costText.toLongOrNull() ?: log.fuelCost) in 1L until MIN_REFUEL_AMOUNT_WON
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1525,11 +1631,7 @@ fun RefuelDetailEditDialog(
                     ) {
                         Column {
                             Text(
-                                text = when {
-                                    log.logType == VehicleLogType.MAINTENANCE -> "정비/세차 결제명 및 상세 설정"
-                                    isParkingEdit -> "주차 결제명 및 상세 설정"
-                                    else -> "주유 결제명 및 상세 설정"
-                                },
+                                text = "차계부 기록 항목 및 상세 수정",
                                 style = AppTypography.h2
                             )
                             Text(
@@ -1544,27 +1646,109 @@ fun RefuelDetailEditDialog(
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
-                    // 결제명 / 주유소·주차장·정비소 상호명 수정
+                    // 1. 기록 항목(유형) 선택 (운행 항목 4종 + 지출 항목 3종)
                     Text(
-                        text = when {
-                            log.logType == VehicleLogType.MAINTENANCE -> "결제명 (정비소 / 세차장 상호명)"
-                            isParkingEdit -> "결제명 (주차장 상호명)"
-                            else -> "결제명 (주유소 상호명)"
-                        },
+                        text = "차계부 기록 항목 선택",
                         style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
                     )
-                    Spacer(modifier = Modifier.height(Spacing.xxs))
-                    OutlinedTextField(
-                        value = stationNameText,
-                        onValueChange = { stationNameText = it },
-                        placeholder = { Text("예: GS칼텍스 위례주유소, 서울어린이대공원, 스피드메이트", style = AppTypography.captionMuted) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+
+                    val drivingCategories = listOf(
+                        CarLogItemCategory.COMMUTE_TO_WORK,
+                        CarLogItemCategory.COMMUTE_FROM_WORK,
+                        CarLogItemCategory.GENERAL_DRIVING,
+                        CarLogItemCategory.GOLF_DRIVING
                     )
+                    val costCategories = listOf(
+                        CarLogItemCategory.REFUELING,
+                        CarLogItemCategory.PARKING,
+                        CarLogItemCategory.MAINTENANCE
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        drivingCategories.forEach { cat ->
+                            val isSel = selectedCategory == cat
+                            Surface(
+                                onClick = {
+                                    selectedCategory = cat
+                                    when (cat) {
+                                        CarLogItemCategory.COMMUTE_TO_WORK -> {
+                                            if (stationNameText.isBlank() || stationNameText == "회사->집" || stationNameText.startsWith("일반 주행")) {
+                                                stationNameText = "집->회사"
+                                            }
+                                            if (distanceKmText.isBlank() || distanceKmText == "0.0") {
+                                                distanceKmText = "27.1"
+                                            }
+                                        }
+                                        CarLogItemCategory.COMMUTE_FROM_WORK -> {
+                                            if (stationNameText.isBlank() || stationNameText == "집->회사" || stationNameText.startsWith("일반 주행")) {
+                                                stationNameText = "회사->집"
+                                            }
+                                            if (distanceKmText.isBlank() || distanceKmText == "0.0") {
+                                                distanceKmText = "27.1"
+                                            }
+                                        }
+                                        else -> {}
+                                    }
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) MenuColors.carLedger else Slate100,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isSel) MenuColors.carLedger else Slate300
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = cat.label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSel) PureWhite else Slate700,
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        costCategories.forEach { cat ->
+                            val isSel = selectedCategory == cat
+                            Surface(
+                                onClick = { selectedCategory = cat },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) MenuColors.carLedger else Slate100,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isSel) MenuColors.carLedger else Slate300
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = cat.label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSel) PureWhite else Slate700,
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
-                    // 차량 선택
+                    // 2. 대상 차량 선택
                     Text("대상 차량 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
                     Spacer(modifier = Modifier.height(Spacing.xs))
                     Row(
@@ -1605,127 +1789,198 @@ fun RefuelDetailEditDialog(
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
-                    // 총 결제 금액
-                    Text(
-                        text = when {
-                            log.logType == VehicleLogType.MAINTENANCE -> "정비/세차 총 결제 금액 (원)"
-                            isParkingEdit -> "주차 총 결제 금액 (원) - 3만원 미만은 주차로 분류"
-                            else -> "주유 총 결제 금액 (원)"
-                        },
-                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.height(Spacing.xxs))
-                    OutlinedTextField(
-                        value = costText,
-                        onValueChange = { costText = it.filter { c -> c.isDigit() } },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        trailingIcon = { Text("원", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
-                    )
-
-                    if (log.logType == VehicleLogType.REFUELING && !isParkingEdit) {
-                        Spacer(modifier = Modifier.height(Spacing.md))
-
-                        // L당 단가
-                        val currentVehicle = vehicles.find { it.id == selectedVehicleId }
-                        val currentDefaultPrice = currentVehicle?.defaultGasPrice ?: 1650.0
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("L당 주유 단가 (원/L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
-                            Text(
-                                text = "기본 설정: %,d원".format(currentDefaultPrice.toInt()),
-                                style = AppTypography.captionMuted.copy(fontSize = 10.sp)
-                            )
-                        }
+                    if (selectedCategory.isDrivingCategory) {
+                        // 운행 경로 / 목적지 수정
+                        Text(
+                            text = "운행 경로 / 목적지 명칭",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                        )
                         Spacer(modifier = Modifier.height(Spacing.xxs))
                         OutlinedTextField(
-                            value = unitPriceText,
-                            onValueChange = { text ->
-                                unitPriceText = text
-                                val cost = costText.toLongOrNull() ?: 0L
-                                val price = text.toDoubleOrNull() ?: 0.0
-                                if (cost > 0 && price > 0.0) {
-                                    litersText = "%.1f".format(Locale.US, cost / price)
-                                }
-                            },
-                            placeholder = { Text("예: 1680 (미입력 시 %,d원 기준)".format(currentDefaultPrice.toInt()), style = AppTypography.captionMuted) },
+                            value = stationNameText,
+                            onValueChange = { stationNameText = it },
+                            placeholder = { Text("예: 집->회사, 송파구 위례동 ➔ 강남구 역삼동, 레이크사이드CC", style = AppTypography.captionMuted) },
                             modifier = Modifier.fillMaxWidth(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true,
-                            trailingIcon = { Text("원/L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                            singleLine = true
                         )
 
                         Spacer(modifier = Modifier.height(Spacing.md))
 
-                        // 실제 주유량 (L)
-                        Text("실제 주유량 (L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                        // 주행 거리 (km) 수정
+                        Text(
+                            text = "주행 거리 (km)",
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                        )
                         Spacer(modifier = Modifier.height(Spacing.xxs))
                         OutlinedTextField(
-                            value = litersText,
+                            value = distanceKmText,
                             onValueChange = { text ->
-                                litersText = text
-                                val cost = costText.toLongOrNull() ?: 0L
-                                val liters = text.toDoubleOrNull() ?: 0.0
-                                if (cost > 0 && liters > 0.0) {
-                                    unitPriceText = "%.1f".format(Locale.US, cost / liters)
-                                }
+                                distanceKmText = text.filter { c -> c.isDigit() || c == '.' }
                             },
-                            placeholder = { Text("예: 32.5 (미입력 시 자동 계산)", style = AppTypography.captionMuted) },
+                            placeholder = { Text("예: 27.1", style = AppTypography.captionMuted) },
                             modifier = Modifier.fillMaxWidth(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             singleLine = true,
-                            trailingIcon = { Text("L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                            trailingIcon = { Text("km", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                         )
 
                         Spacer(modifier = Modifier.height(Spacing.sm))
-
-                        // 자동 계산 도우미 버튼들
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Slate50,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Slate200),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Surface(
-                                onClick = {
-                                    val cost = costText.toLongOrNull() ?: 0L
-                                    unitPriceText = "%.1f".format(Locale.US, currentDefaultPrice)
-                                    if (cost > 0) {
-                                        litersText = "%.1f".format(Locale.US, cost / currentDefaultPrice)
-                                    }
-                                },
-                                shape = RoundedCornerShape(6.dp),
-                                color = Slate100,
-                                modifier = Modifier.weight(1f)
+                            Text(
+                                text = "출근·퇴근은 기본적으로 공휴일을 제외한 평일에만 자동 적용되지만, 여기서 직접 항목을 변경해 저장하면 주말·공휴일 여부와 관계없이 지정한 항목으로 유지됩니다.",
+                                style = AppTypography.captionMuted.copy(fontSize = 10.5.sp),
+                                modifier = Modifier.padding(Spacing.sm)
+                            )
+                        }
+                    } else {
+                        val isParkingEdit = selectedCategory == CarLogItemCategory.PARKING
+                        // 결제명 / 주유소·주차장·정비소 상호명 수정
+                        Text(
+                            text = when (selectedCategory) {
+                                CarLogItemCategory.MAINTENANCE -> "결제명 (정비소 / 세차장 상호명)"
+                                CarLogItemCategory.PARKING -> "결제명 (주차장 상호명)"
+                                else -> "결제명 (주유소 상호명)"
+                            },
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(modifier = Modifier.height(Spacing.xxs))
+                        OutlinedTextField(
+                            value = stationNameText,
+                            onValueChange = { stationNameText = it },
+                            placeholder = { Text("예: GS칼텍스 위례주유소, 서울어린이대공원, 스피드메이트", style = AppTypography.captionMuted) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        Spacer(modifier = Modifier.height(Spacing.md))
+
+                        // 총 결제 금액
+                        Text(
+                            text = when (selectedCategory) {
+                                CarLogItemCategory.MAINTENANCE -> "정비/세차 총 결제 금액 (원)"
+                                CarLogItemCategory.PARKING -> "주차 총 결제 금액 (원)"
+                                else -> "주유 총 결제 금액 (원)"
+                            },
+                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(modifier = Modifier.height(Spacing.xxs))
+                        OutlinedTextField(
+                            value = costText,
+                            onValueChange = { costText = it.filter { c -> c.isDigit() } },
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            trailingIcon = { Text("원", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                        )
+
+                        if (selectedCategory == CarLogItemCategory.REFUELING && !isParkingEdit) {
+                            Spacer(modifier = Modifier.height(Spacing.md))
+
+                            // L당 단가
+                            val currentVehicle = vehicles.find { it.id == selectedVehicleId }
+                            val currentDefaultPrice = currentVehicle?.defaultGasPrice ?: 1650.0
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Text("L당 주유 단가 (원/L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
                                 Text(
-                                    text = "기본(%,d원) 기준 채움".format(currentDefaultPrice.toInt()),
-                                    fontSize = 11.sp,
-                                    color = Slate700,
-                                    modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    text = "기본 설정: %,d원".format(currentDefaultPrice.toInt()),
+                                    style = AppTypography.captionMuted.copy(fontSize = 10.sp)
                                 )
                             }
-
-                            Surface(
-                                onClick = {
-                                    unitPriceText = ""
-                                    litersText = ""
+                            Spacer(modifier = Modifier.height(Spacing.xxs))
+                            OutlinedTextField(
+                                value = unitPriceText,
+                                onValueChange = { text ->
+                                    unitPriceText = text
+                                    val cost = costText.toLongOrNull() ?: 0L
+                                    val price = text.toDoubleOrNull() ?: 0.0
+                                    if (cost > 0 && price > 0.0) {
+                                        litersText = "%.1f".format(Locale.US, cost / price)
+                                    }
                                 },
-                                shape = RoundedCornerShape(6.dp),
-                                color = Slate100,
-                                modifier = Modifier.weight(1f)
+                                placeholder = { Text("예: 1680 (미입력 시 %,d원 기준)".format(currentDefaultPrice.toInt()), style = AppTypography.captionMuted) },
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                trailingIcon = { Text("원/L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                            )
+
+                            Spacer(modifier = Modifier.height(Spacing.md))
+
+                            // 실제 주유량 (L)
+                            Text("실제 주유량 (L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                            Spacer(modifier = Modifier.height(Spacing.xxs))
+                            OutlinedTextField(
+                                value = litersText,
+                                onValueChange = { text ->
+                                    litersText = text
+                                    val cost = costText.toLongOrNull() ?: 0L
+                                    val liters = text.toDoubleOrNull() ?: 0.0
+                                    if (cost > 0 && liters > 0.0) {
+                                        unitPriceText = "%.1f".format(Locale.US, cost / liters)
+                                    }
+                                },
+                                placeholder = { Text("예: 32.5 (미입력 시 자동 계산)", style = AppTypography.captionMuted) },
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                trailingIcon = { Text("L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
+                            )
+
+                            Spacer(modifier = Modifier.height(Spacing.sm))
+
+                            // 자동 계산 도우미 버튼들
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                             ) {
-                                Text(
-                                    text = "선택 항목 비우기",
-                                    fontSize = 11.sp,
-                                    color = Slate700,
-                                    modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
+                                Surface(
+                                    onClick = {
+                                        val cost = costText.toLongOrNull() ?: 0L
+                                        unitPriceText = "%.1f".format(Locale.US, currentDefaultPrice)
+                                        if (cost > 0) {
+                                            litersText = "%.1f".format(Locale.US, cost / currentDefaultPrice)
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Slate100,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "기본(%,d원) 기준 채움".format(currentDefaultPrice.toInt()),
+                                        fontSize = 11.sp,
+                                        color = Slate700,
+                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+
+                                Surface(
+                                    onClick = {
+                                        unitPriceText = ""
+                                        litersText = ""
+                                    },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Slate100,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "선택 항목 비우기",
+                                        fontSize = 11.sp,
+                                        color = Slate700,
+                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
                             }
                         }
                     }
@@ -1819,12 +2074,31 @@ fun RefuelDetailEditDialog(
                             onClick = {
                                 if (!isSavingLocal) {
                                     isSavingLocal = true
-                                    val defaultName = if (log.logType == VehicleLogType.MAINTENANCE) "차량정비/세차" else "주유소"
-                                    val finalStation = stationNameText.trim().ifBlank { log.gasStationName ?: defaultName }
+                                    val defaultName = when (selectedCategory) {
+                                        CarLogItemCategory.MAINTENANCE -> "차량정비/세차"
+                                        CarLogItemCategory.PARKING -> "주차"
+                                        else -> "주유소"
+                                    }
+                                    val finalStation = if (selectedCategory.isDrivingCategory) {
+                                        stationNameText.trim()
+                                    } else {
+                                        stationNameText.trim().ifBlank { log.gasStationName ?: defaultName }
+                                    }
                                     val cost = costText.toLongOrNull() ?: log.fuelCost
                                     val unitPrice = unitPriceText.toDoubleOrNull()
                                     val liters = litersText.toDoubleOrNull()
-                                    onSave(log.id, finalStation, selectedVehicleId, cost, liters, unitPrice, isOneTimeSave)
+                                    val distKm = distanceKmText.toDoubleOrNull()
+                                    onSave(
+                                        log.id,
+                                        finalStation,
+                                        selectedVehicleId,
+                                        cost,
+                                        liters,
+                                        unitPrice,
+                                        isOneTimeSave,
+                                        selectedCategory,
+                                        distKm
+                                    )
                                 }
                             },
                             enabled = !isSavingLocal,

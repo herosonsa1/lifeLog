@@ -29,7 +29,7 @@ class VehicleRepositoryImpl @Inject constructor(
     ) : this(vehicleLogDao, merchantAliasPreferences, ExpenseCustomMetaPreferences())
 
     private fun isOneTimeFuelLog(note: String?): Boolean {
-        return note?.contains("[one_time_edit:true]") == true
+        return note?.contains("[one_time_edit:true]") == true || note?.contains("[user_type_override:") == true
     }
 
     private fun isCorruptedOrAdVehicleLog(
@@ -106,7 +106,7 @@ class VehicleRepositoryImpl @Inject constructor(
         if (isCorruptedOrAdVehicleLog(log.logType, log.gasStationName, log.note)) {
             return@withContext -1L
         }
-        val normalizedTypeLog = if (log.logType == VehicleLogType.REFUELING && log.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON) {
+        val normalizedTypeLog = if (log.note?.contains("[user_type_override:") != true && log.logType == VehicleLogType.REFUELING && log.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON) {
             log.copy(
                 logType = VehicleLogType.PARKING,
                 fuelAmountLiters = 0.0,
@@ -323,7 +323,7 @@ class VehicleRepositoryImpl @Inject constructor(
                     continue
                 }
 
-                val isUnderMinRefuel = entity.logType == VehicleLogType.REFUELING &&
+                val isUnderMinRefuel = entity.note?.contains("[user_type_override:") != true && entity.logType == VehicleLogType.REFUELING &&
                     entity.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
                 val targetType = if (isUnderMinRefuel) VehicleLogType.PARKING else entity.logType
 
@@ -481,7 +481,7 @@ class VehicleRepositoryImpl @Inject constructor(
             if (existingMatchIdx >= 0) {
                 val existingLog = currentLogs[existingMatchIdx]
                 val needsUpdate = existingLog.gasStationName != resolvedStationName ||
-                    existingLog.logType != targetLogType
+                    (existingLog.note?.contains("[user_type_override:") != true && existingLog.logType != targetLogType)
                 if (needsUpdate) {
                     val currentNote = existingLog.note.orEmpty()
                     val updatedNote = if (isTxOneTime && !currentNote.contains("[one_time_edit:true]")) {
@@ -492,7 +492,7 @@ class VehicleRepositoryImpl @Inject constructor(
                         currentNote
                     }
                     val updatedLog = existingLog.copy(
-                        logType = targetLogType,
+                        logType = if (existingLog.note?.contains("[user_type_override:") == true) existingLog.logType else targetLogType,
                         gasStationName = resolvedStationName,
                         fuelAmountLiters = if (targetLogType == VehicleLogType.PARKING) 0.0 else existingLog.fuelAmountLiters,
                         daysSinceLastFuel = if (targetLogType == VehicleLogType.PARKING) null else existingLog.daysSinceLastFuel,
@@ -636,7 +636,7 @@ class VehicleRepositoryImpl @Inject constructor(
                     continue
                 }
 
-                val isUnderMinRefuel = log.logType == VehicleLogType.REFUELING &&
+                val isUnderMinRefuel = !note.contains("[user_type_override:") && log.logType == VehicleLogType.REFUELING &&
                     log.fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
                 if ((resolvedStation.isNotBlank() && resolvedStation != rawStation) || isUnderMinRefuel) {
                     val finalStation = if (resolvedStation.isNotBlank()) resolvedStation else rawStation
@@ -745,7 +745,7 @@ class VehicleRepositoryImpl @Inject constructor(
             if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근 왕복")) {
                 val oneWayDistance = if (commuteDistanceKm > 0.0) Math.round((commuteDistanceKm / 2.0) * 10.0) / 10.0 else log.tripDistanceKm
                 val updated = log.copy(
-                    note = "출근 주행 ($homeName ➔ $companyName)",
+                    note = if (com.autologue.app.util.KoreanHolidayUtils.isCommuteEligibleWorkday(log.timestamp.toLocalDate())) "출근 주행 ($homeName ➔ $companyName)" else "일반 주행 ($homeName ➔ $companyName)",
                     tripDistanceKm = oneWayDistance
                 )
                 vehicleLogDao.updateVehicleLog(updated)
@@ -783,12 +783,12 @@ class VehicleRepositoryImpl @Inject constructor(
                     val safeHome = homeName.ifBlank { "송파구 위례동" }
                     val safeComp = companyName.ifBlank { "영등포구 영등포동" }
 
-                    when (log.timestamp.hour) {
-                        in 5..11 -> {
+                    when {
+                        log.timestamp.hour in 5..11 && com.autologue.app.util.KoreanHolidayUtils.isCommuteEligibleWorkday(log.timestamp.toLocalDate()) -> {
                             healedDistance = oneWayKm
                             healedNote = "$carTag [$safeHome ➔ $safeComp (출근 %.1f km)] (${durationMin}분 운행 · 대략 위치 동네명 보정)".format(java.util.Locale.US, healedDistance)
                         }
-                        in 16..23 -> {
+                        log.timestamp.hour in 16..23 && com.autologue.app.util.KoreanHolidayUtils.isCommuteEligibleWorkday(log.timestamp.toLocalDate()) -> {
                             healedDistance = oneWayKm
                             healedNote = "$carTag [$safeComp ➔ $safeHome (퇴근 %.1f km)] (${durationMin}분 운행 · 대략 위치 동네명 보정)".format(java.util.Locale.US, healedDistance)
                         }

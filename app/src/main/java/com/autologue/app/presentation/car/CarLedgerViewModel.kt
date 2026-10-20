@@ -32,11 +32,15 @@ import com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
 import com.autologue.app.domain.model.buildUpdatedNote
 import com.autologue.app.domain.model.getExplicitUnitPrice
 import com.autologue.app.domain.model.isCustomFuel
+import com.autologue.app.domain.model.CarLogItemCategory
+import com.autologue.app.domain.model.isNonCommuteDrivingLog
 import com.autologue.app.domain.model.isParkingLog
+import com.autologue.app.domain.model.resolveCarLogItemCategory
 import javax.inject.Inject
 
 enum class LogFilterMode {
     ALL,
+    NON_COMMUTE_DRIVING,
     REFUEL_ONLY,
     DRIVING_ONLY
 }
@@ -67,12 +71,14 @@ data class CarLedgerUiState(
     val syncResultMessage: String? = null,
     val totalRefuelCount: Int = 0,
     val totalDrivingCount: Int = 0,
+    val nonCommuteDrivingCount: Int = 0,
     val isSelectionMode: Boolean = false,
     val selectedLogIds: Set<Long> = emptySet()
 ) {
     val filteredLogs: List<VehicleLog>
         get() = when (logFilterMode) {
             LogFilterMode.ALL -> logs
+            LogFilterMode.NON_COMMUTE_DRIVING -> logs.filter { it.isNonCommuteDrivingLog() }
             LogFilterMode.REFUEL_ONLY -> logs.filter {
                 it.logType == VehicleLogType.REFUELING ||
                     it.logType == VehicleLogType.MAINTENANCE ||
@@ -301,6 +307,7 @@ class CarLedgerViewModel @Inject constructor(
                             it.isParkingLog()
                     }
                     val drivingCount = displayedLogs.count { it.logType == VehicleLogType.TRIP_DRIVING }
+                    val nonCommuteDrivingCount = displayedLogs.count { it.isNonCommuteDrivingLog() }
                     val latestDays = if (isAllVehicles) {
                         vehicleFuelLogs.maxByOrNull { it.timestamp }?.daysSinceLastFuel
                     } else {
@@ -318,7 +325,8 @@ class CarLedgerViewModel @Inject constructor(
                         totalDrivingDistanceKm = Math.round(totalDist * 10.0) / 10.0,
                         averageEfficiencyKmPerL = avgEff,
                         totalRefuelCount = refuelCount,
-                        totalDrivingCount = drivingCount
+                        totalDrivingCount = drivingCount,
+                        nonCommuteDrivingCount = nonCommuteDrivingCount
                     )
                 }
             }.collectLatest { nextState ->
@@ -435,7 +443,9 @@ class CarLedgerViewModel @Inject constructor(
         fuelCost: Long,
         explicitLiters: Double?,
         unitPrice: Double?,
-        isOneTimeSave: Boolean = true
+        isOneTimeSave: Boolean = true,
+        selectedCategory: CarLogItemCategory? = null,
+        tripDistanceKm: Double? = null
     ) {
         viewModelScope.launch {
             com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
@@ -444,6 +454,49 @@ class CarLedgerViewModel @Inject constructor(
                 accentColor = com.autologue.app.presentation.theme.MenuColors.carLedger
             ) {
                 val log = vehicleRepository.getVehicleLogById(logId) ?: return@runWithLoading
+                val effectiveCategory = selectedCategory ?: log.resolveCarLogItemCategory()
+                val targetVehicleForDriving = _uiState.value.vehicles.find { it.id == targetVehicleId }
+                val vNameForDriving = targetVehicleForDriving?.name?.split(" ")?.firstOrNull() ?: if (targetVehicleId == "car_2") "차량 2" else "차량 1"
+                if (effectiveCategory.isDrivingCategory) {
+                    val finalDistKm = (tripDistanceKm?.takeIf { it > 0.0 } ?: log.tripDistanceKm)
+                        .let { Math.round(it * 10.0) / 10.0 }
+                    val rawRouteInput = gasStationName
+                        .replace(Regex("\\s*\\([0-9.]+\\s*km\\)", RegexOption.IGNORE_CASE), "")
+                        .trim()
+                    val customRoute = when {
+                        rawRouteInput.isBlank() -> null
+                        effectiveCategory == CarLogItemCategory.COMMUTE_TO_WORK &&
+                            (rawRouteInput == "집->회사" || rawRouteInput == "우리집 ➔ 회사") -> null
+                        effectiveCategory == CarLogItemCategory.COMMUTE_FROM_WORK &&
+                            (rawRouteInput == "회사->집" || rawRouteInput == "회사 ➔ 우리집") -> null
+                        else -> rawRouteInput
+                    }
+                    var drivingNote = log.buildUpdatedNote(
+                        targetVehicleId = targetVehicleId,
+                        vehicleShortName = vNameForDriving,
+                        unitPrice = null,
+                        isCustom = false,
+                        userTypeOverride = effectiveCategory,
+                        customRouteTitle = customRoute
+                    ).replace("[one_time_edit:true]", "").trim()
+                    if (isOneTimeSave) {
+                        drivingNote = "$drivingNote [one_time_edit:true]".trim()
+                    }
+                    val updatedDrivingLog = log.copy(
+                        logType = VehicleLogType.TRIP_DRIVING,
+                        gasStationName = null,
+                        fuelCost = 0L,
+                        fuelAmountLiters = 0.0,
+                        tripDistanceKm = finalDistKm,
+                        note = drivingNote
+                    )
+                    vehicleRepository.updateVehicleLog(updatedDrivingLog)
+                    _uiState.value = _uiState.value.copy(
+                        syncResultMessage = "차계부 기록 항목을 '${effectiveCategory.label}'(으)로 저장했습니다."
+                    )
+                    closeRefuelEditDialog()
+                    return@runWithLoading
+                }
                 val oldStationName = log.gasStationName?.trim().orEmpty()
                 val finalStationName = gasStationName.trim().ifBlank { oldStationName.ifBlank { "주유소" } }
                 val isStationRenamed = finalStationName.isNotBlank() && finalStationName != oldStationName
@@ -456,7 +509,9 @@ class CarLedgerViewModel @Inject constructor(
                     targetVehicleId = targetVehicleId,
                     vehicleShortName = vName,
                     unitPrice = unitPrice,
-                    isCustom = isCustom
+                    isCustom = isCustom,
+                    userTypeOverride = effectiveCategory,
+                    customRouteTitle = null
                 ).replace("[one_time_edit:true]", "").trim()
 
                 var updatedNote = if (isStationRenamed && !baseUpdatedNote.contains("[custom_name:true]")) {
@@ -468,9 +523,18 @@ class CarLedgerViewModel @Inject constructor(
                     updatedNote = "$updatedNote [one_time_edit:true]".trim()
                 }
 
-                val isParking = log.logType != VehicleLogType.MAINTENANCE && fuelCost in 1L until MIN_REFUEL_AMOUNT_WON
+                val isParking = if (selectedCategory != null) {
+                    selectedCategory == CarLogItemCategory.PARKING
+                } else {
+                    log.logType != VehicleLogType.MAINTENANCE && fuelCost in 1L until MIN_REFUEL_AMOUNT_WON
+                }
+                val isMaint = if (selectedCategory != null) {
+                    selectedCategory == CarLogItemCategory.MAINTENANCE
+                } else {
+                    log.logType == VehicleLogType.MAINTENANCE
+                }
                 val nextLogType = when {
-                    log.logType == VehicleLogType.MAINTENANCE -> VehicleLogType.MAINTENANCE
+                    isMaint -> VehicleLogType.MAINTENANCE
                     isParking -> VehicleLogType.PARKING
                     else -> VehicleLogType.REFUELING
                 }

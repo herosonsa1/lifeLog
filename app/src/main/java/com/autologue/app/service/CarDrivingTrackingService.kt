@@ -449,12 +449,13 @@ class CarDrivingTrackingService : Service() {
                 val isMorningCommuteWindow = (startHour in 5..10 || endHour in 6..11) && durationMin >= 15
                 val isEveningCommuteWindow = (startHour in 16..23 || endHour in 16..23) && durationMin >= 15
 
-                val isToWorkCommute = hasCommuteProfile && (
+                val isCommuteWorkday = com.autologue.app.util.KoreanHolidayUtils.isCommuteEligibleWorkday(java.time.LocalDate.now())
+                val isToWorkCommute = isCommuteWorkday && hasCommuteProfile && (
                     (nearHomeStart && nearCompEnd) ||
                     ((nearHomeStart || nearCompEnd) && isMorningCommuteWindow && !nearCompStart) ||
                     (isEndpointsMissingOrSame && isMorningCommuteWindow && !nearCompStart && !nearHomeEnd)
                 )
-                val isToHomeCommute = !isToWorkCommute && hasCommuteProfile && (
+                val isToHomeCommute = isCommuteWorkday && !isToWorkCommute && hasCommuteProfile && (
                     (nearCompStart && nearHomeEnd) ||
                     ((nearCompStart || nearHomeEnd) && isEveningCommuteWindow && !nearHomeStart) ||
                     (isEndpointsMissingOrSame && isEveningCommuteWindow && !nearHomeStart && !nearCompEnd)

@@ -3,6 +3,8 @@ package com.autologue.app.presentation.car
 import com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
+import com.autologue.app.domain.model.isCommuteDrivingLog
+import com.autologue.app.domain.model.isGolfDrivingLog
 import com.autologue.app.domain.model.isParkingLog
 import com.autologue.app.domain.model.isToHomeCommuteLog
 import com.autologue.app.domain.model.isToWorkCommuteLog
@@ -148,11 +150,8 @@ object CarLedgerAnalyticsEngine {
 
     fun classifyDrivingPurpose(log: VehicleLog): CarDrivingPurposeType? {
         if (log.logType != VehicleLogType.TRIP_DRIVING) return null
-        val n = log.note.orEmpty()
-        val isCommute = log.isToWorkCommuteLog() || log.isToHomeCommuteLog() || n.contains("출퇴근")
-        if (isCommute) return CarDrivingPurposeType.COMMUTE
-        val isGolf = n.contains("골프") || n.contains("라운딩") || n.contains("CC") || n.contains("GC") || n.contains("C.C") || n.contains("G.C")
-        if (isGolf) return CarDrivingPurposeType.GOLF
+        if (log.isCommuteDrivingLog()) return CarDrivingPurposeType.COMMUTE
+        if (log.isGolfDrivingLog()) return CarDrivingPurposeType.GOLF
         return CarDrivingPurposeType.GENERAL
     }
 
