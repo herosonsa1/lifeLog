@@ -60,7 +60,9 @@ import com.autologue.app.presentation.common.AutoLogueSecondaryButton
 import com.autologue.app.presentation.common.AutoLogueDangerButton
 import com.autologue.app.presentation.common.AutoLogueOutlinedButton
 import com.autologue.app.presentation.common.HairlineDivider
+import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.common.MetricBadge
+import com.autologue.app.presentation.common.StandardTopBarSettingsTrigger
 import com.autologue.app.presentation.common.TopMenuAccentBar
 import com.autologue.app.presentation.theme.*
 import java.time.Duration
@@ -163,6 +165,79 @@ fun GolfScreen(
         }
     }
 
+    val isEasyMode = LocalEasyMode.current
+
+    if (isEasyMode) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            GolfEasyModeContent(
+                uiState = uiState,
+                selectedGolfPageTab = selectedGolfPageTab,
+                onSelectGolfPageTab = { selectedGolfPageTab = it },
+                golfAnalyticsUnit = golfAnalyticsUnit,
+                golfAnalyticsPeriod = golfAnalyticsPeriod,
+                golfAnalyticsBasis = golfAnalyticsBasis,
+                golfAnalyticsSubTab = golfAnalyticsSubTab,
+                onSelectAnalyticsSubTab = { golfAnalyticsSubTab = it },
+                onSelectAnalyticsUnit = { newUnit ->
+                    golfAnalyticsUnit = newUnit
+                    val latestRoundDate = uiState.completedRounds.maxOfOrNull {
+                        (it.startTime ?: it.roundDate).toLocalDate()
+                    }
+                    val latestGolfTxDate = uiState.allTransactions
+                        .filter {
+                            GolfAnalyticsEngine.isScreenGolfTransaction(it) ||
+                                GolfAnalyticsEngine.isFieldGolfTransaction(it)
+                        }
+                        .maxOfOrNull { it.timestamp.toLocalDate() }
+                    val anchorDate = listOfNotNull(latestRoundDate, latestGolfTxDate).maxOrNull()
+                        ?: LocalDate.now()
+                    golfAnalyticsPeriod = com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                        newUnit,
+                        anchorDate
+                    )
+                },
+                onPreviousAnalyticsPeriod = {
+                    golfAnalyticsPeriod = golfAnalyticsPeriod.previousSequential()
+                },
+                onNextAnalyticsPeriod = {
+                    golfAnalyticsPeriod = golfAnalyticsPeriod.nextSequential()
+                },
+                onSelectAnalyticsBasis = { golfAnalyticsBasis = it },
+                onOpenDirectAddDialog = { viewModel.openDirectAddDialog() },
+                onOpenReservationDialog = { viewModel.openReservationDialog() },
+                onLaunchLockerSlipPicker = {
+                    globalLockerSlipPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onLaunchScorecardPicker = {
+                    globalScorecardPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onOpenGalleryScanDialog = { viewModel.openGalleryScanDialog() },
+                onOpenStatisticsDialog = { viewModel.openStatisticsDialog() },
+                onSelectRound = { viewModel.selectRound(it) },
+                onOpenDutchPayDialog = { viewModel.openDutchPayDialog(it) },
+                onOpenWeatherDetail = { viewModel.openWeatherDetail(it) }
+            )
+
+            com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
+                isLoading = uiState.isLoading || uiState.isOcrScanning || uiState.isWeatherRefreshing,
+                accentColor = MenuColors.golf,
+                title = when {
+                    uiState.isOcrScanning -> "골프 사진·스코어 분석 중"
+                    uiState.isWeatherRefreshing -> "골프장 날씨 조회 중"
+                    else -> uiState.loadingTitle
+                },
+                message = when {
+                    uiState.isOcrScanning -> uiState.ocrScanningMessage.ifBlank { "스코어카드 및 골프 기록을 분석하고 있습니다..." }
+                    uiState.isWeatherRefreshing -> "골프장 실시간 기상 데이터를 불러오고 있습니다..."
+                    else -> uiState.loadingMessage
+                }
+            )
+        }
+    } else {
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
@@ -187,6 +262,12 @@ fun GolfScreen(
                         }
                     },
                     actions = {
+                        StandardTopBarSettingsTrigger(
+                            accentColor = MenuColors.golf,
+                            containerColor = MenuColors.golfBg,
+                            borderColor = MenuColors.golfBorder
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         AutoLogueActionChipButton(
                             text = if (selectedGolfPageTab == GolfPageTab.ANALYTICS) "기간별 비교중" else "기간별 비교",
                             icon = Icons.Default.BarChart,
@@ -524,8 +605,10 @@ fun GolfScreen(
                 }
             )
         }
+    }
+    }
 
-        // Round Detail Dialog
+    // Round Detail Dialog
         if (uiState.selectedRound != null) {
             GolfRoundDetailDialog(
                 round = uiState.selectedRound!!,
@@ -666,7 +749,6 @@ fun GolfScreen(
                 }
             }
         }
-    }
 }
 
 @Composable

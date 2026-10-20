@@ -257,6 +257,67 @@ fun CarLedgerScreen(
         }
     }
 
+    val isEasyMode = LocalEasyMode.current
+
+    if (isEasyMode) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            CarLedgerEasyModeContent(
+                uiState = uiState,
+                snackbarHostState = snackbarHostState,
+                selectedMainTab = selectedMainTab,
+                onSelectMainTab = { selectedMainTab = it },
+                carAnalyticsUnit = carAnalyticsUnit,
+                carAnalyticsPeriod = carAnalyticsPeriod,
+                carAnalyticsBasis = carAnalyticsBasis,
+                carAnalyticsSubTab = carAnalyticsSubTab,
+                onSelectAnalyticsSubTab = { carAnalyticsSubTab = it },
+                onSelectAnalyticsUnit = { newUnit ->
+                    carAnalyticsUnit = newUnit
+                    val anchorDate = uiState.logs.maxOfOrNull { it.timestamp.toLocalDate() }
+                        ?: java.time.LocalDate.now()
+                    carAnalyticsPeriod = com.autologue.app.presentation.expense.PeriodSpec.fromDate(
+                        newUnit,
+                        anchorDate
+                    )
+                },
+                onPreviousAnalyticsPeriod = {
+                    carAnalyticsPeriod = carAnalyticsPeriod.previousSequential()
+                },
+                onNextAnalyticsPeriod = {
+                    carAnalyticsPeriod = carAnalyticsPeriod.nextSequential()
+                },
+                onSelectAnalyticsBasis = { carAnalyticsBasis = it },
+                onJumpToLogTabWithFilter = { mode ->
+                    viewModel.setLogFilterMode(mode)
+                    selectedMainTab = CarLedgerPageTab.RECORDS
+                },
+                onSelectVehicle = { viewModel.selectVehicle(it) },
+                onOpenAddRefuel = { viewModel.openAddRefuelDialog() },
+                onTriggerSmsSync = triggerSmsSync,
+                onOpenPasteSms = { viewModel.openPasteSmsDialog() },
+                onOpenLocationDialog = { viewModel.openLocationDialog() },
+                onOpenVehicleManageDialog = { viewModel.openVehicleManageDialog() },
+                onOpenMaintenanceDialog = { viewModel.openMaintenanceDialog() },
+                onSetLogFilterMode = { viewModel.setLogFilterMode(it) },
+                onToggleVehicleFilter = { viewModel.toggleVehicleFilter() },
+                onToggleSelectionMode = { viewModel.toggleSelectionMode() },
+                onSelectAllVisibleLogs = { viewModel.selectAllVisibleLogs() },
+                onDeleteSelectedLogs = { viewModel.deleteSelectedLogs() },
+                onToggleSelectLog = { viewModel.toggleSelectLog(it) },
+                onDeleteSingleLog = { viewModel.deleteSingleLog(it) },
+                onAssignVehicle = { logId, vId -> viewModel.assignVehicleToFuelLog(logId, vId) },
+                onEditRefuel = { viewModel.openRefuelEditDialog(it) },
+                onClearDummyLogs = { viewModel.clearAllDummyLogs() }
+            )
+
+            com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
+                isLoading = uiState.isLoading || uiState.isSyncing,
+                accentColor = MenuColors.carLedger,
+                title = uiState.loadingTitle,
+                message = uiState.loadingMessage
+            )
+        }
+    } else {
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         containerColor = AppColors.background,
@@ -286,6 +347,12 @@ fun CarLedgerScreen(
                         }
                     },
                     actions = {
+                        StandardTopBarSettingsTrigger(
+                            accentColor = MenuColors.carLedger,
+                            containerColor = MenuColors.carLedgerBg,
+                            borderColor = MenuColors.carLedgerBorder
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         AutoLogueOutlinedButton(
                             text = "주유 등록",
                             icon = Icons.Default.Add,
@@ -1123,6 +1190,7 @@ fun CarLedgerScreen(
             message = uiState.loadingMessage
         )
         }
+    }
     }
 }
 

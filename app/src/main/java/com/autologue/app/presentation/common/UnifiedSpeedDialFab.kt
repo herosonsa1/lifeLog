@@ -1,7 +1,8 @@
 package com.autologue.app.presentation.common
 
 import android.view.HapticFeedbackConstants
-import androidx.compose.animation.*
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -42,6 +44,8 @@ fun UnifiedSpeedDialFab(
 ) {
     var showSheet by remember { mutableStateOf(false) }
     val view = LocalView.current
+    val context = LocalContext.current
+    val isEasyMode by EasyModeManager.isEasyMode.collectAsState()
 
     val navigateToTab: (String) -> Unit = { route ->
         if (navController.currentDestination?.route != route) {
@@ -103,22 +107,22 @@ fun UnifiedSpeedDialFab(
             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             showSheet = true
         },
-        containerColor = Color(0xFF1E3A8A),
+        containerColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF1E3A8A),
         contentColor = Color.White,
         shape = CircleShape,
         modifier = modifier
             .padding(bottom = 12.dp, end = 8.dp)
             .shadow(
-                elevation = 8.dp,
+                elevation = if (isEasyMode) 4.dp else 8.dp,
                 shape = CircleShape,
-                ambientColor = Color(0x661E3A8A),
-                spotColor = Color(0x661E3A8A)
+                ambientColor = Color(0x331E3A8A),
+                spotColor = Color(0x331E3A8A)
             )
     ) {
         Icon(
-            imageVector = Icons.Default.FlashOn,
-            contentDescription = "원터치 빠른 액션",
-            tint = Color(0xFF67E8F9),
+            imageVector = if (isEasyMode) Icons.Default.Add else Icons.Default.FlashOn,
+            contentDescription = "원터치 빠른 액션 및 설정",
+            tint = if (isEasyMode) Color.White else Color(0xFF67E8F9),
             modifier = Modifier.size(24.dp)
         )
     }
@@ -141,7 +145,7 @@ fun UnifiedSpeedDialFab(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "⚡ 원터치 빠른 작업",
+                        text = "원터치 빠른 작업 및 모드 설정",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF0F172A)
@@ -156,18 +160,69 @@ fun UnifiedSpeedDialFab(
                     }
                 }
 
+                // 쉬운 모드 원터치 전환 배너 카드
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = EasyTheme.tossBlueSoft,
+                    border = BorderStroke(1.dp, EasyTheme.tossBlue.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "쉬운 모드 전환 (Toss · Apple 스타일)",
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = EasyTheme.textPrimary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (isEasyMode) "현재 쉬운 모드가 적용되어 있습니다" else "핵심 정보 중심으로 깔끔하게 보기",
+                                fontSize = 12.sp,
+                                color = EasyTheme.textSecondary
+                            )
+                        }
+                        Switch(
+                            checked = isEasyMode,
+                            onCheckedChange = { enabled ->
+                                view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                                EasyModeManager.setEasyMode(context, enabled)
+                                Toast.makeText(
+                                    context,
+                                    if (enabled) "쉬운 모드로 전환되었습니다." else "표준 상세 모드로 전환되었습니다.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = EasyTheme.tossBlue
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
                 Text(
                     text = "원하는 작업을 선택하시면 즉시 해당 화면으로 이동합니다.",
                     fontSize = 13.sp,
                     color = Color(0xFF64748B),
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    modifier = Modifier.padding(bottom = 10.dp)
                 )
 
                 quickActions.forEach { action ->
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = Color(0xFFF8FAFC),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 5.dp)

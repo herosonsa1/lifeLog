@@ -92,7 +92,7 @@ private val MODAL_DATE_FORMATTER: DateTimeFormatter =
 /**
  * 가계부 상단 서브 페이지 구분 (결제 내역 vs 구성비 통계 vs 기간별 증감 비교·인사이트)
  */
-private enum class ExpensePageTab {
+internal enum class ExpensePageTab {
     TRANSACTIONS,      // 결제 내역 조회 및 빠른 관리 (기본)
     STATISTICS,        // 원형 그래프 + 카테고리별/사용자별 구성비 통계
     PERIOD_COMPARISON  // 월간·분기별·반기별·연간 증감 비교 및 최대 변동 인사이트
@@ -101,7 +101,7 @@ private enum class ExpensePageTab {
 /**
  * 통계 페이지 원형(도넛) 그래프 분석 기준
  */
-private enum class ExpenseDonutDimension {
+internal enum class ExpenseDonutDimension {
     BY_CATEGORY,  // 카테고리별 소비 비중
     BY_USER       // 사용자별 소비 비중
 }
@@ -109,7 +109,7 @@ private enum class ExpenseDonutDimension {
 /**
  * 원형 그래프 조각 데이터 모델
  */
-private data class DonutSliceData(
+internal data class DonutSliceData(
     val key: String,
     val label: String,
     val amount: Long,
@@ -122,7 +122,7 @@ private data class DonutSliceData(
 /**
  * 단일 패스 O(N)으로 사전 계산되는 빠른 필터 칩 카운트 및 핵심 요약 지표
  */
-private data class ExpenseQuickFilterSnapshot(
+internal data class ExpenseQuickFilterSnapshot(
     val recurringCount: Int,
     val recurringAmount: Long,
     val recurringIncomeAmount: Long,
@@ -137,7 +137,7 @@ private data class ExpenseQuickFilterSnapshot(
 /**
  * 스크롤 중 연산을 0으로 만들기 위한 거래 행 사전 계산 메타데이터
  */
-private data class PrecomputedRowMeta(
+internal data class PrecomputedRowMeta(
     val matchingAccount: UserAccount?,
     val effectiveCatName: String,
     val formattedDate: String
@@ -347,65 +347,72 @@ fun ExpenseScreen(
         )
     }
 
+    val isEasyMode = LocalEasyMode.current
+    val triggerSmsSyncAction: () -> Unit = {
+        val hasPerm = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_SMS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasPerm) {
+            viewModel.syncHistoricalSms(context)
+        } else {
+            smsPermissionLauncher.launch(
+                arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+            )
+        }
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-        containerColor = AppColors.background,
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.background,
         snackbarHost = { AppSnackbarHost(snackbarHostState) },
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                TopMenuAccentBar(color = MenuColors.expense)
-                com.autologue.app.presentation.common.AutoLogueCompactTopBar(
-                    title = {
-                        Column {
-                            Text(
-                                text = "스마트 가계부",
-                                style = AppTypography.h2
-                            )
-                            Text(
-                                text = "소비·지출 관리",
-                                style = AppTypography.caption.copy(
-                                    color = MenuColors.expense,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp
+            if (!isEasyMode) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    TopMenuAccentBar(color = MenuColors.expense)
+                    com.autologue.app.presentation.common.AutoLogueCompactTopBar(
+                        title = {
+                            Column {
+                                Text(
+                                    text = "스마트 가계부",
+                                    style = AppTypography.h2
                                 )
-                            )
-                        }
-                    },
-                    actions = {
-                        AutoLogueOutlinedButton(
-                            text = "문자 동기화",
-                            icon = Icons.Default.Sync,
-                            onClick = {
-                                val hasPerm = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.READ_SMS
-                                ) == PackageManager.PERMISSION_GRANTED
-                                if (hasPerm) {
-                                    viewModel.syncHistoricalSms(context)
-                                } else {
-                                    smsPermissionLauncher.launch(
-                                        arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+                                Text(
+                                    text = "소비·지출 관리",
+                                    style = AppTypography.caption.copy(
+                                        color = MenuColors.expense,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
                                     )
-                                }
-                            },
-                            contentColor = MenuColors.expense,
-                            containerColor = MenuColors.expenseBg,
-                            borderColor = MenuColors.expenseBorder
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        AutoLogueOutlinedButton(
-                            text = "지출 추가",
-                            icon = Icons.Default.Add,
-                            onClick = { viewModel.openAddDialog() },
-                            contentColor = MenuColors.expense,
-                            containerColor = MenuColors.expenseBg,
-                            borderColor = MenuColors.expenseBorder
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                    },
-                    containerColor = AppColors.background
-                )
-                HairlineDivider()
+                                )
+                            }
+                        },
+                        actions = {
+                            AutoLogueOutlinedButton(
+                                text = "문자 동기화",
+                                icon = Icons.Default.Sync,
+                                onClick = triggerSmsSyncAction,
+                                contentColor = MenuColors.expense,
+                                containerColor = MenuColors.expenseBg,
+                                borderColor = MenuColors.expenseBorder
+                            )
+                            Spacer(modifier = Modifier.width(Spacing.xxs))
+                            AutoLogueOutlinedButton(
+                                text = "지출 추가",
+                                icon = Icons.Default.Add,
+                                onClick = { viewModel.openAddDialog() },
+                                contentColor = MenuColors.expense,
+                                containerColor = MenuColors.expenseBg,
+                                borderColor = MenuColors.expenseBorder
+                            )
+                            Spacer(modifier = Modifier.width(Spacing.xxs))
+                            StandardTopBarSettingsTrigger(accentColor = MenuColors.expense)
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                        },
+                        containerColor = AppColors.background
+                    )
+                    HairlineDivider()
+                }
             }
         }
     ) { padding ->
@@ -414,6 +421,144 @@ fun ExpenseScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            if (isEasyMode) {
+                val sourceAllTxs = if (uiState.dedupedAllTransactions.isNotEmpty()) {
+                    uiState.dedupedAllTransactions
+                } else {
+                    uiState.allTransactions
+                }
+                val userNameByTxId = remember(uiState.userClassByTxId) {
+                    uiState.userClassByTxId.mapValues { it.value.name }
+                }
+                val comparisonReport = remember(
+                    sourceAllTxs,
+                    analyticsUnit,
+                    analyticsPeriod,
+                    analyticsBasis,
+                    uiState.customCategoryByTxId,
+                    userNameByTxId,
+                    uiState.corporateByTxId,
+                    uiState.recurringTransactionIds,
+                    uiState.selectedUserClassification,
+                    uiState.selectedCorporateFilter,
+                    uiState.isRecurringFilterOnly,
+                    uiState.metaVersion
+                ) {
+                    ExpenseAnalyticsEngine.buildReport(
+                        allTransactions = sourceAllTxs,
+                        unit = analyticsUnit,
+                        targetPeriod = analyticsPeriod,
+                        requestedBasis = analyticsBasis,
+                        customCategoryByTxId = uiState.customCategoryByTxId,
+                        userClassByTxId = userNameByTxId,
+                        corporateByTxId = uiState.corporateByTxId,
+                        recurringTransactionIds = uiState.recurringTransactionIds,
+                        selectedUserFilter = uiState.selectedUserClassification,
+                        selectedCorporateFilter = uiState.selectedCorporateFilter,
+                        isRecurringFilterOnly = uiState.isRecurringFilterOnly,
+                        getBuiltInCategoryName = { cat ->
+                            viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                        }
+                    )
+                }
+
+                ExpenseEasyModeContent(
+                    uiState = uiState,
+                    activePageTab = activePageTab,
+                    onSelectPageTab = { activePageTab = it },
+                    filteredTransactions = filteredTransactions,
+                    filteredExpenseTotal = filteredExpenseTotal,
+                    filteredIncomeTotal = filteredIncomeTotal,
+                    quickFilterSnapshot = quickFilterSnapshot,
+                    rowMetaByTxId = rowMetaByTxId,
+                    categoryStatItems = categoryStatItems,
+                    userStatItems = userStatItems,
+                    donutDimension = donutDimension,
+                    onDonutDimensionChange = {
+                        donutDimension = it
+                        selectedDonutSliceKey = null
+                    },
+                    selectedDonutSliceKey = selectedDonutSliceKey,
+                    onSelectDonutSlice = { key ->
+                        selectedDonutSliceKey = if (selectedDonutSliceKey == key) null else key
+                    },
+                    onNavigateToSliceTransactions = { slice ->
+                        if (!slice.isOtherBucket) {
+                            if (donutDimension == ExpenseDonutDimension.BY_CATEGORY) {
+                                viewModel.toggleEffectiveCategoryByName(slice.key)
+                            } else {
+                                viewModel.toggleUserClassificationFilter(slice.key)
+                            }
+                        }
+                        activePageTab = ExpensePageTab.TRANSACTIONS
+                    },
+                    comparisonReport = comparisonReport,
+                    analyticsSubTab = analyticsSubTab,
+                    onSelectAnalyticsSubTab = { analyticsSubTab = it },
+                    analyticsSortMode = analyticsSortMode,
+                    onSelectAnalyticsSortMode = { analyticsSortMode = it },
+                    onSelectAnalyticsPeriodUnit = { newUnit ->
+                        analyticsUnit = newUnit
+                        analyticsPeriod = PeriodSpec.fromDate(
+                            unit = newUnit,
+                            date = analyticsPeriod.startDate
+                        )
+                    },
+                    onPreviousAnalyticsPeriod = {
+                        analyticsPeriod = analyticsPeriod.previousSequential()
+                    },
+                    onNextAnalyticsPeriod = {
+                        analyticsPeriod = analyticsPeriod.nextSequential()
+                    },
+                    onSelectAnalyticsComparisonBasis = { newBasis ->
+                        analyticsBasis = newBasis
+                    },
+                    onNavigateToCategoryTransactions = { catName, periodSpec ->
+                        if (periodSpec.unit == AnalyticsPeriodUnit.MONTHLY) {
+                            viewModel.selectYearMonth(YearMonth.of(periodSpec.year, periodSpec.subIndex))
+                        } else {
+                            viewModel.setCustomDateRange(periodSpec.startDate, periodSpec.endDate)
+                        }
+                        viewModel.toggleEffectiveCategoryByName(catName)
+                        activePageTab = ExpensePageTab.TRANSACTIONS
+                    },
+                    getBuiltInCategoryDisplayName = { cat ->
+                        viewModel.expenseCustomMetaPreferences.getBuiltInCategoryDisplayName(cat)
+                    },
+                    resolveDisplayCardName = { tx ->
+                        viewModel.expenseCustomMetaPreferences.resolveDisplayCardOrBankName(tx)
+                    },
+                    onPreviousMonth = { viewModel.previousMonth() },
+                    onNextMonth = { viewModel.nextMonth() },
+                    onOpenDateRangeDialog = { viewModel.openDateRangeDialog() },
+                    onOpenAddDialog = { viewModel.openAddDialog() },
+                    onTriggerSmsSync = triggerSmsSyncAction,
+                    onOpenBudgetDialog = { viewModel.openBudgetDialog() },
+                    onOpenCategoryManage = { viewModel.openCategoryManageDialog() },
+                    onOpenUserManage = { viewModel.openUserClassificationManageDialog() },
+                    onOpenAccountManage = { viewModel.openAccountManageDialog() },
+                    onOpenPermanentRules = { viewModel.openPermanentRulesDialog() },
+                    onOpenPasteSms = { viewModel.openPasteSmsDialog() },
+                    onExportExcel = { viewModel.exportToExcel(context) },
+                    onToggleSelectionMode = { viewModel.toggleSelectionMode() },
+                    onSelectAllFiltered = { viewModel.selectAllFilteredTransactions() },
+                    onDeleteSelected = { viewModel.deleteSelectedTransactions() },
+                    onClearAllSubFilters = { viewModel.clearAllSubFilters() },
+                    onSetCategoryFilter = { viewModel.setCategoryFilter(it) },
+                    onToggleCategoryFilter = { viewModel.toggleCategoryFilter(it) },
+                    onSetCustomCategoryFilter = { viewModel.setCustomCategoryFilter(it) },
+                    onToggleRecurringFilter = { viewModel.toggleRecurringFilter() },
+                    onToggleUserFilter = { viewModel.toggleUserClassificationFilter(it) },
+                    onSetCorporateFilter = { viewModel.setCorporateFilter(it) },
+                    onTransactionClick = { tx ->
+                        if (uiState.isSelectionMode) {
+                            viewModel.toggleSelectTransaction(tx.id)
+                        } else {
+                            viewModel.openEditDialog(tx)
+                        }
+                    }
+                )
+            } else {
             Column(modifier = Modifier.fillMaxSize()) {
                 // =========================================================================
                 // 고정 상단 컨트롤 바: [연월 선택기] + [접었다 폈다 하는 관리·도구 메뉴] + [결제 내역 | 소비 통계 리포트] 탭
@@ -2137,6 +2282,7 @@ fun ExpenseScreen(
                     }
                 }
             }
+            }
 
             com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
                 isLoading = uiState.isLoading || uiState.isSaving,
@@ -2449,7 +2595,7 @@ fun ExpenseScreen(
  * - 항목 터치 시 중앙 오버레이에 선택된 항목의 비율·금액·건수를 강조 표시하고 [해당 내역 바로 보기] 연동 지원
  */
 @Composable
-private fun ExpenseDonutChartCard(
+internal fun ExpenseDonutChartCard(
     dateTitle: String,
     totalExpense: Long,
     totalIncome: Long,

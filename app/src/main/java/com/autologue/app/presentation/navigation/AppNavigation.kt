@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -23,11 +24,14 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.*
 import com.autologue.app.presentation.car.CarLedgerScreen
-import com.autologue.app.presentation.common.AutoLogueLoadingOverlay
+import com.autologue.app.presentation.common.AppSettingsBottomSheet
+import com.autologue.app.presentation.common.EasyModeManager
+import com.autologue.app.presentation.common.EasyTheme
 import com.autologue.app.presentation.common.GlobalLoadingOverlayHost
 import com.autologue.app.presentation.common.GlobalLoadingRegistry
 import com.autologue.app.presentation.common.GlobalSyncProgressBannerHost
 import com.autologue.app.presentation.common.HairlineDivider
+import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.common.UnifiedSpeedDialFab
 import com.autologue.app.presentation.diary.DiaryScreen
 import com.autologue.app.presentation.expense.ExpenseScreen
@@ -38,6 +42,12 @@ import com.autologue.app.presentation.theme.*
 @Composable
 fun AppNavigation(navController: NavHostController = rememberNavController()) {
     val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        EasyModeManager.ensureInitialized(context)
+    }
+    val isEasyMode by EasyModeManager.isEasyMode.collectAsState()
+    val isSettingsSheetOpen by EasyModeManager.isSettingsSheetOpen.collectAsState()
+
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     var pendingScreen by remember { mutableStateOf<Screen?>(null) }
@@ -112,114 +122,181 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
         Screen.Lifestyle
     )
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-            floatingActionButton = {
-                UnifiedSpeedDialFab(navController = navController)
-            },
-            floatingActionButtonPosition = FabPosition.End,
-            bottomBar = {
-                // 3버튼 네비게이션(보통 36dp 이상)일 때는 시스템 네비게이션 높이를 반영하고,
-                // 안드로이드 스와이프 조작 홈 바 환경에서는 하단 탭 색상 라인이 가려지지 않는 수준(12.dp)으로 살짝 올려 하단 여백 부여
-                val rawNavBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-                val bottomSafeMargin = if (rawNavBottom >= 32.dp) rawNavBottom else 12.dp
+    CompositionLocalProvider(LocalEasyMode provides isEasyMode) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Scaffold(
+                contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
+                floatingActionButton = {
+                    UnifiedSpeedDialFab(navController = navController)
+                },
+                floatingActionButtonPosition = FabPosition.End,
+                bottomBar = {
+                    val rawNavBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                    val bottomSafeMargin = if (rawNavBottom >= 32.dp) rawNavBottom else 12.dp
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(AppColors.surface)
-                ) {
-                    HairlineDivider()
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(AppColors.surface)
-                            .padding(top = 2.dp, bottom = bottomSafeMargin),
-                        horizontalArrangement = Arrangement.SpaceAround,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-
-                        items.forEach { screen ->
-                            val isSelected = effectiveRoute == screen.route
-                            Column(
+                    if (isEasyMode) {
+                        // 쉬운 모드: 토스·애플 스타일의 여유롭고 선명한 하단 탭 바
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(EasyTheme.surface)
+                        ) {
+                            HorizontalDivider(color = EasyTheme.borderSubtle, thickness = 0.8.dp)
+                            Row(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        if (effectiveRoute != screen.route) {
-                                            pendingScreen = screen
-                                        }
-                                    }
-                                    .padding(top = 4.dp, bottom = 3.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
+                                    .fillMaxWidth()
+                                    .background(EasyTheme.surface)
+                                    .padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = bottomSafeMargin),
+                                horizontalArrangement = Arrangement.SpaceAround,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = screen.icon,
-                                    contentDescription = screen.title,
-                                    modifier = Modifier.size(20.dp),
-                                    tint = if (isSelected) screen.themeColor else AppColors.textMuted
-                                )
-                                Spacer(modifier = Modifier.height(Spacing.xxs))
-                                Text(
-                                    text = screen.title,
-                                    fontSize = 10.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) screen.themeColor else AppColors.textMuted
-                                )
-                                Spacer(modifier = Modifier.height(3.dp))
-                                // 메뉴별 고유 색상 언더라인 인디케이터
-                                Box(
-                                    modifier = Modifier
-                                        .height(3.dp)
-                                        .width(if (isSelected) 24.dp else 12.dp)
-                                        .clip(RoundedCornerShape(1.5.dp))
-                                        .background(
-                                            if (isSelected) screen.themeColor
-                                            else screen.themeColor.copy(alpha = 0.18f)
+                                items.forEach { screen ->
+                                    val isSelected = effectiveRoute == screen.route
+                                    val easyLabel = when (screen) {
+                                        Screen.Diary -> "일상"
+                                        Screen.Expense -> "내 소비"
+                                        Screen.CarLedger -> "내 차"
+                                        Screen.Golf -> "골프"
+                                        Screen.Lifestyle -> "리포트"
+                                    }
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .clickable {
+                                                if (effectiveRoute != screen.route) {
+                                                    pendingScreen = screen
+                                                }
+                                            }
+                                            .padding(vertical = 5.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(
+                                            imageVector = screen.icon,
+                                            contentDescription = easyLabel,
+                                            modifier = Modifier.size(22.dp),
+                                            tint = if (isSelected) EasyTheme.textPrimary else Color(0xFFB0B8C1)
                                         )
-                                )
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = easyLabel,
+                                            fontSize = 11.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) EasyTheme.textPrimary else EasyTheme.textMuted
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // 표준 모드: 기존 하단 네비게이션 바 100% 유지
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(AppColors.surface)
+                        ) {
+                            HairlineDivider()
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(AppColors.surface)
+                                    .padding(top = 2.dp, bottom = bottomSafeMargin),
+                                horizontalArrangement = Arrangement.SpaceAround,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                items.forEach { screen ->
+                                    val isSelected = effectiveRoute == screen.route
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                if (effectiveRoute != screen.route) {
+                                                    pendingScreen = screen
+                                                }
+                                            }
+                                            .padding(top = 4.dp, bottom = 3.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(
+                                            imageVector = screen.icon,
+                                            contentDescription = screen.title,
+                                            modifier = Modifier.size(20.dp),
+                                            tint = if (isSelected) screen.themeColor else AppColors.textMuted
+                                        )
+                                        Spacer(modifier = Modifier.height(Spacing.xxs))
+                                        Text(
+                                            text = screen.title,
+                                            fontSize = 10.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelected) screen.themeColor else AppColors.textMuted
+                                        )
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        // 메뉴별 고유 색상 언더라인 인디케이터
+                                        Box(
+                                            modifier = Modifier
+                                                .height(3.dp)
+                                                .width(if (isSelected) 24.dp else 12.dp)
+                                                .clip(RoundedCornerShape(1.5.dp))
+                                                .background(
+                                                    if (isSelected) screen.themeColor
+                                                    else screen.themeColor.copy(alpha = 0.18f)
+                                                )
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
-        ) { paddingValues ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .padding(paddingValues)
-            ) {
-                // 어느 메뉴에 있든 백그라운드 수집·분석 진행 시 전체 건수 대비 진행 건수와 완료율(%)을 앱 최상단에 고정 표시
-                GlobalSyncProgressBannerHost()
-
-                Box(
+            ) { paddingValues ->
+                Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .padding(paddingValues)
                 ) {
-                    NavHost(
-                        navController = navController,
-                        startDestination = Screen.Diary.route,
-                        enterTransition = { fadeIn(animationSpec = tween(140)) },
-                        exitTransition = { fadeOut(animationSpec = tween(100)) },
-                        popEnterTransition = { fadeIn(animationSpec = tween(140)) },
-                        popExitTransition = { fadeOut(animationSpec = tween(100)) },
-                        modifier = Modifier.fillMaxSize()
+                    // 어느 메뉴에 있든 백그라운드 수집·분석 진행 시 전체 건수 대비 진행 건수와 완료율(%)을 앱 최상단에 고정 표시
+                    GlobalSyncProgressBannerHost()
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
                     ) {
-                        composable(Screen.Diary.route) { DiaryScreen() }
-                        composable(Screen.Expense.route) { ExpenseScreen() }
-                        composable(Screen.CarLedger.route) { CarLedgerScreen() }
-                        composable(Screen.Golf.route) { GolfScreen() }
-                        composable(Screen.Lifestyle.route) { LifestyleScreen() }
+                        NavHost(
+                            navController = navController,
+                            startDestination = Screen.Diary.route,
+                            enterTransition = { fadeIn(animationSpec = tween(140)) },
+                            exitTransition = { fadeOut(animationSpec = tween(100)) },
+                            popEnterTransition = { fadeIn(animationSpec = tween(140)) },
+                            popExitTransition = { fadeOut(animationSpec = tween(100)) },
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            composable(Screen.Diary.route) { DiaryScreen() }
+                            composable(Screen.Expense.route) { ExpenseScreen() }
+                            composable(Screen.CarLedger.route) { CarLedgerScreen() }
+                            composable(Screen.Golf.route) { GolfScreen() }
+                            composable(Screen.Lifestyle.route) { LifestyleScreen() }
+                        }
                     }
                 }
             }
-        }
 
-        // 모든 화면, 상단바, 하단바, 다이얼로그보다 제일 앞(Front-most)에 표시되는 통합 로딩 오버레이 호스트
-        GlobalLoadingOverlayHost()
+            // 전역 설정 바텀시트 ('쉬운 모드 전환' 포함)
+            if (isSettingsSheetOpen) {
+                AppSettingsBottomSheet(
+                    isEasyMode = isEasyMode,
+                    onSetEasyMode = { enabled ->
+                        EasyModeManager.setEasyMode(context, enabled)
+                    },
+                    onDismiss = {
+                        EasyModeManager.closeSettingsSheet()
+                    }
+                )
+            }
+
+            // 모든 화면, 상단바, 하단바, 다이얼로그보다 제일 앞(Front-most)에 표시되는 통합 로딩 오버레이 호스트
+            GlobalLoadingOverlayHost()
+        }
     }
 }
-
-

@@ -65,6 +65,8 @@ import com.autologue.app.domain.model.LifestyleMetrics
 import com.autologue.app.domain.model.MobilityOrbit
 import com.autologue.app.domain.model.SpatioTemporalFootprint
 import com.autologue.app.domain.usecase.sync.SyncProgress
+import com.autologue.app.presentation.common.LocalEasyMode
+import com.autologue.app.presentation.common.StandardTopBarSettingsTrigger
 import com.autologue.app.presentation.theme.AppColors
 import com.autologue.app.presentation.theme.AppShapes
 import com.autologue.app.presentation.theme.AppTypography
@@ -82,8 +84,18 @@ fun LifestyleScreen(
     val metrics by viewModel.metrics.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val syncProgress by viewModel.syncProgress.collectAsState()
+    val isEasyMode = LocalEasyMode.current
 
     Box(modifier = Modifier.fillMaxSize()) {
+        if (isEasyMode) {
+            LifestyleEasyModeContent(
+                selectedPeriod = selectedPeriod,
+                metrics = metrics,
+                syncProgress = syncProgress,
+                onSelectPeriod = { viewModel.selectPeriod(it) },
+                onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) }
+            )
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -144,6 +156,7 @@ fun LifestyleScreen(
                 }
             }
         }
+        }
 
         com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
             isLoading = isLoading || (syncProgress?.isRunning == true),
@@ -200,36 +213,46 @@ private fun LifestyleHeader(
             )
         }
 
-        Surface(
-            shape = AppShapes.pill,
-            color = if (isSyncing) AppColors.surfaceVariant else MenuColors.lifestyleBg,
-            border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.lifestyleBorder),
-            modifier = Modifier.clickable(enabled = !isSyncing) { onSyncClick() }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+            StandardTopBarSettingsTrigger(
+                accentColor = MenuColors.lifestyle,
+                containerColor = MenuColors.lifestyleBg,
+                borderColor = MenuColors.lifestyleBorder
+            )
+            Surface(
+                shape = AppShapes.pill,
+                color = if (isSyncing) AppColors.surfaceVariant else MenuColors.lifestyleBg,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.lifestyleBorder),
+                modifier = Modifier.clickable(enabled = !isSyncing) { onSyncClick() }
             ) {
-                if (isSyncing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 1.5.dp,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    if (isSyncing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.5.dp,
+                            color = MenuColors.lifestyle
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Sync,
+                            contentDescription = "동기화",
+                            tint = MenuColors.lifestyle,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Text(
+                        text = if (isSyncing) "동기화 중" else "내 폰 동기화",
+                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold),
                         color = MenuColors.lifestyle
                     )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.Sync,
-                        contentDescription = "동기화",
-                        tint = MenuColors.lifestyle,
-                        modifier = Modifier.size(14.dp)
-                    )
                 }
-                Text(
-                    text = if (isSyncing) "동기화 중" else "내 폰 동기화",
-                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold),
-                    color = MenuColors.lifestyle
-                )
             }
         }
     }

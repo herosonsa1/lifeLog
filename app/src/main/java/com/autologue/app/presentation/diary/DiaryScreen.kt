@@ -184,128 +184,165 @@ fun DiaryScreen(
         }
     }
 
+    val isEasyMode = com.autologue.app.presentation.common.LocalEasyMode.current
+
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-        containerColor = AppColors.background,
+        containerColor = if (isEasyMode) com.autologue.app.presentation.common.EasyTheme.bg else AppColors.background,
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                TopMenuAccentBar(color = MenuColors.diary)
-                com.autologue.app.presentation.common.AutoLogueCompactTopBar(
-                    title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            androidx.compose.foundation.Image(
-                                painter = androidx.compose.ui.res.painterResource(id = com.autologue.app.R.drawable.app_logo),
-                                contentDescription = "나의일상다이어리",
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                            )
-                            Spacer(modifier = Modifier.width(Spacing.sm))
-                            Column(
-                                verticalArrangement = Arrangement.Center
+            if (!isEasyMode) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    TopMenuAccentBar(color = MenuColors.diary)
+                    com.autologue.app.presentation.common.AutoLogueCompactTopBar(
+                        title = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "나의일상",
-                                    style = AppTypography.h2.copy(
-                                        fontSize = 15.5.sp,
-                                        lineHeight = 17.sp,
-                                        fontWeight = FontWeight.Black,
-                                        letterSpacing = (-0.3).sp,
-                                        color = AppColors.textPrimary
-                                    )
+                                androidx.compose.foundation.Image(
+                                    painter = androidx.compose.ui.res.painterResource(id = com.autologue.app.R.drawable.app_logo),
+                                    contentDescription = "나의일상다이어리",
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(8.dp))
                                 )
-                                Text(
-                                    text = "다이어리",
-                                    style = AppTypography.caption.copy(
-                                        color = MenuColors.diary,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 11.5.sp,
-                                        lineHeight = 13.sp,
-                                        letterSpacing = 0.8.sp
+                                Spacer(modifier = Modifier.width(Spacing.sm))
+                                Column(
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = "나의일상",
+                                        style = AppTypography.h2.copy(
+                                            fontSize = 15.5.sp,
+                                            lineHeight = 17.sp,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = (-0.3).sp,
+                                            color = AppColors.textPrimary
+                                        )
                                     )
-                                )
+                                    Text(
+                                        text = "다이어리",
+                                        style = AppTypography.caption.copy(
+                                            color = MenuColors.diary,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 11.5.sp,
+                                            lineHeight = 13.sp,
+                                            letterSpacing = 0.8.sp
+                                        )
+                                    )
+                                }
                             }
-                        }
-                    },
-                    actions = {
-                        // Pill Date Capsule
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(AppShapes.pill)
-                                .background(AppColors.surfaceVariant)
-                                .padding(horizontal = Spacing.xs, vertical = Spacing.xxs)
-                        ) {
-                            IconButton(
-                                onClick = { viewModel.navigatePrevious() },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(Icons.Default.ChevronLeft, contentDescription = "이전", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
-                            }
-
+                        },
+                        actions = {
+                            // Pill Date Capsule
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable { showDateAndMonthPickerDialog = true }
-                                    .padding(horizontal = Spacing.xs, vertical = 2.dp)
+                                    .clip(AppShapes.pill)
+                                    .background(AppColors.surfaceVariant)
+                                    .padding(horizontal = Spacing.xs, vertical = Spacing.xxs)
                             ) {
-                                Text(
-                                    text = when (uiState.viewMode) {
-                                        TimelineViewMode.MONTHLY -> uiState.currentYearMonth.format(DateTimeFormatter.ofPattern("yy년 M월", Locale.KOREA))
-                                        TimelineViewMode.WEEKLY -> {
-                                            val start = uiState.selectedDate.minusDays(6)
-                                            "${start.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))} ~ ${uiState.selectedDate.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))}"
-                                        }
-                                        else -> uiState.selectedDate.format(DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA))
-                                    },
-                                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
-                                )
-                                Icon(
-                                    imageVector = Icons.Default.ArrowDropDown,
-                                    contentDescription = "일자 및 월 선택",
-                                    tint = AppColors.secondary,
-                                    modifier = Modifier.size(14.dp)
-                                )
+                                IconButton(
+                                    onClick = { viewModel.navigatePrevious() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.ChevronLeft, contentDescription = "이전", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { showDateAndMonthPickerDialog = true }
+                                        .padding(horizontal = Spacing.xs, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = when (uiState.viewMode) {
+                                            TimelineViewMode.MONTHLY -> uiState.currentYearMonth.format(DateTimeFormatter.ofPattern("yy년 M월", Locale.KOREA))
+                                            TimelineViewMode.WEEKLY -> {
+                                                val start = uiState.selectedDate.minusDays(6)
+                                                "${start.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))} ~ ${uiState.selectedDate.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))}"
+                                            }
+                                            else -> uiState.selectedDate.format(DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA))
+                                        },
+                                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "일자 및 월 선택",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.navigateNext() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.ChevronRight, contentDescription = "다음", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
+                                }
                             }
 
-                            IconButton(
-                                onClick = { viewModel.navigateNext() },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(Icons.Default.ChevronRight, contentDescription = "다음", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+
+                            IconButton(onClick = onExportExcelClick, modifier = Modifier.size(30.dp)) {
+                                if (uiState.isExportingExcel) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.primary)
+                                } else {
+                                    Icon(Icons.Default.FileDownload, contentDescription = "엑셀 내보내기", tint = AppColors.secondary, modifier = Modifier.size(18.dp))
+                                }
                             }
-                        }
 
-                        Spacer(modifier = Modifier.width(Spacing.sm))
-
-                        IconButton(onClick = onExportExcelClick, modifier = Modifier.size(32.dp)) {
-                            if (uiState.isExportingExcel) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.primary)
-                            } else {
-                                Icon(Icons.Default.FileDownload, contentDescription = "엑셀 내보내기", tint = AppColors.secondary, modifier = Modifier.size(18.dp))
+                            IconButton(onClick = onSyncClick, modifier = Modifier.size(30.dp)) {
+                                Icon(Icons.Default.Sync, contentDescription = "과거 기록 동기화", tint = AppColors.secondary, modifier = Modifier.size(18.dp))
                             }
-                        }
 
-                        IconButton(onClick = onSyncClick, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Sync, contentDescription = "과거 기록 동기화", tint = AppColors.secondary, modifier = Modifier.size(18.dp))
-                        }
+                            com.autologue.app.presentation.common.StandardTopBarSettingsTrigger(accentColor = MenuColors.diary)
 
-                        Spacer(modifier = Modifier.width(Spacing.md))
-                    },
-                    containerColor = AppColors.background
-                )
-                HairlineDivider()
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                        },
+                        containerColor = AppColors.background
+                    )
+                    HairlineDivider()
+                }
             }
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
+        if (isEasyMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                DiaryEasyModeContent(
+                    uiState = uiState,
+                    isNotificationEnabled = isNotificationEnabled,
+                    onOpenNotificationGuide = { showNotificationGuideDialog = true },
+                    onOpenDatePicker = { showDateAndMonthPickerDialog = true },
+                    onPreviousDate = { viewModel.navigatePrevious() },
+                    onNextDate = { viewModel.navigateNext() },
+                    onSelectToday = { viewModel.selectDate(LocalDate.now()) },
+                    onSyncClick = onSyncClick,
+                    onExportExcelClick = onExportExcelClick,
+                    onViewModeChange = { viewModel.setViewMode(it) },
+                    onMapPeriodFilterChange = { viewModel.setMapPeriodFilter(it) },
+                    onSelectMapStep = { viewModel.selectMapStep(it) },
+                    onCalendarDateClicked = { viewModel.onCalendarDateClicked(it) },
+                    onOpenDiaryDetail = { viewModel.openDiaryDetail(it) },
+                    onPhotoClick = { viewModel.openPhotoPreview(it) },
+                    onAddCompanionClick = { viewModel.openAddCompanionDialog(it) },
+                    onRemoveCompanion = { stepId, name -> viewModel.removeCompanionFromStep(stepId, name) },
+                    onJumpToEntryMap = { entry ->
+                        viewModel.selectDate(entry.date.toLocalDate())
+                        viewModel.setViewMode(TimelineViewMode.MAP_ROUTE)
+                    }
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
             // Contextual Notification Listener Bar
             if (!isNotificationEnabled) {
                 Row(
@@ -485,6 +522,7 @@ fun DiaryScreen(
                 message = if (uiState.isExportingExcel) "다이어리 및 전체 라이프로그 엑셀 파일을 생성하고 있습니다..." else uiState.loadingMessage,
                 modifier = Modifier.fillMaxSize()
             )
+        }
         }
     }
 
