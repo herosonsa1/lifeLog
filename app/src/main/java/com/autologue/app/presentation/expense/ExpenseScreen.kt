@@ -2139,7 +2139,7 @@ fun ExpenseScreen(
             com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
                 isLoading = uiState.isLoading || uiState.isSaving,
                 title = if (uiState.isSaving) "변경 사항 저장 중" else uiState.loadingTitle,
-                message = if (uiState.isSaving) "선택하신 영구저장 항목과 내역을 반영하고 있습니다..." else uiState.loadingMessage,
+                message = if (uiState.isSaving) "변경하신 결제 내역 설정을 반영하고 있습니다..." else uiState.loadingMessage,
                 accentColor = MenuColors.expense,
                 delayMillis = 500L,
                 modifier = Modifier.fillMaxSize()
@@ -2322,7 +2322,7 @@ fun ExpenseScreen(
             initialUserClassificationName = uiState.userClassByTxId[editingTx.id]?.name,
             initialIsCorporate = uiState.corporateByTxId[editingTx.id] == true || editingTx.cardOrBankName.contains("법인"),
             initialBaseCardName = resolvedBaseCardOrBank,
-            initialIsOneTimeSave = editingTx.id in uiState.oneTimeEditedIds,
+            initialIsOneTimeSave = true,
             initialIsFixedExpense = editingTx.id in uiState.recurringTransactionIds,
             isSaving = uiState.isSaving,
             activePermanentRule = activePermanentRule,
@@ -3864,7 +3864,7 @@ fun EditTransactionDialog(
     initialUserClassificationName: String?,
     initialIsCorporate: Boolean,
     initialBaseCardName: String,
-    initialIsOneTimeSave: Boolean,
+    initialIsOneTimeSave: Boolean = true,
     initialIsFixedExpense: Boolean = false,
     isSaving: Boolean = false,
     candidateExistingTransactions: List<Transaction> = emptyList(),

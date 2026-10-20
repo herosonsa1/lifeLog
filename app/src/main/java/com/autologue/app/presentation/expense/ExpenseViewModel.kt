@@ -1249,7 +1249,7 @@ class ExpenseViewModel @Inject constructor(
         isCorporate: Boolean = false,
         customCategoryName: String? = null,
         userClassificationName: String? = null,
-        isOneTimeSave: Boolean = false,
+        isOneTimeSave: Boolean = true,
         isFixedExpense: Boolean? = null,
         permanentSaveOptions: com.autologue.app.data.preferences.PermanentSaveOptions = com.autologue.app.data.preferences.PermanentSaveOptions()
     ) {

@@ -435,7 +435,7 @@ class CarLedgerViewModel @Inject constructor(
         fuelCost: Long,
         explicitLiters: Double?,
         unitPrice: Double?,
-        isOneTimeSave: Boolean = false
+        isOneTimeSave: Boolean = true
     ) {
         viewModelScope.launch {
             com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(

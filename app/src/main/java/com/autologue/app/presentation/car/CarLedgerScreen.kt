@@ -1480,7 +1480,7 @@ fun RefuelDetailEditDialog(
     var stationNameText by remember(log.id) { mutableStateOf(log.gasStationName ?: "주유소") }
     var selectedVehicleId by remember(log.id) { mutableStateOf(log.getAssignedVehicleId()) }
     var costText by remember(log.id) { mutableStateOf(if (log.fuelCost > 0) log.fuelCost.toString() else "") }
-    var isOneTimeSave by remember(log.id) { mutableStateOf(log.note?.contains("[one_time_edit:true]") == true) }
+    var isOneTimeSave by remember(log.id) { mutableStateOf(true) }
     var unitPriceText by remember(log.id) {
         mutableStateOf(
             log.getExplicitUnitPrice()?.let { "%.1f".format(Locale.US, it) } ?: ""
