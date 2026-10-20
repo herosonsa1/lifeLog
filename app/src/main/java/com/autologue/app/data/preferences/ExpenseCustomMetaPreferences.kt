@@ -656,21 +656,30 @@ class ExpenseCustomMetaPreferences private constructor(
      * 거래 내역의 성격(카드 결제 vs 출금/이체/입금 계좌 거래) 및 영구저장 규칙에 맞춰
      * 화면에 표시할 최종 카드사명 또는 은행명을 반환합니다.
      */
-    fun resolveDisplayCardOrBankName(tx: Transaction): String {
+    fun resolveDisplayCardOrBankName(tx: Transaction, fallbackMerchantName: String? = null): String {
         val isBankTx = tx.isBankAccountTransaction()
         if (!isOneTimeEdited(tx)) {
+            val isDep = tx.isDepositTransaction()
             val savedRule = lookupDirectionalRule(
                 merchantCardDesignationMap,
                 tx.merchantName,
-                tx.isDepositTransaction()
-            )
+                isDep
+            ) ?: fallbackMerchantName?.takeIf { it.isNotBlank() && it != tx.merchantName }?.let { fbMer ->
+                lookupDirectionalRule(merchantCardDesignationMap, fbMer, isDep)
+            }
             if (!savedRule.isNullOrBlank()) {
                 return if (isBankTx) {
                     inferCanonicalBankName(savedRule, tx.originalText, tx.transferMemo)
                 } else {
                     val isCorp = isCorporateTransaction(tx)
                     // 문자 원문에 명시적인 타 카드사 힌트가 있는 경우 해당 카드사를 유지하고 법인 여부만 반영
-                    val explicitFromOrig = extractExplicitCardCompanyFromOriginal(tx.cardOrBankName, tx.originalText)
+                    val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+                    val explicitFromOrig = if (!isManual) {
+                        extractExplicitCardCompanyFromOriginal(null, tx.originalText)
+                            ?: extractExplicitCardCompanyFromOriginal(tx.cardOrBankName, tx.originalText)
+                    } else {
+                        extractExplicitCardCompanyFromOriginal(tx.cardOrBankName, null)
+                    }
                     val baseCard = explicitFromOrig ?: savedRule
                     formatCardDesignation(baseCard, isCorp, isBankAccountTx = false)
                 }
@@ -680,7 +689,13 @@ class ExpenseCustomMetaPreferences private constructor(
             inferCanonicalBankName(tx.cardOrBankName, tx.originalText, tx.transferMemo)
         } else {
             val isCorp = isCorporateTransaction(tx)
-            val canonicalCard = inferCanonicalCardCompany(tx.cardOrBankName, tx.originalText)
+            val isManual = tx.originalText.startsWith("[직접 입력]") || tx.originalText.startsWith("[차계부 직접 입력]")
+            val canonicalCard = if (!isManual) {
+                extractExplicitCardCompanyFromOriginal(null, tx.originalText)
+                    ?: inferCanonicalCardCompany(tx.cardOrBankName, tx.originalText)
+            } else {
+                inferCanonicalCardCompany(tx.cardOrBankName, tx.originalText)
+            }
             formatCardDesignation(canonicalCard, isCorp, isBankAccountTx = false)
         }
     }
@@ -1728,14 +1743,16 @@ class ExpenseCustomMetaPreferences private constructor(
         private val CORP_BRACKET_REGEX = Regex("""\s*\[\s*법인(?:카드)?\s*\]""")
         private val PERSONAL_PAREN_REGEX = Regex("""\s*\(\s*개인(?:카드)?\s*\)""")
         private val HANA_MASK_REGEX = Regex("""하나\s*\(?[0-9*]{2,}""")
+        private val HANA_COMMA_MASK_REGEX = Regex("""(?:신용|체크)\s*\(\s*,\s*[0-9*]{2,}\s*\)""")
         private val CREDIT_CHECK_MASK_REGEX = Regex("""(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\)""")
-        private val WOORI_MASK_REGEX = Regex("""우리\s*\(?[0-9*]{2,}""")
+        private val WOORI_MASK_REGEX = Regex("""우리(?:카드|체크|BC|비씨|법인|기업|WON|원|페이)?\s*\(?[0-9*]{2,}""")
+        private val WOORI_APPROVAL_BRACKET_REGEX = Regex("""\[(?:일시불|체크|할부|해외|해외체크|법인|가족|\d+개월)\s*[.·]\s*(?:승인|취소|승인취소)\]""")
         private val SHINHAN_MASK_REGEX = Regex("""신한\s*\(?[0-9*]{2,}""")
         private val HYUNDAI_MASK_REGEX = Regex("""현대\s*\(?[0-9*]{2,}""")
         private val SAMSUNG_MASK_REGEX = Regex("""삼성\s*\(?[0-9*]{2,}""")
         private val LOTTE_MASK_REGEX = Regex("""롯데\s*\(?[0-9*]{2,}""")
         private val CARD_TOK_PREFIX_REGEX = Regex("""카드\s*[:：]?\s*(?<tok>[가-힣A-Za-z0-9*(),]{3,})""")
-        private val CARD_TOK_ISSUER_REGEX = Regex("""(?<tok>(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업)(?:농협|국민)?(?:카드|체크|법인)?\s*\(?[,0-9*]{2,}\)?)""")
+        private val CARD_TOK_ISSUER_REGEX = Regex("""(?<tok>(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업)(?:농협|국민|BC|비씨|WON)?(?:카드|체크|신용|법인|기업)?\s*\(?[,0-9*]{2,}\)?)""")
         private val CARD_TOK_TYPE_REGEX = Regex("""(?<tok>(?:신용|체크)\s*\(\s*,?\s*[0-9*]{2,}\s*\))""")
         private val DIGITS_AND_MASK_REGEX = Regex("""[0-9*]{2,}""")
 
@@ -1746,6 +1763,55 @@ class ExpenseCustomMetaPreferences private constructor(
                 .replace(CORP_BRACKET_REGEX, "")
                 .replace(PERSONAL_PAREN_REGEX, "")
                 .trim()
+        }
+
+        private fun matchExplicitCardCompanyFromText(text: String?): String? {
+            if (text.isNullOrBlank()) return null
+            val upper = text.uppercase()
+            return when {
+                text.startsWith("우리") || text.contains("우리카드") || text.contains("우리체크") ||
+                    text.contains("우리BC") || text.contains("우리비씨") || text.contains("우리법인") ||
+                    text.contains("우리기업") || upper.contains("우리WON") || text.contains("우리원카드") ||
+                    text.contains("우리페이") || upper.contains("WOORI") ||
+                    text.contains("1588-9955") || text.contains("1599-9955") ||
+                    text.contains("15889955") || text.contains("15999955") ||
+                    WOORI_MASK_REGEX.containsMatchIn(text) ||
+                    WOORI_APPROVAL_BRACKET_REGEX.containsMatchIn(text) -> "우리카드"
+                text.startsWith("하나") || text.contains("하나카드") || text.contains("하나체크") ||
+                    upper.contains("HANA") || text.contains("1800-1111") || text.contains("18001111") ||
+                    HANA_MASK_REGEX.containsMatchIn(text) || HANA_COMMA_MASK_REGEX.containsMatchIn(text) -> "하나카드"
+                upper.startsWith("NH") || text.startsWith("농협") || upper.contains("NH농협") ||
+                    text.contains("농협카드") || text.contains("농협체크") || text.contains("채움") ||
+                    text.contains("1588-1600") || text.contains("1644-4000") -> "NH농협카드"
+                text.startsWith("신한") || upper.contains("SOL페이") || text.contains("신한카드") ||
+                    text.contains("신한체크") || upper.contains("SHINHAN") || text.contains("1544-7200") ||
+                    SHINHAN_MASK_REGEX.containsMatchIn(text) -> "신한카드"
+                upper.startsWith("KB") || text.startsWith("국민") || upper.contains("KB국민") ||
+                    text.contains("국민카드") || text.contains("국민체크") || upper.contains("KOOKMIN") ||
+                    text.contains("1588-1688") -> "KB국민카드"
+                text.startsWith("현대") || text.contains("현대카드") || upper.contains("HYUNDAI") ||
+                    text.contains("1577-6000") || HYUNDAI_MASK_REGEX.containsMatchIn(text) -> "현대카드"
+                text.startsWith("삼성") || text.contains("삼성카드") || upper.contains("SAMSUNG") ||
+                    text.contains("1588-8700") || SAMSUNG_MASK_REGEX.containsMatchIn(text) -> "삼성카드"
+                text.startsWith("롯데") || text.contains("롯데카드") || upper.contains("LOTTE") ||
+                    text.contains("1588-8100") || LOTTE_MASK_REGEX.containsMatchIn(text) -> "롯데카드"
+                upper.startsWith("BC") || text.startsWith("비씨") || upper.contains("BC카드") ||
+                    text.contains("비씨카드") || text.contains("페이북") || upper.contains("PAYBOOC") ||
+                    text.contains("1588-4000") -> "BC카드"
+                text.contains("카카오페이") || text.startsWith("카카오") || upper.contains("KAKAOPAY") -> "카카오페이"
+                text.contains("네이버페이") || text.startsWith("네이버") || upper.contains("NAVERPAY") -> "네이버페이"
+                text.contains("토스페이") || text.startsWith("토스") || upper.contains("TOSS") -> "토스페이"
+                text.contains("우리") -> "우리카드"
+                text.contains("하나") -> "하나카드"
+                upper.contains("NH") || text.contains("농협") -> "NH농협카드"
+                text.contains("신한") -> "신한카드"
+                upper.contains("KB") || text.contains("국민") -> "KB국민카드"
+                text.contains("현대") -> "현대카드"
+                text.contains("삼성") -> "삼성카드"
+                text.contains("롯데") -> "롯데카드"
+                upper.contains("BC") || text.contains("비씨") -> "BC카드"
+                else -> null
+            }
         }
 
         /**
@@ -1762,41 +1828,21 @@ class ExpenseCustomMetaPreferences private constructor(
             // 이미 표준 카드사 목록과 정확히 일치하는 경우 즉시 반환
             if (cleaned in DEFAULT_CARD_COMPANIES) return cleaned
 
-            fun matchCardFromText(text: String): String? {
-                if (text.isBlank()) return null
-                val upper = text.uppercase()
-                return when {
-                    text.startsWith("하나") || text.contains("하나카드") || text.contains("하나체크") || upper.contains("HANA") || HANA_MASK_REGEX.containsMatchIn(text) || CREDIT_CHECK_MASK_REGEX.containsMatchIn(text) -> "하나카드"
-                    upper.startsWith("NH") || text.startsWith("농협") || upper.contains("NH농협") || text.contains("농협카드") || text.contains("농협체크") || text.contains("채움") -> "NH농협카드"
-                    text.startsWith("우리") || text.contains("우리카드") || text.contains("우리체크") || upper.contains("WOORI") || WOORI_MASK_REGEX.containsMatchIn(text) -> "우리카드"
-                    text.startsWith("신한") || upper.contains("SOL페이") || text.contains("신한카드") || text.contains("신한체크") || upper.contains("SHINHAN") || SHINHAN_MASK_REGEX.containsMatchIn(text) -> "신한카드"
-                    upper.startsWith("KB") || text.startsWith("국민") || upper.contains("KB국민") || text.contains("국민카드") || text.contains("국민체크") || upper.contains("KOOKMIN") -> "KB국민카드"
-                    text.startsWith("현대") || text.contains("현대카드") || upper.contains("HYUNDAI") || HYUNDAI_MASK_REGEX.containsMatchIn(text) -> "현대카드"
-                    text.startsWith("삼성") || text.contains("삼성카드") || upper.contains("SAMSUNG") || SAMSUNG_MASK_REGEX.containsMatchIn(text) -> "삼성카드"
-                    text.startsWith("롯데") || text.contains("롯데카드") || upper.contains("LOTTE") || LOTTE_MASK_REGEX.containsMatchIn(text) -> "롯데카드"
-                    upper.startsWith("BC") || text.startsWith("비씨") || upper.contains("BC카드") || text.contains("비씨카드") || text.contains("페이북") || upper.contains("PAYBOOC") -> "BC카드"
-                    text.contains("카카오페이") || text.startsWith("카카오") || upper.contains("KAKAOPAY") -> "카카오페이"
-                    text.contains("네이버페이") || text.startsWith("네이버") || upper.contains("NAVERPAY") -> "네이버페이"
-                    text.contains("토스페이") || text.startsWith("토스") || upper.contains("TOSS") -> "토스페이"
-                    text.contains("하나") -> "하나카드"
-                    upper.contains("NH") || text.contains("농협") -> "NH농협카드"
-                    text.contains("우리") -> "우리카드"
-                    text.contains("신한") -> "신한카드"
-                    upper.contains("KB") || text.contains("국민") -> "KB국민카드"
-                    text.contains("현대") -> "현대카드"
-                    text.contains("삼성") -> "삼성카드"
-                    text.contains("롯데") -> "롯데카드"
-                    upper.contains("BC") || text.contains("비씨") -> "BC카드"
-                    else -> null
-                }
-            }
-
-            matchCardFromText(cleaned)?.let { return it }
+            // 1순위: 명시적인 카드사명/대표번호/고유 헤더 매칭 (신용/체크 일반 마스킹보다 항상 우선)
+            matchExplicitCardCompanyFromText(cleaned)?.let { return it }
             if (!fallbackOriginalText.isNullOrBlank()) {
-                matchCardFromText(fallbackOriginalText)?.let { return it }
+                matchExplicitCardCompanyFromText(fallbackOriginalText)?.let { return it }
             }
             if (!fallbackSecondText.isNullOrBlank()) {
-                matchCardFromText(fallbackSecondText)?.let { return it }
+                matchExplicitCardCompanyFromText(fallbackSecondText)?.let { return it }
+            }
+
+            // 2순위: 명시적 카드사명이 전혀 없을 때만 신용(1234)/체크(1234) 패턴을 하나카드로 추론
+            if (CREDIT_CHECK_MASK_REGEX.containsMatchIn(cleaned) ||
+                (!fallbackOriginalText.isNullOrBlank() && CREDIT_CHECK_MASK_REGEX.containsMatchIn(fallbackOriginalText)) ||
+                (!fallbackSecondText.isNullOrBlank() && CREDIT_CHECK_MASK_REGEX.containsMatchIn(fallbackSecondText))
+            ) {
+                return "하나카드"
             }
 
             // 마스킹 번호(0*2* 등)가 섞여 있거나 "(결제)" 같은 비카드명이면 기본값 반환
@@ -1874,24 +1920,18 @@ class ExpenseCustomMetaPreferences private constructor(
             rawCardOrBankName: String?,
             originalText: String?
         ): String? {
+            if (!originalText.isNullOrBlank()) {
+                matchExplicitCardCompanyFromText(originalText)?.let { return it }
+            }
+            if (!rawCardOrBankName.isNullOrBlank()) {
+                matchExplicitCardCompanyFromText(rawCardOrBankName)?.let { return it }
+            }
             val combined = "${rawCardOrBankName.orEmpty()} ${originalText.orEmpty()}".trim()
             if (combined.isBlank()) return null
-            val upper = combined.uppercase()
-            return when {
-                combined.contains("하나") || upper.contains("HANA") || CREDIT_CHECK_MASK_REGEX.containsMatchIn(combined) -> "하나카드"
-                upper.contains("NH") || combined.contains("농협") || combined.contains("채움") -> "NH농협카드"
-                combined.contains("우리") || upper.contains("WOORI") -> "우리카드"
-                combined.contains("신한") || upper.contains("SHINHAN") || upper.contains("SOL페이") -> "신한카드"
-                upper.contains("KB") || combined.contains("국민") || upper.contains("KOOKMIN") -> "KB국민카드"
-                combined.contains("현대") || upper.contains("HYUNDAI") -> "현대카드"
-                combined.contains("삼성") || upper.contains("SAMSUNG") -> "삼성카드"
-                combined.contains("롯데") || upper.contains("LOTTE") -> "롯데카드"
-                upper.contains("BC") || combined.contains("비씨") || combined.contains("페이북") || upper.contains("PAYBOOC") -> "BC카드"
-                combined.contains("카카오페이") || upper.contains("KAKAOPAY") -> "카카오페이"
-                combined.contains("네이버페이") || upper.contains("NAVERPAY") -> "네이버페이"
-                combined.contains("토스페이") || upper.contains("TOSS") -> "토스페이"
-                else -> null
+            if (CREDIT_CHECK_MASK_REGEX.containsMatchIn(combined)) {
+                return "하나카드"
             }
+            return null
         }
 
         /**

@@ -92,7 +92,7 @@ fun LifestyleScreen(
             com.autologue.app.presentation.common.TopMenuAccentBar(color = MenuColors.lifestyle)
             Box(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 4.dp)) {
                 LifestyleHeader(
-                    onSyncClick = { viewModel.syncFromDevice(context, 30) },
+                    onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) },
                     isSyncing = syncProgress?.isRunning == true
                 )
             }
@@ -123,7 +123,7 @@ fun LifestyleScreen(
             item {
                 LifeOrbitHeroCard(
                     metrics = metrics,
-                    onSyncClick = { viewModel.syncFromDevice(context, 30) }
+                    onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) }
                 )
             }
 

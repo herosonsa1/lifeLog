@@ -285,7 +285,7 @@ class SyncCheckpointPreferences @Inject constructor(
         private const val KEY_PHOTO_LOCATION_CACHE = "photo_location_cache_v1"
         private const val MAX_CACHED_URIS = 4000
 
-        const val CURRENT_CLEANUP_VERSION = 27
+        const val CURRENT_CLEANUP_VERSION = 28
 
         private val DISPLAY_FORMATTER = DateTimeFormatter.ofPattern("MM/dd HH:mm", Locale.KOREA)
         private val FULL_DISPLAY_FORMATTER = DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm", Locale.KOREA)

@@ -210,6 +210,8 @@ class HistoricalDataImporter @Inject constructor(
                 var scannedRows = 0
                 val candidateList = mutableListOf<RawSmsItem>()
                 val cursor = runCatching {
+                    context.contentResolver.query(uri, standardProjection, null, null, "${Telephony.Sms.DATE} DESC")
+                }.getOrNull() ?: runCatching {
                     context.contentResolver.query(uri, standardProjection, null, null, null)
                 }.getOrNull() ?: runCatching {
                     context.contentResolver.query(uri, null, null, null, null)
@@ -294,6 +296,8 @@ class HistoricalDataImporter @Inject constructor(
             for (uri in urisToTry) {
                 val candidateList = mutableListOf<RawMmsItem>()
                 val cursor = runCatching {
+                    context.contentResolver.query(uri, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE, Telephony.Mms.SUBJECT), null, null, "${Telephony.Mms.DATE} DESC")
+                }.getOrNull() ?: runCatching {
                     context.contentResolver.query(uri, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE, Telephony.Mms.SUBJECT), null, null, null)
                 }.getOrNull() ?: runCatching {
                     context.contentResolver.query(uri, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE), null, null, null)

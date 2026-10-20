@@ -551,5 +551,74 @@ class SmsParserTest {
         assertEquals(1, dedupedDetail.size)
         assertEquals("이마트24(성남분당점)", dedupedDetail.first().merchantName)
     }
+
+    @Test
+    fun `우리카드 다양한 승인 및 취소 문자 포맷이 누락 없이 정확하게 파싱되고 카드사명이 우리카드로 보존되어야 한다`() {
+        val baseTime = LocalDateTime.of(2026, 10, 15, 12, 34)
+
+        // 포맷 1: [일시불.승인] 금액 선행형 + 우리카드(1234)정*우님 + 누적
+        val wooriFormat1 = """
+            [Web발신]
+            [일시불.승인]
+            15,000원
+            우리카드(1234)정*우님
+            10/15 12:34
+            스타벅스 코리아
+            누적1,234,567원
+        """.trimIndent()
+        val tx1 = SmsParser.parse("1588-9955", wooriFormat1, baseTime)
+        assertNotNull(tx1)
+        assertEquals(15000L, tx1!!.amount)
+        assertEquals("스타벅스 코리아", tx1.merchantName)
+        assertEquals("우리카드", tx1.cardOrBankName)
+        assertEquals(com.autologue.app.domain.model.PaymentMethod.CREDIT_CARD, tx1.paymentMethod)
+
+        // 포맷 2: 우리(1234)승인 ('카드' 생략형) + 누적 선행형
+        val wooriFormat2 = """
+            [Web발신]
+            우리(5678)승인
+            정*우님
+            25,000원(일시불)
+            10/15 13:10
+            누적 340,000원
+            투썸플레이스판교점
+        """.trimIndent()
+        val tx2 = SmsParser.parse("1588-9955", wooriFormat2, baseTime)
+        assertNotNull(tx2)
+        assertEquals(25000L, tx2!!.amount)
+        assertEquals("투썸플레이스판교점", tx2.merchantName)
+        assertEquals("우리카드", tx2.cardOrBankName)
+
+        // 포맷 3: [체크.승인] + 출금예정 / 지급예정 포함 체크카드 문자 (비결제 안내로 오탐 차단되지 않아야 함)
+        val wooriCheckSms = """
+            [Web발신]
+            [체크.승인]
+            12,500원
+            우리체크(9012)정*우님
+            10/15 18:20
+            GS25역삼점
+            출금예정 12,500원
+        """.trimIndent()
+        assertFalse(SmsParser.isNonPaymentMessage(wooriCheckSms))
+        val tx3 = SmsParser.parse("1588-9955", wooriCheckSms, baseTime)
+        assertNotNull(tx3)
+        assertEquals(12500L, tx3!!.amount)
+        assertEquals("GS25역삼점", tx3.merchantName)
+        assertEquals("우리카드", tx3.cardOrBankName)
+        assertEquals(com.autologue.app.domain.model.PaymentMethod.CHECK_CARD, tx3.paymentMethod)
+
+        // 포맷 4: 1줄 단문형 (일자 선행)
+        val wooriSingleLine = "[Web발신] 우리카드(1234) 정*우님 10/15 19:05 42,000원(일시불) 이마트분당점 누적 520,000원"
+        val tx4 = SmsParser.parse("1588-9955", wooriSingleLine, baseTime)
+        assertNotNull(tx4)
+        assertEquals(42000L, tx4!!.amount)
+        assertEquals("이마트분당점", tx4.merchantName)
+        assertEquals("우리카드", tx4.cardOrBankName)
+
+        // 포맷 5: 동일 가맹점(스타벅스 코리아)에 타 카드사(하나카드) 영구 규칙이 있더라도 우리카드 문자 원문이면 '우리카드'로 표시되어야 함
+        val metaPrefs = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences()
+        val resolvedCard = metaPrefs.resolveDisplayCardOrBankName(tx1)
+        assertEquals("우리카드", resolvedCard)
+    }
 }
 

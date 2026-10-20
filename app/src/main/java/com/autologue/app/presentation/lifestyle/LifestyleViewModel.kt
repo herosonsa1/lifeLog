@@ -64,7 +64,8 @@ class LifestyleViewModel @Inject constructor(
         }
     }
 
-    fun syncFromDevice(context: Context, daysBack: Int? = 30) {
-        syncHistoricalDataUseCase.startAutoSync(context, daysBack = daysBack ?: 30, force = true)
+    fun syncFromDevice(context: Context, daysBack: Int? = null) {
+        val targetDays = daysBack ?: _selectedPeriod.value.days
+        syncHistoricalDataUseCase.startManualSync(context, daysBack = targetDays, runInBackground = true)
     }
 }

@@ -52,7 +52,10 @@ object NotificationParser {
             packageName == "com.google.android.apps.messaging" ||
             packageName.contains("card") ||
             packageName.contains("paybooc") ||
-            packageName.contains("hana")
+            packageName.contains("hana") ||
+            packageName.contains("woori") ||
+            packageName.contains("shinhan") ||
+            packageName.contains("lotte")
 
         if (isMessagingOrCardApp || combined.contains("[Web발신]") || SmsParser.isCardApprovalMessage(combined) || (combined.contains("승인") && combined.contains("원")) || (combined.contains("결제") && combined.contains("원"))) {
             val titleHasPaymentAmountOrAction = title.contains("원") ||

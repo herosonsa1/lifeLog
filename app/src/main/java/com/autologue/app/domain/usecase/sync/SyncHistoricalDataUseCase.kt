@@ -296,9 +296,11 @@ class SyncHistoricalDataUseCase @Inject constructor(
         try {
             ensureBaselineCheckpointIfNeeded()
 
+            val needsLegacyCleanup = !syncCheckpointPreferences.isLegacyCleanupDone()
             val lastSyncCompletedMillis = syncCheckpointPreferences.getLastSyncCompletedAtMillis()
             val useIncremental = (!isManual && lastSyncCompletedMillis > 0L) ||
                 (isManual && daysBack == 0 && lastSyncCompletedMillis > 0L)
+            val useIncrementalSms = useIncremental && !needsLegacyCleanup
 
             val periodDesc = when {
                 useIncremental -> "마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncCompletedMillis)}) 이후"
@@ -307,7 +309,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
             }
 
             // 0. 기존 중복 데이터 검사 및 가짜 골프 라운드 청소 (최초 1회 또는 수동 기간 전체 동기화 시에만 실행)
-            if (!syncCheckpointPreferences.isLegacyCleanupDone() || (isManual && !useIncremental)) {
+            if (needsLegacyCleanup || (isManual && !useIncremental)) {
                 updateSessionState(
                     sessionId,
                     SyncProgress(
@@ -332,14 +334,14 @@ class SyncHistoricalDataUseCase @Inject constructor(
             }
 
             // 1. 전체 수집 대상(결제 문자 + 갤러리 일반 사진 + 골프 OCR 후보) 고속 사전 스캔 및 전체 모수(N건) 산출
-            val sinceSmsMillis = if (useIncremental) syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis() else null
+            val sinceSmsMillis = if (useIncrementalSms) syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis() else null
             val smsDaysBack = when {
-                useIncremental -> null
+                useIncrementalSms -> null
                 daysBack == null -> null
                 else -> maxOf(daysBack, 365)
             }
             val smsLimit = when {
-                useIncremental -> 1000
+                useIncrementalSms -> 1000
                 daysBack == null -> 10000
                 else -> 5000
             }

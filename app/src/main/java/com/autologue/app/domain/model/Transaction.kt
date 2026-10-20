@@ -157,6 +157,7 @@ fun Transaction.isBankAccountTransaction(overrideCategory: ExpenseCategory? = nu
     val orig = originalText
     val memo = transferMemo.orEmpty()
     val hasCardIndicator = orig.contains("카드") || orig.contains("신용(") || orig.contains("체크(") ||
+        orig.contains("우리(") || orig.contains("[일시불.") || orig.contains("[체크.") || orig.contains("[할부.") ||
         orig.contains("일시불") || orig.contains("할부") || orig.contains("사용처") ||
         orig.contains("(결제)") || orig.contains("누적이용") || cardOrBankName.contains("카드") ||
         cardOrBankName.contains("페이")
@@ -173,15 +174,17 @@ fun Transaction.isBankAccountTransaction(overrideCategory: ExpenseCategory? = nu
 object TransactionDeduplicator {
 
     val GENERIC_TRANSFER_PLACEHOLDERS = setOf(
-        "입금 내역", "출금 내역", "계좌 이체", "이체/출금", "카드 가맹점", "가맹점", "정선우", "정*우", "본인"
+        "입금 내역", "출금 내역", "계좌 이체", "이체/출금", "카드 가맹점", "가맹점",
+        "정선우", "정*우", "정선우님", "정*우님", "고객님", "본인",
+        "[일시불.승인]", "[체크.승인]", "[할부.승인]", "[해외.승인]", "[승인]", "[취소]"
     )
 
     private val BALANCE_EXTRACT_REGEX = Regex("""잔액\s*[:：]?\s*(?<bal>[\d,]+)원?""")
     private val DIRECTION_SUFFIX_CLEAN_REGEX = Regex("""\s*\((?:입금|출금)\)\s*$""")
 
-    // "카드 6", "카드 2", "카드6", "NH카드 6", "농협카드 2", "체크카드 출금", "카드 6*9*" 등 카드번호 파편/일반 플레이스홀더 정규식
+    // "카드 6", "카드 2", "카드6", "NH카드 6", "농협카드 2", "우리(1234)", "우리카드(1234)정*우님", "체크카드 출금", "카드 6*9*" 등 카드번호 파편/일반 플레이스홀더 정규식
     private val CARD_PLACEHOLDER_MERCHANT_REGEX = Regex(
-        """^(?:(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*)?(?:체크\s*|신용\s*)?(?:카드|체크)(?:\s*[-*0-9()]+|\s*(?:출금|결제|승인|사용|내역))?(?:\s*\((?:출금|입금)\))?$""",
+        """^(?:(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*(?:BC|법인|WON)?\s*)?(?:(?:체크\s*|신용\s*)?(?:카드|체크)(?:\s*[-*0-9()]+|\s*(?:출금|결제|승인|사용|내역))?|\([0-9*]{2,4}\))(?:\s*[가-힣*]+님?)?(?:\s*(?:승인|취소|결제))?(?:\s*\((?:출금|입금)\))?$""",
         RegexOption.IGNORE_CASE
     )
 
@@ -202,6 +205,8 @@ object TransactionDeduplicator {
         if (rawTrimmed in GENERIC_TRANSFER_PLACEHOLDERS || clean in GENERIC_TRANSFER_PLACEHOLDERS) return true
         if (CARD_PLACEHOLDER_MERCHANT_REGEX.matches(rawTrimmed) || CARD_PLACEHOLDER_MERCHANT_REGEX.matches(clean)) return true
         if (clean.matches(Regex("""^(?:카드|체크)\s*\d+[\d*()-]*$"""))) return true
+        if (clean.matches(Regex("""^[가-힣]+\*[가-힣*]*님?$"""))) return true
+        if (clean.matches(Regex("""^\[(?:일시불|할부|체크|해외|신용|\d+개월)?\.?(?:승인취소|결제취소|취소|승인|결제)\]$"""))) return true
         return false
     }
 

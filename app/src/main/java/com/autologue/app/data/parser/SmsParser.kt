@@ -22,7 +22,7 @@ object SmsParser {
             val smartChunks = mutableListOf<String>()
             val currentChunkLines = mutableListOf<String>()
 
-            val cardStartRegex = Regex("""^(?:NH|KB|신한|삼성|현대|롯데|우리|하나|BC)카드""")
+            val cardStartRegex = Regex("""^(?:\[(?:일시불|할부|체크|해외|신용|\d+개월)?\.?(?:승인|취소)\]|(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨)(?:카드|체크|BC|법인|\([0-9*]{2,4}\)|[0-9*]{4}))""")
 
             for (line in lines) {
                 val trimmedLine = line.trim()
@@ -82,18 +82,20 @@ object SmsParser {
         "금액", "결제금액", "승인금액", "이용금액", "사용금액", "합계", "총액",
         "누적이용금액", "누적금액", "누적사용금액", "누적결제금액", "총누적", "총누적금액", "총누적이용금액", "누적",
         "결제예정금액", "결제예정액", "결제예정", "청구예정금액", "청구예정액", "청구금액",
-        "총사용금액", "총이용금액", "총결제금액", "총사용액", "총이용액"
+        "총사용금액", "총이용금액", "총결제금액", "총사용액", "총이용액",
+        "출금예정금액", "출금예정액", "출금예정", "지급예정금액", "지급예정액", "지급예정",
+        "[일시불.승인]", "[체크.승인]", "[할부.승인]", "[해외.승인]", "[승인]", "[취소]"
     )
 
     /**
-     * 승인/결제 문자 내 부가 정보로 붙거나 단독 안내로 오는 누적/결제예정/총사용/한도 구문 및 금액 정규식
+     * 승인/결제 문자 내 부가 정보로 붙거나 단독 안내로 오는 누적/결제예정/총사용/출금예정/지급예정/한도 구문 및 금액 정규식
      */
     private val NON_USAGE_AMOUNT_CLAUSE_REGEX = Regex(
-        """(?:/\s*)*(?:총누적이용금액|총누적금액|누적이용금액|누적사용금액|누적결제금액|누적금액|총누적|누적|결제예정금액|결제예정액|결제예정|청구예정금액|청구예정액|청구금액|총사용금액|총이용금액|총결제금액|총사용액|총이용액|당월이용금액|금월이용금액|이번달이용금액|가능금액|가용한도|남은한도|잔여한도|이용한도|한도)(?:\s*안내)?[\s:：/\n\r]*[\d,]+원?"""
+        """(?:/\s*)*(?:총누적이용금액|총누적금액|누적이용금액|누적사용금액|누적결제금액|누적금액|총누적|누적|결제예정금액|결제예정액|결제예정|청구예정금액|청구예정액|청구금액|총사용금액|총이용금액|총결제금액|총사용액|총이용액|당월이용금액|금월이용금액|이번달이용금액|출금예정금액|출금예정액|익월출금예정|출금예정|지급예정금액|지급예정액|지급예정|인출예정|납부예정|할인예정금액|할인예정|적립예정|캐시백예정|가능금액|가용한도|남은한도|잔여한도|이용한도|한도)(?:\s*안내)?[\s:：/\n\r]*[\d,]+원?"""
     )
 
     private val NON_USAGE_TRAIL_KEYWORD_REGEX = Regex(
-        """(?:/\s*)*(?:총누적이용금액|총누적금액|누적이용금액|누적사용금액|누적결제금액|누적금액|총누적|결제예정금액|결제예정액|청구예정금액|청구예정액|총사용금액|총이용금액|총결제금액|총사용액|총이용액)(?:\s*안내)?"""
+        """(?:/\s*)*(?:총누적이용금액|총누적금액|누적이용금액|누적사용금액|누적결제금액|누적금액|총누적|결제예정금액|결제예정액|청구예정금액|청구예정액|총사용금액|총이용금액|총결제금액|총사용액|총이용액|출금예정금액|출금예정액|출금예정|지급예정금액|지급예정액|지급예정)(?:\s*안내)?"""
     )
 
     private val EXCLUDED_NAVER_PAY_TOKENS = listOf("네이버페이", "naverpay", "naver_pay", "네이버파이낸셜", "npay")
@@ -130,7 +132,7 @@ object SmsParser {
         """[\d,]+원\s*(?:상품권|쿠폰|기프티콘|교환권|캐시백|페이백|할인|청구할인|즉시할인|적립|혜택|증정|경품|리워드|드려요|받으세요|받을\s*수|이상\s*결제|이상\s*이용|한도|무이자)|(?:최대|연간|월간|매월)\s*[\d,]+원\s*(?:할인|혜택|캐시백|적립|상품권|쿠폰)"""
     )
     private val EXPLICIT_APPROVAL_DATE_REGEX = Regex(
-        """(?<![0-9~～-])(?:20\d{2}[./-])?(?:0?[1-9]|1[0-2])[./-](?:0?[1-9]|[12]\d|3[01])(?:\s+\d{1,2}:\d{2}|(?![0-9~～-]|개월))|(?:0?[1-9]|1[0-2])월\s*(?:0?[1-9]|[12]\d|3[01])일"""
+        """(?<![0-9~～-])(?:20\d{2}[./-])?(?:1[0-2]|0?[1-9])[./-](?:3[01]|[12]\d|0?[1-9])(?:\s+\d{1,2}:\d{2}|(?![0-9~～-]|개월))|(?:1[0-2]|0?[1-9])월\s*(?:3[01]|[12]\d|0?[1-9])일"""
     )
 
     private val STOCK_OR_NEWS_KEYWORDS = listOf(
@@ -146,17 +148,20 @@ object SmsParser {
         "명세서 안내", "명세서안내", "결제일 안내", "결제일안내", "결제금액 안내", "결제금액안내",
         "총사용금액", "총이용금액", "총결제금액", "총사용액", "총이용액",
         "누적이용금액 안내", "누적금액 안내", "누적사용금액 안내", "이번달 누적", "이번 달 누적",
-        "출금예정", "인출예정", "납부예정", "자동납부 안내", "자동납부안내",
+        "출금예정 안내", "출금예정안내", "출금예정금액 안내", "인출예정 안내", "납부예정 안내", "결제대금 출금", "자동납부 안내", "자동납부안내",
         "연체 안내", "리볼빙 안내", "한도 안내", "한도안내", "한도 상향", "한도상향",
         "유효기간 만료", "재발급 안내", "연회비 안내"
     )
 
-    private val SUMMARY_TOKENS = listOf("누적이용금액", "누적사용금액", "누적결제금액", "누적금액", "총누적", "결제예정", "총사용", "총이용")
+    private val SUMMARY_TOKENS = listOf(
+        "누적이용금액", "누적사용금액", "누적결제금액", "누적금액", "총누적", "결제예정", "총사용", "총이용",
+        "출금예정", "인출예정", "납부예정", "지급예정"
+    )
 
     private val WON_AMOUNT_REGEX = Regex("""[\d,]+원""")
     private val INSTALLMENT_MONTH_REGEX = Regex("""(?<![0-9~～-])\d{1,2}개월""")
-    private val CARD_BRAND_1_REGEX = Regex("""(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|씨티|우체국|새마을|신협|수협|카카오뱅크|토스뱅크|케이뱅크)\s*(?:카드|체크|신용)""")
-    private val CARD_BRAND_2_REGEX = Regex("""(?:NH|삼성|현대|신한|KB|롯데|우리|하나)카드?[0-9*]{2,}""")
+    private val CARD_BRAND_1_REGEX = Regex("""(?:NH|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|씨티|우체국|새마을|신협|수협|카카오뱅크|토스뱅크|케이뱅크)\s*(?:BC\s*|법인\s*|WON\s*)?(?:카드|체크|신용|법인)""")
+    private val CARD_BRAND_2_REGEX = Regex("""(?:NH|농협|삼성|현대|신한|KB|국민|롯데|우리|하나|BC|비씨)(?:카드|체크|BC|법인)?\s*(?:\([0-9*]{2,4}\)|[0-9*]{2,})""")
     private val CARD_BRAND_3_REGEX = Regex("""(?:신용|체크)\s*\([,0-9*]+\)""")
 
     /**
@@ -312,20 +317,25 @@ object SmsParser {
             cleanForAction.contains("가맹점") ||
             cleanForAction.contains("(결제)") ||
             cleanForAction.contains("[결제]") ||
+            cleanForAction.contains("[일시불.") ||
+            cleanForAction.contains("[체크.") ||
+            cleanForAction.contains("[할부.") ||
+            cleanForAction.contains("[해외.") ||
             cleanForAction.contains("체크출금") ||
             cleanForAction.contains("카드출금") ||
             cleanForAction.contains("체크결제") ||
             cleanForAction.contains("카드결제")
 
         val hasExplicitCardHeaderWithNo = Regex(
-            """(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*(?:농협|국민)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)\s*[\d*()-]{2,}"""
+            """(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*(?:농협|국민|BC|법인|WON)?\s*(?:(?:체크\s*|신용\s*)?(?:카드|체크)\s*[\d*()-]{2,}|\([0-9*]{2,4}\))"""
         ).containsMatchIn(cleanForAction)
 
         val hasCardBrand = CARD_BRAND_1_REGEX.containsMatchIn(cleanForAction) ||
             CARD_BRAND_2_REGEX.containsMatchIn(cleanForAction) ||
             CARD_BRAND_3_REGEX.containsMatchIn(cleanForAction) ||
             hasExplicitCardHeaderWithNo ||
-            (cleanForAction.contains("1588-1600") && (cleanForAction.contains("카드") || cleanForAction.contains("체크")))
+            (cleanForAction.contains("1588-1600") && (cleanForAction.contains("카드") || cleanForAction.contains("체크"))) ||
+            ((cleanForAction.contains("1588-9955") || cleanForAction.contains("1599-9955")) && (cleanForAction.contains("우리") || cleanForAction.contains("카드") || cleanForAction.contains("체크") || cleanForAction.contains("승인")))
 
         val isPureAccountTransfer = (cleanForAction.contains("입금") || cleanForAction.contains("송금") || cleanForAction.contains("계좌이체")) &&
             !cleanForAction.contains("승인") && !cleanForAction.contains("일시불") && !cleanForAction.contains("사용처") &&
@@ -374,41 +384,45 @@ object SmsParser {
         val naverResult = parseNaverMembership(cleanBody, fallbackDateTime)
         if (naverResult != null) return naverResult
 
-        // 2. 하나카드 및 주요 카드사 RCS / 알림톡 Key-Value 템플릿 (예: 승인 \n 금액 1,990원 \n 카드 하나0*2* \n 사용처 배민클럽_우아한형제 ...)
+        // 2. 우리카드 승인/취소 정밀 파서 ([일시불.승인], 우리카드(1234), 우리(1234), 우리체크, 우리BC 등 모든 포맷 우선 포획)
+        val wooriResult = parseWooriCard(cleanBody, sender, year, fallbackDateTime)
+        if (wooriResult != null) return wooriResult
+
+        // 3. 하나카드 및 주요 카드사 RCS / 알림톡 Key-Value 템플릿 (예: 승인 \n 금액 1,990원 \n 카드 하나0*2* \n 사용처 배민클럽_우아한형제 ...)
         val hanaResult = parseHanaCard(cleanBody, year, fallbackDateTime)
         if (hanaResult != null) return hanaResult
 
-        // 3. NH농협카드 승인 (예: NH카드2*7*승인 \n 신*선 \n 2,800원 일시불 \n 08/31 16:39 \n 아이스크림살래(힐스점))
+        // 4. NH농협카드 승인 (예: NH카드2*7*승인 \n 신*선 \n 2,800원 일시불 \n 08/31 16:39 \n 아이스크림살래(힐스점))
         val nhCardResult = parseNhCard(cleanBody, year, fallbackDateTime)
         if (nhCardResult != null) return nhCardResult
 
-        // 4. 삼성카드 승인 (예: 삼성1844승인 정*우 \n 119,000원 일시불 \n 08/10 09:11 (주)천재교과서)
+        // 5. 삼성카드 승인 (예: 삼성1844승인 정*우 \n 119,000원 일시불 \n 08/10 09:11 (주)천재교과서)
         val samsungResult = parseSamsungCard(cleanBody, year, fallbackDateTime)
         if (samsungResult != null) return samsungResult
 
-        // 5. KB국민카드 승인 (예: KB국민카드4024 승인 \n 정*우 \n 58,390원 08/10 \n LGUPLUS 통신요금자)
+        // 6. KB국민카드 승인 (예: KB국민카드4024 승인 \n 정*우 \n 58,390원 08/10 \n LGUPLUS 통신요금자)
         val kbCardResult = parseKbCard(cleanBody, year, fallbackDateTime)
         if (kbCardResult != null) return kbCardResult
 
-        // 6. 신한, 현대, 롯데, 우리, BC 등 표준 카드 승인 문자 (은행 이체 파서보다 반드시 우선 실행하여 카드 승인 문자 가로채기 방지)
+        // 7. 신한, 현대, 롯데, 우리, BC 등 표준 카드 승인 문자 (은행 이체 파서보다 반드시 우선 실행하여 카드 승인 문자 가로채기 방지)
         val standardCardResult = parseStandardCard(cleanBody, sender, year, fallbackDateTime)
         if (standardCardResult != null) return standardCardResult
 
-        // 6-2. 범용 카드 승인/취소 정밀 파서 (줄바꿈/어순 변형 카드 문자 100% 포획)
+        // 7-2. 범용 카드 승인/취소 정밀 파서 (줄바꿈/어순 변형 카드 문자 100% 포획)
         if (isCardApprovalMessage(cleanBody)) {
             val universalCardResult = parseUniversalCardSms(cleanBody, sender, fallbackDateTime)
             if (universalCardResult != null) return universalCardResult
         }
 
-        // 7. KB국민은행 계좌 입출금 알림 (예: [KB]08/24 11:09 \n 475801**231 \n 정선우 \n 입금 \n 700,000 \n 잔액1,047,518)
+        // 8. KB국민은행 계좌 입출금 알림 (예: [KB]08/24 11:09 \n 475801**231 \n 정선우 \n 입금 \n 700,000 \n 잔액1,047,518)
         val kbBankResult = parseKbBank(cleanBody, year, fallbackDateTime)
         if (kbBankResult != null) return kbBankResult
 
-        // 8. NH농협 계좌 입출금 알림 (예: 농협 출금20,000원 \n 08/29 02:33 312-****-9414-21 \n 카카오페이 잔액638,728원)
+        // 9. NH농협 계좌 입출금 알림 (예: 농협 출금20,000원 \n 08/29 02:33 312-****-9414-21 \n 카카오페이 잔액638,728원)
         val nhBankResult = parseNhBank(cleanBody, year, fallbackDateTime)
         if (nhBankResult != null) return nhBankResult
 
-        // 8-2. 계좌번호 또는 입금/출금/송금/이체/잔액/보험금 지급 패턴 기반 은행 입출금 SMS 정밀 파싱 (카드 승인 문자가 아닌 경우에만 수행)
+        // 9-2. 계좌번호 또는 입금/출금/송금/이체/잔액/보험금 지급 패턴 기반 은행 입출금 SMS 정밀 파싱 (카드 승인 문자가 아닌 경우에만 수행)
         val isBankTransferSms = !isCardApprovalMessage(cleanBody) && (
             cleanBody.contains("출금") || cleanBody.contains("입금") || cleanBody.contains("송금") ||
                 cleanBody.contains("이체") || cleanBody.contains("잔액") ||
@@ -421,11 +435,11 @@ object SmsParser {
             if (transferResult != null) return transferResult
         }
 
-        // 9. 카카오페이 / 토스 간편결제 문자
+        // 10. 카카오페이 / 토스 간편결제 문자
         val payResult = parseSimplePay(cleanBody, fallbackDateTime)
         if (payResult != null) return payResult
 
-        // 10. 범용 금액 및 가맹점 추출 Fallback (실제 결제/승인 키워드가 있는 경우에만 제한 허용)
+        // 11. 범용 금액 및 가맹점 추출 Fallback (실제 결제/승인 키워드가 있는 경우에만 제한 허용)
         return parseFallback(cleanBody, sender, fallbackDateTime)
     }
 
@@ -450,12 +464,134 @@ object SmsParser {
         return null
     }
 
+    private fun parseWooriCard(body: String, sender: String?, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
+        val combined = "${sender.orEmpty()} $body"
+        val hasWooriHeader = combined.contains("우리카드") ||
+            combined.contains("우리체크") ||
+            combined.contains("우리BC", ignoreCase = true) ||
+            combined.contains("우리법인") ||
+            combined.contains("우리WON", ignoreCase = true) ||
+            combined.contains("1588-9955") ||
+            combined.contains("1599-9955") ||
+            Regex("""우리\s*\([0-9*]{2,4}\)""").containsMatchIn(body) ||
+            Regex("""\[(?:일시불|할부|체크|해외|신용|\d+개월)\.(?:승인|취소)\]""").containsMatchIn(body) ||
+            ((sender?.contains("우리") == true || body.contains("[우리]")) && isCardApprovalMessage(body))
+
+        if (!hasWooriHeader) return null
+
+        // 순수 우리은행 계좌 입출금(승인/일시불/카드 키워드 없이 입금/송금/계좌이체/잔액만 있는 문자) 제외
+        val hasCardContext = body.contains("승인") ||
+            body.contains("일시불") ||
+            body.contains("할부") ||
+            body.contains("체크") ||
+            body.contains("카드") ||
+            body.contains("가맹점") ||
+            body.contains("사용처") ||
+            Regex("""우리\s*\([0-9*]{2,4}\)""").containsMatchIn(body)
+        if (!hasCardContext) return null
+
+        val isCancel = body.contains("승인취소") ||
+            body.contains("결제취소") ||
+            body.contains("취소승인") ||
+            body.contains(".취소]") ||
+            body.contains("[취소]") ||
+            Regex("""\b취소\b""").containsMatchIn(body)
+
+        val bodyWithoutAccum = stripNonUsageAmounts(body)
+            .replace(Regex("""잔액[\s:：]*[\d,]+원?"""), "")
+            .replace(Regex("""(?:출금예정|지급예정|결제예정|청구예정|할인예정|적립예정)(?:금액|액|일)?[\s:：]*[\d,./-]*원?"""), "")
+            .replace(Regex("""\b(?:15|16|18)\d{2}-\d{4}\b"""), "")
+            .trim()
+
+        val labeledAmtMatch = Regex("""(?:승인|결제|취소|이용)\s*금액\s*[:：]?\s*(?<amt>[\d,]+)원?""").find(bodyWithoutAccum)
+        val amtMatch = labeledAmtMatch ?: Regex("""(?<amt>[\d,]+)원""").find(bodyWithoutAccum) ?: return null
+        val rawAmount = amtMatch.groups["amt"]?.value?.replace(",", "")?.toLongOrNull() ?: return null
+        if (rawAmount <= 0L) return null
+        val amount = if (isCancel) -rawAmount else rawAmount
+
+        val explicitMerMatch = Regex("""(?:사용처|가맹점명?|이용가맹점|이용처)\s*[:：]\s*(?<mer>[^\n\r]+)""").find(bodyWithoutAccum)
+        val bodyForDate = bodyWithoutAccum
+            .replace(Regex("""(?:우리|비씨|BC)\s*(?:BC|법인|WON|체크|신용|카드)*\s*\([0-9*]{2,4}\)"""), " ")
+        val dateMatch = Regex("""(?:20\d{2}[./-])?(?<month>1[0-2]|0?[1-9])[./-](?<day>3[01]|[12]\d|0?[1-9])(?:\s+(?<hour>\d{1,2}):(?<minute>\d{1,2}))?""").find(bodyForDate)
+        if (dateMatch == null && explicitMerMatch == null && !hasExplicitApprovalDate(bodyForDate)) {
+            return null
+        }
+
+        val timestamp = if (dateMatch != null) {
+            val mo = dateMatch.groups["month"]?.value?.toIntOrNull() ?: fallbackDateTime.monthValue
+            val da = dateMatch.groups["day"]?.value?.toIntOrNull() ?: fallbackDateTime.dayOfMonth
+            val ho = dateMatch.groups["hour"]?.value?.toIntOrNull() ?: fallbackDateTime.hour
+            val mi = dateMatch.groups["minute"]?.value?.toIntOrNull() ?: fallbackDateTime.minute
+            resolveTimestamp(fallbackDateTime, mo, da, ho, mi)
+        } else {
+            fallbackDateTime
+        }
+
+        val merchant = if (explicitMerMatch != null) {
+            cleanMerchantName(explicitMerMatch.groups["mer"]?.value ?: "우리카드 가맹점")
+        } else {
+            val candidateLines = bodyWithoutAccum.lines()
+                .map { it.trim() }
+                .filter { line ->
+                    line.isNotBlank() &&
+                        !line.equals("[Web발신]", ignoreCase = true) &&
+                        line != "알림"
+                }
+                .map { line ->
+                    line.replace(Regex("""\[Web발신\]""", RegexOption.IGNORE_CASE), " ")
+                        .replace(Regex("""\[(?:일시불|할부|체크|해외|신용|\d+개월)?\.?(?:승인취소|결제취소|취소|승인|결제)\]"""), " ")
+                        .replace(Regex("""\[[^\]]*(?:우리|카드|체크|BC|승인|취소|결제)[^\]]*\]"""), " ")
+                        .replace(Regex("""(?:우리|비씨|BC)\s*(?:BC|법인|WON|체크|신용|카드)*\s*(?:\([0-9*]{2,6}\)|[0-9*()-]{2,8})?"""), " ")
+                        .replace(Regex("""(?:신용|체크|법인)\s*\([,0-9*]+\)"""), " ")
+                        .replace(Regex("""[가-힣]+\*[가-힣*]*님?"""), " ")
+                        .replace(Regex("""[가-힣]{2,4}님(?=\s|$)"""), " ")
+                        .replace(amtMatch.value, " ")
+                        .replace(Regex("""[\d,]+원"""), " ")
+                        .replace(Regex("""(?:20\d{2}[./-])?(?:1[0-2]|0?[1-9])[./-](?:3[01]|[12]\d|0?[1-9])(?:\s+\d{1,2}:\d{1,2}(?::\d{1,2})?)?"""), " ")
+                        .replace(Regex("""(?:\(\s*(?:일시불|할부|\d+개월|체크|신용|결제|승인|취소|승인취소)\s*\)|일시불\.승인|체크\.승인|할부\.승인|해외\.승인|승인취소|결제취소|취소승인|체크출금|카드출금|체크결제|카드결제|일시불|할부|\d+개월|승인|취소|결제완료|결제|출금예정|지급예정|출금)"""), " ")
+                        .replace(Regex("""\s+"""), " ")
+                        .trim()
+                }
+                .filter { cand ->
+                    cand.isNotBlank() &&
+                        cand.length >= 2 &&
+                        !isInvalidMerchantName(cand) &&
+                        !com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(cand)
+                }
+
+            val rawMer = candidateLines.lastOrNull() ?: "카드 가맹점"
+            cleanMerchantName(rawMer)
+        }
+
+        if (isInvalidMerchantName(merchant) ||
+            merchant == "가맹점" ||
+            merchant == "카드 가맹점" ||
+            com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(merchant)
+        ) {
+            return null
+        }
+
+        val isCheck = body.contains("체크") || sender?.contains("체크") == true
+        val category = RuleMatcherEngine.classifyMerchant(merchant, originalText = body)
+        return Transaction(
+            amount = amount,
+            merchantName = merchant,
+            originalText = body,
+            timestamp = timestamp,
+            paymentMethod = if (isCheck) PaymentMethod.CHECK_CARD else PaymentMethod.CREDIT_CARD,
+            category = category,
+            cardOrBankName = "우리카드",
+            transferMemo = if (isCancel) "[승인취소]" else null,
+            isAutoCategorized = true
+        )
+    }
+
     private fun parseHanaCard(body: String, year: Int, fallbackDateTime: LocalDateTime): Transaction? {
         if (body.contains("하나") || body.contains("1800-1111") || (body.contains("금액") && (body.contains("사용처") || body.contains("가맹점")))) {
             val isCancel = body.contains("승인취소") || body.contains("결제취소") || body.startsWith("취소")
             val amtPattern = Pattern.compile("""(?:승인|결제|취소)?\s*금액\s*[:：]?\s*(?<amount>[\d,]+)원?""")
             val merPattern = Pattern.compile("""(?:사용처|가맹점명?|이용가맹점)\s*[:：]?\s*(?<merchant>[^\n\r]+)""")
-            val cardPattern = Pattern.compile("""카드\s*[:：]?\s*(?<card>[^\n\r]+)""")
+            val cardPattern = Pattern.compile("""(?:^|\n)\s*(?:카드명?|이용카드|결제카드)\s*[:：]?\s*(?<card>[^\n\r]+)""")
             val timePattern = Pattern.compile("""(?:거래시간|일시|승인일시|이용일시)?\s*[:：]?\s*(?:20\d{2}[./-])?(?<month>\d{1,2})[./-](?<day>\d{1,2})\s+(?<hour>\d{1,2}):(?<minute>\d{1,2})""")
 
             val amtMatcher = amtPattern.matcher(body)
@@ -500,30 +636,37 @@ object SmsParser {
     }
 
     fun cleanMerchantName(raw: String): String {
-        val statusOnlyRegex = Regex("""^(?:체크출금|카드출금|체크결제|카드결제|체크|출금|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\))(?:\s+(?:체크출금|카드출금|체크결제|카드결제|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\)))*$""")
+        val statusOnlyRegex = Regex("""^(?:\[(?:일시불|할부|체크|해외|신용|\d+개월)?\.?(?:승인취소|결제취소|취소|승인|결제)\]|체크출금|카드출금|체크결제|카드결제|체크|출금예정|지급예정|출금|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\))(?:\s+(?:\[(?:일시불|할부|체크|해외|신용|\d+개월)?\.?(?:승인취소|결제취소|취소|승인|결제)\]|체크출금|카드출금|체크결제|카드결제|출금예정|지급예정|일시불|\d+개월|승인취소|취소|승인|결제완료|결제|\((?:일시불|\d+개월|결제|승인)\)))*$""")
         val csPhoneOnlyRegex = Regex("""^(?:고객센터|대표번호|문의)?\s*[:：]?\s*(?:15|16|18)\d{2}-\d{4}$""")
+        val dateOnlyRegex = Regex("""^(?:20\d{2}[./-])?\d{1,2}[./-]\d{1,2}(?:\s+\d{1,2}:\d{1,2}(?::\d{1,2})?)?$""")
+        val customerNameOnlyRegex = Regex("""^(?:[가-힣]+\*[가-힣*]*님?|[가-힣]{2,4}님)$""")
         var name = stripNonUsageAmounts(raw).lines().map { it.trim() }.firstOrNull {
             it.isNotBlank() &&
                 it.lowercase() !in INVALID_MERCHANT_NAMES &&
                 !it.startsWith("총누적") &&
                 !it.startsWith("누적") &&
                 !it.startsWith("결제예정") &&
+                !it.startsWith("출금예정") &&
+                !it.startsWith("지급예정") &&
                 !it.startsWith("총사용") &&
                 !it.startsWith("총이용") &&
                 !it.startsWith("잔액") &&
                 !csPhoneOnlyRegex.matches(it) &&
+                !dateOnlyRegex.matches(it) &&
+                !customerNameOnlyRegex.matches(it) &&
                 !com.autologue.app.domain.model.TransactionDeduplicator.isGenericOrCardPlaceholderMerchant(it) &&
                 !statusOnlyRegex.matches(it)
         } ?: raw.trim()
         name = stripNonUsageAmounts(name)
             .replace(Regex("""\b(?:15|16|18)\d{2}-\d{4}\b"""), "")
             .replace(Regex("""잔액\s*[:：]?\s*[\d,]+원?"""), "")
+            .replace(Regex("""(?:출금예정|지급예정)\s*[:：]?\s*[\d,]*원?"""), "")
             .trim()
         // 슬래시(/) 구분자로 이어진 카드정보/할부/누적이용금액 파트(예: "지에스25송파물류단지점 / 신용(,0*2*) / / 누적이용금액") 제거
         name = name.replace(Regex("""\s*/\s*(?:신용|체크|일시불|할부|\d+개월|누적|결제예정|총사용|총이용).*$"""), "").trim()
         name = name.replace(Regex("""(?:\s*/\s*)+$"""), "").trim()
-        name = name.replace(Regex("""^(?:\((?:결제|승인|취소|승인취소)\)|\[(?:결제|승인|취소|승인취소)\]|체크출금|카드출금|체크결제|카드결제|일시불|\d+개월|승인취소|승인|결제완료|결제)\s+"""), "").trim()
-        name = name.replace(Regex("""\s*(?:\((?:일시불|\d+개월|결제|승인)\)|일시불|\d+개월|체크출금|카드출금|체크결제|카드결제|승인취소|승인|결제완료|결제)\s*$"""), "").trim()
+        name = name.replace(Regex("""^(?:\[(?:일시불|할부|체크|해외|신용|\d+개월)?\.?(?:승인취소|결제취소|취소|승인|결제)\]|\((?:결제|승인|취소|승인취소)\)|체크출금|카드출금|체크결제|카드결제|일시불|\d+개월|승인취소|승인|결제완료|결제)\s+"""), "").trim()
+        name = name.replace(Regex("""\s*(?:\((?:일시불|\d+개월|결제|승인)\)|일시불|\d+개월|체크출금|카드출금|체크결제|카드결제|출금예정|지급예정|승인취소|승인|결제완료|결제)\s*$"""), "").trim()
         // (주), (유), 주식회사 등 접두/접미사 정제
         name = name.replace(Regex("""^\((?:주|유)\)\s*"""), "")
         name = name.replace(Regex("""^주식회사\s*"""), "")
@@ -975,7 +1118,7 @@ object SmsParser {
 
         // 2. 날짜/시간 추출 및 명시적 가맹점 라벨 확인 (승인일자와 명시적 사용처 라벨이 모두 없는 불명확 문자는 차단)
         val explicitMerMatch = Regex("""(?:사용처|가맹점명?|이용처)\s*[:：]\s*(?<mer>[^\n\r]+)""").find(bodyWithoutAccum)
-        val dateMatch = Regex("""(?:20\d{2}[./-])?(?<month>0?[1-9]|1[0-2])[./-](?<day>0?[1-9]|[12]\d|3[01])(?:\s+(?<hour>\d{1,2}):(?<minute>\d{1,2}))?""").find(bodyWithoutAccum)
+        val dateMatch = Regex("""(?:20\d{2}[./-])?(?<month>1[0-2]|0?[1-9])[./-](?<day>3[01]|[12]\d|0?[1-9])(?:\s+(?<hour>\d{1,2}):(?<minute>\d{1,2}))?""").find(bodyWithoutAccum)
         if (dateMatch == null && explicitMerMatch == null && !hasExplicitApprovalDate(bodyWithoutAccum)) {
             return null
         }
@@ -1004,6 +1147,7 @@ object SmsParser {
             ?: ExpenseCustomMetaPreferences.inferCanonicalCardCompany(safeSender, bodyWithoutAccum)
             ?: when {
                 body.contains("1588-1600") -> "NH농협카드"
+                body.contains("1588-9955") || body.contains("1599-9955") -> "우리카드"
                 !slashCardNo.isNullOrBlank() -> "하나카드"
                 else -> safeSender ?: "신용카드"
             }
@@ -1028,18 +1172,20 @@ object SmsParser {
                         line.isNotBlank() &&
                             line != "[Web발신]" &&
                             line != "알림" &&
-                            !line.matches(Regex("""^[가-힣]\*[가-힣](?:님)?$""")) &&
+                            !line.matches(Regex("""^[가-힣]+\*[가-힣*]*님?$""")) &&
                             !line.matches(Regex("""^[가-힣]{2,4}님$"""))
                     }
                     .map { line ->
                         line.replace("[Web발신]", "")
+                            .replace(Regex("""\[(?:일시불|할부|체크|해외|신용|\d+개월)?\.?(?:승인취소|결제취소|취소|승인|결제)\]"""), "")
                             .replace(Regex("""\[[^\]]*카드[^\]]*\]"""), "")
-                            .replace(Regex("""(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*(?:농협|국민)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)?\s*[\d*()-]*"""), "")
+                            .replace(Regex("""(?:NH|농협|KB|국민|신한|삼성|현대|롯데|우리|하나|BC|비씨|기업|IBK)\s*(?:농협|국민|BC|법인|WON)?\s*(?:체크\s*|신용\s*)?(?:카드|체크)?\s*[\d*()-]*"""), "")
                             .replace(Regex("""(?:체크\s*|신용\s*)?(?:카드|체크)\s*[\d*()-]+"""), "")
-                            .replace(Regex("""[가-힣]\*[가-힣](?:님)?"""), "")
+                            .replace(Regex("""[가-힣]+\*[가-힣*]*님?"""), "")
+                            .replace(Regex("""[가-힣]{2,4}님(?=\s|$)"""), "")
                             .replace(amtMatch.value, "")
                             .replace(Regex("""(?:20\d{2}[./-])?\d{1,2}[./-]\d{1,2}(?:\s+\d{1,2}:\d{1,2})?"""), "")
-                            .replace(Regex("""(?:\((?:일시불|\d+개월|결제|승인|취소|승인취소)\)|일시불|\d+개월|승인취소|취소|승인|체크출금|카드출금|체크결제|카드결제|결제완료|결제|출금)"""), "")
+                            .replace(Regex("""(?:\((?:일시불|\d+개월|결제|승인|취소|승인취소)\)|일시불|\d+개월|승인취소|취소|승인|체크출금|카드출금|체크결제|카드결제|결제완료|결제|출금예정|지급예정|출금)"""), "")
                             .trim()
                     }
                     .filter {

@@ -396,26 +396,30 @@ class ExpenseViewModel @Inject constructor(
             runCatching { transactionRepository.cleanDuplicates() }
             if (!syncCheckpointPreferences.isLegacyCleanupDone()) {
                 cleanCorruptedTransferRecords()
-                runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis = null) }
+                runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis = null, forceFullYearScan = true) }
             } else {
                 val lastSmsSyncAt = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
-                runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis = lastSmsSyncAt) }
+                runCatching { autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis = lastSmsSyncAt, forceFullYearScan = false) }
             }
         }
     }
 
     /**
-     * DB 내에 "카드 6", "카드 2" 등 카드 끝자리 파편 결제명이나 고객센터 번호 오탐이 남아있는 경우,
-     * 마지막 수집 완료 시점(sinceTimestampMillis) 이후의 단말기 문자만 조용히 확인하여 상세 결제명으로 보강합니다.
+     * DB 내에 "카드 6", "카드 2" 등 카드 끝자리 파편 결제명이나 고객센터 번호 오탐이 남아있거나,
+     * 버전 업그레이드로 인해 과거 3개월~1년 누락 문자(우리카드 등) 복원이 필요한 경우
+     * 단말기 문자를 조용히 확인하여 보강합니다.
      */
-    private suspend fun autoRecoverDetailedMerchantsFromSmsIfNeeded(sinceTimestampMillis: Long? = null) {
+    private suspend fun autoRecoverDetailedMerchantsFromSmsIfNeeded(
+        sinceTimestampMillis: Long? = null,
+        forceFullYearScan: Boolean = false
+    ) {
         val currentAll = transactionRepository.getAllTransactionsFlow().first()
         val cardFragmentRegex = Regex("""^(카드|체크|법인)\s*\d+$""")
         val hasBrokenCardFragments = currentAll.any { tx ->
             cardFragmentRegex.matches(tx.merchantName.trim()) ||
                 com.autologue.app.domain.model.TransactionDeduplicator.hasCustomerServicePhoneAsAccount(tx.transferMemo)
         }
-        if (!hasBrokenCardFragments) return
+        if (!forceFullYearScan && !hasBrokenCardFragments) return
 
         val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
             appContext,
@@ -2649,12 +2653,7 @@ class ExpenseViewModel @Inject constructor(
         }
 
         backgroundSmsScope.launch {
-            val lastSmsSyncAt = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis()
-            val sinceLabel = when {
-                fullHistory -> "과거 전체 기간"
-                lastSmsSyncAt > 0L -> "${com.autologue.app.data.preferences.SyncCheckpointPreferences.formatEpochMillis(lastSmsSyncAt)} 이후"
-                else -> "과거 전체 기간"
-            }
+            val sinceLabel = if (fullHistory) "과거 전체 기간" else "최근 1년(3개월 포함)"
 
             _uiState.update {
                 it.copy(
@@ -2678,21 +2677,7 @@ class ExpenseViewModel @Inject constructor(
             val msg = runCatching {
                 runCatching { transactionRepository.cleanDuplicates() }
 
-                var effectiveSinceMillis = if (fullHistory) {
-                    null
-                } else {
-                    syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
-                }
-                if (!fullHistory && effectiveSinceMillis == null) {
-                    val existingTxs = runCatching { transactionRepository.getAllTransactionsFlow().first() }.getOrDefault(emptyList())
-                    val maxExistingMillis = existingTxs.maxOfOrNull {
-                        it.timestamp.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
-                    } ?: 0L
-                    if (maxExistingMillis > 0L) {
-                        syncCheckpointPreferences.ensureBaselineCheckpointFromExistingData(maxExistingMillis)
-                        effectiveSinceMillis = syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis().takeIf { it > 0L }
-                    }
-                }
+                val effectiveSinceMillis: Long? = null
 
                 val scanResult = importer.scanHistoricalSmsDetailed(
                     context = appCtx,

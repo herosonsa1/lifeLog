@@ -163,11 +163,6 @@ class TransactionRepositoryImpl @Inject constructor(
                 isDeposit = isDeposit
             )
         }
-        val savedCardDesignation = if (!isOneTime) {
-            expenseCustomMetaPreferences.resolveMerchantCardDesignation(resolvedMerchantName, isDeposit)
-                ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(transaction.merchantName, isDeposit)
-        } else null
-
         val savedBaseCategory = if (!isOneTime) {
             expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMerchantName, isDeposit)
                 ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(transaction.merchantName, isDeposit)
@@ -175,10 +170,10 @@ class TransactionRepositoryImpl @Inject constructor(
 
         val effectiveCategory = savedBaseCategory
             ?: if (isDeposit && transaction.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else transaction.category
-        val canonicalCardOrBank = savedCardDesignation
-            ?: expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
-                transaction.copy(merchantName = resolvedMerchantName, category = effectiveCategory)
-            )
+        val canonicalCardOrBank = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
+            transaction.copy(merchantName = resolvedMerchantName, category = effectiveCategory),
+            fallbackMerchantName = transaction.merchantName
+        )
 
         val aliasedTransaction = transaction.copy(
             merchantName = resolvedMerchantName,
@@ -532,11 +527,10 @@ class TransactionRepositoryImpl @Inject constructor(
                 ?: expenseCustomMetaPreferences.resolveMerchantBaseCategory(baseMerForAlias, isDeposit)
             val effectiveCat = savedBaseCategory
                 ?: if (isDeposit && sanitizedRawTx.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else sanitizedRawTx.category
-            val savedCard = expenseCustomMetaPreferences.resolveMerchantCardDesignation(aliasedMerchant, isDeposit)
-                ?: expenseCustomMetaPreferences.resolveMerchantCardDesignation(baseMerForAlias, isDeposit)
-                ?: expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
-                    domainRawTx.copy(merchantName = aliasedMerchant.ifBlank { baseMerForAlias }, category = effectiveCat)
-                )
+            val savedCard = expenseCustomMetaPreferences.resolveDisplayCardOrBankName(
+                domainRawTx.copy(merchantName = aliasedMerchant.ifBlank { baseMerForAlias }, category = effectiveCat),
+                fallbackMerchantName = baseMerForAlias
+            )
 
             val tx = if ((aliasedMerchant.isNotBlank() && aliasedMerchant != sanitizedRawTx.merchantName) ||
                 (effectiveCat != sanitizedRawTx.category) ||
