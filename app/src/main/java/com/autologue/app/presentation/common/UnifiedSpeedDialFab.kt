@@ -160,7 +160,7 @@ fun UnifiedSpeedDialFab(
                     }
                 }
 
-                // 쉬운 모드 원터치 전환 배너 카드
+                // 고급모드(기존 상세 UI/UX) ↔ 쉬운 모드(기본) 원터치 전환 배너 카드
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = EasyTheme.tossBlueSoft,
@@ -169,6 +169,7 @@ fun UnifiedSpeedDialFab(
                         .fillMaxWidth()
                         .padding(vertical = 6.dp)
                 ) {
+                    val isAdvancedMode = !isEasyMode
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -178,26 +179,26 @@ fun UnifiedSpeedDialFab(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "쉬운 모드 전환 (Toss · Apple 스타일)",
+                                text = "고급모드 전환 (기존 상세 UI/UX)",
                                 fontSize = 14.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = EasyTheme.textPrimary
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = if (isEasyMode) "현재 쉬운 모드가 적용되어 있습니다" else "핵심 정보 중심으로 깔끔하게 보기",
+                                text = if (isAdvancedMode) "현재 고급모드(기존 상세 UI/UX) 이용 중" else "현재 기본 쉬운 모드(Toss · Apple 스타일) 적용 중",
                                 fontSize = 12.sp,
                                 color = EasyTheme.textSecondary
                             )
                         }
                         Switch(
-                            checked = isEasyMode,
-                            onCheckedChange = { enabled ->
+                            checked = isAdvancedMode,
+                            onCheckedChange = { advancedEnabled ->
                                 view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                                EasyModeManager.setEasyMode(context, enabled)
+                                EasyModeManager.setEasyMode(context, !advancedEnabled)
                                 Toast.makeText(
                                     context,
-                                    if (enabled) "쉬운 모드로 전환되었습니다." else "표준 상세 모드로 전환되었습니다.",
+                                    if (advancedEnabled) "고급모드(기존 상세 UI/UX)로 전환되었습니다." else "기본 쉬운 모드로 전환되었습니다.",
                                     Toast.LENGTH_SHORT
                                 ).show()
                             },

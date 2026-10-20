@@ -864,6 +864,7 @@ internal fun ExpenseEasyModeContent(
 
         // 가계부 관리 · 도구 모달 바텀시트 (모든 고급 관리 기능 100% 제공)
         if (showToolsBottomSheet) {
+            val sheetContext = androidx.compose.ui.platform.LocalContext.current
             ModalBottomSheet(
                 onDismissRequest = { showToolsBottomSheet = false },
                 containerColor = EasyTheme.bg,
@@ -972,6 +973,17 @@ internal fun ExpenseEasyModeContent(
                             onClick = {
                                 showToolsBottomSheet = false
                                 onToggleSelectionMode()
+                            }
+                        )
+                        HorizontalDivider(color = EasyTheme.divider)
+                        EasyToolSheetRow(
+                            title = "고급모드로 전환 (기존 상세 UI/UX)",
+                            subtitle = "다중 필터 바와 전문가용 상세 제어 화면으로 전환",
+                            icon = Icons.Default.Tune,
+                            accent = EasyTheme.tossBlue,
+                            onClick = {
+                                showToolsBottomSheet = false
+                                EasyModeManager.setEasyMode(sheetContext, false)
                             }
                         )
                     }

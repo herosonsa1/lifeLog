@@ -679,6 +679,15 @@ fun CarLedgerEasyModeContent(
                         onToggleSelectionMode()
                     }
                 )
+                EasyCarToolSheetItem(
+                    icon = Icons.Default.Tune,
+                    title = "고급모드로 전환 (기존 상세 UI/UX)",
+                    subtitle = "다중 필터 바와 상세 배지가 포함된 기존 화면으로 전환",
+                    onClick = {
+                        isCarToolsSheetOpen = false
+                        EasyModeManager.setEasyMode(context, false)
+                    }
+                )
             }
         }
     }
