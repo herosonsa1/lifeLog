@@ -1004,7 +1004,8 @@ class ExpenseViewModel @Inject constructor(
         isCorporate: Boolean = false,
         customCategoryName: String? = null,
         userClassificationName: String? = null,
-        isFixedExpense: Boolean = false
+        isFixedExpense: Boolean = false,
+        transactionDateTime: LocalDateTime = LocalDateTime.now()
     ) {
         if (_uiState.value.isSaving) return
         if (com.autologue.app.data.parser.SmsParser.isNaverPayExcluded(
@@ -1022,7 +1023,14 @@ class ExpenseViewModel @Inject constructor(
             }
             return
         }
-        _uiState.update { it.copy(isSaving = false, isAddDialogOpen = false) }
+        val targetYearMonth = YearMonth.from(transactionDateTime)
+        _uiState.update { state ->
+            state.copy(
+                isSaving = false,
+                isAddDialogOpen = false,
+                selectedYearMonth = if (state.filterMode == ExpenseDateFilterMode.MONTH) targetYearMonth else state.selectedYearMonth
+            )
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val isCustomFuel = customCategoryName?.let { it.contains("주유") || it.contains("충전") } == true
             val isCustomMaint = customCategoryName?.let { it.contains("정비") || it.contains("세차") } == true
@@ -1056,7 +1064,7 @@ class ExpenseViewModel @Inject constructor(
                 } else {
                     "[직접 입력] $merchantName %,d원".format(amount)
                 },
-                timestamp = LocalDateTime.now(),
+                timestamp = transactionDateTime,
                 paymentMethod = when {
                     isBankTx -> PaymentMethod.BANK_TRANSFER
                     effectiveCardOrBank.contains("체크") -> PaymentMethod.CHECK_CARD
@@ -1262,7 +1270,8 @@ class ExpenseViewModel @Inject constructor(
         userClassificationName: String? = null,
         isOneTimeSave: Boolean = true,
         isFixedExpense: Boolean? = null,
-        permanentSaveOptions: com.autologue.app.data.preferences.PermanentSaveOptions = com.autologue.app.data.preferences.PermanentSaveOptions()
+        permanentSaveOptions: com.autologue.app.data.preferences.PermanentSaveOptions = com.autologue.app.data.preferences.PermanentSaveOptions(),
+        newTimestamp: LocalDateTime? = null
     ) {
         val snapshot = _uiState.value
         val currentTx = snapshot.allTransactions.find { it.id == transactionId }
@@ -1270,6 +1279,7 @@ class ExpenseViewModel @Inject constructor(
             ?: snapshot.editingTransaction?.takeIf { it.id == transactionId }
             ?: return
 
+        val effectiveTimestamp = newTimestamp ?: currentTx.timestamp
         val isDeposit = currentTx.isDepositTransaction()
         val oldMerchantName = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(currentTx.merchantName)
         val finalMerchantName = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(newMerchantName)
@@ -1335,7 +1345,8 @@ class ExpenseViewModel @Inject constructor(
             merchantName = finalMerchantName,
             category = resolvedCategory,
             cardOrBankName = optimisticCard,
-            transferMemo = sanitizedMemo
+            transferMemo = sanitizedMemo,
+            timestamp = effectiveTimestamp
         )
 
         val selectedExistingSet = if (!isOneTimeSave) {
@@ -1374,8 +1385,8 @@ class ExpenseViewModel @Inject constructor(
                 return tx
             }
 
-            val nextTransactions = state.transactions.map(::transformTx)
-            val nextAllTransactions = state.allTransactions.map(::transformTx)
+            val nextTransactions = state.transactions.map(::transformTx).sortedByDescending { it.timestamp }
+            val nextAllTransactions = state.allTransactions.map(::transformTx).sortedByDescending { it.timestamp }
 
             val nextCustomCatMap = state.customCategoryByTxId.toMutableMap()
             val cleanCustomCat = sanitizedCustomCat.orEmpty()
@@ -1599,9 +1610,13 @@ class ExpenseViewModel @Inject constructor(
                         merchantName = finalMerchantName,
                         category = resolvedCategory,
                         cardOrBankName = formattedCard,
-                        transferMemo = sanitizedMemo
+                        transferMemo = sanitizedMemo,
+                        timestamp = effectiveTimestamp
                     )
 
+                    if (effectiveTimestamp != currentTx.timestamp) {
+                        expenseCustomMetaPreferences.clearOneTimeEdited(currentTx)
+                    }
                     if (isOneTimeSave) {
                         expenseCustomMetaPreferences.markOneTimeEdited(txToSave)
                     } else {

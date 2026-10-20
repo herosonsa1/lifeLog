@@ -78,6 +78,8 @@ import com.autologue.app.domain.model.isSelfTransfer
 import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -2187,6 +2189,7 @@ fun ExpenseScreen(
         AddManualExpenseDialog(
             managedCategories = uiState.managedCategories,
             userClassifications = uiState.userClassifications,
+            initialYearMonth = uiState.selectedYearMonth,
             isSaving = uiState.isSaving,
             onResolveCardCorporate = { cardName ->
                 viewModel.expenseCustomMetaPreferences.resolveCardCorporateByCardName(cardName)
@@ -2199,7 +2202,7 @@ fun ExpenseScreen(
             },
             onDeleteUserClassification = { name -> viewModel.deleteUserClassification(name) },
             onDismiss = { viewModel.closeAddDialog() },
-            onAdd = { merchant, amount, category, card, isCorp, customCat, userClass, isFixed, memo ->
+            onAdd = { merchant, amount, category, card, isCorp, customCat, userClass, isFixed, memo, txDateTime ->
                 viewModel.addManualTransaction(
                     merchantName = merchant,
                     amount = amount,
@@ -2209,7 +2212,8 @@ fun ExpenseScreen(
                     isCorporate = isCorp,
                     customCategoryName = customCat,
                     userClassificationName = userClass,
-                    isFixedExpense = isFixed
+                    isFixedExpense = isFixed,
+                    transactionDateTime = txDateTime
                 )
             }
         )
@@ -2359,7 +2363,7 @@ fun ExpenseScreen(
             },
             onDeleteUserClassification = { name -> viewModel.deleteUserClassification(name) },
             onDismiss = { viewModel.closeEditDialog() },
-            onSave = { newMerchantName, cat, cardCompany, isCorp, customCat, userClass, isOneTime, isFixed, memo, permanentSaveOptions ->
+            onSave = { newMerchantName, cat, cardCompany, isCorp, customCat, userClass, isOneTime, isFixed, memo, permanentSaveOptions, newTimestamp ->
                 viewModel.updateTransactionDetails(
                     transactionId = editingTx.id,
                     newMerchantName = newMerchantName,
@@ -2371,7 +2375,8 @@ fun ExpenseScreen(
                     userClassificationName = userClass,
                     isOneTimeSave = isOneTime,
                     isFixedExpense = isFixed,
-                    permanentSaveOptions = permanentSaveOptions
+                    permanentSaveOptions = permanentSaveOptions,
+                    newTimestamp = newTimestamp
                 )
             },
             onDelete = {
@@ -3357,6 +3362,424 @@ fun DateRangeFilterDialog(
 }
 
 /**
+ * 카드 사용 일자(연·월·일) 및 일시(시·분) 선택 컴포넌트
+ * - 달력 팝업(DatePickerDialog) 및 시간 선택 팝업(TimePickerDialog) 원클릭 호출
+ * - 빠른 프리셋 칩(지금, 오늘, 어제, 그제, -1일, +1일, 조회월 맞춤)
+ * - 인라인 직접 입력 패널(연/월/일/시/분 숫자 직접 입력 및 주요 시간대 원탭 선택)
+ */
+@Composable
+fun ExpenseTransactionDateTimeSelector(
+    selectedDateTime: LocalDateTime,
+    onDateTimeChange: (LocalDateTime) -> Unit,
+    referenceYearMonth: YearMonth? = null,
+    sectionTitle: String = "카드 사용 일자 및 일시 지정"
+) {
+    val context = LocalContext.current
+    var showDirectInput by remember { mutableStateOf(false) }
+
+    val dateDisplayFmt = remember { DateTimeFormatter.ofPattern("yyyy.MM.dd (E)", Locale.KOREA) }
+    val timeDisplayFmt = remember { DateTimeFormatter.ofPattern("a hh:mm (HH:mm)", Locale.KOREA) }
+    val fullBadgeFmt = remember { DateTimeFormatter.ofPattern("yyyy.MM.dd(E) HH:mm", Locale.KOREA) }
+
+    var yearText by remember(selectedDateTime.year) { mutableStateOf(selectedDateTime.year.toString()) }
+    var monthText by remember(selectedDateTime.monthValue) { mutableStateOf(selectedDateTime.monthValue.toString()) }
+    var dayText by remember(selectedDateTime.dayOfMonth) { mutableStateOf(selectedDateTime.dayOfMonth.toString()) }
+    var hourText by remember(selectedDateTime.hour) { mutableStateOf("%02d".format(selectedDateTime.hour)) }
+    var minuteText by remember(selectedDateTime.minute) { mutableStateOf("%02d".format(selectedDateTime.minute)) }
+
+    fun applyDirectFields(yStr: String, mStr: String, dStr: String, hStr: String, minStr: String) {
+        val y = yStr.toIntOrNull()?.coerceIn(2000, 2100) ?: selectedDateTime.year
+        val m = mStr.toIntOrNull()?.coerceIn(1, 12) ?: selectedDateTime.monthValue
+        val maxDay = YearMonth.of(y, m).lengthOfMonth()
+        val d = dStr.toIntOrNull()?.coerceIn(1, maxDay) ?: selectedDateTime.dayOfMonth.coerceAtMost(maxDay)
+        val h = hStr.toIntOrNull()?.coerceIn(0, 23) ?: selectedDateTime.hour
+        val min = minStr.toIntOrNull()?.coerceIn(0, 59) ?: selectedDateTime.minute
+        onDateTimeChange(LocalDateTime.of(y, m, d, h, min))
+    }
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFFF8FAFC),
+        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // 상단 타이틀 및 현재 지정 일시 배지
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = sectionTitle,
+                    style = AppTypography.caption.copy(color = Color(0xFF1E3A8A), fontWeight = FontWeight.Bold)
+                )
+                Surface(
+                    shape = RoundedCornerShape(5.dp),
+                    color = Color(0xFFEFF6FF),
+                    border = BorderStroke(1.dp, Color(0xFF93C5FD))
+                ) {
+                    Text(
+                        text = selectedDateTime.format(fullBadgeFmt),
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1D4ED8),
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.5.dp)
+                    )
+                }
+            }
+
+            // 메인 2열 선택 버튼 (사용 일자 달력 선택 / 사용 시간 시계 선택)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 1) 사용 일자 선택 카드
+                Surface(
+                    onClick = {
+                        android.app.DatePickerDialog(
+                            context,
+                            { _, year, monthZeroBased, dayOfMonth ->
+                                val newDate = LocalDate.of(year, monthZeroBased + 1, dayOfMonth)
+                                onDateTimeChange(LocalDateTime.of(newDate, selectedDateTime.toLocalTime()))
+                            },
+                            selectedDateTime.year,
+                            selectedDateTime.monthValue - 1,
+                            selectedDateTime.dayOfMonth
+                        ).show()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    color = PureWhite,
+                    border = BorderStroke(1.2.dp, Color(0xFF93C5FD)),
+                    modifier = Modifier.weight(1.1f)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarMonth,
+                                    contentDescription = "사용 일자 선택",
+                                    tint = Color(0xFF2563EB),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "사용 일자",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Slate600
+                                )
+                            }
+                            Text(
+                                text = "달력 ▾",
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2563EB)
+                            )
+                        }
+                        Text(
+                            text = selectedDateTime.format(dateDisplayFmt),
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Slate900,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                // 2) 사용 일시(시간) 선택 카드
+                Surface(
+                    onClick = {
+                        android.app.TimePickerDialog(
+                            context,
+                            { _, hourOfDay, minute ->
+                                val newTime = LocalTime.of(hourOfDay, minute)
+                                onDateTimeChange(LocalDateTime.of(selectedDateTime.toLocalDate(), newTime))
+                            },
+                            selectedDateTime.hour,
+                            selectedDateTime.minute,
+                            false
+                        ).show()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    color = PureWhite,
+                    border = BorderStroke(1.2.dp, Color(0xFF93C5FD)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "사용 일시(시간)",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Slate600
+                            )
+                            Text(
+                                text = "시간 ▾",
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2563EB)
+                            )
+                        }
+                        Text(
+                            text = selectedDateTime.format(timeDisplayFmt),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Slate900,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            // 빠른 선택 프리셋 칩 행 (지금 / 오늘 / 어제 / 그제 / -1일 / +1일 / 직접입력)
+            val today = LocalDate.now()
+            val selectedDate = selectedDateTime.toLocalDate()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ExpenseInlineFilterChip(
+                    text = "지금(현재)",
+                    isSelected = false,
+                    onClick = {
+                        onDateTimeChange(LocalDateTime.now().withSecond(0).withNano(0))
+                    },
+                    height = 26.dp,
+                    fontSize = 10.sp
+                )
+                ExpenseInlineFilterChip(
+                    text = "오늘",
+                    isSelected = selectedDate == today,
+                    onClick = {
+                        onDateTimeChange(LocalDateTime.of(today, selectedDateTime.toLocalTime()))
+                    },
+                    height = 26.dp,
+                    fontSize = 10.sp
+                )
+                ExpenseInlineFilterChip(
+                    text = "어제",
+                    isSelected = selectedDate == today.minusDays(1),
+                    onClick = {
+                        onDateTimeChange(LocalDateTime.of(today.minusDays(1), selectedDateTime.toLocalTime()))
+                    },
+                    height = 26.dp,
+                    fontSize = 10.sp
+                )
+                ExpenseInlineFilterChip(
+                    text = "그제",
+                    isSelected = selectedDate == today.minusDays(2),
+                    onClick = {
+                        onDateTimeChange(LocalDateTime.of(today.minusDays(2), selectedDateTime.toLocalTime()))
+                    },
+                    height = 26.dp,
+                    fontSize = 10.sp
+                )
+                ExpenseInlineFilterChip(
+                    text = "-1일",
+                    isSelected = false,
+                    onClick = { onDateTimeChange(selectedDateTime.minusDays(1)) },
+                    height = 26.dp,
+                    fontSize = 10.sp
+                )
+                ExpenseInlineFilterChip(
+                    text = "+1일",
+                    isSelected = false,
+                    onClick = { onDateTimeChange(selectedDateTime.plusDays(1)) },
+                    height = 26.dp,
+                    fontSize = 10.sp
+                )
+                if (referenceYearMonth != null && referenceYearMonth != YearMonth.from(selectedDate)) {
+                    ExpenseInlineFilterChip(
+                        text = "${referenceYearMonth.monthValue}월로 맞춤",
+                        isSelected = false,
+                        onClick = {
+                            val clampedDay = selectedDate.dayOfMonth.coerceAtMost(referenceYearMonth.lengthOfMonth())
+                            onDateTimeChange(
+                                LocalDateTime.of(
+                                    referenceYearMonth.atDay(clampedDay),
+                                    selectedDateTime.toLocalTime()
+                                )
+                            )
+                        },
+                        selectedContainerColor = Color(0xFF0D9488),
+                        selectedBorderColor = Color(0xFF0F766E),
+                        height = 26.dp,
+                        fontSize = 10.sp
+                    )
+                }
+                ExpenseInlineFilterChip(
+                    text = if (showDirectInput) "직접 입력 ▴" else "직접 입력 ▾",
+                    isSelected = showDirectInput,
+                    onClick = { showDirectInput = !showDirectInput },
+                    selectedContainerColor = Color(0xFF1E40AF),
+                    selectedBorderColor = Color(0xFF1E3A8A),
+                    height = 26.dp,
+                    fontSize = 10.sp
+                )
+            }
+
+            // 인라인 숫자 직접 입력 및 시간대 프리셋 패널
+            if (showDirectInput) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = PureWhite,
+                    border = BorderStroke(1.dp, Slate200),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "연·월·일 및 시·분 직접 입력 (24시간제)",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Slate700
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = yearText,
+                                onValueChange = { v ->
+                                    val digits = v.filter { it.isDigit() }.take(4)
+                                    yearText = digits
+                                    if (digits.length == 4) {
+                                        applyDirectFields(digits, monthText, dayText, hourText, minuteText)
+                                    }
+                                },
+                                label = { Text("연도", fontSize = 9.sp) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(1.35f)
+                            )
+                            OutlinedTextField(
+                                value = monthText,
+                                onValueChange = { v ->
+                                    val digits = v.filter { it.isDigit() }.take(2)
+                                    monthText = digits
+                                    if (digits.isNotEmpty()) {
+                                        applyDirectFields(yearText, digits, dayText, hourText, minuteText)
+                                    }
+                                },
+                                label = { Text("월", fontSize = 9.sp) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(0.95f)
+                            )
+                            OutlinedTextField(
+                                value = dayText,
+                                onValueChange = { v ->
+                                    val digits = v.filter { it.isDigit() }.take(2)
+                                    dayText = digits
+                                    if (digits.isNotEmpty()) {
+                                        applyDirectFields(yearText, monthText, digits, hourText, minuteText)
+                                    }
+                                },
+                                label = { Text("일", fontSize = 9.sp) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(0.95f)
+                            )
+                            OutlinedTextField(
+                                value = hourText,
+                                onValueChange = { v ->
+                                    val digits = v.filter { it.isDigit() }.take(2)
+                                    hourText = digits
+                                    if (digits.isNotEmpty()) {
+                                        applyDirectFields(yearText, monthText, dayText, digits, minuteText)
+                                    }
+                                },
+                                label = { Text("시", fontSize = 9.sp) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(0.95f)
+                            )
+                            OutlinedTextField(
+                                value = minuteText,
+                                onValueChange = { v ->
+                                    val digits = v.filter { it.isDigit() }.take(2)
+                                    minuteText = digits
+                                    if (digits.isNotEmpty()) {
+                                        applyDirectFields(yearText, monthText, dayText, hourText, digits)
+                                    }
+                                },
+                                label = { Text("분", fontSize = 9.sp) },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                modifier = Modifier.weight(0.95f)
+                            )
+                        }
+
+                        // 자주 사용하는 시간대 원탭 선택
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "시간 빠른선택:",
+                                fontSize = 9.5.sp,
+                                color = Slate500,
+                                fontWeight = FontWeight.Medium
+                            )
+                            listOf(
+                                Triple("09:00", 9, 0),
+                                Triple("12:00", 12, 0),
+                                Triple("13:00", 13, 0),
+                                Triple("18:00", 18, 0),
+                                Triple("19:30", 19, 30),
+                                Triple("21:00", 21, 0)
+                            ).forEach { (label, h, m) ->
+                                val isTimeSel = selectedDateTime.hour == h && selectedDateTime.minute == m
+                                ExpenseInlineFilterChip(
+                                    text = label,
+                                    isSelected = isTimeSel,
+                                    onClick = {
+                                        onDateTimeChange(
+                                            LocalDateTime.of(selectedDateTime.toLocalDate(), LocalTime.of(h, m))
+                                        )
+                                    },
+                                    height = 24.dp,
+                                    fontSize = 9.5.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * 지출 직접 추가 팝업 다이얼로그 (입체 그림자 + 뚜렷한 입력필드 + 고대비 버튼)
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -3364,6 +3787,7 @@ fun DateRangeFilterDialog(
 fun AddManualExpenseDialog(
     managedCategories: List<com.autologue.app.data.preferences.ManagedCategoryItem>,
     userClassifications: List<com.autologue.app.data.preferences.UserClassificationItem>,
+    initialYearMonth: YearMonth = YearMonth.now(),
     isSaving: Boolean = false,
     onResolveCardCorporate: (String) -> Boolean? = { null },
     onAddPermanentCategory: (String) -> Boolean,
@@ -3381,9 +3805,19 @@ fun AddManualExpenseDialog(
         customCategoryName: String?,
         userClassificationName: String?,
         isFixedExpense: Boolean,
-        memo: String?
+        memo: String?,
+        transactionDateTime: LocalDateTime
     ) -> Unit
 ) {
+    var transactionDateTime by remember {
+        val now = LocalDateTime.now().withSecond(0).withNano(0)
+        val initDate = if (initialYearMonth != YearMonth.from(now)) {
+            initialYearMonth.atDay(now.dayOfMonth.coerceAtMost(initialYearMonth.lengthOfMonth()))
+        } else {
+            now.toLocalDate()
+        }
+        mutableStateOf(LocalDateTime.of(initDate, now.toLocalTime()))
+    }
     var merchantName by remember { mutableStateOf("") }
     var amountText by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf(ExpenseCategory.FOOD) }
@@ -3412,6 +3846,14 @@ fun AddManualExpenseDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
+                // 0. 카드 사용 일자 및 일시(시간) 지정
+                ExpenseTransactionDateTimeSelector(
+                    selectedDateTime = transactionDateTime,
+                    onDateTimeChange = { transactionDateTime = it },
+                    referenceYearMonth = initialYearMonth,
+                    sectionTitle = if (isBankMode) "거래 일자 및 일시 지정" else "카드 사용 일자 및 일시 지정"
+                )
+
                 // 1. 가맹점 / 상호명
                 AutoLogueTextField(
                     value = merchantName,
@@ -3829,7 +4271,8 @@ fun AddManualExpenseDialog(
                             finalCustomCat,
                             userClassificationInput.trim().ifEmpty { null },
                             isFixedExpense,
-                            memo
+                            memo,
+                            transactionDateTime
                         )
                     }
                 },
@@ -3901,10 +4344,12 @@ fun EditTransactionDialog(
         isOneTimeSave: Boolean,
         isFixedExpense: Boolean,
         memo: String?,
-        permanentSaveOptions: com.autologue.app.data.preferences.PermanentSaveOptions
+        permanentSaveOptions: com.autologue.app.data.preferences.PermanentSaveOptions,
+        newTimestamp: LocalDateTime
     ) -> Unit,
     onDelete: () -> Unit
 ) {
+    var editedTimestamp by remember(transaction.id) { mutableStateOf(transaction.timestamp) }
     val isDeposit = remember(transaction.id, transaction.category, transaction.originalText, transaction.transferMemo) {
         transaction.isDepositTransaction()
     }
@@ -4098,11 +4543,18 @@ fun EditTransactionDialog(
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "${transaction.timestamp.format(MODAL_DATE_FORMATTER)} · $cardCompany",
+                                text = "${editedTimestamp.format(MODAL_DATE_FORMATTER)} · $cardCompany",
                                 style = AppTypography.captionMuted
                             )
                         }
                     }
+
+                    // 카드 사용 일자 및 일시(시간) 변경 섹션
+                    ExpenseTransactionDateTimeSelector(
+                        selectedDateTime = editedTimestamp,
+                        onDateTimeChange = { editedTimestamp = it },
+                        sectionTitle = if (isBankTx) "거래 일자 및 일시 변경" else "카드 사용 일자 및 일시 변경"
+                    )
 
                     // 0. 현재 결제처에 적용 중인 영구저장 규칙 안내 및 즉시 해제 배너
                     if (activePermanentRule != null) {
@@ -5438,7 +5890,8 @@ fun EditTransactionDialog(
                                     } else {
                                         null
                                     }
-                                )
+                                ),
+                                editedTimestamp
                             )
                         }
                     },
