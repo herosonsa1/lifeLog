@@ -370,4 +370,33 @@ class PeriodAnalyticsEngineTest {
         assertEquals(-8.0, yoyReport.yoyAvgScoreDelta ?: 0.0, 0.1) // 82.0 - 90.0 = -8.0타 단축
         assertTrue(yoyReport.yoyComparisonInsight.contains("전년 동반기"))
     }
+
+    @Test
+    fun `SyncProgress formats quantitative count and completion percentage accurately`() {
+        val runningProgress = com.autologue.app.domain.usecase.sync.SyncProgress(
+            isRunning = true,
+            stage = "[2/4단계] 과거 전체 갤러리 사진·위치 분석 중 (310/600장)",
+            syncedTxCount = 480,
+            syncedPhotoCount = 310,
+            syncedGolfCount = 0,
+            isDone = false,
+            stepNumber = 2,
+            totalSteps = 4,
+            stepProcessedCount = 310,
+            stepTotalCount = 600,
+            overallProcessedCount = 790,
+            overallTotalCount = 1240,
+            progressPercent = 63
+        )
+        assertEquals("전체 1,240건 중 790건 (63% 완료)", runningProgress.formatQuantitativeSummary())
+
+        val doneProgress = runningProgress.copy(
+            isRunning = false,
+            isDone = true,
+            overallProcessedCount = 1240,
+            overallTotalCount = 1240,
+            progressPercent = 100
+        )
+        assertEquals("전체 1,240건 중 1,240건 (100% 완료)", doneProgress.formatQuantitativeSummary())
+    }
 }

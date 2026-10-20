@@ -290,14 +290,6 @@ fun DiaryScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Real-time Auto/Manual Syncing Banner
-            if (uiState.isAutoSyncing) {
-                SyncingBannerCard(
-                    stage = uiState.autoSyncStage,
-                    progress = uiState.syncProgress
-                )
-            }
-
             // Contextual Notification Listener Bar
             if (!isNotificationEnabled) {
                 Row(
@@ -1788,25 +1780,40 @@ fun SyncProgressDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(
-                if (progress.isDone) "동기화 완료" else "동기화 진행 중",
-                style = AppTypography.h2
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (progress.isDone) "동기화 완료" else "동기화 진행 중",
+                    style = AppTypography.h2
+                )
+                Text(
+                    text = progress.formatQuantitativeSummary(),
+                    style = AppTypography.caption.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        color = AppColors.primary
+                    )
+                )
+            }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if (!progress.isDone) {
-                    LinearProgressIndicator(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = AppColors.primary,
-                        trackColor = Slate100
-                    )
-                }
+                LinearProgressIndicator(
+                    progress = { (progress.progressPercent.coerceIn(0, 100) / 100f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = AppColors.primary,
+                    trackColor = Slate100
+                )
                 Text(progress.stage, style = AppTypography.bodySecondary)
                 if (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0) {
-                    val golfSummary = if (progress.syncedGolfCount > 0) " / ⛳ 골프 ${progress.syncedGolfCount}건" else ""
+                    val golfSummary = if (progress.syncedGolfCount > 0) " · 골프 ${progress.syncedGolfCount}건" else ""
                     Text(
-                        "• 결제 ${progress.syncedTxCount}건 / 사진 ${progress.syncedPhotoCount}장 색인됨$golfSummary",
+                        "결제 ${progress.syncedTxCount}건 · 사진 ${progress.syncedPhotoCount}장 색인됨$golfSummary",
                         style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold)
                     )
                 }
@@ -1838,52 +1845,15 @@ fun SyncingBannerCard(
     progress: com.autologue.app.domain.usecase.sync.SyncProgress? = null,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        color = AppColors.surfaceVariant,
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp,
-                color = AppColors.primary
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "백그라운드 고속 동기화 진행 중 (화면 이동 가능)",
-                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
-                    )
-                    if (progress != null && (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0)) {
-                        Text(
-                            text = buildString {
-                                append("결제 ${progress.syncedTxCount} · 사진 ${progress.syncedPhotoCount}")
-                                if (progress.syncedGolfCount > 0) append(" · 골프 ${progress.syncedGolfCount}")
-                            },
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.primary)
-                        )
-                    }
-                }
-                Text(
-                    text = stage.ifBlank { "결제 문자 및 갤러리 사진을 병렬 분석하고 있습니다..." },
-                    style = AppTypography.captionMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-    HairlineDivider()
+    val resolved = progress ?: com.autologue.app.domain.usecase.sync.SyncProgress(
+        isRunning = true,
+        stage = stage,
+        progressPercent = 10
+    )
+    com.autologue.app.presentation.common.GlobalSyncProgressBannerContent(
+        progress = resolved,
+        modifier = modifier
+    )
 }
 
 @Composable

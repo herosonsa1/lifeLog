@@ -780,6 +780,92 @@ class HistoricalDataImporter @Inject constructor(
         val photoTime: java.time.LocalDateTime
     )
 
+    /**
+     * 갤러리 일반 사진 스캔 대상 후보 건수를 고속 메타데이터 커서로 사전 집계합니다.
+     * 전체 수집·분석 파이프라인 시작 시 전체 대상 건수(N건)를 즉시 산출하기 위해 사용됩니다.
+     */
+    suspend fun countHistoricalPhotoCandidates(
+        context: Context,
+        daysBack: Int? = 30,
+        limit: Int = 100,
+        sinceTimestampMillis: Long? = null
+    ): Int = withContext(Dispatchers.IO) {
+        val hasReadPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+        if (!hasReadPermission) return@withContext 0
+
+        var count = 0
+        runCatching {
+            val projectionList = mutableListOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATE_TAKEN,
+                MediaStore.Images.Media.DATE_ADDED,
+                MediaStore.Images.Media.DISPLAY_NAME,
+                @Suppress("DEPRECATION")
+                MediaStore.Images.Media.DATA
+            )
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                projectionList.add(MediaStore.Images.Media.RELATIVE_PATH)
+            }
+            val projection = projectionList.toTypedArray()
+            val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+
+            val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
+            val minDateMillis = when {
+                isIncremental -> sinceTimestampMillis!!
+                daysBack != null -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+                else -> 0L
+            }
+            val minDateSec = minDateMillis / 1000L
+            val selection = if (minDateMillis > 0L) {
+                "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
+            } else null
+
+            context.contentResolver.query(uri, projection, selection, null, sortOrder)?.use { cursor ->
+                val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)
+                val dateTakenCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                val dateAddedCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
+                val displayNameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                val dataCol = cursor.getColumnIndex(@Suppress("DEPRECATION") MediaStore.Images.Media.DATA)
+                val relativePathCol = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+                } else -1
+
+                while (cursor.moveToNext() && count < limit) {
+                    if (idCol < 0) continue
+                    val id = cursor.getLong(idCol)
+                    val dateTaken = if (dateTakenCol >= 0) cursor.getLong(dateTakenCol) else 0L
+                    val dateAdded = if (dateAddedCol >= 0) cursor.getLong(dateAddedCol) else 0L
+                    val displayName = if (displayNameCol >= 0) cursor.getString(displayNameCol) else null
+                    val dataPath = if (dataCol >= 0) cursor.getString(dataCol) else null
+                    val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
+
+                    if (isScreenshot(displayName, relativePath, dataPath, false)) continue
+
+                    val timestampMillis = when {
+                        dateTaken > 100_000_000_000L -> dateTaken
+                        dateTaken > 0 -> dateTaken * 1000L
+                        dateAdded > 100_000_000_000L -> dateAdded
+                        dateAdded > 0 -> dateAdded * 1000L
+                        else -> System.currentTimeMillis()
+                    }
+                    if (minDateMillis > 0L) {
+                        val passes = if (isIncremental) timestampMillis > minDateMillis else timestampMillis >= minDateMillis
+                        if (!passes) continue
+                    }
+                    val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    if (excludedPhotoPreferences.isExcluded(contentUri.toString())) continue
+                    count++
+                }
+            }
+        }
+        count
+    }
+
     suspend fun scanHistoricalPhotos(
         context: Context,
         daysBack: Int? = 30,
@@ -788,6 +874,8 @@ class HistoricalDataImporter @Inject constructor(
         onProgress: (suspend (current: Int, total: Int) -> Unit)? = null
     ): List<ScannedPhoto> = withContext(Dispatchers.IO) {
         val rawCandidates = mutableListOf<RawPhotoMeta>()
+        val scannedQueue = java.util.concurrent.ConcurrentLinkedQueue<ScannedPhoto>()
+        val cacheDirty = java.util.concurrent.atomic.AtomicBoolean(false)
         try {
             val projectionList = mutableListOf(
                 MediaStore.Images.Media._ID,
@@ -874,11 +962,11 @@ class HistoricalDataImporter @Inject constructor(
             }
 
             val total = rawCandidates.size
+            runCatching { onProgress?.invoke(0, total) }
             val completedCounter = AtomicInteger(0)
             val semaphore = Semaphore(6)
-            var cacheDirty = false
 
-            val scanned = coroutineScope {
+            coroutineScope {
                 rawCandidates.map { meta ->
                     async(Dispatchers.IO) {
                         semaphore.withPermit {
@@ -895,8 +983,11 @@ class HistoricalDataImporter @Inject constructor(
                                     null
                                 }
                             } else {
-                                val fresh = placeResolver.resolvePhotoLocation(context, meta.contentUri) {
-                                    runCatching { context.contentResolver.openInputStream(meta.contentUri) }.getOrNull()
+                                // 개별 사진 역지오코딩 지연으로 전체 배치가 멈추지 않도록 1.8초 타임아웃 적용
+                                val fresh = kotlinx.coroutines.withTimeoutOrNull(1800L) {
+                                    placeResolver.resolvePhotoLocation(context, meta.contentUri) {
+                                        runCatching { context.contentResolver.openInputStream(meta.contentUri) }.getOrNull()
+                                    }
                                 }
                                 syncCheckpointPreferences?.putCachedPhotoLocation(
                                     uri = meta.uriString,
@@ -908,39 +999,45 @@ class HistoricalDataImporter @Inject constructor(
                                         longitude = fresh?.longitude
                                     )
                                 )
-                                cacheDirty = true
+                                cacheDirty.set(true)
                                 fresh
                             }
 
+                            scannedQueue.add(
+                                ScannedPhoto(
+                                    uri = meta.uriString,
+                                    time = meta.photoTime,
+                                    placeName = resolved?.placeName,
+                                    address = resolved?.address,
+                                    latitude = resolved?.latitude,
+                                    longitude = resolved?.longitude
+                                )
+                            )
+
                             val doneNow = completedCounter.incrementAndGet()
-                            if (doneNow == 1 || doneNow % 10 == 0 || doneNow == total) {
+                            // 25장마다 위치 캐시를 즉시 디스크에 플러시하여 중단 시에도 진행분 100% 보존
+                            if (doneNow % 25 == 0 && cacheDirty.get()) {
+                                runCatching { syncCheckpointPreferences?.flushPhotoLocationCache() }
+                            }
+                            if (doneNow == 1 || doneNow % 5 == 0 || doneNow == total) {
                                 runCatching { onProgress?.invoke(doneNow, total) }
                             }
-
-                            ScannedPhoto(
-                                uri = meta.uriString,
-                                time = meta.photoTime,
-                                placeName = resolved?.placeName,
-                                address = resolved?.address,
-                                latitude = resolved?.latitude,
-                                longitude = resolved?.longitude
-                            )
                         }
                     }
                 }.awaitAll()
             }
 
-            if (cacheDirty) {
-                syncCheckpointPreferences?.flushPhotoLocationCache()
-            }
-
+            val scanned = scannedQueue.toList().sortedByDescending { it.time }
             android.util.Log.d("HistoricalDataImporter", "일반 다이어리 사진 병렬 스캔 완료(incremental=$isIncremental): ${scanned.size}장 색인됨")
             return@withContext scanned
         } catch (t: Throwable) {
-            android.util.Log.e("HistoricalDataImporter", "사진 스캔 중 오류", t)
-            t.printStackTrace()
+            android.util.Log.e("HistoricalDataImporter", "사진 스캔 중 오류 (부분 완료 ${scannedQueue.size}장 보존)", t)
+        } finally {
+            if (cacheDirty.get()) {
+                runCatching { syncCheckpointPreferences?.flushPhotoLocationCache() }
+            }
         }
-        emptyList()
+        scannedQueue.toList().sortedByDescending { it.time }
     }
 
     /**

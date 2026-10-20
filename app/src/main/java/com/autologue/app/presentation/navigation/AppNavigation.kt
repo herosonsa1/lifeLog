@@ -26,6 +26,7 @@ import com.autologue.app.presentation.car.CarLedgerScreen
 import com.autologue.app.presentation.common.AutoLogueLoadingOverlay
 import com.autologue.app.presentation.common.GlobalLoadingOverlayHost
 import com.autologue.app.presentation.common.GlobalLoadingRegistry
+import com.autologue.app.presentation.common.GlobalSyncProgressBannerHost
 import com.autologue.app.presentation.common.HairlineDivider
 import com.autologue.app.presentation.common.UnifiedSpeedDialFab
 import com.autologue.app.presentation.diary.DiaryScreen
@@ -183,26 +184,35 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                 }
             }
         ) { paddingValues ->
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
                     .padding(paddingValues)
             ) {
-                NavHost(
-                    navController = navController,
-                    startDestination = Screen.Diary.route,
-                    enterTransition = { fadeIn(animationSpec = tween(140)) },
-                    exitTransition = { fadeOut(animationSpec = tween(100)) },
-                    popEnterTransition = { fadeIn(animationSpec = tween(140)) },
-                    popExitTransition = { fadeOut(animationSpec = tween(100)) },
-                    modifier = Modifier.fillMaxSize()
+                // 어느 메뉴에 있든 백그라운드 수집·분석 진행 시 전체 건수 대비 진행 건수와 완료율(%)을 앱 최상단에 고정 표시
+                GlobalSyncProgressBannerHost()
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
                 ) {
-                    composable(Screen.Diary.route) { DiaryScreen() }
-                    composable(Screen.Expense.route) { ExpenseScreen() }
-                    composable(Screen.CarLedger.route) { CarLedgerScreen() }
-                    composable(Screen.Golf.route) { GolfScreen() }
-                    composable(Screen.Lifestyle.route) { LifestyleScreen() }
+                    NavHost(
+                        navController = navController,
+                        startDestination = Screen.Diary.route,
+                        enterTransition = { fadeIn(animationSpec = tween(140)) },
+                        exitTransition = { fadeOut(animationSpec = tween(100)) },
+                        popEnterTransition = { fadeIn(animationSpec = tween(140)) },
+                        popExitTransition = { fadeOut(animationSpec = tween(100)) },
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        composable(Screen.Diary.route) { DiaryScreen() }
+                        composable(Screen.Expense.route) { ExpenseScreen() }
+                        composable(Screen.CarLedger.route) { CarLedgerScreen() }
+                        composable(Screen.Golf.route) { GolfScreen() }
+                        composable(Screen.Lifestyle.route) { LifestyleScreen() }
+                    }
                 }
             }
         }

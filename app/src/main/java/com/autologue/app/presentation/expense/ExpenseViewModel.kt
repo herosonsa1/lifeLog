@@ -374,7 +374,8 @@ class ExpenseViewModel @Inject constructor(
     private val exportAllDataToExcelUseCase: ExportAllDataToExcelUseCase,
     private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase,
     private val importer: com.autologue.app.data.sync.HistoricalDataImporter,
-    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
+    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences,
+    private val syncHistoricalDataUseCase: com.autologue.app.domain.usecase.sync.SyncHistoricalDataUseCase
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ExpenseUiState())
@@ -2599,7 +2600,19 @@ class ExpenseViewModel @Inject constructor(
                     smsSyncProgressMessage = "$sinceLabel 결제 문자(SMS/MMS/RCS) 병렬 스캔 중..."
                 )
             }
+            syncHistoricalDataUseCase.publishExternalSyncProgress(
+                appCtx,
+                com.autologue.app.domain.usecase.sync.SyncProgress(
+                    isRunning = true,
+                    stage = "[결제 문자 스캔] $sinceLabel 문자(SMS/MMS/RCS) 대상 건수 집계 중...",
+                    stepNumber = 1,
+                    totalSteps = 1,
+                    progressPercent = 3
+                )
+            )
 
+            var totalTxsScanned = 0
+            var addedTxsCount = 0
             val msg = runCatching {
                 runCatching { transactionRepository.cleanDuplicates() }
 
@@ -2627,6 +2640,7 @@ class ExpenseViewModel @Inject constructor(
                 )
                 var newCount = 0
                 val totalTxs = scanResult.transactions.size
+                totalTxsScanned = totalTxs
                 for ((idx, tx) in scanResult.transactions.withIndex()) {
                     if (expenseCustomMetaPreferences.isTransactionDeleted(tx)) continue
                     if (tx.paymentMethod == PaymentMethod.NAVER_PAY ||
@@ -2640,12 +2654,32 @@ class ExpenseViewModel @Inject constructor(
                         val id = processTransactionUseCase(tx)
                         if (id > 0L) newCount++
                     }
-                    if ((idx + 1) % 30 == 0 || (idx + 1) == totalTxs) {
+                    addedTxsCount = newCount
+                    val stepDone = idx + 1
+                    if (stepDone == 1 || stepDone % 20 == 0 || stepDone == totalTxs) {
+                        val pct = if (totalTxs > 0) ((stepDone * 100.0) / totalTxs).toInt().coerceIn(5, 99) else 50
+                        val progressText = "$sinceLabel 결제 내역 반영 중 (${stepDone}/${totalTxs}건 · 신규 ${newCount}건)"
                         _uiState.update {
                             it.copy(
-                                smsSyncProgressMessage = "$sinceLabel 결제 내역 반영 중... (${idx + 1}/${totalTxs}건 · 신규 ${newCount}건)"
+                                smsSyncProgressMessage = progressText
                             )
                         }
+                        syncHistoricalDataUseCase.publishExternalSyncProgress(
+                            appCtx,
+                            com.autologue.app.domain.usecase.sync.SyncProgress(
+                                isRunning = true,
+                                stage = "[결제 문자 동기화] $progressText",
+                                syncedTxCount = newCount,
+                                isDone = false,
+                                stepNumber = 1,
+                                totalSteps = 1,
+                                stepProcessedCount = stepDone,
+                                stepTotalCount = totalTxs,
+                                overallProcessedCount = stepDone,
+                                overallTotalCount = totalTxs,
+                                progressPercent = pct
+                            )
+                        )
                     }
                 }
 
@@ -2676,6 +2710,23 @@ class ExpenseViewModel @Inject constructor(
             }.getOrElse { e ->
                 "결제 문자 백그라운드 분석 중 오류가 발생했습니다: ${e.localizedMessage}"
             }
+
+            syncHistoricalDataUseCase.publishExternalSyncProgress(
+                appCtx,
+                com.autologue.app.domain.usecase.sync.SyncProgress(
+                    isRunning = false,
+                    stage = msg,
+                    syncedTxCount = addedTxsCount,
+                    isDone = true,
+                    stepNumber = 1,
+                    totalSteps = 1,
+                    stepProcessedCount = totalTxsScanned,
+                    stepTotalCount = totalTxsScanned,
+                    overallProcessedCount = totalTxsScanned,
+                    overallTotalCount = totalTxsScanned,
+                    progressPercent = 100
+                )
+            )
 
             _uiState.update {
                 it.copy(

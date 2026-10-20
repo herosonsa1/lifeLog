@@ -285,42 +285,6 @@ fun GolfScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = Spacing.xxxl)
             ) {
-                if (uiState.isBackgroundGalleryScanning) {
-                    item {
-                        Surface(
-                            color = MenuColors.golfBg,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MenuColors.golf
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "백그라운드 갤러리 골프 미디어 병렬 분석 중 (화면 이동 가능)",
-                                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.golf)
-                                    )
-                                    Text(
-                                        text = uiState.ocrScanningMessage.ifBlank { "스코어카드 및 라커룸 전표를 고속 탐색하고 있습니다..." },
-                                        style = AppTypography.captionMuted,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                        HairlineDivider()
-                    }
-                }
-
                 // 골프 메인 탭 바: [라운드 기록 · 예약] | [기간별 골프 통계 · 비교]
                 item {
                     Surface(

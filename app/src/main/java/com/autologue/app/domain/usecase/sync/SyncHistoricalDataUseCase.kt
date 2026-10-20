@@ -8,12 +8,15 @@ import com.autologue.app.domain.repository.DiaryRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
+import com.autologue.app.service.DataSyncForegroundService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +33,7 @@ import kotlinx.coroutines.yield
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,14 +44,53 @@ data class SyncProgress(
     val syncedTxCount: Int = 0,
     val syncedPhotoCount: Int = 0,
     val syncedGolfCount: Int = 0,
-    val isDone: Boolean = false
-)
+    val isDone: Boolean = false,
+    val stepNumber: Int = 1,
+    val totalSteps: Int = 4,
+    val stepProcessedCount: Int = 0,
+    val stepTotalCount: Int = 0,
+    val overallProcessedCount: Int = 0,
+    val overallTotalCount: Int = 0,
+    val progressPercent: Int = if (isDone) 100 else 0
+) {
+    /**
+     * 앱 상단 전역 진행 바 및 알림창에 표시할 정량적 건수·퍼센트 요약 문자열을 생성합니다.
+     * 예: "전체 1,240건 중 780건 (63% 완료)"
+     */
+    fun formatQuantitativeSummary(): String {
+        val displayTotal = when {
+            overallTotalCount > 0 -> overallTotalCount
+            stepTotalCount > 0 -> stepTotalCount
+            else -> 0
+        }
+        val displayCurrent = when {
+            overallTotalCount > 0 -> overallProcessedCount.coerceIn(0, overallTotalCount)
+            stepTotalCount > 0 -> stepProcessedCount.coerceIn(0, stepTotalCount)
+            else -> 0
+        }
+        val displayPercent = when {
+            isDone -> 100
+            progressPercent in 1..99 -> progressPercent
+            displayTotal > 0 -> ((displayCurrent * 100.0) / displayTotal).toInt().coerceIn(1, 99)
+            else -> 0
+        }
+        return when {
+            isDone && displayTotal > 0 ->
+                String.format(Locale.KOREA, "전체 %,d건 중 %,d건 (100%% 완료)", displayTotal, displayTotal)
+            isDone ->
+                "전체 100% 완료"
+            displayTotal > 0 ->
+                String.format(Locale.KOREA, "전체 %,d건 중 %,d건 (%d%% 완료)", displayTotal, displayCurrent, displayPercent)
+            else ->
+                String.format(Locale.KOREA, "대상 건수 집계 중 (%d%%)", displayPercent)
+        }
+    }
+}
 
 /**
  * 화면(ViewModel / NavBackStackEntry) 생명주기에 종속되지 않고
- * 앱 전역 백그라운드(Application Scope)에서 독립적으로 동작하는 통합 동기화 엔진.
- * 마지막으로 앱이 구동된 시점과 마지막으로 데이터 수집·분석이 완료된 시점(SyncCheckpointPreferences)을 기록해두고,
- * 그 이후 시점부터 새로 발생한 증분(Incremental) 데이터만 수집 및 분석합니다.
+ * 앱 전역 백그라운드(Application Scope + DataSyncForegroundService)에서 독립적으로 동작하는 통합 동기화 엔진.
+ * 앱을 닫거나 화면을 꺼도 포그라운드 서비스와 증분 체크포인트를 통해 중단 없이 끝까지 완주합니다.
  */
 @Singleton
 class SyncHistoricalDataUseCase @Inject constructor(
@@ -84,10 +127,47 @@ class SyncHistoricalDataUseCase @Inject constructor(
         }
     }
 
+    private fun computeProgressPercent(
+        processed: Int,
+        total: Int,
+        minFloor: Int = 1,
+        maxCap: Int = 99
+    ): Int {
+        if (total <= 0) return minFloor.coerceIn(0, maxCap)
+        val raw = ((processed.coerceAtLeast(0).toDouble() / total.toDouble()) * 100.0).toInt()
+        return raw.coerceIn(minFloor, maxCap)
+    }
+
+    /**
+     * 개별 탭(스마트 골프 갤러리 스캔, 스마트 가계부 문자 동기화 등)에서 시작된 백그라운드 수집 작업도
+     * 앱 상단 전역 진행률 바와 포그라운드 서비스에 통합 표출되도록 상태를 발행합니다.
+     */
+    fun publishExternalSyncProgress(context: Context, progress: SyncProgress) {
+        val appCtx = context.applicationContext ?: context
+        if (activeSyncJob?.isActive == true) {
+            // 이미 전체 통합 파이프라인이 가동 중이면 전체 파이프라인 진행률을 우선 유지
+            return
+        }
+        _syncState.value = progress
+        if (progress.isRunning && !progress.isDone) {
+            DataSyncForegroundService.startOrUpdate(appCtx)
+        }
+    }
+
+    /**
+     * 완료된 상단 배너 또는 수동 동기화 다이얼로그를 닫습니다.
+     */
+    fun dismissSyncBanner() {
+        _isManualSyncDialogVisible.value = false
+        val current = _syncState.value
+        if (current != null && (current.isDone || !current.isRunning)) {
+            _syncState.value = null
+        }
+    }
+
     /**
      * 앱 세션 최초 진입 시 백그라운드 자동 동기화를 시작합니다.
      * 이미 동기화가 진행 중이거나 완료된 경우 중복 실행하지 않고 기존 상태를 그대로 유지합니다.
-     * 마지막 수집·분석 완료 시점이 존재하면 해당 시점 이후의 신규 데이터만 증분 수집·분석합니다.
      */
     fun startAutoSync(context: Context, daysBack: Int = 7, force: Boolean = false) {
         val appCtx = context.applicationContext ?: context
@@ -102,18 +182,22 @@ class SyncHistoricalDataUseCase @Inject constructor(
             val sessionId = syncSessionId.incrementAndGet()
             val lastSyncMillis = syncCheckpointPreferences.getLastSyncCompletedAtMillis()
             val initialStage = if (lastSyncMillis > 0L) {
-                "마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncMillis)}) 이후 신규 데이터 수집 시작..."
+                "[1/4단계] 마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncMillis)}) 이후 신규 데이터 집계 중..."
             } else {
-                "일상 기록(결제 문자 & 사진) 동기화 시작..."
+                "[1/4단계] 일상 기록(결제 문자·사진·골프) 대상 건수 집계 중..."
             }
             updateSessionState(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
                     stage = initialStage,
-                    isDone = false
+                    isDone = false,
+                    stepNumber = 1,
+                    totalSteps = 4,
+                    progressPercent = 1
                 )
             )
+            DataSyncForegroundService.startOrUpdate(appCtx)
             activeSyncJob = backgroundScope.launch {
                 executeSyncPipeline(sessionId, appCtx, daysBack = daysBack, isManual = false)
             }
@@ -122,8 +206,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
 
     /**
      * 사용자가 명시적으로 요청한 기간별 수동 동기화를 백그라운드에서 시작합니다.
-     * daysBack == 0 인 경우 마지막 분석 완료 시점 이후의 증분 데이터만 수집·분석합니다.
-     * runInBackground == true(기본값)이면 화면을 가리는 모달 대신 상단 실시간 배너로 무차단 백그라운드 실행합니다.
+     * 포그라운드 서비스와 연동되어 앱을 닫거나 화면을 꺼도 백그라운드에서 끝까지 진행됩니다.
      */
     fun startManualSync(context: Context, daysBack: Int? = 0, runInBackground: Boolean = true) {
         val appCtx = context.applicationContext ?: context
@@ -135,10 +218,14 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 sessionId,
                 SyncProgress(
                     isRunning = true,
-                    stage = "백그라운드 고속 데이터 수집 및 분석 준비 중...",
-                    isDone = false
+                    stage = "[1/4단계] 백그라운드 데이터 수집·분석 대상 건수 확인 중...",
+                    isDone = false,
+                    stepNumber = 1,
+                    totalSteps = 4,
+                    progressPercent = 1
                 )
             )
+            DataSyncForegroundService.startOrUpdate(appCtx)
             activeSyncJob = backgroundScope.launch {
                 runCatching { previousJob?.cancel() }
                 executeSyncPipeline(sessionId, appCtx, daysBack = daysBack, isManual = true)
@@ -150,11 +237,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
      * 수동 동기화 다이얼로그를 닫습니다.
      */
     fun dismissManualSyncDialog() {
-        _isManualSyncDialogVisible.value = false
-        val current = _syncState.value
-        if (current != null && current.isDone) {
-            _syncState.value = null
-        }
+        dismissSyncBanner()
     }
 
     /**
@@ -206,10 +289,11 @@ class SyncHistoricalDataUseCase @Inject constructor(
         var photoCount = 0
         var golfSyncedCount = 0
         var insertedEntriesCount = 0
+        var grandTotalCount = 0
+        var grandProcessedCount = 0
         val syncStartedAtMillis = System.currentTimeMillis()
 
         try {
-            // 기존 버전에서 업데이트된 단말에 이미 수집된 DB 데이터가 있다면 해당 최신 시점을 기준점으로 자동 설정
             ensureBaselineCheckpointIfNeeded()
 
             val lastSyncCompletedMillis = syncCheckpointPreferences.getLastSyncCompletedAtMillis()
@@ -222,17 +306,20 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 else -> "과거 전체"
             }
 
-            // 1. 기존 중복 데이터 검사 및 가짜 골프 라운드 청소 (최초 1회 또는 수동 기간 전체 동기화 시에만 실행)
+            // 0. 기존 중복 데이터 검사 및 가짜 골프 라운드 청소 (최초 1회 또는 수동 기간 전체 동기화 시에만 실행)
             if (!syncCheckpointPreferences.isLegacyCleanupDone() || (isManual && !useIncremental)) {
                 updateSessionState(
                     sessionId,
                     SyncProgress(
                         isRunning = true,
-                        stage = "기존 중복 데이터 검사 및 정리 중...",
+                        stage = "[준비] 기존 중복 데이터 검사 및 정리 중...",
                         syncedTxCount = 0,
                         syncedPhotoCount = 0,
                         syncedGolfCount = 0,
-                        isDone = false
+                        isDone = false,
+                        stepNumber = 1,
+                        totalSteps = 4,
+                        progressPercent = 2
                     )
                 )
                 withTimeoutOrNull(10_000L) {
@@ -244,90 +331,19 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 }
             }
 
-            updateSessionState(
-                sessionId,
-                SyncProgress(
-                    isRunning = true,
-                    stage = "$periodDesc 결제 문자(SMS/MMS/RCS) 병렬 스캔 중...",
-                    syncedTxCount = 0,
-                    syncedPhotoCount = 0,
-                    syncedGolfCount = 0,
-                    isDone = false
-                )
-            )
-
-            // 2. 문자 스캔 및 거래/주유 내역 동기화 (병렬 고속 스캔)
+            // 1. 전체 수집 대상(결제 문자 + 갤러리 일반 사진 + 골프 OCR 후보) 고속 사전 스캔 및 전체 모수(N건) 산출
             val sinceSmsMillis = if (useIncremental) syncCheckpointPreferences.getLastSmsSyncCompletedAtMillis() else null
-            val savedTransactions = mutableListOf<com.autologue.app.domain.model.Transaction>()
-            val smsTimeoutMs = if (daysBack == null && !useIncremental) 60_000L else 30_000L
-            withTimeoutOrNull(smsTimeoutMs) {
-                val smsDaysBack = when {
-                    useIncremental -> null
-                    daysBack == null -> null
-                    else -> maxOf(daysBack, 365)
-                }
-                val smsLimit = when {
-                    useIncremental -> 1000
-                    daysBack == null -> 10000
-                    else -> 5000
-                }
-                val transactions = importer.scanHistoricalSms(
-                    context = context,
-                    daysBack = smsDaysBack,
-                    limit = smsLimit,
-                    sinceTimestampMillis = sinceSmsMillis
-                )
-                for ((idx, tx) in transactions.withIndex()) {
-                    runCatching {
-                        val txId = processTransactionUseCase(tx)
-                        if (txId > 0L) {
-                            savedTransactions.add(tx)
-                            txCount++
-                        }
-                    }
-                    if ((idx + 1) % 25 == 0 || (idx + 1) == transactions.size) {
-                        updateSessionState(
-                            sessionId,
-                            SyncProgress(
-                                isRunning = true,
-                                stage = "$periodDesc 결제 내역 반영 중... (${idx + 1}/${transactions.size}건 · 신규 ${txCount}건)",
-                                syncedTxCount = txCount,
-                                syncedPhotoCount = 0,
-                                syncedGolfCount = 0,
-                                isDone = false
-                            )
-                        )
-                    }
-                }
-                if (savedTransactions.isNotEmpty() || !useIncremental) {
-                    runCatching { transactionRepository.cleanDuplicates() }
-                    runCatching {
-                        val targetTxs = if (useIncremental) {
-                            savedTransactions
-                        } else {
-                            transactionRepository.getAllTransactionsFlow().first()
-                        }
-                        if (targetTxs.isNotEmpty()) {
-                            vehicleRepository.syncRefuelingFromTransactions(targetTxs)
-                        }
-                    }
-                }
-                syncCheckpointPreferences.recordSmsSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
+            val smsDaysBack = when {
+                useIncremental -> null
+                daysBack == null -> null
+                else -> maxOf(daysBack, 365)
+            }
+            val smsLimit = when {
+                useIncremental -> 1000
+                daysBack == null -> 10000
+                else -> 5000
             }
 
-            updateSessionState(
-                sessionId,
-                SyncProgress(
-                    isRunning = true,
-                    stage = "$periodDesc 갤러리 사진 및 위치 병렬 분석 중...",
-                    syncedTxCount = txCount,
-                    syncedPhotoCount = 0,
-                    syncedGolfCount = 0,
-                    isDone = false
-                )
-            )
-
-            // 3. 갤러리 사진 및 위치 스캔 (6채널 병렬 + 영구 위치 캐시 연동)
             val sincePhotoMillis = if (useIncremental) syncCheckpointPreferences.getLastPhotoSyncCompletedAtMillis() else null
             val photoLimit = when {
                 useIncremental -> 200
@@ -335,31 +351,7 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 daysBack >= 60 -> 600
                 else -> 300
             }
-            val photoTimeoutMs = if (daysBack == null && !useIncremental) 90_000L else 35_000L
-            val photos = withTimeoutOrNull(photoTimeoutMs) {
-                importer.scanHistoricalPhotos(
-                    context = context,
-                    daysBack = if (useIncremental) null else daysBack,
-                    limit = photoLimit,
-                    sinceTimestampMillis = sincePhotoMillis
-                ) { cur, tot ->
-                    updateSessionState(
-                        sessionId,
-                        SyncProgress(
-                            isRunning = true,
-                            stage = "$periodDesc 갤러리 사진·위치 병렬 분석 중... (${cur}/${tot}장)",
-                            syncedTxCount = txCount,
-                            syncedPhotoCount = cur,
-                            syncedGolfCount = 0,
-                            isDone = false
-                        )
-                    )
-                }
-            } ?: emptyList()
-            photoCount = photos.size
-            syncCheckpointPreferences.recordPhotoSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
 
-            // 4. 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지 (3채널 병렬 지문 OCR + 영구 캐시)
             val sinceGolfMillis = if (useIncremental) syncCheckpointPreferences.getLastGolfSyncCompletedAtMillis() else null
             val candidateLimit = when {
                 useIncremental -> 150
@@ -368,181 +360,366 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 else -> 300
             }
             val candidateDaysBack = if (useIncremental) null else if (!isManual && daysBack != null && daysBack <= 7) 14 else daysBack
-            val golfCandidates = withTimeoutOrNull(15_000L) {
-                importer.scanHistoricalGolfCandidates(
-                    context = context,
-                    daysBack = candidateDaysBack,
-                    limit = candidateLimit,
-                    sinceTimestampMillis = sinceGolfMillis
-                )
-            } ?: emptyList()
 
+            updateSessionState(
+                sessionId,
+                SyncProgress(
+                    isRunning = true,
+                    stage = "[1/4단계] $periodDesc 문자·사진·골프 분석 대상 건수 집계 중...",
+                    syncedTxCount = 0,
+                    syncedPhotoCount = 0,
+                    syncedGolfCount = 0,
+                    isDone = false,
+                    stepNumber = 1,
+                    totalSteps = 4,
+                    progressPercent = 4
+                )
+            )
+
+            val (transactions, initialPhotoTotal, golfCandidates) = coroutineScope {
+                val smsDef = async(Dispatchers.IO) {
+                    runCatching {
+                        importer.scanHistoricalSms(
+                            context = context,
+                            daysBack = smsDaysBack,
+                            limit = smsLimit,
+                            sinceTimestampMillis = sinceSmsMillis
+                        )
+                    }.getOrDefault(emptyList())
+                }
+                val photoCountDef = async(Dispatchers.IO) {
+                    runCatching {
+                        importer.countHistoricalPhotoCandidates(
+                            context = context,
+                            daysBack = if (useIncremental) null else daysBack,
+                            limit = photoLimit,
+                            sinceTimestampMillis = sincePhotoMillis
+                        )
+                    }.getOrDefault(0)
+                }
+                val golfDef = async(Dispatchers.IO) {
+                    runCatching {
+                        importer.scanHistoricalGolfCandidates(
+                            context = context,
+                            daysBack = candidateDaysBack,
+                            limit = candidateLimit,
+                            sinceTimestampMillis = sinceGolfMillis
+                        )
+                    }.getOrDefault(emptyList())
+                }
+                Triple(smsDef.await(), photoCountDef.await(), golfDef.await())
+            }
+
+            val txTotal = transactions.size
+            var photoTotal = initialPhotoTotal
+            var golfTotal = golfCandidates.size
+            val rawCandidateSum = txTotal + photoTotal + golfTotal
+            val estimatedDiaryDays = if (rawCandidateSum > 0) (rawCandidateSum / 10).coerceIn(1, 90) else 0
+            grandTotalCount = (rawCandidateSum + estimatedDiaryDays).coerceAtLeast(1)
+
+            // [Stage 1/4] 문자 스캔 결과 DB 반영 및 주유 내역 동기화
+            val savedTransactions = mutableListOf<com.autologue.app.domain.model.Transaction>()
+            if (txTotal > 0) {
+                updateSessionState(
+                    sessionId,
+                    SyncProgress(
+                        isRunning = true,
+                        stage = "[1/4단계] $periodDesc 결제 내역 반영 시작 (0/${txTotal}건)",
+                        syncedTxCount = 0,
+                        syncedPhotoCount = 0,
+                        syncedGolfCount = 0,
+                        isDone = false,
+                        stepNumber = 1,
+                        totalSteps = 4,
+                        stepProcessedCount = 0,
+                        stepTotalCount = txTotal,
+                        overallProcessedCount = 0,
+                        overallTotalCount = grandTotalCount,
+                        progressPercent = computeProgressPercent(0, grandTotalCount, minFloor = 5)
+                    )
+                )
+            }
+
+            for ((idx, tx) in transactions.withIndex()) {
+                runCatching {
+                    val txId = processTransactionUseCase(tx)
+                    if (txId > 0L) {
+                        savedTransactions.add(tx)
+                        txCount++
+                    }
+                }
+                val stepDone = idx + 1
+                grandProcessedCount = stepDone
+                if (stepDone == 1 || stepDone % 15 == 0 || stepDone == txTotal) {
+                    updateSessionState(
+                        sessionId,
+                        SyncProgress(
+                            isRunning = true,
+                            stage = "[1/4단계] $periodDesc 결제 내역 반영 중 (${stepDone}/${txTotal}건 · 신규 ${txCount}건)",
+                            syncedTxCount = txCount,
+                            syncedPhotoCount = 0,
+                            syncedGolfCount = 0,
+                            isDone = false,
+                            stepNumber = 1,
+                            totalSteps = 4,
+                            stepProcessedCount = stepDone,
+                            stepTotalCount = txTotal,
+                            overallProcessedCount = grandProcessedCount,
+                            overallTotalCount = grandTotalCount,
+                            progressPercent = computeProgressPercent(grandProcessedCount, grandTotalCount, minFloor = 5)
+                        )
+                    )
+                }
+            }
+
+            if (savedTransactions.isNotEmpty() || !useIncremental) {
+                runCatching { transactionRepository.cleanDuplicates() }
+                runCatching {
+                    val targetTxs = if (useIncremental) {
+                        savedTransactions
+                    } else {
+                        transactionRepository.getAllTransactionsFlow().first()
+                    }
+                    if (targetTxs.isNotEmpty()) {
+                        vehicleRepository.syncRefuelingFromTransactions(targetTxs)
+                    }
+                }
+            }
+            syncCheckpointPreferences.recordSmsSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
+
+            // [Stage 2/4] 갤러리 사진 및 위치 스캔 (6채널 병렬 + 개별 1.8초 타임아웃 + 25장 주기 캐시 플러시)
+            updateSessionState(
+                sessionId,
+                SyncProgress(
+                    isRunning = true,
+                    stage = "[2/4단계] $periodDesc 갤러리 사진·위치 병렬 분석 중 (0/${photoTotal}장)",
+                    syncedTxCount = txCount,
+                    syncedPhotoCount = 0,
+                    syncedGolfCount = 0,
+                    isDone = false,
+                    stepNumber = 2,
+                    totalSteps = 4,
+                    stepProcessedCount = 0,
+                    stepTotalCount = photoTotal,
+                    overallProcessedCount = txTotal,
+                    overallTotalCount = grandTotalCount,
+                    progressPercent = computeProgressPercent(txTotal, grandTotalCount, minFloor = 12)
+                )
+            )
+
+            val photos = importer.scanHistoricalPhotos(
+                context = context,
+                daysBack = if (useIncremental) null else daysBack,
+                limit = photoLimit,
+                sinceTimestampMillis = sincePhotoMillis
+            ) { cur, tot ->
+                photoTotal = tot
+                grandTotalCount = (txTotal + photoTotal + golfTotal + estimatedDiaryDays).coerceAtLeast(1)
+                grandProcessedCount = txTotal + cur
+                updateSessionState(
+                    sessionId,
+                    SyncProgress(
+                        isRunning = true,
+                        stage = "[2/4단계] $periodDesc 갤러리 사진·위치 분석 중 (${cur}/${tot}장)",
+                        syncedTxCount = txCount,
+                        syncedPhotoCount = cur,
+                        syncedGolfCount = 0,
+                        isDone = false,
+                        stepNumber = 2,
+                        totalSteps = 4,
+                        stepProcessedCount = cur,
+                        stepTotalCount = tot,
+                        overallProcessedCount = grandProcessedCount,
+                        overallTotalCount = grandTotalCount,
+                        progressPercent = computeProgressPercent(grandProcessedCount, grandTotalCount, minFloor = 12)
+                    )
+                )
+            }
+            photoCount = photos.size
+            photoTotal = photoCount
+            grandTotalCount = (txTotal + photoTotal + golfTotal + estimatedDiaryDays).coerceAtLeast(1)
+            grandProcessedCount = txTotal + photoCount
+            syncCheckpointPreferences.recordPhotoSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
+
+            // [Stage 3/4] 캡처된 스크린샷 및 갤러리 사진에서 라커룸 전표 및 스코어카드 자동 감지 (3채널 병렬 지문 OCR)
             if (golfCandidates.isNotEmpty()) {
                 updateSessionState(
                     sessionId,
                     SyncProgress(
                         isRunning = true,
-                        stage = "$periodDesc 갤러리 골프 OCR 병렬 스캔 시작 (${golfCandidates.size}장)...",
+                        stage = "[3/4단계] $periodDesc 갤러리 골프 OCR 분석 시작 (0/${golfTotal}장)",
                         syncedTxCount = txCount,
                         syncedPhotoCount = photoCount,
                         syncedGolfCount = 0,
-                        isDone = false
+                        isDone = false,
+                        stepNumber = 3,
+                        totalSteps = 4,
+                        stepProcessedCount = 0,
+                        stepTotalCount = golfTotal,
+                        overallProcessedCount = grandProcessedCount,
+                        overallTotalCount = grandTotalCount,
+                        progressPercent = computeProgressPercent(grandProcessedCount, grandTotalCount, minFloor = 35)
                     )
                 )
-                val ocrTimeoutMs = when {
-                    daysBack == null && !useIncremental -> 180_000L
-                    isManual -> 90_000L
-                    else -> 35_000L
-                }
-                golfSyncedCount = withTimeoutOrNull(ocrTimeoutMs) {
-                    runCatching {
-                        autoProcessGolfMediaUseCase.processBatchCandidates(golfCandidates) { current, total, foundCount ->
-                            if (current == 1 || current % 3 == 0 || current == total || foundCount > 0) {
-                                val foundMsg = if (foundCount > 0) " (⛳ 골프 ${foundCount}건 발견)" else ""
-                                updateSessionState(
-                                    sessionId,
-                                    SyncProgress(
-                                        isRunning = true,
-                                        stage = "갤러리 골프 OCR 병렬 분석 중... (${current}/${total}장$foundMsg)",
-                                        syncedTxCount = txCount,
-                                        syncedPhotoCount = photoCount,
-                                        syncedGolfCount = foundCount,
-                                        isDone = false
-                                    )
-                                )
-                            }
-                        }
-                    }.onFailure { t ->
-                        if (t is CancellationException) throw t
-                        android.util.Log.e("SyncHistoricalData", "골프 미디어 일괄 OCR 분석 중 오류", t)
-                    }.getOrDefault(0)
-                } ?: 0
 
-                if (golfSyncedCount > 0) {
-                    updateSessionState(
-                        sessionId,
-                        SyncProgress(
-                            isRunning = true,
-                            stage = "골프 라운드 ${golfSyncedCount}건 자동 등록 완료!",
-                            syncedTxCount = txCount,
-                            syncedPhotoCount = photoCount,
-                            syncedGolfCount = golfSyncedCount,
-                            isDone = false
-                        )
-                    )
-                }
-            }
-            syncCheckpointPreferences.recordGolfSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
-
-            // 5. 통합 다이어리 생성 및 주행 기록 동기화
-            val diaryTimeoutMs = if (daysBack == null && !useIncremental) 90_000L else 35_000L
-            withTimeoutOrNull(diaryTimeoutMs) {
-                val allGolfRounds = runCatching {
-                    golfRepository.getAllGolfRoundsList()
-                }.getOrDefault(emptyList())
-
-                val allDbTxs = runCatching {
-                    transactionRepository.getAllTransactionsFlow().first()
-                }.getOrDefault(savedTransactions)
-
-                val diaryEntries = if (useIncremental) {
-                    val affectedDates = mutableSetOf<LocalDate>()
-                    photos.forEach { affectedDates.add(it.time.toLocalDate()) }
-                    savedTransactions.forEach { affectedDates.add(it.timestamp.toLocalDate()) }
-                    if (golfSyncedCount > 0 && sinceGolfMillis != null && sinceGolfMillis > 0L) {
-                        val sinceGolfDate = Instant.ofEpochMilli(sinceGolfMillis)
-                            .atZone(ZoneId.systemDefault())
-                            .toLocalDate()
-                        allGolfRounds
-                            .filter { !it.roundDate.toLocalDate().isBefore(sinceGolfDate) }
-                            .forEach { affectedDates.add(it.roundDate.toLocalDate()) }
-                    }
-
-                    if (affectedDates.isEmpty()) {
-                        emptyList()
-                    } else {
-                        val minAffectedStartMillis = affectedDates.minOf {
-                            it.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                        }
-                        val fullDayPhotos = (photos + importer.scanHistoricalPhotos(
-                            context = context,
-                            daysBack = null,
-                            limit = 200,
-                            sinceTimestampMillis = (minAffectedStartMillis - 1L).coerceAtLeast(1L)
-                        )).distinctBy { it.uri }
-
-                        importer.generateIntegratedDiaries(
-                            photos = fullDayPhotos,
-                            transactions = allDbTxs.ifEmpty { savedTransactions },
-                            golfRounds = allGolfRounds,
-                            targetDates = affectedDates
-                        )
-                    }
-                } else {
-                    importer.generateIntegratedDiaries(
-                        photos = photos,
-                        transactions = allDbTxs.ifEmpty { savedTransactions },
-                        golfRounds = allGolfRounds,
-                        targetDates = null
-                    )
-                }
-
-                val totalEntries = diaryEntries.size
-                if (totalEntries > 0) {
-                    updateSessionState(
-                        sessionId,
-                        SyncProgress(
-                            isRunning = true,
-                            stage = "하루 이동 경로 및 다이어리 작성 중... (1/${totalEntries}일)",
-                            syncedTxCount = txCount,
-                            syncedPhotoCount = photoCount,
-                            syncedGolfCount = golfSyncedCount,
-                            isDone = false
-                        )
-                    )
-                }
-
-                for ((idx, entry) in diaryEntries.withIndex()) {
-                    runCatching {
-                        diaryRepository.insertDiaryEntry(entry)
-                        insertedEntriesCount++
-                    }
-
-                    if ((idx + 1) % 3 == 0 || (idx + 1) == totalEntries) {
+                golfSyncedCount = runCatching {
+                    autoProcessGolfMediaUseCase.processBatchCandidates(golfCandidates) { current, total, foundCount ->
+                        golfTotal = total
+                        grandTotalCount = (txTotal + photoTotal + golfTotal + estimatedDiaryDays).coerceAtLeast(1)
+                        grandProcessedCount = txTotal + photoTotal + current
+                        val foundMsg = if (foundCount > 0) " · 골프 ${foundCount}건 발견" else ""
                         updateSessionState(
                             sessionId,
                             SyncProgress(
                                 isRunning = true,
-                                stage = "하루 이동 경로 및 다이어리 작성 중... (${idx + 1}/${totalEntries}일)",
+                                stage = "[3/4단계] 갤러리 골프 OCR 분석 중 (${current}/${total}장$foundMsg)",
                                 syncedTxCount = txCount,
                                 syncedPhotoCount = photoCount,
-                                syncedGolfCount = golfSyncedCount,
-                                isDone = false
+                                syncedGolfCount = foundCount,
+                                isDone = false,
+                                stepNumber = 3,
+                                totalSteps = 4,
+                                stepProcessedCount = current,
+                                stepTotalCount = total,
+                                overallProcessedCount = grandProcessedCount,
+                                overallTotalCount = grandTotalCount,
+                                progressPercent = computeProgressPercent(grandProcessedCount, grandTotalCount, minFloor = 35)
                             )
                         )
                     }
-                    yield()
+                }.onFailure { t ->
+                    if (t is CancellationException) throw t
+                    android.util.Log.e("SyncHistoricalData", "골프 미디어 일괄 OCR 분석 중 오류", t)
+                }.getOrDefault(0)
+            }
+            grandProcessedCount = txTotal + photoTotal + golfTotal
+            syncCheckpointPreferences.recordGolfSyncCompleted(syncStartedAtMillis, updateGlobalCheckpoint = false)
+
+            // [Stage 4/4] 통합 다이어리 생성 및 주행 기록 동기화
+            val allGolfRounds = runCatching {
+                golfRepository.getAllGolfRoundsList()
+            }.getOrDefault(emptyList())
+
+            val allDbTxs = runCatching {
+                transactionRepository.getAllTransactionsFlow().first()
+            }.getOrDefault(savedTransactions)
+
+            val diaryEntries = if (useIncremental) {
+                val affectedDates = mutableSetOf<LocalDate>()
+                photos.forEach { affectedDates.add(it.time.toLocalDate()) }
+                savedTransactions.forEach { affectedDates.add(it.timestamp.toLocalDate()) }
+                if (golfSyncedCount > 0 && sinceGolfMillis != null && sinceGolfMillis > 0L) {
+                    val sinceGolfDate = Instant.ofEpochMilli(sinceGolfMillis)
+                        .atZone(ZoneId.systemDefault())
+                        .toLocalDate()
+                    allGolfRounds
+                        .filter { !it.roundDate.toLocalDate().isBefore(sinceGolfDate) }
+                        .forEach { affectedDates.add(it.roundDate.toLocalDate()) }
                 }
 
-                // 생성된 다이어리 이동 경로를 바탕으로 차계부 주행 기록도 백그라운드에서 자동 누적
-                if (diaryEntries.isNotEmpty()) {
-                    runCatching {
-                        vehicleRepository.syncDrivingLogsFromDiary(diaryEntries)
+                if (affectedDates.isEmpty()) {
+                    emptyList()
+                } else {
+                    val minAffectedStartMillis = affectedDates.minOf {
+                        it.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                     }
+                    val fullDayPhotos = (photos + importer.scanHistoricalPhotos(
+                        context = context,
+                        daysBack = null,
+                        limit = 200,
+                        sinceTimestampMillis = (minAffectedStartMillis - 1L).coerceAtLeast(1L)
+                    )).distinctBy { it.uri }
+
+                    importer.generateIntegratedDiaries(
+                        photos = fullDayPhotos,
+                        transactions = allDbTxs.ifEmpty { savedTransactions },
+                        golfRounds = allGolfRounds,
+                        targetDates = affectedDates
+                    )
+                }
+            } else {
+                importer.generateIntegratedDiaries(
+                    photos = photos,
+                    transactions = allDbTxs.ifEmpty { savedTransactions },
+                    golfRounds = allGolfRounds,
+                    targetDates = null
+                )
+            }
+
+            val totalEntries = diaryEntries.size
+            val baseProcessedBeforeDiary = txTotal + photoTotal + golfTotal
+            grandTotalCount = (baseProcessedBeforeDiary + totalEntries).coerceAtLeast(1)
+
+            if (totalEntries > 0) {
+                updateSessionState(
+                    sessionId,
+                    SyncProgress(
+                        isRunning = true,
+                        stage = "[4/4단계] 하루 이동 경로 및 다이어리 작성 중 (0/${totalEntries}일)",
+                        syncedTxCount = txCount,
+                        syncedPhotoCount = photoCount,
+                        syncedGolfCount = golfSyncedCount,
+                        isDone = false,
+                        stepNumber = 4,
+                        totalSteps = 4,
+                        stepProcessedCount = 0,
+                        stepTotalCount = totalEntries,
+                        overallProcessedCount = baseProcessedBeforeDiary,
+                        overallTotalCount = grandTotalCount,
+                        progressPercent = computeProgressPercent(baseProcessedBeforeDiary, grandTotalCount, minFloor = 80)
+                    )
+                )
+            }
+
+            for ((idx, entry) in diaryEntries.withIndex()) {
+                runCatching {
+                    diaryRepository.insertDiaryEntry(entry)
+                    insertedEntriesCount++
+                }
+
+                val stepDone = idx + 1
+                grandProcessedCount = baseProcessedBeforeDiary + stepDone
+                if (stepDone == 1 || stepDone % 3 == 0 || stepDone == totalEntries) {
+                    updateSessionState(
+                        sessionId,
+                        SyncProgress(
+                            isRunning = true,
+                            stage = "[4/4단계] 하루 이동 경로 및 다이어리 작성 중 (${stepDone}/${totalEntries}일)",
+                            syncedTxCount = txCount,
+                            syncedPhotoCount = photoCount,
+                            syncedGolfCount = golfSyncedCount,
+                            isDone = false,
+                            stepNumber = 4,
+                            totalSteps = 4,
+                            stepProcessedCount = stepDone,
+                            stepTotalCount = totalEntries,
+                            overallProcessedCount = grandProcessedCount,
+                            overallTotalCount = grandTotalCount,
+                            progressPercent = computeProgressPercent(grandProcessedCount, grandTotalCount, minFloor = 80)
+                        )
+                    )
+                }
+                yield()
+            }
+
+            if (diaryEntries.isNotEmpty()) {
+                runCatching {
+                    vehicleRepository.syncDrivingLogsFromDiary(diaryEntries)
                 }
             }
 
-            // 6. 데이터 수집 및 분석 완료 시점 영구 기록
+            // 5. 데이터 수집 및 분석 완료 시점 영구 기록
             val completedAtMillis = System.currentTimeMillis()
             syncCheckpointPreferences.recordSyncCompleted(completedAtMillis)
 
-            val golfSummary = if (golfSyncedCount > 0) " / ⛳ 골프 ${golfSyncedCount}건 등록" else ""
+            val golfSummary = if (golfSyncedCount > 0) " · 골프 ${golfSyncedCount}건 등록" else ""
             val doneMessage = if (useIncremental && txCount == 0 && photoCount == 0 && golfSyncedCount == 0) {
-                "마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncCompletedMillis)}) 이후 새로 추가된 데이터가 없습니다. (최신 상태 유지)"
+                "마지막 분석(${SyncCheckpointPreferences.formatEpochMillis(lastSyncCompletedMillis)}) 이후 새로 추가된 데이터가 없습니다."
             } else {
-                "$periodDesc 분석 완료: 신규 결제 ${txCount}건, 사진 ${photoCount}장$golfSummary, 다이어리 ${insertedEntriesCount}일 갱신!"
+                "$periodDesc 분석 완료: 결제 ${txCount}건 · 사진 ${photoCount}장$golfSummary · 다이어리 ${insertedEntriesCount}일 갱신"
             }
 
+            val finalTotal = if (rawCandidateSum + totalEntries > 0) rawCandidateSum + totalEntries else 0
             updateSessionState(
                 sessionId,
                 SyncProgress(
@@ -551,22 +728,35 @@ class SyncHistoricalDataUseCase @Inject constructor(
                     syncedTxCount = txCount,
                     syncedPhotoCount = photoCount,
                     syncedGolfCount = golfSyncedCount,
-                    isDone = true
+                    isDone = true,
+                    stepNumber = 4,
+                    totalSteps = 4,
+                    stepProcessedCount = totalEntries,
+                    stepTotalCount = totalEntries,
+                    overallProcessedCount = finalTotal,
+                    overallTotalCount = finalTotal,
+                    progressPercent = 100
                 )
             )
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             android.util.Log.e("SyncHistoricalData", "백그라운드 동기화 중 예외 안전 처리", t)
             syncCheckpointPreferences.recordSyncCompleted(System.currentTimeMillis())
+            val finalTotal = grandTotalCount.coerceAtLeast(grandProcessedCount)
             updateSessionState(
                 sessionId,
                 SyncProgress(
                     isRunning = false,
-                    stage = "동기화 완료: 결제 ${txCount}건, 사진 ${photoCount}장 색인 완료",
+                    stage = "동기화 완료: 결제 ${txCount}건 · 사진 ${photoCount}장 색인 완료",
                     syncedTxCount = txCount,
                     syncedPhotoCount = photoCount,
                     syncedGolfCount = golfSyncedCount,
-                    isDone = true
+                    isDone = true,
+                    stepNumber = 4,
+                    totalSteps = 4,
+                    overallProcessedCount = finalTotal,
+                    overallTotalCount = finalTotal,
+                    progressPercent = 100
                 )
             )
         } finally {
@@ -574,16 +764,22 @@ class SyncHistoricalDataUseCase @Inject constructor(
                 if (syncSessionId.get() == sessionId) {
                     val current = _syncState.value
                     if (current == null || current.isRunning || !current.isDone) {
-                        val golfSummary = if (golfSyncedCount > 0) " / ⛳ 골프 ${golfSyncedCount}건 등록" else ""
+                        val golfSummary = if (golfSyncedCount > 0) " · 골프 ${golfSyncedCount}건 등록" else ""
+                        val finalTotal = grandTotalCount.coerceAtLeast(grandProcessedCount)
                         updateSessionState(
                             sessionId,
                             SyncProgress(
                                 isRunning = false,
-                                stage = "동기화 완료: 결제 ${txCount}건, 사진 ${photoCount}장 색인$golfSummary 및 다이어리 ${insertedEntriesCount}일 구축 완료!",
+                                stage = "동기화 완료: 결제 ${txCount}건 · 사진 ${photoCount}장 색인$golfSummary · 다이어리 ${insertedEntriesCount}일 구축 완료",
                                 syncedTxCount = txCount,
                                 syncedPhotoCount = photoCount,
                                 syncedGolfCount = golfSyncedCount,
-                                isDone = true
+                                isDone = true,
+                                stepNumber = 4,
+                                totalSteps = 4,
+                                overallProcessedCount = finalTotal,
+                                overallTotalCount = finalTotal,
+                                progressPercent = 100
                             )
                         )
                     }
@@ -670,4 +866,3 @@ class SyncHistoricalDataUseCase @Inject constructor(
         }
     }
 }
-

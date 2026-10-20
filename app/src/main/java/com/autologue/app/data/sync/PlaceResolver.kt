@@ -477,6 +477,9 @@ class PlaceResolver internal constructor(
     @Volatile
     private var nominatimCooldownUntilMillis: Long = 0L
 
+    @Volatile
+    private var geocoderCooldownUntilMillis: Long = 0L
+
     private fun fetchNominatimReverseGeocode(lat: Double, lng: Double): ResolvedLocation? {
         if (System.currentTimeMillis() < nominatimCooldownUntilMillis) return null
         return runCatching {
@@ -535,8 +538,8 @@ class PlaceResolver internal constructor(
 
         val activeContext = context ?: this.context
 
-        // 1. Android Geocoder (구글 맵 공식 역지오코딩) 최우선 실행
-        if (activeContext != null) {
+        // 1. Android Geocoder (구글 맵 공식 역지오코딩) 최우선 실행 (연속 타임아웃 방지를 위한 쿨다운 가드 포함)
+        if (activeContext != null && System.currentTimeMillis() >= geocoderCooldownUntilMillis) {
             runCatching {
                 if (android.location.Geocoder.isPresent()) {
                     val geocoder = android.location.Geocoder(activeContext, java.util.Locale.KOREAN)
@@ -556,6 +559,8 @@ class PlaceResolver internal constructor(
                         return res
                     }
                 }
+            }.onFailure {
+                geocoderCooldownUntilMillis = System.currentTimeMillis() + 30_000L
             }
         }
 

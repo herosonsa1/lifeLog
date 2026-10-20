@@ -200,7 +200,8 @@ class GolfViewModel @Inject constructor(
     private val autoProcessGolfMediaUseCase: com.autologue.app.domain.usecase.golf.AutoProcessGolfMediaUseCase,
     private val golfWeatherRepository: GolfWeatherRepository,
     private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences,
-    private val transactionRepository: com.autologue.app.domain.repository.TransactionRepository
+    private val transactionRepository: com.autologue.app.domain.repository.TransactionRepository,
+    private val syncHistoricalDataUseCase: com.autologue.app.domain.usecase.sync.SyncHistoricalDataUseCase
 ) : ViewModel() {
 
     // [L-04] ScorecardOcrAnalyzer를 ViewModel 멤버로 관리하여 onCleared()에서 close() 호출
@@ -934,6 +935,18 @@ class GolfViewModel @Inject constructor(
                 isBackgroundGalleryScanning = true,
                 ocrScanningMessage = "$periodText 갤러리 미디어 수집 중..."
             )
+            syncHistoricalDataUseCase.publishExternalSyncProgress(
+                appContext,
+                com.autologue.app.domain.usecase.sync.SyncProgress(
+                    isRunning = true,
+                    stage = "[골프 미디어 스캔] $periodText 갤러리 사진 후보 집계 중...",
+                    stepNumber = 1,
+                    totalSteps = 1,
+                    progressPercent = 2
+                )
+            )
+            var totalCandidatesCount = 0
+            var finalFoundCount = 0
             try {
                 val effectiveSinceMillis = if (isIncremental) {
                     var since = lastGolfSyncAt.takeIf { it > 0L }
@@ -958,8 +971,20 @@ class GolfViewModel @Inject constructor(
                     limit = effectiveLimit,
                     sinceTimestampMillis = effectiveSinceMillis
                 )
+                totalCandidatesCount = candidates.size
                 if (candidates.isEmpty()) {
                     syncCheckpointPreferences.recordGolfSyncCompleted(System.currentTimeMillis())
+                    syncHistoricalDataUseCase.publishExternalSyncProgress(
+                        appContext,
+                        com.autologue.app.domain.usecase.sync.SyncProgress(
+                            isRunning = false,
+                            stage = "$periodText 갤러리 골프 미디어 스캔 완료: 새로 분석할 사진이 없습니다.",
+                            isDone = true,
+                            stepNumber = 1,
+                            totalSteps = 1,
+                            progressPercent = 100
+                        )
+                    )
                     loadRounds()
                     return@launch
                 }
@@ -967,16 +992,70 @@ class GolfViewModel @Inject constructor(
                     ocrScanningMessage = "$periodText 갤러리 병렬 OCR 분석 시작 (${candidates.size}장)..."
                 )
                 val processedCount = autoProcessGolfMediaUseCase.processBatchCandidates(candidates) { current, total, foundCount ->
-                    val foundMsg = if (foundCount > 0) " (⛳ 골프 ${foundCount}건 발견)" else ""
+                    totalCandidatesCount = total
+                    finalFoundCount = foundCount
+                    val pct = if (total > 0) ((current * 100.0) / total).toInt().coerceIn(3, 99) else 50
+                    val foundMsg = if (foundCount > 0) " · 골프 ${foundCount}건 발견" else ""
+                    val msg = "갤러리 골프 OCR 분석 중 (${current}/${total}장$foundMsg)"
                     _uiState.value = _uiState.value.copy(
-                        ocrScanningMessage = "백그라운드 갤러리 OCR 분석 중... (${current}/${total}장$foundMsg)"
+                        ocrScanningMessage = msg
+                    )
+                    syncHistoricalDataUseCase.publishExternalSyncProgress(
+                        appContext,
+                        com.autologue.app.domain.usecase.sync.SyncProgress(
+                            isRunning = true,
+                            stage = "[골프 미디어 스캔] $msg",
+                            syncedPhotoCount = current,
+                            syncedGolfCount = foundCount,
+                            isDone = false,
+                            stepNumber = 1,
+                            totalSteps = 1,
+                            stepProcessedCount = current,
+                            stepTotalCount = total,
+                            overallProcessedCount = current,
+                            overallTotalCount = total,
+                            progressPercent = pct
+                        )
                     )
                 }
+                finalFoundCount = processedCount
                 syncCheckpointPreferences.recordGolfSyncCompleted(System.currentTimeMillis())
+                syncHistoricalDataUseCase.publishExternalSyncProgress(
+                    appContext,
+                    com.autologue.app.domain.usecase.sync.SyncProgress(
+                        isRunning = false,
+                        stage = "$periodText 갤러리 골프 OCR 분석 완료: 총 ${totalCandidatesCount}장 확인 · 골프 ${processedCount}건 반영",
+                        syncedPhotoCount = totalCandidatesCount,
+                        syncedGolfCount = processedCount,
+                        isDone = true,
+                        stepNumber = 1,
+                        totalSteps = 1,
+                        stepProcessedCount = totalCandidatesCount,
+                        stepTotalCount = totalCandidatesCount,
+                        overallProcessedCount = totalCandidatesCount,
+                        overallTotalCount = totalCandidatesCount,
+                        progressPercent = 100
+                    )
+                )
                 android.util.Log.d("GolfViewModel", "갤러리 골프 미디어 백그라운드 스캔 완료: $processedCount 건 처리")
                 loadRounds()
             } catch (t: Throwable) {
                 android.util.Log.e("GolfViewModel", "갤러리 골프 미디어 백그라운드 스캔 중 오류", t)
+                syncHistoricalDataUseCase.publishExternalSyncProgress(
+                    appContext,
+                    com.autologue.app.domain.usecase.sync.SyncProgress(
+                        isRunning = false,
+                        stage = "갤러리 골프 미디어 스캔 완료 (골프 ${finalFoundCount}건 반영)",
+                        syncedPhotoCount = totalCandidatesCount,
+                        syncedGolfCount = finalFoundCount,
+                        isDone = true,
+                        stepNumber = 1,
+                        totalSteps = 1,
+                        overallProcessedCount = totalCandidatesCount,
+                        overallTotalCount = totalCandidatesCount,
+                        progressPercent = 100
+                    )
+                )
             } finally {
                 _uiState.value = _uiState.value.copy(isBackgroundGalleryScanning = false, ocrScanningMessage = "")
             }

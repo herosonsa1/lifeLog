@@ -161,97 +161,100 @@ class AutoProcessGolfMediaUseCase @Inject constructor(
         val completedCounter = AtomicInteger(0)
         val probeSemaphore = Semaphore(3)
 
+        runCatching { onProgress?.invoke(0, totalCount, 0) }
         android.util.Log.d("AutoProcessGolfMedia", "골프 미디어 초고속 3채널 병렬 2-Stage 분석 시작: 총 ${totalCount}장 대상")
 
-        coroutineScope {
-            targetPhotos.map { photo ->
-                async(Dispatchers.IO) {
-                    probeSemaphore.withPermit {
-                        ensureActive()
-                        val uri = runCatching { Uri.parse(photo.uri) }.getOrNull()
-                        val photoDate = photo.time.toLocalDate()
+        try {
+            coroutineScope {
+                targetPhotos.map { photo ->
+                    async(Dispatchers.IO) {
+                        probeSemaphore.withPermit {
+                            ensureActive()
+                            val uri = runCatching { Uri.parse(photo.uri) }.getOrNull()
+                            val photoDate = photo.time.toLocalDate()
 
-                        if (uri != null) {
-                            try {
-                                kotlinx.coroutines.withTimeoutOrNull(4500L) {
-                                    // [Stage 1: Fast Parallel Fingerprint Probe - 1280px]
-                                    val probeText = scorecardOcrAnalyzer.quickProbeText(uri, maxDimension = 1280)
-                                    if (probeText.isBlank() || ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(probeText)) {
-                                        markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
-                                        return@withTimeoutOrNull
-                                    }
-
-                                    val probeUpper = probeText.uppercase()
-                                    val matchedProbeKeywords = GOLF_FINGERPRINTS.filter { probeUpper.contains(it) }
-
-                                    // 골프 지문이 단 1개도 없는 일반 사진은 영구 캐시에 기록 후 즉시 패스
-                                    if (matchedProbeKeywords.isEmpty()) {
-                                        markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
-                                        return@withTimeoutOrNull
-                                    }
-
-                                    android.util.Log.d("AutoProcessGolfMedia", "⛳ 골프 지문 감지: $matchedProbeKeywords ($uri)")
-
-                                    // [Stage 2: Deep Analysis - 골프 지문 감지된 사진만 2560px 정밀 분석 및 즉시 DB 반영]
-                                    val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri, photoDate)
-                                    val rawText = scorecardResult.recognizedRawText.ifBlank { probeText }
-                                    if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(rawText)) {
-                                        markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
-                                        return@withTimeoutOrNull
-                                    }
-                                    val rawUpper = rawText.uppercase()
-
-                                    val isValidScorecard = ScorecardOcrAnalyzer.isGenuineScorecardResult(scorecardResult, rawText)
-                                    val isScorecardLike = rawUpper.contains("SCORE") || rawUpper.contains("스코어") || (rawUpper.contains("PAR") && rawUpper.contains("HOLE"))
-                                    val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
-                                    val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진" && !isScorecardLike
-
-                                    if (isValidScorecard || isValidSlip) {
-                                        deepAnalysisLock.lock()
-                                        try {
-                                            if (isValidScorecard) {
-                                                if (isValidSlip) {
-                                                    processGolfLockerSlipUseCase(slipResult, photo.uri)
-                                                }
-                                                val round = extractScorecardOcrUseCase.processScorecardResult(scorecardResult, photo.uri, photoDate)
-                                                if (round != null) {
-                                                    processedRounds.add(round.id)
-                                                    android.util.Log.d("AutoProcessGolfMedia", "⛳ 스코어카드 분석 성공: ${round.clubName} ${round.totalScore}타 (id=${round.id})")
-                                                }
-                                            } else if (isValidSlip) {
-                                                val round = processGolfLockerSlipUseCase(slipResult, photo.uri)
-                                                if (round != null) {
-                                                    processedRounds.add(round.id)
-                                                    android.util.Log.d("AutoProcessGolfMedia", "📋 라커룸 안내지 분석 성공: ${round.clubName} (id=${round.id})")
-                                                }
-                                            }
-                                        } finally {
-                                            deepAnalysisLock.unlock()
+                            if (uri != null) {
+                                try {
+                                    kotlinx.coroutines.withTimeoutOrNull(4500L) {
+                                        // [Stage 1: Fast Parallel Fingerprint Probe - 1280px]
+                                        val probeText = scorecardOcrAnalyzer.quickProbeText(uri, maxDimension = 1280)
+                                        if (probeText.isBlank() || ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(probeText)) {
+                                            markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
+                                            return@withTimeoutOrNull
                                         }
-                                    } else {
-                                        markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
+
+                                        val probeUpper = probeText.uppercase()
+                                        val matchedProbeKeywords = GOLF_FINGERPRINTS.filter { probeUpper.contains(it) }
+
+                                        // 골프 지문이 단 1개도 없는 일반 사진은 영구 캐시에 기록 후 즉시 패스
+                                        if (matchedProbeKeywords.isEmpty()) {
+                                            markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
+                                            return@withTimeoutOrNull
+                                        }
+
+                                        android.util.Log.d("AutoProcessGolfMedia", "골프 지문 감지: $matchedProbeKeywords ($uri)")
+
+                                        // [Stage 2: Deep Analysis - 골프 지문 감지된 사진만 2560px 정밀 분석 및 즉시 DB 반영]
+                                        val scorecardResult = scorecardOcrAnalyzer.analyzeScorecard(uri, photoDate)
+                                        val rawText = scorecardResult.recognizedRawText.ifBlank { probeText }
+                                        if (ScorecardOcrAnalyzer.hasMedicalOrReceiptNegative(rawText)) {
+                                            markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
+                                            return@withTimeoutOrNull
+                                        }
+                                        val rawUpper = rawText.uppercase()
+
+                                        val isValidScorecard = ScorecardOcrAnalyzer.isGenuineScorecardResult(scorecardResult, rawText)
+                                        val isScorecardLike = rawUpper.contains("SCORE") || rawUpper.contains("스코어") || (rawUpper.contains("PAR") && rawUpper.contains("HOLE"))
+                                        val slipResult = GolfLockerSlipOcrAnalyzer.parse(rawText, photoDate)
+                                        val isValidSlip = slipResult.isLockerSlip && slipResult.clubName != "일반 사진" && !isScorecardLike
+
+                                        if (isValidScorecard || isValidSlip) {
+                                            deepAnalysisLock.lock()
+                                            try {
+                                                if (isValidScorecard) {
+                                                    if (isValidSlip) {
+                                                        processGolfLockerSlipUseCase(slipResult, photo.uri)
+                                                    }
+                                                    val round = extractScorecardOcrUseCase.processScorecardResult(scorecardResult, photo.uri, photoDate)
+                                                    if (round != null) {
+                                                        processedRounds.add(round.id)
+                                                        android.util.Log.d("AutoProcessGolfMedia", "스코어카드 분석 성공: ${round.clubName} ${round.totalScore}타 (id=${round.id})")
+                                                    }
+                                                } else if (isValidSlip) {
+                                                    val round = processGolfLockerSlipUseCase(slipResult, photo.uri)
+                                                    if (round != null) {
+                                                        processedRounds.add(round.id)
+                                                        android.util.Log.d("AutoProcessGolfMedia", "라커룸 안내지 분석 성공: ${round.clubName} (id=${round.id})")
+                                                    }
+                                                }
+                                            } finally {
+                                                deepAnalysisLock.unlock()
+                                            }
+                                        } else {
+                                            markAsNonGolf(photo.uri, newlyMarkedNonGolfUris)
+                                        }
                                     }
+                                } catch (t: Throwable) {
+                                    if (t is kotlinx.coroutines.CancellationException) throw t
+                                    android.util.Log.w("AutoProcessGolfMedia", "미디어 분석 건너뜀 (${photo.uri}): ${t.message}")
                                 }
-                            } catch (t: Throwable) {
-                                if (t is kotlinx.coroutines.CancellationException) throw t
-                                android.util.Log.w("AutoProcessGolfMedia", "미디어 분석 건너뜀 (${photo.uri}): ${t.message}")
+                            }
+
+                            val currentDone = completedCounter.incrementAndGet()
+                            if (currentDone % 20 == 0 && newlyMarkedNonGolfUris.isNotEmpty()) {
+                                runCatching { syncCheckpointPreferences?.markNonGolfUris(newlyMarkedNonGolfUris.toList()) }
+                            }
+                            if (currentDone == 1 || currentDone % 2 == 0 || currentDone == totalCount) {
+                                runCatching { onProgress?.invoke(currentDone, totalCount, processedRounds.size) }
                             }
                         }
-
-                        val currentDone = completedCounter.incrementAndGet()
-                        if (currentDone % 25 == 0 && newlyMarkedNonGolfUris.isNotEmpty()) {
-                            syncCheckpointPreferences?.markNonGolfUris(newlyMarkedNonGolfUris.toList())
-                        }
-                        if (currentDone == 1 || currentDone % 3 == 0 || currentDone == totalCount) {
-                            runCatching { onProgress?.invoke(currentDone, totalCount, processedRounds.size) }
-                        }
                     }
-                }
-            }.awaitAll()
-        }
-
-        if (newlyMarkedNonGolfUris.isNotEmpty()) {
-            syncCheckpointPreferences?.markNonGolfUris(newlyMarkedNonGolfUris.toList())
+                }.awaitAll()
+            }
+        } finally {
+            if (newlyMarkedNonGolfUris.isNotEmpty()) {
+                runCatching { syncCheckpointPreferences?.markNonGolfUris(newlyMarkedNonGolfUris.toList()) }
+            }
         }
 
         // [Stage 3: 확정된 필드 라운드 날짜의 골프장 촬영 사진(비-스크린샷 카메라 사진) 자동 첨부]
