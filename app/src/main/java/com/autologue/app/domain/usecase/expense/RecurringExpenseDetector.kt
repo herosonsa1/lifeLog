@@ -106,6 +106,8 @@ object RecurringExpenseDetector {
         return false
     }
 
+    private val TRAILING_SERIAL_REGEX = Regex("""[\s\-_()/]*\d[\d\s\-_()/]*$""")
+
     private fun cleanMerchantForComparison(merchant: String): String {
         return merchant.replace("주식회사", "")
             .replace("(주)", "")
@@ -117,10 +119,26 @@ object RecurringExpenseDetector {
             .trim()
     }
 
+    /**
+     * 월별 일련번호가 붙는 가맹점/출금명(예: "예별손090154" -> "예별손", "동양09-155" -> "동양")에서
+     * 뒷자리 숫자·기호를 제외한 앞자리 핵심 텍스트(2글자 이상)를 추출합니다.
+     */
+    fun extractMerchantPrefixStem(merchant: String): String {
+        val cleaned = cleanMerchantForComparison(merchant)
+        if (cleaned.isBlank()) return ""
+        val stripped = cleaned.replace(TRAILING_SERIAL_REGEX, "").trim()
+        return if (stripped.length >= 2) stripped else ""
+    }
+
     private fun isMerchantSimilar(m1: String, m2: String): Boolean {
         if (m1.isBlank() || m2.isBlank()) return false
         if (m1 == m2) return true
         if (m1.contains(m2) || m2.contains(m1)) return true
+        val stem1 = extractMerchantPrefixStem(m1)
+        val stem2 = extractMerchantPrefixStem(m2)
+        if (stem1.length >= 2 && stem1.equals(stem2, ignoreCase = true)) {
+            return true
+        }
         return false
     }
 }

@@ -1162,11 +1162,16 @@ class ExpenseViewModel @Inject constructor(
      */
     fun findMatchingExistingTransactions(
         targetTx: Transaction,
-        editedMerchantName: String? = null
+        editedMerchantName: String? = null,
+        matchPrefix: String? = null
     ): List<Transaction> {
         val isDeposit = targetTx.isDepositTransaction()
         val oldMerchantName = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(targetTx.merchantName)
         val newMerchant = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(editedMerchantName)
+        val effectivePrefix = com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(matchPrefix)
+            .ifBlank {
+                expenseCustomMetaPreferences.resolveFixedExpenseMatchPrefix(oldMerchantName, isDeposit).orEmpty()
+            }
 
         val isManual = targetTx.originalText.startsWith("[직접 입력]") || targetTx.originalText.startsWith("[차계부 직접 입력]")
         val rawParsedName = if (!isManual && targetTx.originalText.isNotBlank()) {
@@ -1209,6 +1214,12 @@ class ExpenseViewModel @Inject constructor(
             if (other.id == targetTx.id) return@filter false
             if (other.isDepositTransaction() != isDeposit) return@filter false
             if (expenseCustomMetaPreferences.isOneTimeEdited(other)) return@filter false
+
+            if (effectivePrefix.isNotBlank() &&
+                ExpenseCustomMetaPreferences.matchesFixedExpensePrefix(other.merchantName, effectivePrefix)
+            ) {
+                return@filter true
+            }
 
             if (candidateNormKeys.isNotEmpty()) {
                 val otherMerchant = other.merchantName.trim()
@@ -1267,12 +1278,18 @@ class ExpenseViewModel @Inject constructor(
         val sanitizedCustomCat = customCategoryName?.let { com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
         val sanitizedUserClass = userClassificationName?.let { com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(it).ifBlank { null } }
 
+        val cleanFixedMatchPrefix = permanentSaveOptions.fixedExpenseMatchPrefix
+            ?.let { com.autologue.app.data.preferences.MerchantAliasPreferences.sanitizeSingleLine(it) }
+            ?.takeIf { it.isNotBlank() }
+
         val applyMerchantRule = !isOneTimeSave && permanentSaveOptions.applyMerchantName
         val applyCategoryRule = !isOneTimeSave && permanentSaveOptions.applyCategory
         val applyUserClassRule = !isOneTimeSave && permanentSaveOptions.applyUserClassification
         val applyCardAndCorpRule = !isOneTimeSave && permanentSaveOptions.applyCardAndCorporate
-        val applyFixedRule = !isOneTimeSave && permanentSaveOptions.applyFixedExpense
+        val applyFixedRule = (!isOneTimeSave && permanentSaveOptions.applyFixedExpense) ||
+            (isFixedExpense != null && cleanFixedMatchPrefix != null)
         val applyMemoRule = !isOneTimeSave && permanentSaveOptions.applyMemo
+        val isMerchantActuallyRenamed = !finalMerchantName.equals(oldMerchantName, ignoreCase = true)
 
         val wasFuel = currentTx.category == ExpenseCategory.FUEL ||
             com.autologue.app.data.repository.VehicleRepositoryImpl.isFuelMerchant(oldMerchantName)
@@ -1326,6 +1343,18 @@ class ExpenseViewModel @Inject constructor(
         } else {
             emptySet()
         }
+        val prefixMatchedExistingIds = if (cleanFixedMatchPrefix != null) {
+            snapshot.allTransactions.asSequence()
+                .filter { other ->
+                    other.id != transactionId &&
+                        other.isDepositTransaction() == isDeposit &&
+                        ExpenseCustomMetaPreferences.matchesFixedExpensePrefix(other.merchantName, cleanFixedMatchPrefix)
+                }
+                .map { it.id }
+                .toSet()
+        } else {
+            emptySet()
+        }
 
         // [0ms 낙관적 UI 즉시 반영] 모달을 즉시 닫고 화면의 리스트 및 통계를 프레임 드랍 없이 바로 갱신
         _uiState.update { state ->
@@ -1333,8 +1362,10 @@ class ExpenseViewModel @Inject constructor(
             fun transformTx(tx: Transaction): Transaction {
                 if (tx.id == transactionId) return optimisticUpdatedTx
                 if (!isOneTimeSave && tx.id in selectedExistingSet) {
+                    val shouldRenameThisTx = applyMerchantRule &&
+                        (isMerchantActuallyRenamed || tx.merchantName.equals(oldMerchantName, ignoreCase = true))
                     return tx.copy(
-                        merchantName = if (applyMerchantRule) finalMerchantName else tx.merchantName,
+                        merchantName = if (shouldRenameThisTx) finalMerchantName else tx.merchantName,
                         category = if (applyCategoryRule) resolvedCategory else tx.category,
                         cardOrBankName = if (applyCardAndCorpRule) optimisticCard else tx.cardOrBankName,
                         transferMemo = if (applyMemoRule) sanitizedMemo else tx.transferMemo
@@ -1384,7 +1415,7 @@ class ExpenseViewModel @Inject constructor(
 
             val nextRecurringIds = state.recurringTransactionIds.toMutableSet()
             if (isFixedExpense != null) {
-                val fixedTargetIds = if (applyFixedRule) targetIdsToUpdate else setOf(transactionId)
+                val fixedTargetIds = (if (applyFixedRule) targetIdsToUpdate else setOf(transactionId)) + prefixMatchedExistingIds
                 for (id in fixedTargetIds) {
                     if (isFixedExpense) nextRecurringIds.add(id) else nextRecurringIds.remove(id)
                 }
@@ -1434,9 +1465,10 @@ class ExpenseViewModel @Inject constructor(
                     val selectedIds = permanentSaveOptions.selectedExistingTxIds
                     snapshot.allTransactions.filter { it.id != currentTx.id && it.id in selectedIds }
                 } else {
-                    findMatchingExistingTransactions(currentTx, finalMerchantName)
+                    findMatchingExistingTransactions(currentTx, finalMerchantName, cleanFixedMatchPrefix)
                 }
                 val targetExistingIds: Set<Long> = targetExistingTxs.map { it.id }.toSet()
+                val fixedBatchTargetIds: Set<Long> = (if (applyFixedRule) targetExistingIds else emptySet()) + prefixMatchedExistingIds
 
                 val allRuleMerchantNames = LinkedHashSet<String>()
                 if (finalMerchantName.isNotBlank()) allRuleMerchantNames.add(finalMerchantName)
@@ -1546,7 +1578,8 @@ class ExpenseViewModel @Inject constructor(
                             applyToMerchantRule = applyFixedRule,
                             isDeposit = isDeposit,
                             extraMerchantNames = extraRuleKeysArray,
-                            targetTxIds = if (applyFixedRule) targetExistingIds else emptySet()
+                            targetTxIds = fixedBatchTargetIds,
+                            matchPrefix = cleanFixedMatchPrefix
                         )
                         if (effectiveIsDeposit != isDeposit) {
                             expenseCustomMetaPreferences.setFixedExpense(
@@ -1556,7 +1589,8 @@ class ExpenseViewModel @Inject constructor(
                                 applyToMerchantRule = applyFixedRule,
                                 isDeposit = effectiveIsDeposit,
                                 extraMerchantNames = extraRuleKeysArray,
-                                targetTxIds = if (applyFixedRule) targetExistingIds else emptySet()
+                                targetTxIds = fixedBatchTargetIds,
+                                matchPrefix = cleanFixedMatchPrefix
                             )
                         }
                     }
@@ -1586,12 +1620,14 @@ class ExpenseViewModel @Inject constructor(
                 if (!isOneTimeSave) {
                     for (exTx in targetExistingTxs) {
                         val exWasVehicle = exTx.category == ExpenseCategory.FUEL || exTx.category == ExpenseCategory.CAR_MAINTENANCE
-                        val exNewMerchant = if (applyMerchantRule) finalMerchantName else exTx.merchantName
+                        val shouldRenameThisEx = applyMerchantRule &&
+                            (isMerchantActuallyRenamed || exTx.merchantName.equals(oldMerchantName, ignoreCase = true))
+                        val exNewMerchant = if (shouldRenameThisEx) finalMerchantName else exTx.merchantName
                         val exNewCategory = if (applyCategoryRule) resolvedCategory else exTx.category
                         val exNewCard = if (applyCardAndCorpRule) formattedCard else exTx.cardOrBankName
                         val exNewMemo = if (applyMemoRule) sanitizedMemo else exTx.transferMemo
 
-                        if (applyMerchantRule && exTx.merchantName.isNotBlank() &&
+                        if (shouldRenameThisEx && exTx.merchantName.isNotBlank() &&
                             !exTx.merchantName.equals(finalMerchantName, ignoreCase = true)
                         ) {
                             merchantAliasPreferences.registerAlias(
@@ -1709,14 +1745,20 @@ class ExpenseViewModel @Inject constructor(
 
                 val dirLabel = if (isDeposit) "입금" else "출금"
                 val resultMessage = if (isOneTimeSave) {
-                    "'$finalMerchantName' [$dirLabel] 내역 1건을 1회성으로 저장했습니다. (동일 결제처의 다른 내역은 변경되지 않습니다)"
+                    if (isFixedExpense == true && cleanFixedMatchPrefix != null) {
+                        "'$finalMerchantName' [$dirLabel] 내역을 저장하고 제목 앞자리('${cleanFixedMatchPrefix}~') 고정항목 기준을 적용했습니다. (${prefixMatchedExistingIds.size + 1}건 반영)"
+                    } else {
+                        "'$finalMerchantName' [$dirLabel] 내역 1건을 1회성으로 저장했습니다. (동일 결제처의 다른 내역은 변경되지 않습니다)"
+                    }
                 } else {
                     val appliedFields = buildList {
                         if (applyMerchantRule) add("결제명")
                         if (applyCategoryRule) add("카테고리")
                         if (applyUserClassRule) add("사용자분류")
                         if (applyCardAndCorpRule) add("카드/은행·법인")
-                        if (applyFixedRule) add("고정지출")
+                        if (applyFixedRule) {
+                            if (cleanFixedMatchPrefix != null) add("고정항목(앞자리 '${cleanFixedMatchPrefix}~')") else add("고정지출")
+                        }
                         if (applyMemoRule) add("메모")
                     }.joinToString(", ")
                     val extraMsg = if (globalRenamedCount > 0) " (기존 사용내역 ${globalRenamedCount}건 함께 반영 완료)" else ""
@@ -2065,9 +2107,14 @@ class ExpenseViewModel @Inject constructor(
             if (rule.isDeposit != isDeposit) return@firstOrNull false
             val ruleTargetNorm = com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(rule.merchantName)
             if (ruleTargetNorm in candidateNorms) return@firstOrNull true
-            rule.sourceMerchantNames.any { src ->
-                com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(src) in candidateNorms
+            if (rule.sourceMerchantNames.any { src ->
+                    com.autologue.app.data.preferences.MerchantAliasPreferences.normalizeMerchantKey(src) in candidateNorms
+                }
+            ) {
+                return@firstOrNull true
             }
+            !rule.fixedExpenseMatchPrefix.isNullOrBlank() &&
+                ExpenseCustomMetaPreferences.matchesFixedExpensePrefix(tx.merchantName, rule.fixedExpenseMatchPrefix)
         }
     }
 

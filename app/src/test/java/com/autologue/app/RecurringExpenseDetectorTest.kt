@@ -1,4 +1,4 @@
-﻿package com.autologue.app
+package com.autologue.app
 
 import com.autologue.app.data.preferences.UserAccount
 import com.autologue.app.domain.model.ExpenseCategory
@@ -90,5 +90,61 @@ class RecurringExpenseDetectorTest {
             alias = ""
         )
         assertEquals("KB국민", accWithoutAlias.badgeLabel)
+    }
+
+    @Test
+    fun detectRecurring_monthlyVaryingTitleSuffix_markedAsRecurring() {
+        // 예별손080154 -> 예별손090154 (94,250원), 동양08-155 -> 동양09-155 (106,120원)
+        val yebyeolAug = createTx(201L, 94250L, "예별손080154", 2026, 8, 25, ExpenseCategory.TRANSFER, "KB국민은행")
+        val yebyeolSep = createTx(202L, 94250L, "예별손090154", 2026, 9, 25, ExpenseCategory.TRANSFER, "KB국민은행")
+        val dongyangAug = createTx(203L, 106120L, "동양08-155", 2026, 8, 25, ExpenseCategory.TRANSFER, "KB국민은행")
+        val dongyangSep = createTx(204L, 106120L, "동양09-155", 2026, 9, 25, ExpenseCategory.TRANSFER, "KB국민은행")
+
+        assertEquals("예별손", RecurringExpenseDetector.extractMerchantPrefixStem("예별손090154"))
+        assertEquals("동양", RecurringExpenseDetector.extractMerchantPrefixStem("동양09-155"))
+
+        val recurringIds = RecurringExpenseDetector.detectRecurringTransactionIds(
+            listOf(yebyeolAug, yebyeolSep, dongyangAug, dongyangSep)
+        )
+
+        assertTrue(recurringIds.contains(201L))
+        assertTrue(recurringIds.contains(202L))
+        assertTrue(recurringIds.contains(203L))
+        assertTrue(recurringIds.contains(204L))
+    }
+
+    @Test
+    fun customMetaPreferences_fixedExpenseMatchPrefix_matchesMonthlyVaryingTitles() {
+        val prefs = com.autologue.app.data.preferences.ExpenseCustomMetaPreferences()
+
+        assertEquals("예별손", com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.suggestFixedExpensePrefix("예별손090154"))
+        assertEquals("동양", com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.suggestFixedExpensePrefix("동양09-155"))
+
+        val txSep = createTx(301L, 94250L, "예별손090154", 2026, 9, 25, ExpenseCategory.TRANSFER, "KB국민은행")
+        val txOct = createTx(302L, 94250L, "예별손100154", 2026, 10, 25, ExpenseCategory.TRANSFER, "KB국민은행")
+        val txDongyang = createTx(303L, 106120L, "동양10-155", 2026, 10, 25, ExpenseCategory.TRANSFER, "KB국민은행")
+
+        prefs.setFixedExpense(
+            txId = txSep.id,
+            merchantName = txSep.merchantName,
+            isFixed = true,
+            applyToMerchantRule = true,
+            isDeposit = false,
+            matchPrefix = "예별손"
+        )
+        prefs.setFixedExpense(
+            txId = 0L,
+            merchantName = "동양09-155",
+            isFixed = true,
+            applyToMerchantRule = true,
+            isDeposit = false,
+            matchPrefix = "동양"
+        )
+
+        assertTrue(prefs.resolveIsFixedExpense(txSep))
+        assertTrue(prefs.resolveIsFixedExpense(txOct))
+        assertTrue(prefs.resolveIsFixedExpense(txDongyang))
+        assertEquals("예별손", prefs.resolveFixedExpenseMatchPrefix("예별손110154", isDeposit = false))
+        assertEquals("동양", prefs.resolveFixedExpenseMatchPrefix("동양11-155", isDeposit = false))
     }
 }

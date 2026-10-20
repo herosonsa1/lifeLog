@@ -2299,6 +2299,12 @@ fun ExpenseScreen(
         val activePermanentRule = remember(editingTx.id, uiState.permanentMerchantRules) {
             viewModel.findPermanentRuleForTransaction(editingTx)
         }
+        val initialFixedPrefix = remember(editingTx.id, uiState.metaVersion) {
+            viewModel.expenseCustomMetaPreferences.resolveFixedExpenseMatchPrefix(
+                editingTx.merchantName,
+                editingTx.isDepositTransaction()
+            )
+        }
         val editCandidatePair by produceState(
             initialValue = Pair(emptyList<Transaction>(), emptySet<Long>()),
             key1 = editingTx.id
@@ -2324,6 +2330,7 @@ fun ExpenseScreen(
             initialBaseCardName = resolvedBaseCardOrBank,
             initialIsOneTimeSave = true,
             initialIsFixedExpense = editingTx.id in uiState.recurringTransactionIds,
+            initialFixedMatchPrefix = initialFixedPrefix,
             isSaving = uiState.isSaving,
             activePermanentRule = activePermanentRule,
             candidateExistingTransactions = sameDirectionExistingTxs,
@@ -3866,6 +3873,7 @@ fun EditTransactionDialog(
     initialBaseCardName: String,
     initialIsOneTimeSave: Boolean = true,
     initialIsFixedExpense: Boolean = false,
+    initialFixedMatchPrefix: String? = null,
     isSaving: Boolean = false,
     candidateExistingTransactions: List<Transaction> = emptyList(),
     autoMatchedExistingTxIds: Set<Long> = emptySet(),
@@ -3940,6 +3948,18 @@ fun EditTransactionDialog(
     var userClassificationInput by remember(transaction.id) { mutableStateOf(initialUserClassificationName ?: "") }
     var isOneTimeSave by remember(transaction.id) { mutableStateOf(initialIsOneTimeSave) }
     var isFixedExpense by remember(transaction.id) { mutableStateOf(initialIsFixedExpense) }
+    val autoSuggestedPrefix = remember(transaction.id, merchantName) {
+        com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.suggestFixedExpensePrefix(merchantName)
+    }
+    var useFixedPrefixMatch by remember(transaction.id) {
+        mutableStateOf(!initialFixedMatchPrefix.isNullOrBlank() || autoSuggestedPrefix.isNotBlank())
+    }
+    var fixedMatchPrefix by remember(transaction.id) {
+        mutableStateOf(
+            initialFixedMatchPrefix?.takeIf { it.isNotBlank() }
+                ?: autoSuggestedPrefix.ifBlank { merchantName.take(3) }
+        )
+    }
     var memo by remember(transaction.id) { mutableStateOf(transaction.transferMemo ?: "") }
 
     // 영구저장 시 선택적으로 지정할 항목 상태 (결제명, 카테고리, 사용자 분류, 카드/은행·법인, 고정지출, 메모)
@@ -3950,9 +3970,31 @@ fun EditTransactionDialog(
     var applyFixedExpense by remember(transaction.id) { mutableStateOf(true) }
     var applyMemo by remember(transaction.id) { mutableStateOf(false) }
 
-    // 기존 사용내역 중 함께 적용할 대상 선택 상태 (기본값: 금액 무관 동일 항목 자동 매칭 전체 선택)
-    var selectedExistingTxIds by remember(transaction.id, autoMatchedExistingTxIds) {
-        mutableStateOf(autoMatchedExistingTxIds)
+    val cleanFixedPrefixTrimmed = fixedMatchPrefix.trim()
+    val prefixMatchedCandidateTxs = remember(
+        candidateExistingTransactions,
+        cleanFixedPrefixTrimmed,
+        useFixedPrefixMatch,
+        isFixedExpense
+    ) {
+        if (!isFixedExpense || !useFixedPrefixMatch || cleanFixedPrefixTrimmed.isBlank()) {
+            emptyList()
+        } else {
+            candidateExistingTransactions.filter { cand ->
+                com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.matchesFixedExpensePrefix(
+                    cand.merchantName,
+                    cleanFixedPrefixTrimmed
+                )
+            }
+        }
+    }
+    val effectiveAutoMatchedIds = remember(autoMatchedExistingTxIds, prefixMatchedCandidateTxs) {
+        autoMatchedExistingTxIds + prefixMatchedCandidateTxs.map { it.id }
+    }
+
+    // 기존 사용내역 중 함께 적용할 대상 선택 상태 (기본값: 금액 무관 동일 항목 + 앞자리 일치 자동 매칭 전체 선택)
+    var selectedExistingTxIds by remember(transaction.id, effectiveAutoMatchedIds) {
+        mutableStateOf(effectiveAutoMatchedIds)
     }
     var showExistingTxSelector by remember(transaction.id) { mutableStateOf(false) }
     var showOtherExistingTxs by remember(transaction.id) { mutableStateOf(false) }
@@ -4126,7 +4168,12 @@ fun EditTransactionDialog(
                                         add("분류: ${activePermanentRule.userClassificationName}")
                                     }
                                     if (activePermanentRule.isFixedExpense == true) {
-                                        add(if (activePermanentRule.isDeposit || activePermanentRule.baseCategory == ExpenseCategory.INCOME) "고정수입" else "고정지출")
+                                        val fixedLabel = if (activePermanentRule.isDeposit || activePermanentRule.baseCategory == ExpenseCategory.INCOME) "고정수입" else "고정지출"
+                                        if (!activePermanentRule.fixedExpenseMatchPrefix.isNullOrBlank()) {
+                                            add("$fixedLabel(앞자리 '${activePermanentRule.fixedExpenseMatchPrefix}~')")
+                                        } else {
+                                            add(fixedLabel)
+                                        }
                                     }
                                 }.joinToString(" · ")
                                 if (summaryText.isNotEmpty()) {
@@ -4281,7 +4328,7 @@ fun EditTransactionDialog(
                         }
                     }
 
-                    // 3. 고정항목(고정지출·고정수입) 지정 및 저장
+                    // 3. 고정항목(고정지출·고정수입) 지정 및 저장 (앞자리 텍스트 일치 지정 포함)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -4318,13 +4365,156 @@ fun EditTransactionDialog(
                                     unselectedContainerColor = Color(0xFFF5F3FF),
                                     unselectedBorderColor = Color(0xFFDDD6FE),
                                     unselectedContentColor = Color(0xFF5B21B6),
-                                    onClick = { isFixedExpense = true }
+                                    onClick = {
+                                        isFixedExpense = true
+                                        if (fixedMatchPrefix.isBlank()) {
+                                            fixedMatchPrefix = autoSuggestedPrefix.ifBlank { merchantName.trim().take(3) }
+                                        }
+                                    }
                                 )
                             ),
                             columns = 2,
                             itemHeight = 34.dp,
                             fontSize = 11.5.sp
                         )
+
+                        // 고정항목지정 선택 시: 정기지출 판별 제목 텍스트(앞자리 일치 vs 전체 제목 일치) 설정 카드
+                        if (isFixedExpense) {
+                            val cleanBaseTitle = merchantName.trim().ifBlank { transaction.merchantName.trim() }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFF5F3FF),
+                                border = BorderStroke(1.dp, Color(0xFFDDD6FE)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "정기지출 판단 제목 기준",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF4C1D95)
+                                        )
+                                        Text(
+                                            text = if (useFixedPrefixMatch) {
+                                                "월별 뒷자리 번호 변동 내역 자동 매칭"
+                                            } else {
+                                                "전체 결제명이 동일한 내역만 매칭"
+                                            },
+                                            fontSize = 9.5.sp,
+                                            color = Color(0xFF6D28D9),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+
+                                    ExpenseUniformFilterGrid(
+                                        options = listOf(
+                                            ExpenseGridOptionItem(
+                                                label = "앞자리 텍스트 일치",
+                                                isSelected = useFixedPrefixMatch,
+                                                selectedContainerColor = Color(0xFF6D28D9),
+                                                selectedBorderColor = Color(0xFF5B21B6),
+                                                unselectedContainerColor = PureWhite,
+                                                onClick = {
+                                                    useFixedPrefixMatch = true
+                                                    if (fixedMatchPrefix.isBlank()) {
+                                                        fixedMatchPrefix = autoSuggestedPrefix.ifBlank { cleanBaseTitle.take(3) }
+                                                    }
+                                                }
+                                            ),
+                                            ExpenseGridOptionItem(
+                                                label = "전체 제목 일치",
+                                                isSelected = !useFixedPrefixMatch,
+                                                selectedContainerColor = Color(0xFF475569),
+                                                selectedBorderColor = Color(0xFF334155),
+                                                unselectedContainerColor = PureWhite,
+                                                onClick = { useFixedPrefixMatch = false }
+                                            )
+                                        ),
+                                        columns = 2,
+                                        itemHeight = 30.dp,
+                                        fontSize = 11.sp
+                                    )
+
+                                    if (useFixedPrefixMatch) {
+                                        // 빠른 앞자리 글자수/추천 선택 칩 구성
+                                        val prefixPresetItems = remember(cleanBaseTitle, autoSuggestedPrefix) {
+                                            val list = mutableListOf<Pair<String, String>>()
+                                            if (autoSuggestedPrefix.isNotBlank()) {
+                                                list.add("자동추천(${autoSuggestedPrefix})" to autoSuggestedPrefix)
+                                            }
+                                            for (len in listOf(2, 3, 4, 5)) {
+                                                if (cleanBaseTitle.length >= len) {
+                                                    val sub = cleanBaseTitle.take(len)
+                                                    if (list.none { it.second == sub }) {
+                                                        list.add("앞 ${len}자리(${sub})" to sub)
+                                                    }
+                                                }
+                                            }
+                                            list
+                                        }
+
+                                        if (prefixPresetItems.isNotEmpty()) {
+                                            ExpenseUniformFilterGrid(
+                                                options = prefixPresetItems.map { (chipLabel, chipVal) ->
+                                                    val isChipSel = cleanFixedPrefixTrimmed.equals(chipVal, ignoreCase = true)
+                                                    ExpenseGridOptionItem(
+                                                        label = chipLabel,
+                                                        isSelected = isChipSel,
+                                                        selectedContainerColor = Color(0xFF5B21B6),
+                                                        selectedBorderColor = Color(0xFF4C1D95),
+                                                        unselectedContainerColor = PureWhite,
+                                                        unselectedBorderColor = Color(0xFFDDD6FE),
+                                                        unselectedContentColor = Color(0xFF5B21B6),
+                                                        onClick = { fixedMatchPrefix = chipVal }
+                                                    )
+                                                },
+                                                columns = prefixPresetItems.size.coerceIn(2, 3),
+                                                itemHeight = 28.dp,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+
+                                        AutoLogueTextField(
+                                            value = fixedMatchPrefix,
+                                            onValueChange = { fixedMatchPrefix = it },
+                                            label = "판단 기준 제목 앞자리 텍스트",
+                                            placeholder = "예: 예별손, 동양 (이 텍스트로 시작하는 내역을 고정지출로 지정)",
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        if (cleanFixedPrefixTrimmed.isNotBlank()) {
+                                            val matchedSampleNames = remember(
+                                                transaction.merchantName,
+                                                prefixMatchedCandidateTxs,
+                                                cleanFixedPrefixTrimmed
+                                            ) {
+                                                (listOf(transaction.merchantName.trim()) +
+                                                    prefixMatchedCandidateTxs.map { it.merchantName.trim() })
+                                                    .filter { it.isNotBlank() }
+                                                    .distinct()
+                                                    .take(3)
+                                                    .joinToString(", ")
+                                            }
+                                            Text(
+                                                text = "제목이 '${cleanFixedPrefixTrimmed}'(으)로 시작하는 내역을 월별 번호가 바뀌어도 고정항목으로 자동 판별합니다. (현재 ${prefixMatchedCandidateTxs.size + 1}건 일치: $matchedSampleNames)",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF4C1D95),
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // 4. 카테고리 변경 + 수정/삭제 + '기타' 선택 시 추가 카테고리 영구 등록
@@ -4883,7 +5073,11 @@ fun EditTransactionDialog(
 
                         if (isOneTimeSave) {
                             Text(
-                                text = "이번 $txDirLabel 내역만 단독 수정됩니다 (동일 결제처 및 기존 사용내역에 영향 없음)",
+                                text = if (isFixedExpense && useFixedPrefixMatch && cleanFixedPrefixTrimmed.isNotBlank()) {
+                                    "이번 $txDirLabel 내역을 수정하며, 지정한 고정항목 제목 앞자리 기준('${cleanFixedPrefixTrimmed}~')은 월별 내역에 계속 적용됩니다"
+                                } else {
+                                    "이번 $txDirLabel 내역만 단독 수정됩니다 (동일 결제처 및 기존 사용내역에 영향 없음)"
+                                },
                                 fontSize = 10.sp,
                                 color = Color(0xFFB45309)
                             )
@@ -4976,12 +5170,12 @@ fun EditTransactionDialog(
                                 }
                             }
 
-                            // 2) 기존 사용내역 포함 일괄 적용 대상 선택 섹션 (금액 무관)
-                            val autoMatchedTxs = remember(candidateExistingTransactions, autoMatchedExistingTxIds) {
-                                candidateExistingTransactions.filter { it.id in autoMatchedExistingTxIds }
+                            // 2) 기존 사용내역 포함 일괄 적용 대상 선택 섹션 (금액 무관 + 앞자리 일치 포함)
+                            val autoMatchedTxs = remember(candidateExistingTransactions, effectiveAutoMatchedIds) {
+                                candidateExistingTransactions.filter { it.id in effectiveAutoMatchedIds }
                             }
-                            val otherCandidateTxs = remember(candidateExistingTransactions, autoMatchedExistingTxIds) {
-                                candidateExistingTransactions.filter { it.id !in autoMatchedExistingTxIds }.take(30)
+                            val otherCandidateTxs = remember(candidateExistingTransactions, effectiveAutoMatchedIds) {
+                                candidateExistingTransactions.filter { it.id !in effectiveAutoMatchedIds }.take(30)
                             }
                             val txDateFmt = remember { DateTimeFormatter.ofPattern("MM.dd HH:mm", Locale.KOREA) }
 
@@ -5017,14 +5211,14 @@ fun EditTransactionDialog(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            if (autoMatchedExistingTxIds.isNotEmpty()) {
+                                            if (effectiveAutoMatchedIds.isNotEmpty()) {
                                                 Surface(
                                                     onClick = {
                                                         if (!isSaving) {
-                                                            selectedExistingTxIds = if (selectedExistingTxIds.containsAll(autoMatchedExistingTxIds)) {
-                                                                selectedExistingTxIds - autoMatchedExistingTxIds
+                                                            selectedExistingTxIds = if (selectedExistingTxIds.containsAll(effectiveAutoMatchedIds)) {
+                                                                selectedExistingTxIds - effectiveAutoMatchedIds
                                                             } else {
-                                                                selectedExistingTxIds + autoMatchedExistingTxIds
+                                                                selectedExistingTxIds + effectiveAutoMatchedIds
                                                             }
                                                         }
                                                     },
@@ -5032,9 +5226,9 @@ fun EditTransactionDialog(
                                                     color = Color(0xFFEFF6FF),
                                                     border = BorderStroke(1.dp, Color(0xFFBFDBFE))
                                                 ) {
-                                                    val allAutoSelected = selectedExistingTxIds.containsAll(autoMatchedExistingTxIds)
+                                                    val allAutoSelected = selectedExistingTxIds.containsAll(effectiveAutoMatchedIds)
                                                     Text(
-                                                        text = if (allAutoSelected) "동일항목 해제" else "동일항목(${autoMatchedExistingTxIds.size}건)",
+                                                        text = if (allAutoSelected) "동일항목 해제" else "동일항목(${effectiveAutoMatchedIds.size}건)",
                                                         fontSize = 9.sp,
                                                         fontWeight = FontWeight.SemiBold,
                                                         color = Color(0xFF1D4ED8),
@@ -5238,7 +5432,12 @@ fun EditTransactionDialog(
                                     applyCardAndCorporate = applyCardAndCorporate,
                                     applyFixedExpense = applyFixedExpense,
                                     applyMemo = applyMemo,
-                                    selectedExistingTxIds = selectedExistingTxIds
+                                    selectedExistingTxIds = selectedExistingTxIds,
+                                    fixedExpenseMatchPrefix = if (isFixedExpense && useFixedPrefixMatch) {
+                                        cleanFixedPrefixTrimmed.ifBlank { null }
+                                    } else {
+                                        null
+                                    }
                                 )
                             )
                         }

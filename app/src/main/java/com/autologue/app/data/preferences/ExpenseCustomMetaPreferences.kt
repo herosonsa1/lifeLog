@@ -48,7 +48,8 @@ data class PermanentSaveOptions(
     val applyCardAndCorporate: Boolean = true,
     val applyFixedExpense: Boolean = true,
     val applyMemo: Boolean = false,
-    val selectedExistingTxIds: Set<Long>? = null
+    val selectedExistingTxIds: Set<Long>? = null,
+    val fixedExpenseMatchPrefix: String? = null
 )
 
 /**
@@ -75,7 +76,8 @@ data class PermanentMerchantRuleSummary(
     val customCategoryName: String? = null,
     val userClassificationName: String? = null,
     val cardDesignation: String? = null,
-    val isFixedExpense: Boolean? = null
+    val isFixedExpense: Boolean? = null,
+    val fixedExpenseMatchPrefix: String? = null
 ) {
     val hasAliasRule: Boolean get() = sourceMerchantNames.isNotEmpty()
     val effectiveCategoryLabel: String?
@@ -131,9 +133,10 @@ class ExpenseCustomMetaPreferences private constructor(
     private val cardCorporateRuleMap = ConcurrentHashMap<String, Boolean>()
     private val merchantCardDesignationMap = ConcurrentHashMap<String, String>()
 
-    // 4. 고정지출(정기지출) 지정 상태 (거래 ID별 및 가맹점 영구 규칙별)
+    // 4. 고정지출(정기지출) 지정 상태 (거래 ID별, 가맹점 영구 규칙별, 제목 앞자리 텍스트 일치 규칙별)
     private val txFixedExpenseMap = ConcurrentHashMap<Long, Boolean>()
     private val merchantFixedExpenseMap = ConcurrentHashMap<String, String>()
+    private val merchantFixedPrefixRuleMap = ConcurrentHashMap<String, String>()
 
     // 5. 1회성 수정 보호(One-Time Save) 거래 ID 및 서명 집합
     private val oneTimeEditedTxIds = ConcurrentHashMap.newKeySet<Long>()
@@ -394,6 +397,16 @@ class ExpenseCustomMetaPreferences private constructor(
                 }
             }
 
+            merchantFixedPrefixRuleMap.clear()
+            root.optJSONObject("merchantFixedPrefixRuleMap")?.let { obj ->
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next().trim()
+                    val v = obj.optString(k).trim()
+                    if (k.isNotBlank() && v.isNotBlank()) merchantFixedPrefixRuleMap[k] = v
+                }
+            }
+
             oneTimeEditedTxIds.clear()
             root.optJSONArray("oneTimeEditedTxIds")?.let { arr ->
                 for (i in 0 until arr.length()) {
@@ -497,6 +510,10 @@ class ExpenseCustomMetaPreferences private constructor(
             val merFixedObj = JSONObject()
             merchantFixedExpenseMap.forEach { (k, v) -> merFixedObj.put(k, v) }
             root.put("merchantFixedExpenseMap", merFixedObj)
+
+            val merFixedPrefixObj = JSONObject()
+            merchantFixedPrefixRuleMap.forEach { (k, v) -> merFixedPrefixObj.put(k, v) }
+            root.put("merchantFixedPrefixRuleMap", merFixedPrefixObj)
 
             val oneTimeIdsArr = JSONArray()
             oneTimeEditedTxIds.forEach { oneTimeIdsArr.put(it) }
@@ -763,7 +780,7 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     // =========================================================================
-    // 1-2. 고정항목(고정지출·고정수입) 수동 및 영구 지정
+    // 1-2. 고정항목(고정지출·고정수입) 수동 및 영구 지정 (앞자리 텍스트 일치 규칙 포함)
     // =========================================================================
 
     fun setFixedExpense(
@@ -773,7 +790,8 @@ class ExpenseCustomMetaPreferences private constructor(
         applyToMerchantRule: Boolean,
         isDeposit: Boolean = false,
         vararg extraMerchantNames: String?,
-        targetTxIds: Collection<Long> = emptyList()
+        targetTxIds: Collection<Long> = emptyList(),
+        matchPrefix: String? = null
     ) {
         if (txId > 0L) {
             txFixedExpenseMap[txId] = isFixed
@@ -781,6 +799,23 @@ class ExpenseCustomMetaPreferences private constructor(
         for (targetId in targetTxIds) {
             if (targetId > 0L) {
                 txFixedExpenseMap[targetId] = isFixed
+            }
+        }
+        val cleanPrefix = MerchantAliasPreferences.sanitizeSingleLine(matchPrefix)
+        val dirPrefix = MerchantAliasPreferences.directionPrefix(isDeposit)
+        if (cleanPrefix.isNotBlank()) {
+            // 앞자리 텍스트 기준이 명시된 경우 고정항목 앞자리 규칙으로 영구 등록/해제
+            val prefixRuleKey = "$dirPrefix$cleanPrefix"
+            if (isFixed) {
+                merchantFixedPrefixRuleMap[prefixRuleKey] = "true"
+            } else {
+                merchantFixedPrefixRuleMap.remove(prefixRuleKey)
+            }
+        } else if (!isFixed && applyToMerchantRule && merchantName.isNotBlank()) {
+            // 일반 항목으로 영구 해제할 때 해당 가맹점에 걸려 있던 앞자리 고정 규칙도 함께 해제
+            merchantFixedPrefixRuleMap.keys.removeIf { rawKey ->
+                rawKey.startsWith(dirPrefix) &&
+                    matchesFixedExpensePrefix(merchantName, MerchantAliasPreferences.stripDirectionPrefix(rawKey))
             }
         }
         if (applyToMerchantRule && merchantName.isNotBlank()) {
@@ -795,6 +830,50 @@ class ExpenseCustomMetaPreferences private constructor(
         saveToPrefs()
     }
 
+    /**
+     * 해당 결제명에 적용 중인 고정항목 앞자리(접두어) 일치 규칙 텍스트를 반환합니다.
+     */
+    fun resolveFixedExpenseMatchPrefix(merchantName: String?, isDeposit: Boolean = false): String? {
+        val raw = MerchantAliasPreferences.sanitizeSingleLine(merchantName)
+        if (raw.isBlank()) return null
+        val dirPrefix = MerchantAliasPreferences.directionPrefix(isDeposit)
+        var bestPrefix: String? = null
+        for ((rawKey, value) in merchantFixedPrefixRuleMap.entries) {
+            if (!rawKey.startsWith(dirPrefix)) continue
+            if (value != "true") continue
+            val prefix = MerchantAliasPreferences.sanitizeSingleLine(
+                MerchantAliasPreferences.stripDirectionPrefix(rawKey)
+            )
+            if (prefix.isNotBlank() && matchesFixedExpensePrefix(raw, prefix)) {
+                if (bestPrefix == null || prefix.length > bestPrefix.length) {
+                    bestPrefix = prefix
+                }
+            }
+        }
+        return bestPrefix
+    }
+
+    private fun lookupFixedPrefixRule(merchantName: String?, isDeposit: Boolean): Boolean? {
+        val raw = MerchantAliasPreferences.sanitizeSingleLine(merchantName)
+        if (raw.isBlank()) return null
+        val dirPrefix = MerchantAliasPreferences.directionPrefix(isDeposit)
+        var bestLen = -1
+        var bestVal: Boolean? = null
+        for ((rawKey, value) in merchantFixedPrefixRuleMap.entries) {
+            if (!rawKey.startsWith(dirPrefix)) continue
+            val prefix = MerchantAliasPreferences.sanitizeSingleLine(
+                MerchantAliasPreferences.stripDirectionPrefix(rawKey)
+            )
+            if (prefix.isNotBlank() && matchesFixedExpensePrefix(raw, prefix)) {
+                if (prefix.length > bestLen) {
+                    bestLen = prefix.length
+                    bestVal = (value == "true")
+                }
+            }
+        }
+        return bestVal
+    }
+
     fun resolveIsFixedExpense(tx: Transaction, autoRecurringIds: Set<Long> = emptySet()): Boolean {
         val isDeposit = tx.isDepositTransaction() || tx.category == ExpenseCategory.INCOME
         if (isOneTimeEdited(tx)) {
@@ -807,6 +886,10 @@ class ExpenseCustomMetaPreferences private constructor(
                 tx.merchantName,
                 isDeposit
             )?.let { return it == "true" }
+        }
+        // 앞자리(접두어) 텍스트 지정 고정항목 규칙 확인 (예: "예별손" -> "예별손090154", "동양" -> "동양09-155")
+        lookupFixedPrefixRule(tx.merchantName, isDeposit)?.let { return it }
+        if (!isOneTimeEdited(tx)) {
             if (tx.id > 0L && txFixedExpenseMap.containsKey(tx.id)) {
                 return txFixedExpenseMap[tx.id] == true
             }
@@ -815,6 +898,7 @@ class ExpenseCustomMetaPreferences private constructor(
                 tx.merchantName,
                 !isDeposit
             )?.let { return it == "true" }
+            lookupFixedPrefixRule(tx.merchantName, !isDeposit)?.let { return it }
         }
         return tx.id in autoRecurringIds
     }
@@ -1335,13 +1419,14 @@ class ExpenseCustomMetaPreferences private constructor(
             }
         }
 
-        // 2) 5대 가맹점 메타 규칙 맵의 모든 키를 스캔하여 통합 버킷에 병합
+        // 2) 5대 가맹점 메타 규칙 맵 및 앞자리 고정 규칙 맵의 모든 키를 스캔하여 통합 버킷에 병합
         val allMetaKeys = LinkedHashSet<String>().apply {
             addAll(merchantBaseCategoryMap.keys)
             addAll(merchantCustomCategoryMap.keys)
             addAll(merchantUserClassMap.keys)
             addAll(merchantCardDesignationMap.keys)
             addAll(merchantFixedExpenseMap.keys)
+            addAll(merchantFixedPrefixRuleMap.keys)
         }
 
         for (rawKey in allMetaKeys) {
@@ -1387,7 +1472,11 @@ class ExpenseCustomMetaPreferences private constructor(
             val customCat = lookupFirstIn(merchantCustomCategoryMap)
             val userClass = lookupFirstIn(merchantUserClassMap)
             val cardDesig = lookupFirstIn(merchantCardDesignationMap)
+            val fixedPrefixMatched = candidateLookupNames.firstNotNullOfOrNull { cand ->
+                resolveFixedExpenseMatchPrefix(cand, isDep)
+            }
             val fixedRaw = lookupFirstIn(merchantFixedExpenseMap)
+                ?: if (!fixedPrefixMatched.isNullOrBlank()) "true" else null
             val isFixed = when (fixedRaw) {
                 "true" -> true
                 "false" -> false
@@ -1416,7 +1505,8 @@ class ExpenseCustomMetaPreferences private constructor(
                     customCategoryName = customCat,
                     userClassificationName = userClass,
                     cardDesignation = cardDesig,
-                    isFixedExpense = isFixed
+                    isFixedExpense = isFixed,
+                    fixedExpenseMatchPrefix = fixedPrefixMatched
                 )
             )
         }
@@ -1444,6 +1534,15 @@ class ExpenseCustomMetaPreferences private constructor(
         removeDirectionalRule(merchantUserClassMap, merchantName, isDeposit, *extras)
         removeDirectionalRule(merchantCardDesignationMap, merchantName, isDeposit, *extras)
         removeDirectionalRule(merchantFixedExpenseMap, merchantName, isDeposit, *extras)
+        val dirPrefix = MerchantAliasPreferences.directionPrefix(isDeposit)
+        val allNames = listOf(merchantName) + extraMerchantNames
+        merchantFixedPrefixRuleMap.keys.removeIf { rawKey ->
+            if (!rawKey.startsWith(dirPrefix)) return@removeIf false
+            val prefix = MerchantAliasPreferences.stripDirectionPrefix(rawKey)
+            allNames.any { name ->
+                name.equals(prefix, ignoreCase = true) || matchesFixedExpensePrefix(name, prefix)
+            }
+        }
 
         for (txId in affectedTxIds) {
             if (txId > 0L && txId !in oneTimeEditedTxIds) {
@@ -1517,6 +1616,15 @@ class ExpenseCustomMetaPreferences private constructor(
             }
             PermanentRuleAttribute.FIXED_EXPENSE -> {
                 removeDirectionalRule(merchantFixedExpenseMap, merchantName, isDeposit, *extras)
+                val dirPrefix = MerchantAliasPreferences.directionPrefix(isDeposit)
+                val allNames = listOf(merchantName) + extraMerchantNames
+                merchantFixedPrefixRuleMap.keys.removeIf { rawKey ->
+                    if (!rawKey.startsWith(dirPrefix)) return@removeIf false
+                    val prefix = MerchantAliasPreferences.stripDirectionPrefix(rawKey)
+                    allNames.any { name ->
+                        name.equals(prefix, ignoreCase = true) || matchesFixedExpensePrefix(name, prefix)
+                    }
+                }
                 for (txId in affectedTxIds) {
                     if (txId > 0L && txId !in oneTimeEditedTxIds) {
                         txFixedExpenseMap.remove(txId)
@@ -1556,6 +1664,7 @@ class ExpenseCustomMetaPreferences private constructor(
         merchantUserClassMap.clear()
         merchantCardDesignationMap.clear()
         merchantFixedExpenseMap.clear()
+        merchantFixedPrefixRuleMap.clear()
         cardCorporateRuleMap.clear()
 
         txCustomCategoryMap.keys.removeIf { id -> id !in oneTimeEditedTxIds }
@@ -1569,6 +1678,38 @@ class ExpenseCustomMetaPreferences private constructor(
         private const val PREFS_NAME = "expense_custom_meta_prefs"
         private const val KEY_META_JSON = "expense_custom_meta_json"
         const val BADGE_COLOR_COUNT = 10
+
+        private val TRAILING_VAR_SUFFIX_REGEX = Regex("""[\s\-_()/]*\d[\d\s\-_()/]*$""")
+
+        /**
+         * 월별 일련번호가 붙는 가맹점/결제명(예: "예별손090154", "동양09-155")에서
+         * 고정항목 판별 기준이 될 앞자리 텍스트(예: "예별손", "동양")를 추천 추출합니다.
+         */
+        fun suggestFixedExpensePrefix(merchantName: String?): String {
+            val raw = MerchantAliasPreferences.sanitizeSingleLine(merchantName)
+            if (raw.isBlank()) return ""
+            val stripped = raw.replace(TRAILING_VAR_SUFFIX_REGEX, "").trim()
+            if (stripped.length >= 2 && stripped.length < raw.length) {
+                return stripped
+            }
+            return ""
+        }
+
+        /**
+         * 주어진 결제명이 고정항목 판단 기준 텍스트(앞자리 일치)에 부합하는지 검사합니다.
+         */
+        fun matchesFixedExpensePrefix(merchantName: String?, prefixPattern: String?): Boolean {
+            val rawMerchant = MerchantAliasPreferences.sanitizeSingleLine(merchantName)
+            val cleanPrefix = MerchantAliasPreferences.sanitizeSingleLine(prefixPattern)
+            if (rawMerchant.isBlank() || cleanPrefix.isBlank()) return false
+            if (rawMerchant.startsWith(cleanPrefix, ignoreCase = true)) return true
+            val normMerchant = MerchantAliasPreferences.normalizeMerchantKey(rawMerchant)
+            val normPrefix = MerchantAliasPreferences.normalizeMerchantKey(cleanPrefix)
+            if (normMerchant.isNotBlank() && normPrefix.isNotBlank() && normMerchant.startsWith(normPrefix)) {
+                return true
+            }
+            return false
+        }
 
         val DEFAULT_CARD_COMPANIES = listOf(
             "신한카드", "KB국민카드", "현대카드", "삼성카드",
