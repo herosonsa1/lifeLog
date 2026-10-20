@@ -442,29 +442,50 @@ class DiaryViewModel @Inject constructor(
     }
 
     fun selectDate(date: LocalDate) {
-        _uiState.update { it.copy(selectedDate = date) }
+        val targetYm = YearMonth.from(date)
+        val ymChanged = _uiState.value.currentYearMonth != targetYm
+        _uiState.update {
+            it.copy(
+                selectedDate = date,
+                currentYearMonth = targetYm
+            )
+        }
+        if (ymChanged) {
+            loadMonthlyCalendar(targetYm)
+        }
         updateFilteredEntries()
     }
 
     fun onCalendarDateClicked(date: LocalDate) {
+        val targetYm = YearMonth.from(date)
+        val ymChanged = _uiState.value.currentYearMonth != targetYm
         _uiState.update {
             it.copy(
                 selectedDate = date,
+                currentYearMonth = targetYm,
                 viewMode = TimelineViewMode.DAILY
             )
+        }
+        if (ymChanged) {
+            loadMonthlyCalendar(targetYm)
         }
         updateFilteredEntries()
     }
 
     fun changeYearMonth(yearMonth: YearMonth) {
+        val currentDay = _uiState.value.selectedDate.dayOfMonth
+        val safeDay = currentDay.coerceAtMost(yearMonth.lengthOfMonth())
+        val syncedDate = yearMonth.atDay(safeDay)
         _uiState.update {
             it.copy(
                 currentYearMonth = yearMonth,
-                isLoading = true,
+                selectedDate = syncedDate,
+                isLoading = it.viewMode == TimelineViewMode.MONTHLY,
                 loadingMessage = "월간 캘린더 데이터를 불러오는 중입니다..."
             )
         }
         loadMonthlyCalendar(yearMonth)
+        updateFilteredEntries()
     }
 
     fun navigatePrevious() {

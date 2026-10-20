@@ -68,8 +68,10 @@ import com.autologue.app.presentation.common.MetricBadge
 import com.autologue.app.presentation.common.TopMenuAccentBar
 import com.autologue.app.presentation.common.UnderlineTabBar
 import com.autologue.app.presentation.theme.*
+import com.autologue.app.util.KoreanHolidayUtils
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -89,6 +91,7 @@ fun DiaryScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     var isNotificationEnabled by remember { mutableStateOf(isNotificationAccessGranted(context)) }
     var showNotificationGuideDialog by remember { mutableStateOf(false) }
+    var showDateAndMonthPickerDialog by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -242,18 +245,31 @@ fun DiaryScreen(
                                 Icon(Icons.Default.ChevronLeft, contentDescription = "이전", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
                             }
 
-                            Text(
-                                text = when (uiState.viewMode) {
-                                    TimelineViewMode.MONTHLY -> uiState.currentYearMonth.format(DateTimeFormatter.ofPattern("yy년 M월", Locale.KOREA))
-                                    TimelineViewMode.WEEKLY -> {
-                                        val start = uiState.selectedDate.minusDays(6)
-                                        "${start.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))} ~ ${uiState.selectedDate.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))}"
-                                    }
-                                    else -> uiState.selectedDate.format(DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA))
-                                },
-                                style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary),
-                                modifier = Modifier.padding(horizontal = Spacing.xs)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { showDateAndMonthPickerDialog = true }
+                                    .padding(horizontal = Spacing.xs, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = when (uiState.viewMode) {
+                                        TimelineViewMode.MONTHLY -> uiState.currentYearMonth.format(DateTimeFormatter.ofPattern("yy년 M월", Locale.KOREA))
+                                        TimelineViewMode.WEEKLY -> {
+                                            val start = uiState.selectedDate.minusDays(6)
+                                            "${start.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))} ~ ${uiState.selectedDate.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))}"
+                                        }
+                                        else -> uiState.selectedDate.format(DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA))
+                                    },
+                                    style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "일자 및 월 선택",
+                                    tint = AppColors.secondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
 
                             IconButton(
                                 onClick = { viewModel.navigateNext() },
@@ -354,7 +370,8 @@ fun DiaryScreen(
                         MonthlyCalendarView(
                             monthlySummary = uiState.monthlyCalendarData,
                             selectedDate = uiState.selectedDate,
-                            onDateClick = { viewModel.onCalendarDateClicked(it) }
+                            onDateClick = { viewModel.onCalendarDateClicked(it) },
+                            onOpenMonthPicker = { showDateAndMonthPickerDialog = true }
                         )
                     }
                 }
@@ -574,6 +591,32 @@ fun DiaryScreen(
                 onIndexChanged = { viewModel.setPhotoPreviewIndex(it) },
                 onDeletePhoto = { viewModel.deletePhoto(it) },
                 onDismiss = { viewModel.closePhotoPreview() }
+            )
+        }
+
+        // 일자 및 월·연도 선택 캘린더 팝업
+        if (showDateAndMonthPickerDialog) {
+            val recordedDates = remember(uiState.allEntries) {
+                uiState.allEntries.map { it.date.toLocalDate() }.toSet()
+            }
+            DiaryDateAndMonthPickerDialog(
+                initialDate = uiState.selectedDate,
+                initialYearMonth = uiState.currentYearMonth,
+                isMonthlyViewMode = uiState.viewMode == TimelineViewMode.MONTHLY,
+                recordedDates = recordedDates,
+                onSelectDate = { chosenDate ->
+                    showDateAndMonthPickerDialog = false
+                    if (uiState.viewMode == TimelineViewMode.MONTHLY) {
+                        viewModel.onCalendarDateClicked(chosenDate)
+                    } else {
+                        viewModel.selectDate(chosenDate)
+                    }
+                },
+                onSelectYearMonth = { chosenYearMonth ->
+                    showDateAndMonthPickerDialog = false
+                    viewModel.changeYearMonth(chosenYearMonth)
+                },
+                onDismiss = { showDateAndMonthPickerDialog = false }
             )
         }
     }
@@ -1545,7 +1588,8 @@ fun AddCompanionDialog(
 fun MonthlyCalendarView(
     monthlySummary: MonthlySummary?,
     selectedDate: LocalDate,
-    onDateClick: (LocalDate) -> Unit
+    onDateClick: (LocalDate) -> Unit,
+    onOpenMonthPicker: () -> Unit = {}
 ) {
     if (monthlySummary == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1559,7 +1603,7 @@ fun MonthlyCalendarView(
             .fillMaxSize()
             .background(AppColors.background)
     ) {
-        // Summary Strip
+        // Summary Strip with clickable Year-Month Selector
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1568,7 +1612,29 @@ fun MonthlyCalendarView(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("월간 총 지출", style = AppTypography.caption)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(AppColors.surfaceVariant)
+                        .clickable { onOpenMonthPicker() }
+                        .padding(horizontal = Spacing.sm, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "${monthlySummary.yearMonth.year}년 ${monthlySummary.yearMonth.monthValue}월 지출",
+                        style = AppTypography.caption.copy(
+                            color = AppColors.textPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = "연도 및 월 선택",
+                        tint = AppColors.secondary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     "%,d원".format(monthlySummary.totalExpense),
                     style = AppTypography.h1
@@ -1671,7 +1737,7 @@ fun MonthlyCalendarView(
                                             fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Medium,
                                             color = when {
                                                 isSelected -> PureWhite
-                                                date.dayOfWeek == DayOfWeek.SUNDAY -> AppColors.errorText
+                                                date.dayOfWeek == DayOfWeek.SUNDAY || KoreanHolidayUtils.isKoreanPublicHoliday(date) -> AppColors.errorText
                                                 else -> AppColors.textPrimary
                                             }
                                         )
@@ -1968,5 +2034,694 @@ fun SmartDiaryLoadingOverlay(
         delayMillis = 500L,
         modifier = modifier
     )
+}
+
+private enum class DiaryPickerMode {
+    DATE_CALENDAR,
+    MONTH_GRID,
+    YEAR_GRID
+}
+
+/**
+ * 일상 다이어리 상단 `< , >` 사이 날짜/월 표시 텍스트 또는 월간 캘린더 연·월 헤더 터치 시 열리는
+ * 통합 일자·월·연도 선택 캘린더 팝업
+ */
+@Composable
+fun DiaryDateAndMonthPickerDialog(
+    initialDate: LocalDate,
+    initialYearMonth: YearMonth,
+    isMonthlyViewMode: Boolean,
+    recordedDates: Set<LocalDate>,
+    onSelectDate: (LocalDate) -> Unit,
+    onSelectYearMonth: (YearMonth) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var browsingYearMonth by remember {
+        mutableStateOf(if (isMonthlyViewMode) initialYearMonth else YearMonth.from(initialDate))
+    }
+    var pickerMode by remember {
+        mutableStateOf(if (isMonthlyViewMode) DiaryPickerMode.MONTH_GRID else DiaryPickerMode.DATE_CALENDAR)
+    }
+    var yearPageStart by remember(browsingYearMonth.year) {
+        mutableIntStateOf((browsingYearMonth.year / 12) * 12)
+    }
+
+    val recordedMonthsByYear = remember(recordedDates, browsingYearMonth.year) {
+        recordedDates
+            .filter { it.year == browsingYearMonth.year }
+            .groupingBy { it.monthValue }
+            .eachCount()
+    }
+
+    val recordedYears = remember(recordedDates) {
+        recordedDates.groupingBy { it.year }.eachCount()
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .wrapContentHeight(),
+            shape = RoundedCornerShape(16.dp),
+            color = PureWhite,
+            tonalElevation = 0.dp,
+            border = BorderStroke(1.dp, AppColors.border)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(Spacing.xl)
+            ) {
+                // 1. 상단 타이틀 및 [오늘] 빠른 이동 / 닫기 버튼
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "일자 · 월 · 연도 이동",
+                            style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "원하는 연도, 월, 일자를 선택해 바로 이동합니다",
+                            style = AppTypography.caption.copy(color = AppColors.textMuted)
+                        )
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = AppShapes.pill,
+                            color = Slate100,
+                            modifier = Modifier
+                                .clip(AppShapes.pill)
+                                .clickable {
+                                    val today = LocalDate.now()
+                                    if (isMonthlyViewMode && pickerMode == DiaryPickerMode.MONTH_GRID) {
+                                        onSelectYearMonth(YearMonth.from(today))
+                                    } else {
+                                        onSelectDate(today)
+                                    }
+                                }
+                        ) {
+                            Text(
+                                text = "오늘",
+                                style = AppTypography.caption.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = AppColors.primary
+                                ),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "닫기",
+                                tint = AppColors.secondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(Spacing.md))
+
+                // 2. 모드 전환 세그먼트 탭 (일자 달력 / 월 선택 / 연도 선택)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Slate100)
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val tabs = listOf(
+                        DiaryPickerMode.DATE_CALENDAR to "일자 달력",
+                        DiaryPickerMode.MONTH_GRID to "월 선택",
+                        DiaryPickerMode.YEAR_GRID to "연도 선택"
+                    )
+                    tabs.forEach { (mode, label) ->
+                        val selected = pickerMode == mode
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selected) PureWhite else Color.Transparent)
+                                .clickable {
+                                    if (mode == DiaryPickerMode.YEAR_GRID) {
+                                        yearPageStart = (browsingYearMonth.year / 12) * 12
+                                    }
+                                    pickerMode = mode
+                                }
+                                .padding(vertical = 7.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                style = AppTypography.caption.copy(
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) AppColors.textPrimary else AppColors.textMuted
+                                )
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(Spacing.md))
+
+                // 3. 연도 및 월 네비게이션 컨트롤 바
+                when (pickerMode) {
+                    DiaryPickerMode.DATE_CALENDAR -> {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(AppColors.surfaceVariant)
+                                .padding(horizontal = Spacing.xs, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { browsingYearMonth = browsingYearMonth.minusYears(1) },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardDoubleArrowLeft,
+                                        contentDescription = "이전 연도",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { browsingYearMonth = browsingYearMonth.minusMonths(1) },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ChevronLeft,
+                                        contentDescription = "이전 월",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 연도 칩 (누르면 연도 그리드로 전환)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(PureWhite)
+                                        .border(1.dp, AppColors.border, RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            yearPageStart = (browsingYearMonth.year / 12) * 12
+                                            pickerMode = DiaryPickerMode.YEAR_GRID
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "${browsingYearMonth.year}년",
+                                        style = AppTypography.body.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "연도 선택",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+
+                                // 월 칩 (누르면 1~12월 그리드로 전환)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(PureWhite)
+                                        .border(1.dp, AppColors.border, RoundedCornerShape(6.dp))
+                                        .clickable { pickerMode = DiaryPickerMode.MONTH_GRID }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "${browsingYearMonth.monthValue}월",
+                                        style = AppTypography.body.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "월 선택",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { browsingYearMonth = browsingYearMonth.plusMonths(1) },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ChevronRight,
+                                        contentDescription = "다음 월",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { browsingYearMonth = browsingYearMonth.plusYears(1) },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardDoubleArrowRight,
+                                        contentDescription = "다음 연도",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    DiaryPickerMode.MONTH_GRID -> {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(AppColors.surfaceVariant)
+                                .padding(horizontal = Spacing.sm, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { browsingYearMonth = browsingYearMonth.minusYears(1) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ChevronLeft,
+                                    contentDescription = "이전 연도",
+                                    tint = AppColors.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(PureWhite)
+                                    .border(1.dp, AppColors.border, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        yearPageStart = (browsingYearMonth.year / 12) * 12
+                                        pickerMode = DiaryPickerMode.YEAR_GRID
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = "${browsingYearMonth.year}년",
+                                    style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "연도 목록 열기",
+                                    tint = AppColors.secondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { browsingYearMonth = browsingYearMonth.plusYears(1) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = "다음 연도",
+                                    tint = AppColors.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    DiaryPickerMode.YEAR_GRID -> {
+                        val yearEnd = yearPageStart + 11
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(AppColors.surfaceVariant)
+                                .padding(horizontal = Spacing.sm, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { yearPageStart -= 12 },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ChevronLeft,
+                                    contentDescription = "이전 12년",
+                                    tint = AppColors.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Text(
+                                text = "${yearPageStart}년 ~ ${yearEnd}년",
+                                style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
+                            )
+
+                            IconButton(
+                                onClick = { yearPageStart += 12 },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = "다음 12년",
+                                    tint = AppColors.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(Spacing.md))
+
+                // 4. 본문 그리드 영역 (일자 캘린더 / 1~12월 그리드 / 연도 그리드)
+                when (pickerMode) {
+                    DiaryPickerMode.DATE_CALENDAR -> {
+                        // 요일 헤더
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceAround
+                        ) {
+                            listOf("일", "월", "화", "수", "목", "금", "토").forEachIndexed { idx, day ->
+                                Text(
+                                    text = day,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (idx == 0) AppColors.errorText else AppColors.textMuted,
+                                    modifier = Modifier.weight(1f),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                        HairlineDivider()
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        val firstDayOfMonth = browsingYearMonth.atDay(1)
+                        val firstDayOfWeek = firstDayOfMonth.dayOfWeek.value % 7
+                        val daysInMonth = browsingYearMonth.lengthOfMonth()
+
+                        val calendarCells = mutableListOf<LocalDate?>()
+                        repeat(firstDayOfWeek) { calendarCells.add(null) }
+                        for (day in 1..daysInMonth) {
+                            calendarCells.add(browsingYearMonth.atDay(day))
+                        }
+                        while (calendarCells.size % 7 != 0) {
+                            calendarCells.add(null)
+                        }
+                        val weeks = calendarCells.chunked(7)
+
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            weeks.forEach { week ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    week.forEach { date ->
+                                        if (date != null) {
+                                            val isSelected = date == initialDate
+                                            val isToday = date == LocalDate.now()
+                                            val hasRecord = date in recordedDates
+                                            val isHolidayOrSunday = date.dayOfWeek == DayOfWeek.SUNDAY ||
+                                                    KoreanHolidayUtils.isKoreanPublicHoliday(date)
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(42.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(
+                                                        when {
+                                                            isSelected -> AppColors.primary
+                                                            isToday -> Slate100
+                                                            else -> Color.Transparent
+                                                        }
+                                                    )
+                                                    .then(
+                                                        if (isToday && !isSelected) {
+                                                            Modifier.border(1.dp, AppColors.primary, RoundedCornerShape(8.dp))
+                                                        } else {
+                                                            Modifier
+                                                        }
+                                                    )
+                                                    .clickable { onSelectDate(date) },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.Center
+                                                ) {
+                                                    Text(
+                                                        text = "${date.dayOfMonth}",
+                                                        fontSize = 13.sp,
+                                                        fontWeight = if (isSelected || isToday || hasRecord) FontWeight.Bold else FontWeight.Medium,
+                                                        color = when {
+                                                            isSelected -> PureWhite
+                                                            isHolidayOrSunday -> AppColors.errorText
+                                                            else -> AppColors.textPrimary
+                                                        }
+                                                    )
+                                                    if (hasRecord) {
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(4.dp)
+                                                                .clip(CircleShape)
+                                                                .background(if (isSelected) PureWhite else MenuColors.diary)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            Spacer(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(42.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(Spacing.md))
+                        HairlineDivider()
+                        Spacer(modifier = Modifier.height(Spacing.sm))
+
+                        // 하단 빠른 월간 이동 버튼
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(MenuColors.diary)
+                                )
+                                Text(
+                                    text = "다이어리 기록 있는 날",
+                                    style = AppTypography.caption.copy(color = AppColors.textMuted)
+                                )
+                            }
+
+                            TextButton(
+                                onClick = { onSelectYearMonth(browsingYearMonth) }
+                            ) {
+                                Text(
+                                    text = "${browsingYearMonth.year}년 ${browsingYearMonth.monthValue}월 전체 보기 →",
+                                    style = AppTypography.caption.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = AppColors.primary
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    DiaryPickerMode.MONTH_GRID -> {
+                        val months = (1..12).chunked(3)
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            months.forEach { rowMonths ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    rowMonths.forEach { month ->
+                                        val ym = YearMonth.of(browsingYearMonth.year, month)
+                                        val isCurrentSelectedYm = ym == initialYearMonth
+                                        val isThisMonth = ym == YearMonth.now()
+                                        val recordCount = recordedMonthsByYear[month] ?: 0
+
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(58.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    when {
+                                                        isCurrentSelectedYm -> AppColors.primary
+                                                        isThisMonth -> Slate100
+                                                        else -> AppColors.surfaceVariant
+                                                    }
+                                                )
+                                                .border(
+                                                    width = 1.dp,
+                                                    color = if (isCurrentSelectedYm) AppColors.primary else AppColors.border,
+                                                    shape = RoundedCornerShape(10.dp)
+                                                )
+                                                .clickable {
+                                                    browsingYearMonth = ym
+                                                    if (isMonthlyViewMode) {
+                                                        onSelectYearMonth(ym)
+                                                    } else {
+                                                        pickerMode = DiaryPickerMode.DATE_CALENDAR
+                                                    }
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Text(
+                                                    text = "${month}월",
+                                                    style = AppTypography.body.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (isCurrentSelectedYm) PureWhite else AppColors.textPrimary
+                                                    )
+                                                )
+                                                if (recordCount > 0) {
+                                                    Text(
+                                                        text = "기록 ${recordCount}일",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = if (isCurrentSelectedYm) PureWhite.copy(alpha = 0.85f) else MenuColors.diary
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!isMonthlyViewMode) {
+                            Spacer(modifier = Modifier.height(Spacing.md))
+                            AutoLogueSecondaryButton(
+                                text = "${browsingYearMonth.year}년 ${browsingYearMonth.monthValue}월로 바로 이동",
+                                onClick = { onSelectYearMonth(browsingYearMonth) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
+                    DiaryPickerMode.YEAR_GRID -> {
+                        val years = (yearPageStart until (yearPageStart + 12)).chunked(3)
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            years.forEach { rowYears ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    rowYears.forEach { year ->
+                                        val isSelectedYear = year == browsingYearMonth.year
+                                        val isCurrentYear = year == LocalDate.now().year
+                                        val recordCount = recordedYears[year] ?: 0
+
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(54.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    when {
+                                                        isSelectedYear -> AppColors.primary
+                                                        isCurrentYear -> Slate100
+                                                        else -> AppColors.surfaceVariant
+                                                    }
+                                                )
+                                                .border(
+                                                    width = 1.dp,
+                                                    color = if (isSelectedYear) AppColors.primary else AppColors.border,
+                                                    shape = RoundedCornerShape(10.dp)
+                                                )
+                                                .clickable {
+                                                    browsingYearMonth = YearMonth.of(year, browsingYearMonth.monthValue)
+                                                    pickerMode = DiaryPickerMode.MONTH_GRID
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Text(
+                                                    text = "${year}년",
+                                                    style = AppTypography.body.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (isSelectedYear) PureWhite else AppColors.textPrimary
+                                                    )
+                                                )
+                                                if (recordCount > 0) {
+                                                    Text(
+                                                        text = "기록 ${recordCount}일",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = if (isSelectedYear) PureWhite.copy(alpha = 0.85f) else MenuColors.diary
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
