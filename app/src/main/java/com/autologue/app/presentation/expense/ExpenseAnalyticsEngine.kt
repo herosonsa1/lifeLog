@@ -364,7 +364,7 @@ object ExpenseAnalyticsEngine {
                 .entries
                 .sortedByDescending { it.value }
                 .take(2)
-                .joinToString(" · ") { (mName, mAmt) -> "$mName %,d원".format(mAmt) }
+                .joinToString(" · ") { (mName, mAmt) -> "$mName ${"%,d원".format(mAmt)}" }
 
             val causeSummary = buildCategoryCauseSummary(
                 curAmt = curAmt,

@@ -276,7 +276,7 @@ object CarLedgerAnalyticsEngine {
                 .entries
                 .sortedByDescending { it.value }
                 .take(2)
-                .joinToString(" · ") { (place, amt) -> "$place %,d원".format(amt) }
+                .joinToString(" · ") { (place, amt) -> "$place ${"%,d원".format(amt)}" }
 
             val causeSummary = buildCostCategoryCauseSummary(
                 type = cType,

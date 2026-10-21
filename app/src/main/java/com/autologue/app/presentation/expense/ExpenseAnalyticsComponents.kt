@@ -1309,10 +1309,11 @@ private fun CategoryDeltaComparisonRow(
                     if (showYoySubMetric && item.yoyAmount > 0L) {
                         val yoyDiff = item.currentAmount - item.yoyAmount
                         val yoyPct = ExpenseAnalyticsEngine.calculatePercentChange(item.currentAmount, item.yoyAmount)
+                        val yoyAmtFormatted = "%,d원".format(item.yoyAmount)
+                        val yoyDiffFormatted = ExpenseAnalyticsEngine.formatSignedAmount(yoyDiff)
+                        val yoyPctFormatted = ExpenseAnalyticsEngine.formatSignedPercent(yoyPct, item.currentAmount, item.yoyAmount)
                         Text(
-                            text = "전년 동기($yoyLabel) %,d원 대비: ${ExpenseAnalyticsEngine.formatSignedAmount(yoyDiff)} (${
-                                ExpenseAnalyticsEngine.formatSignedPercent(yoyPct, item.currentAmount, item.yoyAmount)
-                            })".format(item.yoyAmount),
+                            text = "전년 동기($yoyLabel) $yoyAmtFormatted 대비: $yoyDiffFormatted ($yoyPctFormatted)",
                             fontSize = 10.5.sp,
                             color = Slate600
                         )

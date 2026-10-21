@@ -236,7 +236,7 @@ data class ExpenseUiState(
                     .take(3)
                     .joinToString(" · ") { (uName, uAmt) ->
                         val uPct = (uAmt.toFloat() / sum * 100f).toInt()
-                        "$uName %,d원(%d%%)".format(uAmt, uPct)
+                        "$uName ${"%,d원(%d%%)".format(uAmt, uPct)}"
                     }
                 CategoryStatItem(
                     displayName = catName,
@@ -300,7 +300,7 @@ data class ExpenseUiState(
                     .take(3)
                     .joinToString(" · ") { (cName, cAmt) ->
                         val cPct = (cAmt.toFloat() / sum * 100f).toInt()
-                        "$cName %,d원(%d%%)".format(cAmt, cPct)
+                        "$cName ${"%,d원(%d%%)".format(cAmt, cPct)}"
                     }
             } else {
                 ""
@@ -332,7 +332,7 @@ data class ExpenseUiState(
                     .take(3)
                     .joinToString(" · ") { (cName, cAmt) ->
                         val cPct = (cAmt.toFloat() / unassignedSum * 100f).toInt()
-                        "$cName %,d원(%d%%)".format(cAmt, cPct)
+                        "$cName ${"%,d원(%d%%)".format(cAmt, cPct)}"
                     }
             } else {
                 ""
