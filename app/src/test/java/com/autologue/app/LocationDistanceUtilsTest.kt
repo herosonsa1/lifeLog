@@ -122,10 +122,39 @@ class LocationDistanceUtilsTest {
             note = "[car_1: 제네시스 G80] [서울 방이동 ➔ 성남 백현동 (15.2 km)] (59분 운행 · GPS 21개 지점)"
         )
 
-        assertEquals("서울 방이동 ➔ 성남 백현동 (15.2 km)", log.getDrivingRouteTitle())
+        assertEquals("방이동 ➔ 성남시 (15.2 km)", log.getDrivingRouteTitle())
         assertEquals("59분 운행 · GPS 21개 지점", log.getDrivingDetailSubtitle())
-        assertEquals("서울 방이동 ➔ 성남 백현동 (15.2 km)", log.displayTitle())
+        assertEquals("방이동 ➔ 성남시 (15.2 km)", log.displayTitle())
         assertEquals("car_1", log.getAssignedVehicleId())
+
+        val sundayDate = LocalDateTime.of(2026, 10, 18, 17, 48) // 일요일 일반 주행
+        val seoulToGyeonggiLog = com.autologue.app.domain.model.VehicleLog(
+            id = 101L,
+            timestamp = sundayDate,
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 27.2,
+            note = "[car_2: 볼보] [영등포구 영등포동 ➔ 하남시 학암동 (27.2 km)]"
+        )
+        assertEquals("영등포동 ➔ 하남시 (27.2 km)", seoulToGyeonggiLog.displayTitle())
+        assertEquals("car_2", seoulToGyeonggiLog.getAssignedVehicleId())
+
+        val seoulToSeoulLog = com.autologue.app.domain.model.VehicleLog(
+            id = 102L,
+            timestamp = sundayDate,
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 1.5,
+            note = "[car_2: 볼보] [송파구 장지동 ➔ 송파구 문정동 (1.5 km)]"
+        )
+        assertEquals("장지동 ➔ 문정동 (1.5 km)", seoulToSeoulLog.displayTitle())
+
+        val gyeonggiToSeoulLog = com.autologue.app.domain.model.VehicleLog(
+            id = 103L,
+            timestamp = sundayDate,
+            logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
+            tripDistanceKm = 3.2,
+            note = "[car_2: 볼보] [하남시 학암동 ➔ 송파구 문정동 (3.2 km)]"
+        )
+        assertEquals("하남시 ➔ 문정동 (3.2 km)", gyeonggiToSeoulLog.displayTitle())
     }
 
     @Test
@@ -145,35 +174,36 @@ class LocationDistanceUtilsTest {
 
     @Test
     fun testCommuteTripTitle() {
+        val weekday = LocalDateTime.of(2026, 10, 20, 7, 20)
         val toWorkLog = com.autologue.app.domain.model.VehicleLog(
             id = 3L,
-            timestamp = LocalDateTime.now(),
+            timestamp = weekday,
             logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
             tripDistanceKm = 24.8,
             note = "[car_2: 쏘렌토 MQ4] [우리집 ➔ 회사 (출근 24.8 km)] (35분 운행 · GPS 12개 지점)"
         )
 
-        assertEquals("집->회사(24.8km)", toWorkLog.getDrivingRouteTitle())
-        assertEquals("집->회사(24.8km)", toWorkLog.displayTitle())
+        assertEquals("집 ➔ 회사 (24.8 km)", toWorkLog.getDrivingRouteTitle())
+        assertEquals("집 ➔ 회사 (24.8 km)", toWorkLog.displayTitle())
         assertEquals("car_2", toWorkLog.getAssignedVehicleId())
 
         val dongCommuteLog = com.autologue.app.domain.model.VehicleLog(
             id = 31L,
-            timestamp = LocalDateTime.now(),
+            timestamp = weekday,
             logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
             tripDistanceKm = 30.0,
             note = "[car_1: 벤츠] [하남시 학암동 ➔ 영등포구 영등포동 (출근 30.0 km)] (60분 운행 · GPS 18개 지점)"
         )
-        assertEquals("집->회사(30.0km)", dongCommuteLog.getDrivingRouteTitle())
+        assertEquals("집 ➔ 회사 (30.0 km)", dongCommuteLog.getDrivingRouteTitle())
 
         val toHomeLog = com.autologue.app.domain.model.VehicleLog(
             id = 32L,
-            timestamp = LocalDateTime.now(),
+            timestamp = weekday.withHour(18).withMinute(32),
             logType = com.autologue.app.domain.model.VehicleLogType.TRIP_DRIVING,
             tripDistanceKm = 27.1,
             note = "[car_1: 벤츠] [영등포구 영등포동 ➔ 하남시 학암동 (퇴근 27.1 km)] (55분 운행 · GPS 16개 지점)"
         )
-        assertEquals("회사->집(27.1km)", toHomeLog.getDrivingRouteTitle())
+        assertEquals("회사 ➔ 집 (27.1 km)", toHomeLog.getDrivingRouteTitle())
     }
 
     @Test

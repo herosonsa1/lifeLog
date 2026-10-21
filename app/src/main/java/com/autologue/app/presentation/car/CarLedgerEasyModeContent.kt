@@ -693,6 +693,21 @@ fun CarLedgerEasyModeContent(
     }
 }
 
+private fun getEasyVehicleBadgeColors(vehicleId: String, vehicleName: String): Pair<Color, Color> {
+    val norm = vehicleName.trim().lowercase()
+    return when {
+        norm.contains("볼보") || norm.contains("volvo") || norm.contains("xc") || vehicleId == "car_2" -> {
+            Color(0xFF047857) to Color(0xFFD1FAE5) // 볼보 / 차량 2: 딥 에메랄드 그린
+        }
+        norm.contains("벤츠") || norm.contains("benz") || vehicleId == "car_1" -> {
+            Color(0xFF1B64DA) to Color(0xFFE8F3FF) // 벤츠 / 차량 1: 코발트 블루
+        }
+        else -> {
+            Color(0xFF6D28D9) to Color(0xFFEDE9FE) // 추가 차량: 로얄 퍼플
+        }
+    }
+}
+
 @Composable
 private fun EasyVehicleCapsuleSelector(
     vehicles: List<VehicleProfile>,
@@ -711,7 +726,7 @@ private fun EasyVehicleCapsuleSelector(
         Surface(
             onClick = { onSelectVehicle(MultiVehiclePreferences.ALL_VEHICLES_ID) },
             shape = RoundedCornerShape(999.dp),
-            color = if (isAllSelected) EasyTheme.tossBlue else EasyTheme.CardBg,
+            color = if (isAllSelected) EasyTheme.textPrimary else EasyTheme.CardBg,
             border = if (isAllSelected) null else BorderStroke(1.dp, EasyTheme.DividerColor)
         ) {
             Text(
@@ -725,28 +740,35 @@ private fun EasyVehicleCapsuleSelector(
 
         vehicles.forEach { vehicle ->
             val isSelected = selectedVehicleId == vehicle.id
+            val (vFg, vBg) = getEasyVehicleBadgeColors(vehicle.id, vehicle.name)
             Surface(
                 onClick = { onSelectVehicle(vehicle.id) },
                 shape = RoundedCornerShape(999.dp),
-                color = if (isSelected) EasyTheme.tossBlue else EasyTheme.CardBg,
-                border = if (isSelected) null else BorderStroke(1.dp, EasyTheme.DividerColor)
+                color = if (isSelected) vFg else vBg.copy(alpha = 0.65f),
+                border = if (isSelected) null else BorderStroke(1.dp, vFg.copy(alpha = 0.25f))
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 15.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(if (isSelected) Color.White else vFg)
+                    )
                     Text(
                         text = vehicle.name,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (isSelected) Color.White else EasyTheme.textPrimary
+                        color = if (isSelected) Color.White else vFg
                     )
                     Text(
                         text = vehicle.fuelType,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (isSelected) Color.White.copy(alpha = 0.85f) else EasyTheme.textSecondary
+                        color = if (isSelected) Color.White.copy(alpha = 0.85f) else vFg.copy(alpha = 0.8f)
                     )
                 }
             }
@@ -857,7 +879,9 @@ private fun EasyCarLogCard(
     val assignedId = log.getAssignedVehicleId()
     val matchedVehicle = vehicles.find { it.id == assignedId }
     val vehicleLabel = matchedVehicle?.name?.split(" ")?.firstOrNull()
+        ?: Regex("\\[(car_[12]:?\\s*|차량\\s*[12]:?\\s*)([^\\]]+)\\]").find(log.note ?: "")?.groupValues?.get(2)?.trim()?.split(" ")?.firstOrNull()
         ?: if (assignedId == "car_2") "차량 2" else "차량 1"
+    val (vehicleBadgeFg, vehicleBadgeBg) = getEasyVehicleBadgeColors(assignedId, vehicleLabel)
 
     val badgeLabel = when {
         isParking -> "주차"
@@ -872,13 +896,13 @@ private fun EasyCarLogCard(
 
     val iconBg = when {
         log.logType == VehicleLogType.REFUELING -> EasyTheme.WarningAmberBg
-        isParking || log.logType == VehicleLogType.MAINTENANCE -> EasyTheme.tossBlueSoft
-        else -> EasyTheme.PositiveGreenBg
+        isParking || log.logType == VehicleLogType.MAINTENANCE -> Color(0xFFF3E8FF)
+        else -> vehicleBadgeBg
     }
     val iconTint = when {
         log.logType == VehicleLogType.REFUELING -> EasyTheme.WarningAmber
-        isParking || log.logType == VehicleLogType.MAINTENANCE -> EasyTheme.tossBlue
-        else -> EasyTheme.PositiveGreen
+        isParking || log.logType == VehicleLogType.MAINTENANCE -> Color(0xFF6D28D9)
+        else -> vehicleBadgeFg
     }
     val iconVec = when {
         log.logType == VehicleLogType.REFUELING -> Icons.Default.LocalGasStation
@@ -929,12 +953,20 @@ private fun EasyCarLogCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = vehicleLabel,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = EasyTheme.tossBlue
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = vehicleBadgeBg
+                        ) {
+                            Text(
+                                text = vehicleLabel,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = vehicleBadgeFg,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                            )
+                        }
                         Text(
                             text = "·",
                             fontSize = 11.5.sp,
@@ -947,7 +979,7 @@ private fun EasyCarLogCard(
                             color = EasyTheme.textSecondary
                         )
                     }
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = log.displayTitle(),
                         fontSize = 15.5.sp,

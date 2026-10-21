@@ -587,7 +587,7 @@ class CarDrivingTrackingService : Service() {
                 // 5. 출퇴근 주행 또는 일반 주행 기록 저장
                 if (isToWorkCommute) {
                     val tripKm = if (config.commuteOneWayKm > 0.0 && finalTripKm < config.commuteOneWayKm * 0.6) config.commuteOneWayKm else finalTripKm
-                    val commuteTitle = "집->회사(%.1fkm)".format(java.util.Locale.US, tripKm)
+                    val commuteTitle = "집 ➔ 회사 (%.1f km)".format(java.util.Locale.US, tripKm)
                     val log = VehicleLog(
                         timestamp = LocalDateTime.now(),
                         logType = VehicleLogType.TRIP_DRIVING,
@@ -598,7 +598,7 @@ class CarDrivingTrackingService : Service() {
                     Log.d(TAG, "출근 주행 기록 완료: [$activeVehicleName$carPlatePrefix] $commuteTitle")
                 } else if (isToHomeCommute) {
                     val tripKm = if (config.commuteOneWayKm > 0.0 && finalTripKm < config.commuteOneWayKm * 0.6) config.commuteOneWayKm else finalTripKm
-                    val commuteTitle = "회사->집(%.1fkm)".format(java.util.Locale.US, tripKm)
+                    val commuteTitle = "회사 ➔ 집 (%.1f km)".format(java.util.Locale.US, tripKm)
                     val log = VehicleLog(
                         timestamp = LocalDateTime.now(),
                         logType = VehicleLogType.TRIP_DRIVING,

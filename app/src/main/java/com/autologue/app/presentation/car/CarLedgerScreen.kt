@@ -1249,7 +1249,7 @@ fun SaaSCarLogRow(
         val vehicleEmoji = matchedVehicle?.emblemEmoji
             ?: com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(vehicleName ?: log.note)
 
-        val isCar2 = assignedVehicleId == "car_2"
+        val isCar2 = assignedVehicleId == "car_2" || vehicleName?.contains("볼보") == true
         val drivingSubtitle = log.getDrivingDetailSubtitle()
 
         Column(modifier = Modifier.weight(1f).padding(end = Spacing.sm)) {
@@ -1744,16 +1744,16 @@ fun RefuelDetailEditDialog(
                                     selectedCategory = cat
                                     when (cat) {
                                         CarLogItemCategory.COMMUTE_TO_WORK -> {
-                                            if (stationNameText.isBlank() || stationNameText == "회사->집" || stationNameText.startsWith("일반 주행")) {
-                                                stationNameText = "집->회사"
+                                            if (stationNameText.isBlank() || stationNameText == "회사->집" || stationNameText == "회사 ➔ 집" || stationNameText.startsWith("일반 주행")) {
+                                                stationNameText = "집 ➔ 회사"
                                             }
                                             if (distanceKmText.isBlank() || distanceKmText == "0.0") {
                                                 distanceKmText = "27.1"
                                             }
                                         }
                                         CarLogItemCategory.COMMUTE_FROM_WORK -> {
-                                            if (stationNameText.isBlank() || stationNameText == "집->회사" || stationNameText.startsWith("일반 주행")) {
-                                                stationNameText = "회사->집"
+                                            if (stationNameText.isBlank() || stationNameText == "집->회사" || stationNameText == "집 ➔ 회사" || stationNameText.startsWith("일반 주행")) {
+                                                stationNameText = "회사 ➔ 집"
                                             }
                                             if (distanceKmText.isBlank() || distanceKmText == "0.0") {
                                                 distanceKmText = "27.1"
@@ -1867,7 +1867,7 @@ fun RefuelDetailEditDialog(
                         OutlinedTextField(
                             value = stationNameText,
                             onValueChange = { stationNameText = it },
-                            placeholder = { Text("예: 집->회사, 송파구 위례동 ➔ 강남구 역삼동, 레이크사이드CC", style = AppTypography.captionMuted) },
+                            placeholder = { Text("예: 집 ➔ 회사, 위례동 ➔ 역삼동, 레이크사이드CC", style = AppTypography.captionMuted) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )

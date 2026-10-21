@@ -466,9 +466,9 @@ class CarLedgerViewModel @Inject constructor(
                     val customRoute = when {
                         rawRouteInput.isBlank() -> null
                         effectiveCategory == CarLogItemCategory.COMMUTE_TO_WORK &&
-                            (rawRouteInput == "집->회사" || rawRouteInput == "우리집 ➔ 회사") -> null
+                            (rawRouteInput == "집->회사" || rawRouteInput == "집 ➔ 회사" || rawRouteInput == "우리집 ➔ 회사") -> null
                         effectiveCategory == CarLogItemCategory.COMMUTE_FROM_WORK &&
-                            (rawRouteInput == "회사->집" || rawRouteInput == "회사 ➔ 우리집") -> null
+                            (rawRouteInput == "회사->집" || rawRouteInput == "회사 ➔ 집" || rawRouteInput == "회사 ➔ 우리집") -> null
                         else -> rawRouteInput
                     }
                     var drivingNote = log.buildUpdatedNote(
