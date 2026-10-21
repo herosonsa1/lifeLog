@@ -185,7 +185,9 @@ fun StandardTopBarSettingsTrigger(
                     text = if (isEasy) "쉬운모드" else "쉬운모드로",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isEasy) Color.White else EasyTheme.tossBlue
+                    color = if (isEasy) Color.White else EasyTheme.tossBlue,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }
@@ -290,7 +292,9 @@ fun EasyModeTopBar(
                             text = "고급모드",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = EasyTheme.textSecondary
+                            color = EasyTheme.textSecondary,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -460,6 +464,7 @@ fun EasyActionButton(
                 fontWeight = FontWeight.SemiBold,
                 color = contentColor,
                 maxLines = 1,
+                softWrap = false,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -468,6 +473,8 @@ fun EasyActionButton(
 
 /**
  * 토스·애플 스타일 날짜/기간 선택 캡슐
+ * - 좌측 날짜 네비게이터에 weight(1f, fill = false)를 부여하여 우측 액션 버튼(오늘, 불러오기 등)이
+ *   항상 먼저 고유 너비를 확보하고 세로 줄넘김 없이 1줄로 깔끔하게 표시되도록 보장합니다.
  */
 @Composable
 fun EasyDateNavigatorRow(
@@ -483,6 +490,7 @@ fun EasyDateNavigatorRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
+            modifier = Modifier.weight(1f, fill = false),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
@@ -490,14 +498,14 @@ fun EasyDateNavigatorRow(
                 onClick = onPrevious,
                 shape = CircleShape,
                 color = EasyTheme.chipBg,
-                modifier = Modifier.size(34.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Default.ChevronLeft,
                         contentDescription = "이전",
                         tint = EasyTheme.textSecondary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -506,6 +514,7 @@ fun EasyDateNavigatorRow(
                 shape = RoundedCornerShape(12.dp),
                 color = Color.Transparent,
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .then(
                         if (onTitleClick != null) {
                             Modifier.clip(RoundedCornerShape(12.dp)).clickable { onTitleClick() }
@@ -513,22 +522,25 @@ fun EasyDateNavigatorRow(
                     )
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Text(
                         text = title,
-                        fontSize = 17.sp,
+                        fontSize = 16.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = EasyTheme.textPrimary
+                        color = EasyTheme.textPrimary,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (onTitleClick != null) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowDown,
                             contentDescription = "날짜 선택",
                             tint = EasyTheme.textSecondary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(17.dp)
                         )
                     }
                 }
@@ -538,20 +550,21 @@ fun EasyDateNavigatorRow(
                 onClick = onNext,
                 shape = CircleShape,
                 color = EasyTheme.chipBg,
-                modifier = Modifier.size(34.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Default.ChevronRight,
                         contentDescription = "다음",
                         tint = EasyTheme.textSecondary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
         }
 
         if (trailingAction != null) {
+            Spacer(modifier = Modifier.width(6.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),

@@ -63,12 +63,18 @@ fun DiaryEasyModeContent(
             )
             TimelineViewMode.WEEKLY -> {
                 val start = uiState.selectedDate.minusDays(6)
-                "${start.format(DateTimeFormatter.ofPattern("M월 d일", Locale.KOREA))} ~ ${
-                    uiState.selectedDate.format(DateTimeFormatter.ofPattern("M월 d일", Locale.KOREA))
-                }"
+                if (start.month == uiState.selectedDate.month) {
+                    "${start.format(DateTimeFormatter.ofPattern("M월 d일", Locale.KOREA))}~${
+                        uiState.selectedDate.format(DateTimeFormatter.ofPattern("d일", Locale.KOREA))
+                    }"
+                } else {
+                    "${start.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))} ~ ${
+                        uiState.selectedDate.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))
+                    }"
+                }
             }
             else -> uiState.selectedDate.format(
-                DateTimeFormatter.ofPattern("M월 d일 E요일", Locale.KOREA)
+                DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA)
             )
         }
     }
@@ -172,7 +178,9 @@ fun DiaryEasyModeContent(
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = EasyTheme.tossBlue,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
                                 )
                             }
                         }
@@ -182,7 +190,7 @@ fun DiaryEasyModeContent(
                             color = EasyTheme.chipBg
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -196,7 +204,9 @@ fun DiaryEasyModeContent(
                                     text = "불러오기",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = EasyTheme.textSecondary
+                                    color = EasyTheme.textSecondary,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }

@@ -34,7 +34,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val EASY_DAY_HEADER_FORMATTER: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("M월 d일 E요일", Locale.KOREA)
+    DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA)
 private val EASY_TIME_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA)
 
@@ -164,7 +164,9 @@ internal fun ExpenseEasyModeContent(
                                 text = "관리",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = EasyTheme.textSecondary
+                                color = EasyTheme.textSecondary,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -214,7 +216,9 @@ internal fun ExpenseEasyModeContent(
                                             text = if (uiState.hasActiveSubFilter) "필터 켜짐" else "상세조건",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (uiState.hasActiveSubFilter) EasyTheme.tossBlue else EasyTheme.textSecondary
+                                            color = if (uiState.hasActiveSubFilter) EasyTheme.tossBlue else EasyTheme.textSecondary,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                     }
                                 }
