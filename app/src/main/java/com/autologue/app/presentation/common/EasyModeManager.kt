@@ -123,7 +123,7 @@ object EasyTheme {
     val applePurple = Color(0xFF6741D9)    // 라이프 / 다이어리 퍼플
     val applePurpleSoft = Color(0xFFF3F0FF)
 
-    // PascalCase 별칭 (화면별 쉬운 모드 컴포넌트 호환성 보장)
+    // PascalCase & camelCase 별칭 (화면·팝업별 쉬운 모드 컴포넌트 호환성 보장)
     val CanvasBg = bg
     val CardBg = surface
     val SubtleBoxBg = surfaceSubtle
@@ -135,6 +135,18 @@ object EasyTheme {
     val WarningAmber = appleAmber
     val WarningAmberBg = appleAmberSoft
     val AppleIndigo = applePurple
+
+    val blue = tossBlue
+    val blueSoft = tossBlueSoft
+    val blueBg = tossBlueSoft
+    val green = appleGreen
+    val greenSoft = appleGreenSoft
+    val red = appleRed
+    val redSoft = appleRedSoft
+    val coral = appleRed
+    val golfAccent = appleGreen
+    val accent = tossBlue
+    val accentSoft = tossBlueSoft
 }
 
 /**
@@ -642,11 +654,10 @@ fun AppSettingsBottomSheet(
                 }
             }
 
-            // 1. 핵심 기능: 쉬운 모드(기본) ↔ 고급모드(기존 UI/UX) 전환 스위치 & 비교 카드
+            // 1. 핵심 기능: 쉬운 모드 전환 스위치 & 고급모드 비교 선택 카드
             EasySectionCard(
                 contentPadding = PaddingValues(20.dp)
             ) {
-                val isAdvancedMode = !isEasyMode
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -658,27 +669,27 @@ fun AppSettingsBottomSheet(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
-                                text = "고급모드 전환",
+                                text = "쉬운 모드 전환",
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = EasyTheme.textPrimary
                             )
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isAdvancedMode) EasyTheme.tossBlueSoft else EasyTheme.chipBg
+                                color = if (isEasyMode) EasyTheme.tossBlueSoft else EasyTheme.chipBg
                             ) {
                                 Text(
-                                    text = if (isAdvancedMode) "고급모드 사용 중" else "기본: 쉬운 모드",
+                                    text = if (isEasyMode) "쉬운 모드 사용 중" else "고급모드 사용 중",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isAdvancedMode) EasyTheme.tossBlue else EasyTheme.textSecondary,
+                                    color = if (isEasyMode) EasyTheme.tossBlue else EasyTheme.textSecondary,
                                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                                 )
                             }
                         }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "평소에는 토스·애플 스타일의 깔끔한 쉬운 모드로 사용하고, 다중 필터와 상세 제어 툴바가 필요할 때 고급모드(기존 UI/UX)로 전환할 수 있습니다.",
+                            text = "켜면 메인 화면·통계·모든 상세 팝업까지 토스·애플 감성의 깔끔한 쉬운 모드 UI/UX가 적용되며, 끄면 기존 고급모드 상세 UI/UX로 전환됩니다.",
                             fontSize = 13.sp,
                             color = EasyTheme.textSecondary,
                             lineHeight = 18.sp
@@ -686,10 +697,10 @@ fun AppSettingsBottomSheet(
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Switch(
-                        checked = isAdvancedMode,
-                        onCheckedChange = { advancedEnabled ->
+                        checked = isEasyMode,
+                        onCheckedChange = { easyEnabled ->
                             view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                            onSetEasyMode(!advancedEnabled)
+                            onSetEasyMode(easyEnabled)
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
@@ -746,7 +757,7 @@ fun AppSettingsBottomSheet(
                                 )
                             }
                             Text(
-                                text = "Toss · Apple 스타일\n여백 중심 · 큰 글씨\n직관적인 요약과 리스트",
+                                text = "Toss · Apple 스타일\n메인·통계·팝업 통합\n깔끔한 여백과 큰 글씨",
                                 fontSize = 11.5.sp,
                                 lineHeight = 16.sp,
                                 color = EasyTheme.textSecondary

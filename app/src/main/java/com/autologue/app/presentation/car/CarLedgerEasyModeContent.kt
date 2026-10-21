@@ -133,18 +133,16 @@ fun CarLedgerEasyModeContent(
                                 requestedBasis = carAnalyticsBasis
                             )
                         }
-                        EasySectionCard(contentPadding = PaddingValues(vertical = 8.dp)) {
-                            CarLedgerAnalyticsSection(
-                                report = carReport,
-                                selectedSubTab = carAnalyticsSubTab,
-                                onSelectSubTab = onSelectAnalyticsSubTab,
-                                onSelectPeriodUnit = onSelectAnalyticsUnit,
-                                onPreviousPeriod = onPreviousAnalyticsPeriod,
-                                onNextPeriod = onNextAnalyticsPeriod,
-                                onSelectComparisonBasis = onSelectAnalyticsBasis,
-                                onJumpToLogTabWithFilter = onJumpToLogTabWithFilter
-                            )
-                        }
+                        CarLedgerAnalyticsSection(
+                            report = carReport,
+                            selectedSubTab = carAnalyticsSubTab,
+                            onSelectSubTab = onSelectAnalyticsSubTab,
+                            onSelectPeriodUnit = onSelectAnalyticsUnit,
+                            onPreviousPeriod = onPreviousAnalyticsPeriod,
+                            onNextPeriod = onNextAnalyticsPeriod,
+                            onSelectComparisonBasis = onSelectAnalyticsBasis,
+                            onJumpToLogTabWithFilter = onJumpToLogTabWithFilter
+                        )
                     }
                 } else {
                     // 3. 내 차 요약 히어로 카드 (평균 연비 + 총 주행거리 + 총 주유비 + 원탭 액션)

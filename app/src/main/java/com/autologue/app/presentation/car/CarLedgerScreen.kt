@@ -1667,6 +1667,15 @@ fun RefuelDetailEditDialog(
         )
     }
 
+    val isEasyMode = LocalEasyMode.current
+    val easyFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+        unfocusedContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+        focusedBorderColor = if (isEasyMode) EasyTheme.blue else MenuColors.carLedger,
+        unfocusedBorderColor = if (isEasyMode) androidx.compose.ui.graphics.Color.Transparent else Slate300
+    )
+    val easyFieldShape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp)
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
@@ -1680,15 +1689,15 @@ fun RefuelDetailEditDialog(
             contentAlignment = Alignment.Center
         ) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = AppColors.surface,
+                shape = RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp),
+                color = if (isEasyMode) EasyTheme.bg else AppColors.surface,
                 modifier = Modifier
                     .fillMaxWidth(0.92f)
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp))
             ) {
                 Column(
                     modifier = Modifier
-                        .padding(Spacing.xl)
+                        .padding(if (isEasyMode) 20.dp else Spacing.xl)
                         .verticalScroll(rememberScrollState())
                 ) {
                     // 헤더
@@ -1697,18 +1706,38 @@ fun RefuelDetailEditDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "차계부 기록 항목 및 상세 수정",
-                                style = AppTypography.h2
+                                style = if (isEasyMode) {
+                                    AppTypography.h2.copy(
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = EasyTheme.textPrimary
+                                    )
+                                } else {
+                                    AppTypography.h2
+                                }
                             )
                             Text(
                                 text = log.timestamp.format(DateTimeFormatter.ofPattern("yyyy.MM.dd(E) HH:mm", Locale.KOREA)),
-                                style = AppTypography.captionMuted
+                                style = AppTypography.captionMuted.copy(
+                                    color = if (isEasyMode) EasyTheme.textSecondary else AppColors.textMuted
+                                )
                             )
                         }
-                        IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "닫기", tint = Slate500)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            EasyModalModeSwitchChip()
+                            IconButton(onClick = onDismiss) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "닫기",
+                                    tint = if (isEasyMode) EasyTheme.textSecondary else Slate500
+                                )
+                            }
                         }
                     }
 
@@ -1717,7 +1746,10 @@ fun RefuelDetailEditDialog(
                     // 1. 기록 항목(유형) 선택 (운행 항목 4종 + 지출 항목 3종)
                     Text(
                         text = "차계부 기록 항목 선택",
-                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                        style = AppTypography.caption.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                        )
                     )
                     Spacer(modifier = Modifier.height(Spacing.xs))
 
@@ -1762,9 +1794,13 @@ fun RefuelDetailEditDialog(
                                         else -> {}
                                     }
                                 },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSel) MenuColors.carLedger else Slate100,
-                                border = androidx.compose.foundation.BorderStroke(
+                                shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                                color = if (isSel) {
+                                    if (isEasyMode) EasyTheme.blue else MenuColors.carLedger
+                                } else {
+                                    if (isEasyMode) EasyTheme.surface else Slate100
+                                },
+                                border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(
                                     1.dp,
                                     if (isSel) MenuColors.carLedger else Slate300
                                 ),
@@ -1772,10 +1808,10 @@ fun RefuelDetailEditDialog(
                             ) {
                                 Text(
                                     text = cat.label,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSel) PureWhite else Slate700,
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSel) PureWhite else if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                    modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                     maxLines = 1
                                 )
@@ -1793,9 +1829,13 @@ fun RefuelDetailEditDialog(
                             val isSel = selectedCategory == cat
                             Surface(
                                 onClick = { selectedCategory = cat },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSel) MenuColors.carLedger else Slate100,
-                                border = androidx.compose.foundation.BorderStroke(
+                                shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                                color = if (isSel) {
+                                    if (isEasyMode) EasyTheme.blue else MenuColors.carLedger
+                                } else {
+                                    if (isEasyMode) EasyTheme.surface else Slate100
+                                },
+                                border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(
                                     1.dp,
                                     if (isSel) MenuColors.carLedger else Slate300
                                 ),
@@ -1803,10 +1843,10 @@ fun RefuelDetailEditDialog(
                             ) {
                                 Text(
                                     text = cat.label,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSel) PureWhite else Slate700,
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp),
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSel) PureWhite else if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                    modifier = Modifier.padding(vertical = 9.dp, horizontal = 2.dp),
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                     maxLines = 1
                                 )
@@ -1817,7 +1857,13 @@ fun RefuelDetailEditDialog(
                     Spacer(modifier = Modifier.height(Spacing.md))
 
                     // 2. 대상 차량 선택
-                    Text("대상 차량 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Text(
+                        "대상 차량 선택",
+                        style = AppTypography.caption.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                        )
+                    )
                     Spacer(modifier = Modifier.height(Spacing.xs))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1827,28 +1873,41 @@ fun RefuelDetailEditDialog(
                             val isSel = selectedVehicleId == v.id
                             Surface(
                                 onClick = { selectedVehicleId = v.id },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSel) MenuColors.carLedgerBg else Slate100,
-                                border = androidx.compose.foundation.BorderStroke(
+                                shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                                color = if (isSel) {
+                                    if (isEasyMode) EasyTheme.blueSoft else MenuColors.carLedgerBg
+                                } else {
+                                    if (isEasyMode) EasyTheme.surface else Slate100
+                                },
+                                border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(
                                     1.dp,
                                     if (isSel) MenuColors.carLedger else Slate300
                                 ),
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    modifier = Modifier.padding(vertical = 9.dp),
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     if (isSel) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(14.dp))
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = if (isEasyMode) EasyTheme.blue else MenuColors.carLedger,
+                                            modifier = Modifier.size(14.dp)
+                                        )
                                         Spacer(modifier = Modifier.width(4.dp))
                                     }
                                     Text(
                                         text = v.name,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSel) MenuColors.carLedger else Slate700
+                                        fontSize = 12.5.sp,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSel) {
+                                            if (isEasyMode) EasyTheme.blue else MenuColors.carLedger
+                                        } else {
+                                            if (isEasyMode) EasyTheme.textSecondary else Slate700
+                                        }
                                     )
                                 }
                             }
@@ -1861,7 +1920,10 @@ fun RefuelDetailEditDialog(
                         // 운행 경로 / 목적지 수정
                         Text(
                             text = "운행 경로 / 목적지 명칭",
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                            style = AppTypography.caption.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                            )
                         )
                         Spacer(modifier = Modifier.height(Spacing.xxs))
                         OutlinedTextField(
@@ -1869,7 +1931,9 @@ fun RefuelDetailEditDialog(
                             onValueChange = { stationNameText = it },
                             placeholder = { Text("예: 집 ➔ 회사, 위례동 ➔ 역삼동, 레이크사이드CC", style = AppTypography.captionMuted) },
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
+                            singleLine = true,
+                            shape = easyFieldShape,
+                            colors = easyFieldColors
                         )
 
                         Spacer(modifier = Modifier.height(Spacing.md))
@@ -1877,7 +1941,10 @@ fun RefuelDetailEditDialog(
                         // 주행 거리 (km) 수정
                         Text(
                             text = "주행 거리 (km)",
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                            style = AppTypography.caption.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                            )
                         )
                         Spacer(modifier = Modifier.height(Spacing.xxs))
                         OutlinedTextField(
@@ -1889,19 +1956,24 @@ fun RefuelDetailEditDialog(
                             modifier = Modifier.fillMaxWidth(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             singleLine = true,
+                            shape = easyFieldShape,
+                            colors = easyFieldColors,
                             trailingIcon = { Text("km", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                         )
 
                         Spacer(modifier = Modifier.height(Spacing.sm))
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Slate50,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Slate200),
+                            shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                            color = if (isEasyMode) EasyTheme.surface else Slate50,
+                            border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(1.dp, Slate200),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
                                 text = "출근·퇴근은 기본적으로 공휴일을 제외한 평일에만 자동 적용되지만, 여기서 직접 항목을 변경해 저장하면 주말·공휴일 여부와 관계없이 지정한 항목으로 유지됩니다.",
-                                style = AppTypography.captionMuted.copy(fontSize = 10.5.sp),
+                                style = AppTypography.captionMuted.copy(
+                                    fontSize = 11.sp,
+                                    color = if (isEasyMode) EasyTheme.textSecondary else AppColors.textMuted
+                                ),
                                 modifier = Modifier.padding(Spacing.sm)
                             )
                         }
@@ -1914,7 +1986,10 @@ fun RefuelDetailEditDialog(
                                 CarLogItemCategory.PARKING -> "결제명 (주차장 상호명)"
                                 else -> "결제명 (주유소 상호명)"
                             },
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                            style = AppTypography.caption.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                            )
                         )
                         Spacer(modifier = Modifier.height(Spacing.xxs))
                         OutlinedTextField(
@@ -1922,7 +1997,9 @@ fun RefuelDetailEditDialog(
                             onValueChange = { stationNameText = it },
                             placeholder = { Text("예: GS칼텍스 위례주유소, 서울어린이대공원, 스피드메이트", style = AppTypography.captionMuted) },
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
+                            singleLine = true,
+                            shape = easyFieldShape,
+                            colors = easyFieldColors
                         )
 
                         Spacer(modifier = Modifier.height(Spacing.md))
@@ -1934,7 +2011,10 @@ fun RefuelDetailEditDialog(
                                 CarLogItemCategory.PARKING -> "주차 총 결제 금액 (원)"
                                 else -> "주유 총 결제 금액 (원)"
                             },
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.Bold)
+                            style = AppTypography.caption.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                            )
                         )
                         Spacer(modifier = Modifier.height(Spacing.xxs))
                         OutlinedTextField(
@@ -1943,6 +2023,8 @@ fun RefuelDetailEditDialog(
                             modifier = Modifier.fillMaxWidth(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
+                            shape = easyFieldShape,
+                            colors = easyFieldColors,
                             trailingIcon = { Text("원", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                         )
 
@@ -1958,7 +2040,13 @@ fun RefuelDetailEditDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("L당 주유 단가 (원/L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                                Text(
+                                    "L당 주유 단가 (원/L) - 선택",
+                                    style = AppTypography.caption.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                                    )
+                                )
                                 Text(
                                     text = "기본 설정: %,d원".format(currentDefaultPrice.toInt()),
                                     style = AppTypography.captionMuted.copy(fontSize = 10.sp)
@@ -1979,13 +2067,21 @@ fun RefuelDetailEditDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
+                                shape = easyFieldShape,
+                                colors = easyFieldColors,
                                 trailingIcon = { Text("원/L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                             )
 
                             Spacer(modifier = Modifier.height(Spacing.md))
 
                             // 실제 주유량 (L)
-                            Text("실제 주유량 (L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                            Text(
+                                "실제 주유량 (L) - 선택",
+                                style = AppTypography.caption.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                                )
+                            )
                             Spacer(modifier = Modifier.height(Spacing.xxs))
                             OutlinedTextField(
                                 value = litersText,
@@ -2001,6 +2097,8 @@ fun RefuelDetailEditDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
+                                shape = easyFieldShape,
+                                colors = easyFieldColors,
                                 trailingIcon = { Text("L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                             )
 
@@ -2019,15 +2117,16 @@ fun RefuelDetailEditDialog(
                                             litersText = "%.1f".format(Locale.US, cost / currentDefaultPrice)
                                         }
                                     },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = Slate100,
+                                    shape = RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp),
+                                    color = if (isEasyMode) EasyTheme.surface else Slate100,
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Text(
                                         text = "기본(%,d원) 기준 채움".format(currentDefaultPrice.toInt()),
-                                        fontSize = 11.sp,
-                                        color = Slate700,
-                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                     )
                                 }
@@ -2037,15 +2136,16 @@ fun RefuelDetailEditDialog(
                                         unitPriceText = ""
                                         litersText = ""
                                     },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = Slate100,
+                                    shape = RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp),
+                                    color = if (isEasyMode) EasyTheme.surface else Slate100,
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Text(
                                         text = "선택 항목 비우기",
-                                        fontSize = 11.sp,
-                                        color = Slate700,
-                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                     )
                                 }
@@ -2057,17 +2157,23 @@ fun RefuelDetailEditDialog(
 
                     // 저장 버튼 바로 위에 배치된 [1회성 저장 / 영구저장] 선택 버튼
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFFFFBEB) else MenuColors.carLedgerBg,
-                        border = androidx.compose.foundation.BorderStroke(
+                        shape = RoundedCornerShape(if (isEasyMode) 16.dp else 8.dp),
+                        color = if (isEasyMode) {
+                            EasyTheme.surface
+                        } else if (isOneTimeSave) {
+                            androidx.compose.ui.graphics.Color(0xFFFFFBEB)
+                        } else {
+                            MenuColors.carLedgerBg
+                        },
+                        border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(
                             1.dp,
                             if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFFDE68A) else MenuColors.carLedgerBorder
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
-                            modifier = Modifier.padding(Spacing.sm),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                            modifier = Modifier.padding(if (isEasyMode) 12.dp else Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2075,33 +2181,55 @@ fun RefuelDetailEditDialog(
                             ) {
                                 Surface(
                                     onClick = { isOneTimeSave = true },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFD97706) else androidx.compose.ui.graphics.Color.White,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFB45309) else Slate300),
+                                    shape = RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp),
+                                    color = if (isOneTimeSave) {
+                                        if (isEasyMode) EasyTheme.textPrimary else androidx.compose.ui.graphics.Color(0xFFD97706)
+                                    } else {
+                                        if (isEasyMode) EasyTheme.surfaceSubtle else androidx.compose.ui.graphics.Color.White
+                                    },
+                                    border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFB45309) else Slate300
+                                    ),
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Text(
                                         text = "1회성 저장",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isOneTimeSave) androidx.compose.ui.graphics.Color.White else Slate700,
-                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        color = if (isOneTimeSave) {
+                                            androidx.compose.ui.graphics.Color.White
+                                        } else {
+                                            if (isEasyMode) EasyTheme.textSecondary else Slate700
+                                        },
+                                        modifier = Modifier.padding(vertical = 9.dp),
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                     )
                                 }
                                 Surface(
                                     onClick = { isOneTimeSave = false },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (!isOneTimeSave) MenuColors.carLedger else androidx.compose.ui.graphics.Color.White,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (!isOneTimeSave) MenuColors.carLedger else Slate300),
+                                    shape = RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp),
+                                    color = if (!isOneTimeSave) {
+                                        if (isEasyMode) EasyTheme.blue else MenuColors.carLedger
+                                    } else {
+                                        if (isEasyMode) EasyTheme.surfaceSubtle else androidx.compose.ui.graphics.Color.White
+                                    },
+                                    border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (!isOneTimeSave) MenuColors.carLedger else Slate300
+                                    ),
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Text(
                                         text = "영구저장",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (!isOneTimeSave) androidx.compose.ui.graphics.Color.White else Slate700,
-                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        color = if (!isOneTimeSave) {
+                                            androidx.compose.ui.graphics.Color.White
+                                        } else {
+                                            if (isEasyMode) EasyTheme.textSecondary else Slate700
+                                        },
+                                        modifier = Modifier.padding(vertical = 9.dp),
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                     )
                                 }
@@ -2113,8 +2241,14 @@ fun RefuelDetailEditDialog(
                                     "결제명을 수정하면 가계부 및 차계부의 동일 결제처(출금) 내역이 자동으로 영구 치환됩니다."
                                 },
                                 style = AppTypography.caption.copy(
-                                    color = if (isOneTimeSave) androidx.compose.ui.graphics.Color(0xFFB45309) else MenuColors.carLedger,
-                                    fontSize = 10.5.sp
+                                    color = if (isEasyMode) {
+                                        EasyTheme.textSecondary
+                                    } else if (isOneTimeSave) {
+                                        androidx.compose.ui.graphics.Color(0xFFB45309)
+                                    } else {
+                                        MenuColors.carLedger
+                                    },
+                                    fontSize = 11.sp
                                 )
                             )
                         }
@@ -2171,9 +2305,12 @@ fun RefuelDetailEditDialog(
                             },
                             enabled = !isSavingLocal,
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFF2563EB)),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isEasyMode) EasyTheme.blue else androidx.compose.ui.graphics.Color(0xFF2563EB)
+                            ),
+                            shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = if (isEasyMode) 12.dp else 10.dp),
+                            elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp)
                         ) {
                             if (isSavingLocal) {
                                 CircularProgressIndicator(
@@ -2184,7 +2321,7 @@ fun RefuelDetailEditDialog(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("저장 중...", color = PureWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             } else {
-                                Text("저장", color = PureWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("저장", color = PureWhite, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
                             }
                         }
                     }
@@ -2201,6 +2338,15 @@ fun AddRefuelLogDialog(
     onDismiss: () -> Unit,
     onSave: (vehicleId: String, station: String, cost: Long, liters: Double?, unitPrice: Double?, dateTime: LocalDateTime) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
+    val easyFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+        unfocusedContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+        focusedBorderColor = if (isEasyMode) EasyTheme.blue else MenuColors.carLedger,
+        unfocusedBorderColor = if (isEasyMode) androidx.compose.ui.graphics.Color.Transparent else Slate300
+    )
+    val easyFieldShape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp)
+
     val initialVehicleId = if (selectedVehicleId == com.autologue.app.data.preferences.MultiVehiclePreferences.ALL_VEHICLES_ID) {
         vehicles.firstOrNull()?.id ?: "car_1"
     } else {
@@ -2226,15 +2372,15 @@ fun AddRefuelLogDialog(
             contentAlignment = Alignment.Center
         ) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = AppColors.surface,
+                shape = RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp),
+                color = if (isEasyMode) EasyTheme.bg else AppColors.surface,
                 modifier = Modifier
                     .fillMaxWidth(0.92f)
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp))
             ) {
                 Column(
                     modifier = Modifier
-                        .padding(Spacing.xl)
+                        .padding(if (isEasyMode) 20.dp else Spacing.xl)
                         .verticalScroll(rememberScrollState())
                 ) {
                     // 헤더
@@ -2243,18 +2389,38 @@ fun AddRefuelLogDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "주유 기록 직접 추가",
-                                style = AppTypography.h2
+                                style = if (isEasyMode) {
+                                    AppTypography.h2.copy(
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = EasyTheme.textPrimary
+                                    )
+                                } else {
+                                    AppTypography.h2
+                                }
                             )
                             Text(
                                 text = "차계부 및 가계부에 동시 반영",
-                                style = AppTypography.captionMuted
+                                style = AppTypography.captionMuted.copy(
+                                    color = if (isEasyMode) EasyTheme.textSecondary else AppColors.textMuted
+                                )
                             )
                         }
-                        IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "닫기", tint = Slate500)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            EasyModalModeSwitchChip()
+                            IconButton(onClick = onDismiss) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "닫기",
+                                    tint = if (isEasyMode) EasyTheme.textSecondary else Slate500
+                                )
+                            }
                         }
                     }
 
@@ -2262,17 +2428,25 @@ fun AddRefuelLogDialog(
 
                     // 안내 뱃지
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MenuColors.carLedgerBg,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                        color = if (isEasyMode) EasyTheme.surface else MenuColors.carLedgerBg,
+                        border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(1.dp, MenuColors.carLedgerBorder),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Info, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(16.dp))
+                        Row(modifier = Modifier.padding(if (isEasyMode) 12.dp else Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = if (isEasyMode) EasyTheme.blue else MenuColors.carLedger,
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(modifier = Modifier.width(Spacing.xs))
                             Text(
                                 text = "주유 금액을 입력하면 실연비와 가계부 지출이 자동 계산/누적됩니다.",
-                                style = AppTypography.caption.copy(color = MenuColors.carLedger, fontSize = 11.sp)
+                                style = AppTypography.caption.copy(
+                                    color = if (isEasyMode) EasyTheme.textSecondary else MenuColors.carLedger,
+                                    fontSize = 11.5.sp
+                                )
                             )
                         }
                     }
@@ -2280,7 +2454,13 @@ fun AddRefuelLogDialog(
                     Spacer(modifier = Modifier.height(Spacing.md))
 
                     // 1. 차량 선택
-                    Text("주유 차량 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Text(
+                        "주유 차량 선택",
+                        style = AppTypography.caption.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                        )
+                    )
                     Spacer(modifier = Modifier.height(Spacing.xs))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -2290,28 +2470,41 @@ fun AddRefuelLogDialog(
                             val isSel = curVehicleId == v.id
                             Surface(
                                 onClick = { curVehicleId = v.id },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSel) MenuColors.carLedgerBg else Slate100,
-                                border = androidx.compose.foundation.BorderStroke(
+                                shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                                color = if (isSel) {
+                                    if (isEasyMode) EasyTheme.blueSoft else MenuColors.carLedgerBg
+                                } else {
+                                    if (isEasyMode) EasyTheme.surface else Slate100
+                                },
+                                border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(
                                     1.dp,
                                     if (isSel) MenuColors.carLedger else Slate300
                                 ),
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    modifier = Modifier.padding(vertical = 9.dp),
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     if (isSel) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = MenuColors.carLedger, modifier = Modifier.size(14.dp))
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = if (isEasyMode) EasyTheme.blue else MenuColors.carLedger,
+                                            modifier = Modifier.size(14.dp)
+                                        )
                                         Spacer(modifier = Modifier.width(4.dp))
                                     }
                                     Text(
                                         text = v.name,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSel) MenuColors.carLedger else Slate700
+                                        fontSize = 12.5.sp,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSel) {
+                                            if (isEasyMode) EasyTheme.blue else MenuColors.carLedger
+                                        } else {
+                                            if (isEasyMode) EasyTheme.textSecondary else Slate700
+                                        }
                                     )
                                 }
                             }
@@ -2321,20 +2514,34 @@ fun AddRefuelLogDialog(
                     Spacer(modifier = Modifier.height(Spacing.md))
 
                     // 2. 주유소 상호명
-                    Text("주유소 상호명", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Text(
+                        "주유소 상호명",
+                        style = AppTypography.caption.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                        )
+                    )
                     Spacer(modifier = Modifier.height(Spacing.xxs))
                     OutlinedTextField(
                         value = stationText,
                         onValueChange = { stationText = it },
                         placeholder = { Text("예: GS칼텍스 판교주유소, SK에너지 서초셀프", style = AppTypography.captionMuted) },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors
                     )
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
                     // 3. 주유 총금액
-                    Text("주유 총 결제 금액 (원) *필수", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Text(
+                        "주유 총 결제 금액 (원) *필수",
+                        style = AppTypography.caption.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                        )
+                    )
                     Spacer(modifier = Modifier.height(Spacing.xxs))
                     OutlinedTextField(
                         value = costText,
@@ -2350,6 +2557,8 @@ fun AddRefuelLogDialog(
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         trailingIcon = { Text("원", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                     )
 
@@ -2364,7 +2573,13 @@ fun AddRefuelLogDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("L당 주유 단가 (원/L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                        Text(
+                            "L당 주유 단가 (원/L) - 선택",
+                            style = AppTypography.caption.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                            )
+                        )
                         Text(
                             text = "차량 기본 유가: %,d원".format(currentDefaultPrice.toInt()),
                             style = AppTypography.captionMuted.copy(fontSize = 10.sp)
@@ -2385,13 +2600,21 @@ fun AddRefuelLogDialog(
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         trailingIcon = { Text("원/L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                     )
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
                     // 5. 실제 주유량 (L)
-                    Text("주유량 (L) - 선택", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Text(
+                        "주유량 (L) - 선택",
+                        style = AppTypography.caption.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                        )
+                    )
                     Spacer(modifier = Modifier.height(Spacing.xxs))
                     OutlinedTextField(
                         value = litersText,
@@ -2407,6 +2630,8 @@ fun AddRefuelLogDialog(
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         trailingIcon = { Text("L", modifier = Modifier.padding(end = 12.dp), style = AppTypography.captionMuted) }
                     )
 
@@ -2425,15 +2650,16 @@ fun AddRefuelLogDialog(
                                     litersText = "%.1f".format(Locale.US, cost / currentDefaultPrice)
                                 }
                             },
-                            shape = RoundedCornerShape(6.dp),
-                            color = Slate100,
+                            shape = RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp),
+                            color = if (isEasyMode) EasyTheme.surface else Slate100,
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(
                                 text = "기본(%,d원) 기준 채움".format(currentDefaultPrice.toInt()),
-                                fontSize = 11.sp,
-                                color = Slate700,
-                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
                         }
@@ -2443,15 +2669,16 @@ fun AddRefuelLogDialog(
                                 unitPriceText = ""
                                 litersText = ""
                             },
-                            shape = RoundedCornerShape(6.dp),
-                            color = Slate100,
+                            shape = RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp),
+                            color = if (isEasyMode) EasyTheme.surface else Slate100,
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(
                                 text = "선택 항목 비우기",
-                                fontSize = 11.sp,
-                                color = Slate700,
-                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
                         }

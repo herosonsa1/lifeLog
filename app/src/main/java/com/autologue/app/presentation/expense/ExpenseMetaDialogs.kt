@@ -77,6 +77,7 @@ fun CategoryManageDialog(
     onDeleteCategory: (ManagedCategoryItem) -> Unit,
     onRestoreDefaults: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     var newCategoryName by remember { mutableStateOf("") }
     var editingItemId by remember { mutableStateOf<String?>(null) }
     var editingNameText by remember { mutableStateOf("") }
@@ -87,19 +88,39 @@ fun CategoryManageDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("카테고리 관리 (추가·수정·삭제)", style = AppTypography.h2)
-                TextButton(
-                    onClick = onRestoreDefaults,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = Slate600)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("기본값 복원", fontSize = 11.sp, color = Slate600)
+                    Text(
+                        "카테고리 관리",
+                        style = if (isEasyMode) {
+                            AppTypography.h2.copy(
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = EasyTheme.textPrimary
+                            )
+                        } else {
+                            AppTypography.h2
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        EasyModalModeSwitchChip()
+                        TextButton(
+                            onClick = onRestoreDefaults,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = Slate600)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("기본값 복원", fontSize = 11.sp, color = Slate600)
+                        }
+                    }
                 }
             }
         },
@@ -121,13 +142,16 @@ fun CategoryManageDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    OutlinedTextField(
-                        value = newCategoryName,
-                        onValueChange = { newCategoryName = it },
-                        placeholder = { Text("새 카테고리 이름 입력 (예: 교육/육아, 반려동물)", fontSize = 12.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Box(modifier = Modifier.weight(1f)) {
+                        AutoLogueTextField(
+                            value = newCategoryName,
+                            onValueChange = { newCategoryName = it },
+                            label = "새 카테고리 이름",
+                            placeholder = "예: 교육/육아, 반려동물",
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     Button(
                         onClick = {
                             val trimmed = newCategoryName.trim()
@@ -137,8 +161,10 @@ fun CategoryManageDialog(
                             }
                         },
                         enabled = newCategoryName.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
-                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isEasyMode) EasyTheme.blue else AppColors.primary
+                        ),
+                        shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "추가", modifier = Modifier.size(16.dp), tint = PureWhite)
@@ -147,7 +173,9 @@ fun CategoryManageDialog(
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 Text(
                     text = "등록된 카테고리 목록 (${orderedCategories.size}개)",
@@ -158,9 +186,19 @@ fun CategoryManageDialog(
                     val isEditing = editingItemId == item.id
                     val isEtcBuiltIn = item.isBuiltIn && item.baseCategory == ExpenseCategory.ETC
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (item.isBuiltIn) Slate50 else Color(0xFFEFF6FF),
-                        border = BorderStroke(1.dp, if (item.isBuiltIn) Slate200 else Color(0xFFBFDBFE)),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                        color = if (isEasyMode) {
+                            EasyTheme.surface
+                        } else if (item.isBuiltIn) {
+                            Slate50
+                        } else {
+                            Color(0xFFEFF6FF)
+                        },
+                        border = if (isEasyMode) {
+                            null
+                        } else {
+                            BorderStroke(1.dp, if (item.isBuiltIn) Slate200 else Color(0xFFBFDBFE))
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (isEditing) {
@@ -253,8 +291,8 @@ fun CategoryManageDialog(
         confirmButton = {
             AutoLoguePrimaryButton(text = "완료", onClick = onDismiss)
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal
     )
 }
 
@@ -270,6 +308,7 @@ fun UserClassificationManageDialog(
     onUpdateUserClassification: (String, String, Int) -> Unit,
     onDeleteUserClassification: (String) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     var newUserName by remember { mutableStateOf("") }
     var selectedColorIndex by remember { mutableStateOf(userClassifications.size % ExpenseCustomMetaPreferences.BADGE_COLOR_COUNT) }
     var editingOriginalName by remember { mutableStateOf<String?>(null) }
@@ -279,7 +318,26 @@ fun UserClassificationManageDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("사용자 분류 관리 (추가·수정·삭제)", style = AppTypography.h2)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "사용자 분류 관리",
+                    style = if (isEasyMode) {
+                        AppTypography.h2.copy(
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = EasyTheme.textPrimary
+                        )
+                    } else {
+                        AppTypography.h2
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                EasyModalModeSwitchChip()
+            }
         },
         text = {
             Column(
@@ -295,13 +353,13 @@ fun UserClassificationManageDialog(
 
                 // 새 사용자 분류 직접 입력 및 배지 색상 선택
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Slate50,
-                    border = BorderStroke(1.dp, Slate200),
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+                    color = if (isEasyMode) EasyTheme.surface else Slate50,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(10.dp),
+                        modifier = Modifier.padding(if (isEasyMode) 14.dp else 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text("새 사용자 분류 추가", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate800))
@@ -310,13 +368,16 @@ fun UserClassificationManageDialog(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            OutlinedTextField(
-                                value = newUserName,
-                                onValueChange = { newUserName = it },
-                                placeholder = { Text("사용자명 직접 입력 (예: 정선우, 배우자, 법인)", fontSize = 12.sp) },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Box(modifier = Modifier.weight(1f)) {
+                                AutoLogueTextField(
+                                    value = newUserName,
+                                    onValueChange = { newUserName = it },
+                                    label = "사용자명",
+                                    placeholder = "예: 정선우, 배우자, 법인",
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                             Button(
                                 onClick = {
                                     val clean = newUserName.trim()
@@ -327,8 +388,10 @@ fun UserClassificationManageDialog(
                                     }
                                 },
                                 enabled = newUserName.isNotBlank(),
-                                colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
-                                shape = RoundedCornerShape(8.dp)
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isEasyMode) EasyTheme.blue else AppColors.primary
+                                ),
+                                shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp)
                             ) {
                                 Text("추가", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
                             }
@@ -365,7 +428,9 @@ fun UserClassificationManageDialog(
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 Text(
                     text = "등록된 사용자 분류 (${userClassifications.size}개) · 색상 원을 누르면 즉시 변경됩니다",
@@ -377,9 +442,9 @@ fun UserClassificationManageDialog(
                     val (badgeFg, badgeBg) = getUserClassificationBadgeColors(item.colorIndex)
 
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = PureWhite,
-                        border = BorderStroke(1.dp, Slate200),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (isEditing) {
@@ -528,8 +593,8 @@ fun UserClassificationManageDialog(
         confirmButton = {
             AutoLoguePrimaryButton(text = "완료", onClick = onDismiss)
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal
     )
 }
 
@@ -559,6 +624,7 @@ fun PermanentRulesManageDialog(
     onDeleteDbRule: (Long, String) -> Unit,
     onClearAllRules: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(PermanentRulesFilterTab.ALL) }
     var confirmClearAll by remember { mutableStateOf(false) }
@@ -630,41 +696,59 @@ fun PermanentRulesManageDialog(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Text("영구저장 데이터 관리", style = AppTypography.h2)
+                        Text(
+                            "영구저장 데이터 관리",
+                            style = if (isEasyMode) {
+                                AppTypography.h2.copy(
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = EasyTheme.textPrimary
+                                )
+                            } else {
+                                AppTypography.h2
+                            }
+                        )
                         MetricBadge(
                             text = "총 ${totalCount}건",
                             textColor = Color(0xFF1D4ED8),
                             backgroundColor = Color(0xFFDBEAFE)
                         )
                     }
-                    if (totalCount > 0) {
-                        TextButton(
-                            onClick = { confirmClearAll = !confirmClearAll },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp),
-                                tint = Color(0xFFDC2626)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = if (confirmClearAll) "초기화 취소" else "전체 초기화",
-                                fontSize = 11.sp,
-                                color = Color(0xFFDC2626),
-                                fontWeight = FontWeight.Bold
-                            )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        EasyModalModeSwitchChip()
+                        if (totalCount > 0) {
+                            TextButton(
+                                onClick = { confirmClearAll = !confirmClearAll },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = Color(0xFFDC2626)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = if (confirmClearAll) "초기화 취소" else "전체 초기화",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFDC2626),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
                 if (confirmClearAll) {
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
                         color = Color(0xFFFEF2F2),
-                        border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFFECACA)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -706,15 +790,15 @@ fun PermanentRulesManageDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFFF8FAFC),
-                    border = BorderStroke(1.dp, Slate200),
+                    shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.surface else Color(0xFFF8FAFC),
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         text = "잘못 영구저장되어 자동으로 결제명이 치환되거나 분류되는 항목을 찾아 개별 해제할 수 있습니다. 해제 즉시 기존에 자동 치환되었던 내역도 원본 문자 기준으로 일괄 복원됩니다.",
                         style = AppTypography.captionMuted.copy(fontSize = 11.sp, lineHeight = 15.sp),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                     )
                 }
 
@@ -734,6 +818,17 @@ fun PermanentRulesManageDialog(
                         }
                     },
                     singleLine = true,
+                    shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                    colors = if (isEasyMode) {
+                        OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = EasyTheme.surface,
+                            unfocusedContainerColor = EasyTheme.surface,
+                            focusedBorderColor = EasyTheme.blue.copy(alpha = 0.45f),
+                            unfocusedBorderColor = Color.Transparent
+                        )
+                    } else {
+                        OutlinedTextFieldDefaults.colors()
+                    },
                     textStyle = LocalTextStyle.current.copy(fontSize = 12.5.sp),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -741,7 +836,7 @@ fun PermanentRulesManageDialog(
                 // 필터 탭 바
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 6.dp else 4.dp)
                 ) {
                     val tabs = listOf(
                         PermanentRulesFilterTab.ALL to totalCount,
@@ -752,9 +847,13 @@ fun PermanentRulesManageDialog(
                     tabs.forEach { (tab, count) ->
                         val isSel = selectedTab == tab
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isSel) AppColors.primary else Slate100,
-                            border = BorderStroke(1.dp, if (isSel) AppColors.primary else Slate200),
+                            shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                            color = if (isSel) {
+                                if (isEasyMode) EasyTheme.blue else AppColors.primary
+                            } else {
+                                if (isEasyMode) EasyTheme.surface else Slate100
+                            },
+                            border = if (isEasyMode) null else BorderStroke(1.dp, if (isSel) AppColors.primary else Slate200),
                             modifier = Modifier
                                 .weight(1f)
                                 .clickable { selectedTab = tab }
@@ -782,7 +881,9 @@ fun PermanentRulesManageDialog(
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // 규칙 목록 스크롤 영역
                 Column(
@@ -790,13 +891,13 @@ fun PermanentRulesManageDialog(
                         .fillMaxWidth()
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 10.dp else 8.dp)
                 ) {
                     if (filteredMerchantRules.isEmpty() && filteredCardRules.isEmpty() && filteredDbRules.isEmpty()) {
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Slate50,
-                            border = BorderStroke(1.dp, Slate200),
+                            shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+                            color = if (isEasyMode) EasyTheme.surface else Slate50,
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
@@ -825,12 +926,16 @@ fun PermanentRulesManageDialog(
                     // 1. 가맹점별 통합 영구저장 규칙 카드
                     filteredMerchantRules.forEach { rule ->
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = PureWhite,
-                            border = BorderStroke(
-                                1.dp,
-                                if (rule.hasAliasRule) Color(0xFF93C5FD) else Slate200
-                            ),
+                            shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+                            color = if (isEasyMode) EasyTheme.surface else PureWhite,
+                            border = if (isEasyMode) {
+                                null
+                            } else {
+                                BorderStroke(
+                                    1.dp,
+                                    if (rule.hasAliasRule) Color(0xFF93C5FD) else Slate200
+                                )
+                            },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
@@ -1026,9 +1131,9 @@ fun PermanentRulesManageDialog(
                         )
                         filteredCardRules.forEach { cardRule ->
                             Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = PureWhite,
-                                border = BorderStroke(1.dp, Slate200),
+                                shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                                color = if (isEasyMode) EasyTheme.surface else PureWhite,
+                                border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
@@ -1072,9 +1177,9 @@ fun PermanentRulesManageDialog(
                         )
                         filteredDbRules.forEach { dbRule ->
                             Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = PureWhite,
-                                border = BorderStroke(1.dp, Slate200),
+                                shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                                color = if (isEasyMode) EasyTheme.surface else PureWhite,
+                                border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
@@ -1114,8 +1219,8 @@ fun PermanentRulesManageDialog(
         confirmButton = {
             AutoLoguePrimaryButton(text = "닫기", onClick = onDismiss)
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal
     )
 }
 
@@ -1128,10 +1233,11 @@ private fun RemovableRuleAttributeChip(
     borderColor: Color,
     onRemove: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
-        shape = RoundedCornerShape(6.dp),
+        shape = RoundedCornerShape(if (isEasyMode) 8.dp else 6.dp),
         color = bgColor,
-        border = BorderStroke(1.dp, borderColor),
+        border = if (isEasyMode) null else BorderStroke(1.dp, borderColor),
         modifier = Modifier.clickable { onRemove() }
     ) {
         Row(

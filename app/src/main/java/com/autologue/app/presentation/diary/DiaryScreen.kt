@@ -58,15 +58,7 @@ import com.autologue.app.domain.model.DiaryEntry
 import com.autologue.app.domain.model.MonthlySummary
 import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
-import com.autologue.app.presentation.common.AutoLogueDangerButton
-import com.autologue.app.presentation.common.AutoLogueOutlinedButton
-import com.autologue.app.presentation.common.AutoLogueTextField
-import com.autologue.app.presentation.common.AutoLoguePrimaryButton
-import com.autologue.app.presentation.common.AutoLogueSecondaryButton
-import com.autologue.app.presentation.common.HairlineDivider
-import com.autologue.app.presentation.common.MetricBadge
-import com.autologue.app.presentation.common.TopMenuAccentBar
-import com.autologue.app.presentation.common.UnderlineTabBar
+import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 import com.autologue.app.util.KoreanHolidayUtils
 import java.time.DayOfWeek
@@ -1493,6 +1485,7 @@ fun AddCompanionDialog(
     onRemoveCompanion: (String, String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     var newName by remember { mutableStateOf("") }
 
     AlertDialog(
@@ -1501,27 +1494,54 @@ fun AddCompanionDialog(
         modifier = Modifier.imePadding(),
         title = {
             Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = null,
-                        tint = AppColors.primary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("특정 지점 동행인 관리", style = AppTypography.h2)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        if (!isEasyMode) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = AppColors.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text(
+                            "특정 지점 동행인 관리",
+                            style = if (isEasyMode) {
+                                AppTypography.h2.copy(
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = EasyTheme.textPrimary
+                                )
+                            } else {
+                                AppTypography.h2
+                            }
+                        )
+                    }
+                    EasyModalModeSwitchChip()
                 }
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 // 특정 지점 정보 명시
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Slate100,
+                    shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.surface else Slate100,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        val prefix = if (isEasyMode) "" else "📍 "
                         Text(
-                            text = "📍 ${step.locationName ?: step.title} (${step.time.format(DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA))})",
-                            style = AppTypography.caption.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
+                            text = "$prefix${step.locationName ?: step.title} (${step.time.format(DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA))})",
+                            style = AppTypography.caption.copy(
+                                color = if (isEasyMode) EasyTheme.blue else AppColors.primary,
+                                fontWeight = FontWeight.Bold
+                            )
                         )
                         if (!step.address.isNullOrBlank()) {
                             Text(
@@ -1538,15 +1558,19 @@ fun AddCompanionDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "※ 해당 지점(방문 장소)에 함께 있었던 동행인만 개별 등록됩니다.",
+                    text = if (isEasyMode) {
+                        "해당 지점(방문 장소)에 함께 있었던 동행인만 개별 등록됩니다."
+                    } else {
+                        "※ 해당 지점(방문 장소)에 함께 있었던 동행인만 개별 등록됩니다."
+                    },
                     style = AppTypography.captionMuted
                 )
                 Spacer(modifier = Modifier.height(Spacing.sm))
 
                 // 현재 등록된 동행인 목록
                 if (step.companions.isNotEmpty()) {
-                    Text("현재 등록된 동행인:", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("현재 등록된 동행인", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold))
+                    Spacer(modifier = Modifier.height(6.dp))
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1555,21 +1579,31 @@ fun AddCompanionDialog(
                         step.companions.forEach { companion ->
                             Surface(
                                 shape = AppShapes.pill,
-                                color = Indigo50,
-                                border = androidx.compose.foundation.BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.4f))
+                                color = if (isEasyMode) EasyTheme.blueBg else Indigo50,
+                                border = if (isEasyMode) {
+                                    null
+                                } else {
+                                    androidx.compose.foundation.BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.4f))
+                                }
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                 ) {
-                                    Text("👤 $companion", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Indigo700)
+                                    val compText = if (isEasyMode) companion else "👤 $companion"
+                                    Text(
+                                        compText,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isEasyMode) EasyTheme.blue else Indigo700
+                                    )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Icon(
                                         imageVector = Icons.Default.Close,
                                         contentDescription = "삭제",
-                                        tint = Indigo600,
+                                        tint = if (isEasyMode) EasyTheme.blue else Indigo600,
                                         modifier = Modifier
-                                            .size(12.dp)
+                                            .size(13.dp)
                                             .clickable { onRemoveCompanion(step.id, companion) }
                                     )
                                 }
@@ -1585,14 +1619,16 @@ fun AddCompanionDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        placeholder = { Text("동행인 이름 (예: 김철수, 대표님)", fontSize = 12.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        textStyle = AppTypography.body
-                    )
+                    Box(modifier = Modifier.weight(1f)) {
+                        AutoLogueTextField(
+                            value = newName,
+                            onValueChange = { newName = it },
+                            label = "동행인 이름",
+                            placeholder = "예: 김철수, 대표님",
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     Button(
                         onClick = {
                             if (newName.isNotBlank()) {
@@ -1601,9 +1637,11 @@ fun AddCompanionDialog(
                             }
                         },
                         enabled = newName.isNotBlank(),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isEasyMode) EasyTheme.blue else AppColors.primary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                         modifier = Modifier.height(48.dp)
                     ) {
                         Text("추가", fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -1612,12 +1650,13 @@ fun AddCompanionDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("닫기", style = AppTypography.body.copy(fontWeight = FontWeight.Bold, color = AppColors.primary))
-            }
+            AutoLoguePrimaryButton(
+                text = "닫기",
+                onClick = onDismiss
+            )
         },
-        shape = RoundedCornerShape(16.dp),
-        containerColor = PureWhite
+        shape = RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp),
+        containerColor = if (isEasyMode) EasyTheme.bg else PureWhite
     )
 }
 
@@ -1881,6 +1920,7 @@ fun SyncProgressDialog(
     progress: com.autologue.app.domain.usecase.sync.SyncProgress,
     onDismiss: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1891,15 +1931,30 @@ fun SyncProgressDialog(
             ) {
                 Text(
                     if (progress.isDone) "동기화 완료" else "동기화 진행 중",
-                    style = AppTypography.h2
+                    style = if (isEasyMode) {
+                        AppTypography.h2.copy(
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = EasyTheme.textPrimary
+                        )
+                    } else {
+                        AppTypography.h2
+                    },
+                    modifier = Modifier.weight(1f)
                 )
-                Text(
-                    text = progress.formatQuantitativeSummary(),
-                    style = AppTypography.caption.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AppColors.primary
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = progress.formatQuantitativeSummary(),
+                        style = AppTypography.caption.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isEasyMode) EasyTheme.blue else AppColors.primary
+                        )
                     )
-                )
+                    EasyModalModeSwitchChip()
+                }
             }
         },
         text = {
@@ -1908,10 +1963,10 @@ fun SyncProgressDialog(
                     progress = { (progress.progressPercent.coerceIn(0, 100) / 100f) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp)),
-                    color = AppColors.primary,
-                    trackColor = Slate100
+                        .height(if (isEasyMode) 8.dp else 6.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = if (isEasyMode) EasyTheme.blue else AppColors.primary,
+                    trackColor = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100
                 )
                 Text(progress.stage, style = AppTypography.bodySecondary)
                 if (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0) {
@@ -1925,21 +1980,19 @@ fun SyncProgressDialog(
         },
         confirmButton = {
             if (progress.isDone) {
-                Button(
-                    onClick = onDismiss,
-                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary, contentColor = PureWhite),
-                    shape = AppShapes.button
-                ) {
-                    Text("확인", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
-                }
+                AutoLoguePrimaryButton(
+                    text = "확인",
+                    onClick = onDismiss
+                )
             } else {
-                TextButton(onClick = onDismiss) {
-                    Text("백그라운드 전환", fontSize = 12.sp, color = AppColors.primary, fontWeight = FontWeight.Bold)
-                }
+                AutoLogueSecondaryButton(
+                    text = "백그라운드 전환",
+                    onClick = onDismiss
+                )
             }
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal
     )
 }
 
@@ -1965,15 +2018,32 @@ fun ManualSyncPeriodDialog(
     onDismiss: () -> Unit,
     onConfirm: (Int?) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     var selectedDays by remember { mutableStateOf<Int?>(0) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(
-                text = "데이터 수집 및 백그라운드 동기화",
-                style = AppTypography.h2
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "데이터 수집 및 백그라운드 동기화",
+                    style = if (isEasyMode) {
+                        AppTypography.h2.copy(
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = EasyTheme.textPrimary
+                        )
+                    } else {
+                        AppTypography.h2
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                EasyModalModeSwitchChip()
+            }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
@@ -1984,7 +2054,7 @@ fun ManualSyncPeriodDialog(
 
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+                    verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 8.dp else Spacing.xs)
                 ) {
                     val periods: List<Pair<Int?, String>> = listOf(
                         0 to "마지막 분석 이후 신규 데이터만 (추천 · 초고속 증분 분석)",
@@ -1997,12 +2067,20 @@ fun ManualSyncPeriodDialog(
                     periods.forEach { (days, label) ->
                         val isSelected = selectedDays == days
                         Surface(
-                            shape = AppShapes.card,
-                            color = if (isSelected) AppColors.primary.copy(alpha = 0.08f) else AppColors.surface,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isSelected) AppColors.primary else AppColors.border
-                            ),
+                            shape = if (isEasyMode) RoundedCornerShape(14.dp) else AppShapes.card,
+                            color = if (isEasyMode) {
+                                if (isSelected) EasyTheme.blueBg else EasyTheme.surface
+                            } else {
+                                if (isSelected) AppColors.primary.copy(alpha = 0.08f) else AppColors.surface
+                            },
+                            border = if (isEasyMode) {
+                                null
+                            } else {
+                                androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isSelected) AppColors.primary else AppColors.border
+                                )
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { selectedDays = days }
@@ -2017,7 +2095,7 @@ fun ManualSyncPeriodDialog(
                                     selected = isSelected,
                                     onClick = { selectedDays = days },
                                     colors = RadioButtonDefaults.colors(
-                                        selectedColor = AppColors.primary,
+                                        selectedColor = if (isEasyMode) EasyTheme.blue else AppColors.primary,
                                         unselectedColor = AppColors.secondary
                                     )
                                 )
@@ -2026,7 +2104,11 @@ fun ManualSyncPeriodDialog(
                                     text = label,
                                     style = AppTypography.body.copy(
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) AppColors.primary else AppColors.textPrimary
+                                        color = if (isSelected) {
+                                            if (isEasyMode) EasyTheme.blue else AppColors.primary
+                                        } else {
+                                            AppColors.textPrimary
+                                        }
                                     )
                                 )
                             }
@@ -2036,21 +2118,19 @@ fun ManualSyncPeriodDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = { onConfirm(selectedDays) },
-                colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary, contentColor = PureWhite),
-                shape = AppShapes.button
-            ) {
-                Text("백그라운드 분석 시작", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
-            }
+            AutoLoguePrimaryButton(
+                text = "백그라운드 분석 시작",
+                onClick = { onConfirm(selectedDays) }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("취소", fontSize = 12.sp, color = AppColors.secondary)
-            }
+            AutoLogueSecondaryButton(
+                text = "취소",
+                onClick = onDismiss
+            )
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal
     )
 }
 
@@ -2116,6 +2196,7 @@ fun DiaryDateAndMonthPickerDialog(
         recordedDates.groupingBy { it.year }.eachCount()
     }
 
+    val isEasyMode = LocalEasyMode.current
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -2124,10 +2205,10 @@ fun DiaryDateAndMonthPickerDialog(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
                 .wrapContentHeight(),
-            shape = RoundedCornerShape(16.dp),
-            color = PureWhite,
+            shape = RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp),
+            color = if (isEasyMode) EasyTheme.bg else PureWhite,
             tonalElevation = 0.dp,
-            border = BorderStroke(1.dp, AppColors.border)
+            border = if (isEasyMode) null else BorderStroke(1.dp, AppColors.border)
         ) {
             Column(
                 modifier = Modifier
@@ -2140,10 +2221,18 @@ fun DiaryDateAndMonthPickerDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "일자 · 월 · 연도 이동",
-                            style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
+                            style = if (isEasyMode) {
+                                AppTypography.h2.copy(
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = EasyTheme.textPrimary
+                                )
+                            } else {
+                                AppTypography.h2.copy(fontWeight = FontWeight.Bold)
+                            }
                         )
                         Text(
                             text = "원하는 연도, 월, 일자를 선택해 바로 이동합니다",
@@ -2155,9 +2244,10 @@ fun DiaryDateAndMonthPickerDialog(
                         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        EasyModalModeSwitchChip()
                         Surface(
                             shape = AppShapes.pill,
-                            color = Slate100,
+                            color = if (isEasyMode) EasyTheme.blueBg else Slate100,
                             modifier = Modifier
                                 .clip(AppShapes.pill)
                                 .clickable {
@@ -2173,7 +2263,7 @@ fun DiaryDateAndMonthPickerDialog(
                                 text = "오늘",
                                 style = AppTypography.caption.copy(
                                     fontWeight = FontWeight.Bold,
-                                    color = AppColors.primary
+                                    color = if (isEasyMode) EasyTheme.blue else AppColors.primary
                                 ),
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                             )
@@ -2199,8 +2289,8 @@ fun DiaryDateAndMonthPickerDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Slate100)
+                        .clip(RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp))
+                        .background(if (isEasyMode) EasyTheme.surfaceSubtle else Slate100)
                         .padding(3.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {

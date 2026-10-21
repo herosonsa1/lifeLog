@@ -30,7 +30,10 @@ import com.autologue.app.domain.model.HourlyGolfWeather
 import com.autologue.app.domain.model.RainRiskLevel
 import com.autologue.app.presentation.common.AutoLoguePrimaryButton
 import com.autologue.app.presentation.common.AutoLogueSecondaryButton
+import com.autologue.app.presentation.common.EasyModalModeSwitchChip
+import com.autologue.app.presentation.common.EasyTheme
 import com.autologue.app.presentation.common.HairlineDivider
+import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.theme.*
 
 /**
@@ -44,6 +47,7 @@ fun GolfWeatherSummaryBadge(
     modifier: Modifier = Modifier
 ) {
     if (weather == null && !isLoading) return
+    val isEasyMode = LocalEasyMode.current
 
     val riskColor = when (weather?.rainRiskLevel) {
         RainRiskLevel.CLEAR -> Color(0xFF059669) // Green
@@ -70,14 +74,14 @@ fun GolfWeatherSummaryBadge(
     }
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = riskBgColor,
-        border = BorderStroke(1.dp, riskBorderColor),
+        shape = RoundedCornerShape(if (isEasyMode) 20.dp else 12.dp),
+        color = if (isEasyMode) EasyTheme.surface else riskBgColor,
+        border = if (isEasyMode) null else BorderStroke(1.dp, riskBorderColor),
         modifier = modifier
             .fillMaxWidth()
             .clickable { onViewDetail() }
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(modifier = Modifier.padding(horizontal = if (isEasyMode) 18.dp else 12.dp, vertical = if (isEasyMode) 16.dp else 10.dp)) {
             // Header: WeatherNext 3 Tag & Playtime
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -86,41 +90,41 @@ fun GolfWeatherSummaryBadge(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = Color(0xFF1E3A8A)
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFF1E3A8A)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
                                 text = "WeatherNext 3",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.accent else Color.White
                             )
                         }
                     }
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "플레이 시간대 (${weather?.playStartTime ?: "--:--"}~${weather?.playEndTime ?: "--:--"}) 날씨",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF475569)
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF475569)
                     )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "상세보기→",
+                        text = "상세보기 →",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF2563EB)
+                        color = if (isEasyMode) EasyTheme.accent else Color(0xFF2563EB)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             if (isLoading && weather == null) {
                 Row(
@@ -141,80 +145,86 @@ fun GolfWeatherSummaryBadge(
                 ) {
                     // Temperature & Condition
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        val icon = weather.hourlyForecast.firstOrNull { it.isPlayTime }?.weatherIcon ?: "☀️"
-                        Text(icon, fontSize = 20.sp)
-                        Spacer(modifier = Modifier.width(6.dp))
+                        if (!isEasyMode) {
+                            val icon = weather.hourlyForecast.firstOrNull { it.isPlayTime }?.weatherIcon ?: "☀️"
+                            Text(icon, fontSize = 20.sp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
                         Column {
                             Text(
                                 text = "%.1f°C".format(weather.avgTemperature),
-                                fontSize = 15.sp,
+                                fontSize = if (isEasyMode) 17.sp else 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF0F172A)
+                                color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF0F172A)
                             )
                             Text(
                                 text = "체감 %.1f°C".format(weather.avgFeelsLike),
-                                fontSize = 10.sp,
-                                color = Slate500
+                                fontSize = 11.sp,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Slate500
                             )
                         }
                     }
 
                     // Wind
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🍃", fontSize = 14.sp)
-                        Spacer(modifier = Modifier.width(3.dp))
+                        if (!isEasyMode) {
+                            Text("🍃", fontSize = 14.sp)
+                            Spacer(modifier = Modifier.width(3.dp))
+                        }
                         Column {
                             Text(
                                 text = "${weather.avgWindSpeed}m/s",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF1E293B)
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF1E293B)
                             )
                             Text(
-                                text = weather.mainWindDirection,
-                                fontSize = 10.sp,
-                                color = Slate500
+                                text = if (isEasyMode) "바람 · ${weather.mainWindDirection}" else weather.mainWindDirection,
+                                fontSize = 11.sp,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Slate500
                             )
                         }
                     }
 
                     // Humidity
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("💧", fontSize = 14.sp)
-                        Spacer(modifier = Modifier.width(3.dp))
+                        if (!isEasyMode) {
+                            Text("💧", fontSize = 14.sp)
+                            Spacer(modifier = Modifier.width(3.dp))
+                        }
                         Column {
                             Text(
                                 text = "${weather.avgHumidity}%",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF1E293B)
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF1E293B)
                             )
                             Text(
                                 text = "습도",
-                                fontSize = 10.sp,
-                                color = Slate500
+                                fontSize = 11.sp,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Slate500
                             )
                         }
                     }
 
                     // Precipitation (Most important!)
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = riskColor.copy(alpha = 0.12f),
-                        border = BorderStroke(1.dp, riskColor.copy(alpha = 0.35f))
+                        shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                        color = if (isEasyMode) riskColor.copy(alpha = 0.08f) else riskColor.copy(alpha = 0.12f),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, riskColor.copy(alpha = 0.35f))
                     ) {
                         Column(
                             horizontalAlignment = Alignment.End,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "🌧️ 강우량",
+                                    text = if (isEasyMode) "강우량" else "🌧️ 강우량",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = riskColor
                                 )
-                                Spacer(modifier = Modifier.width(3.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "%.1fmm".format(weather.totalRainfallMm),
                                     fontSize = 13.sp,
@@ -233,13 +243,14 @@ fun GolfWeatherSummaryBadge(
                 }
 
                 // Summary single-line text
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = weather.weatherSummary,
                     fontSize = 11.sp,
-                    color = Color(0xFF334155),
+                    color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF334155),
                     fontWeight = FontWeight.Medium,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -255,15 +266,21 @@ fun GolfHourlyRainfallChart(
     modifier: Modifier = Modifier
 ) {
     if (hourlyList.isEmpty()) return
+    val isEasyMode = LocalEasyMode.current
 
     val maxRain = (hourlyList.maxOfOrNull { it.precipitationMm } ?: 0.0).coerceAtLeast(2.0)
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color(0xFFF8FAFC), RoundedCornerShape(14.dp))
-            .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(14.dp))
-            .padding(14.dp)
+            .background(
+                color = if (isEasyMode) EasyTheme.surface else Color(0xFFF8FAFC),
+                shape = RoundedCornerShape(if (isEasyMode) 20.dp else 14.dp)
+            )
+            .let {
+                if (isEasyMode) it else it.border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(14.dp))
+            }
+            .padding(if (isEasyMode) 18.dp else 14.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -271,18 +288,20 @@ fun GolfHourlyRainfallChart(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.BarChart,
-                    contentDescription = null,
-                    tint = Color(0xFF2563EB),
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
+                if (!isEasyMode) {
+                    Icon(
+                        imageVector = Icons.Default.BarChart,
+                        contentDescription = null,
+                        tint = Color(0xFF2563EB),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
                 Text(
-                    text = "시간대별 강우량 & 강수확률 예보",
-                    fontSize = 13.sp,
+                    text = "시간대별 강우량 및 강수확률 예보",
+                    fontSize = if (isEasyMode) 14.sp else 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0F172A)
+                    color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF0F172A)
                 )
             }
         }
@@ -298,7 +317,7 @@ fun GolfHourlyRainfallChart(
             verticalAlignment = Alignment.Bottom
         ) {
             hourlyList.forEach { item ->
-                HourlyRainfallColumn(item = item, maxRainReference = maxRain)
+                HourlyRainfallColumn(item = item, maxRainReference = maxRain, isEasyMode = isEasyMode)
             }
         }
     }
@@ -307,7 +326,8 @@ fun GolfHourlyRainfallChart(
 @Composable
 private fun HourlyRainfallColumn(
     item: HourlyGolfWeather,
-    maxRainReference: Double
+    maxRainReference: Double,
+    isEasyMode: Boolean = false
 ) {
     val isPlay = item.isPlayTime
     val hasRain = item.precipitationMm > 0.0
@@ -325,30 +345,34 @@ private fun HourlyRainfallColumn(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .width(52.dp)
+            .width(54.dp)
             .background(
-                color = if (isPlay) Color(0xFFEFF6FF) else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
+                color = when {
+                    isEasyMode && isPlay -> EasyTheme.accentSoft
+                    isPlay -> Color(0xFFEFF6FF)
+                    else -> Color.Transparent
+                },
+                shape = RoundedCornerShape(10.dp)
             )
             .border(
-                width = if (isPlay) 1.dp else 0.dp,
-                color = if (isPlay) Color(0xFF93C5FD) else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
+                width = if (!isEasyMode && isPlay) 1.dp else 0.dp,
+                color = if (!isEasyMode && isPlay) Color(0xFF93C5FD) else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
             )
-            .padding(vertical = 6.dp, horizontal = 2.dp)
+            .padding(vertical = 8.dp, horizontal = 3.dp)
     ) {
         // Play indicator badge
         if (isPlay) {
             Surface(
-                shape = RoundedCornerShape(3.dp),
-                color = Color(0xFF2563EB)
+                shape = RoundedCornerShape(4.dp),
+                color = if (isEasyMode) EasyTheme.accent else Color(0xFF2563EB)
             ) {
                 Text(
                     text = "PLAY",
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
-                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                 )
             }
         } else {
@@ -434,7 +458,7 @@ private fun HourlyRainfallColumn(
 }
 
 /**
- * WeatherNext 3 및 Gemini AI 기상 분석 심층 다이얼로그
+ * WeatherNext 3 및 AI 기상 분석 심층 다이얼로그
  */
 @Composable
 fun GolfWeatherDetailDialog(
@@ -443,6 +467,8 @@ fun GolfWeatherDetailDialog(
     onDismiss: () -> Unit,
     onRefresh: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -451,74 +477,88 @@ fun GolfWeatherDetailDialog(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.90f),
-            shape = RoundedCornerShape(20.dp),
-            color = AppColors.surface,
-            shadowElevation = 8.dp
+            shape = RoundedCornerShape(if (isEasyMode) 28.dp else 20.dp),
+            color = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+            shadowElevation = if (isEasyMode) 0.dp else 8.dp
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(Spacing.lg)
+                modifier = Modifier.fillMaxSize()
             ) {
                 // Header
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("⛳", fontSize = 22.sp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Column {
-                            Text(
-                                text = "${weather.clubName} 날씨 예보",
-                                style = AppTypography.h2
-                            )
-                            Text(
-                                text = "${weather.source} · ${weather.lastUpdated}",
-                                fontSize = 11.sp,
-                                color = Color(0xFF2563EB),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onRefresh, enabled = !isRefreshing) {
-                            if (isRefreshing) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Default.Refresh, contentDescription = "새로고침", tint = Color(0xFF2563EB))
+                Surface(color = if (isEasyMode) EasyTheme.surface else Color.Transparent) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.lg, vertical = if (isEasyMode) 18.dp else Spacing.md),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            if (!isEasyMode) {
+                                Text("⛳", fontSize = 22.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Column {
+                                Text(
+                                    text = "${weather.clubName} 날씨 예보",
+                                    style = AppTypography.h2.copy(
+                                        color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary
+                                    )
+                                )
+                                Text(
+                                    text = "${weather.source} · ${weather.lastUpdated}",
+                                    fontSize = 11.sp,
+                                    color = if (isEasyMode) EasyTheme.accent else Color(0xFF2563EB),
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
                         }
-                        IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "닫기", tint = Slate400)
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            EasyModalModeSwitchChip()
+                            IconButton(onClick = onRefresh, enabled = !isRefreshing) {
+                                if (isRefreshing) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = "새로고침", tint = Color(0xFF2563EB))
+                                }
+                            }
+                            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "닫기", tint = Slate400)
+                            }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                HairlineDivider()
-                Spacer(modifier = Modifier.height(Spacing.xs))
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // Scrollable Body
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = if (isEasyMode) 16.dp else Spacing.lg, vertical = if (isEasyMode) 16.dp else Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 12.dp else Spacing.md)
                 ) {
                     // Playtime Notice Bar
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFFEFF6FF),
-                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                        shape = RoundedCornerShape(if (isEasyMode) 18.dp else 10.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Color(0xFFEFF6FF),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFBFDBFE)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
+                                .padding(if (isEasyMode) 16.dp else 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -527,9 +567,9 @@ fun GolfWeatherDetailDialog(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = "플레이 타임: ${weather.playStartTime} ~ ${weather.playEndTime}",
-                                    fontSize = 12.sp,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF1E3A8A)
+                                    color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF1E3A8A)
                                 )
                             }
                             Text(
@@ -541,36 +581,35 @@ fun GolfWeatherDetailDialog(
                         }
                     }
 
-                    // AI Briefing Card (Gemini 텍스트 및 불필요한 이모지 배제)
+                    // AI Briefing Card
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFF1F5F9),
-                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                        shape = RoundedCornerShape(if (isEasyMode) 20.dp else 12.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Color(0xFFF1F5F9),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFCBD5E1)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
+                        Column(modifier = Modifier.padding(if (isEasyMode) 18.dp else 14.dp)) {
                             Text(
                                 text = "AI 골프 라운딩 정밀 분석",
-                                fontSize = 13.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF0F172A)
+                                color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF0F172A)
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = weather.geminiBriefing,
                                 fontSize = 12.sp,
-                                lineHeight = 18.sp,
-                                color = Color(0xFF334155)
+                                lineHeight = 19.sp,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF334155)
                             )
                         }
                     }
 
-                    // 4-Quadrant Key Metrics Grid (2줄 레이아웃: 1줄-타이틀, 2줄-정보 상세정보)
+                    // 4-Quadrant Key Metrics Grid
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 10.dp else 8.dp)
                     ) {
-                        // 1. 강우량 카드 (1mm 이상 빨간색 강조)
                         val rainHighlight = if (weather.totalRainfallMm >= 1.0) Color(0xFFDC2626) else Color(0xFF059669)
                         val rainBg = if (weather.totalRainfallMm >= 1.0) Color(0xFFFEF2F2) else Color(0xFFECFDF5)
                         MetricQuadrantCard(
@@ -579,10 +618,10 @@ fun GolfWeatherDetailDialog(
                             value = "%.1f mm".format(weather.totalRainfallMm),
                             subtext = "최대 ${weather.maxRainProbability}%",
                             highlightColor = rainHighlight,
-                            bgColor = rainBg
+                            bgColor = rainBg,
+                            isEasyMode = isEasyMode
                         )
 
-                        // 2. 기온 카드 (10도 이하 파란색, 30도 이상 빨간색)
                         val tempHighlight = when {
                             weather.avgTemperature <= 10.0 -> Color(0xFF2563EB)
                             weather.avgTemperature >= 30.0 -> Color(0xFFDC2626)
@@ -598,15 +637,15 @@ fun GolfWeatherDetailDialog(
                             value = "%.1f°C".format(weather.avgTemperature),
                             subtext = "체감 %.1f°C".format(weather.avgFeelsLike),
                             highlightColor = tempHighlight,
-                            bgColor = tempBg
+                            bgColor = tempBg,
+                            isEasyMode = isEasyMode
                         )
                     }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 10.dp else 8.dp)
                     ) {
-                        // 3. 바람 카드 (3.5~6.5 파란색, >6.5 빨간색)
                         val windHighlight = when {
                             weather.avgWindSpeed > 6.5 -> Color(0xFFDC2626)
                             weather.avgWindSpeed >= 3.5 -> Color(0xFF2563EB)
@@ -623,42 +662,57 @@ fun GolfWeatherDetailDialog(
                             value = "%.1f m/s".format(weather.avgWindSpeed),
                             subtext = "${weather.mainWindDirection}풍",
                             highlightColor = windHighlight,
-                            bgColor = windBg
+                            bgColor = windBg,
+                            isEasyMode = isEasyMode
                         )
 
-                        // 4. 습도 카드
                         MetricQuadrantCard(
                             modifier = Modifier.weight(1f),
                             title = "습도",
                             value = "${weather.avgHumidity}%",
                             subtext = "쾌적도 적정",
                             highlightColor = Color(0xFF6366F1),
-                            bgColor = Color(0xFFEEF2FF)
+                            bgColor = Color(0xFFEEF2FF),
+                            isEasyMode = isEasyMode
                         )
                     }
 
-                    // Hourly Chart Component (시간대별 강우량 & 기상 차트)
+                    // Hourly Chart Component
                     GolfHourlyRainfallChart(hourlyList = weather.hourlyForecast)
 
                     // Hourly Details Table
-                    Text(
-                        text = "📋 시간대별 상세 기상 데이터",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1E293B)
-                    )
-
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                        shape = RoundedCornerShape(if (isEasyMode) 20.dp else 10.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Color.White,
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFE2E8F0)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column {
-                            // Table Header (강우량 헤더 빨간색 제거 -> Slate600 통일)
+                        Column(modifier = Modifier.padding(if (isEasyMode) 14.dp else 0.dp)) {
+                            if (isEasyMode) {
+                                Text(
+                                    text = "시간대별 상세 기상 데이터",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EasyTheme.textPrimary,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = "📋 시간대별 상세 기상 데이터",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1E293B),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                )
+                            }
+                            // Table Header
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color(0xFFF8FAFC))
+                                    .background(
+                                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF8FAFC),
+                                        shape = if (isEasyMode) RoundedCornerShape(10.dp) else RoundedCornerShape(0.dp)
+                                    )
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
@@ -668,23 +722,24 @@ fun GolfWeatherDetailDialog(
                                 Text("기온", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Slate600, modifier = Modifier.width(45.dp))
                                 Text("바람", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Slate600, modifier = Modifier.width(55.dp))
                             }
-                            HairlineDivider()
+                            if (!isEasyMode) {
+                                HairlineDivider()
+                            }
 
-                            // Table Rows with conditional color highlights
                             weather.hourlyForecast.forEach { item ->
                                 val rainColor = if (item.precipitationMm >= 1.0) Color(0xFFDC2626) else Slate600
                                 val rainWeight = if (item.precipitationMm >= 1.0) FontWeight.Bold else FontWeight.Normal
 
                                 val tempColor = when {
-                                    item.temperature <= 10.0 -> Color(0xFF2563EB) // 10도 이하 파란색
-                                    item.temperature >= 30.0 -> Color(0xFFDC2626) // 30도 이상 빨간색
+                                    item.temperature <= 10.0 -> Color(0xFF2563EB)
+                                    item.temperature >= 30.0 -> Color(0xFFDC2626)
                                     else -> Color(0xFF0F172A)
                                 }
                                 val tempWeight = if (item.temperature <= 10.0 || item.temperature >= 30.0) FontWeight.Bold else FontWeight.Normal
 
                                 val windColor = when {
-                                    item.windSpeed > 6.5 -> Color(0xFFDC2626) // 6.5 초과 빨간색
-                                    item.windSpeed >= 3.5 -> Color(0xFF2563EB) // 3.5~6.5 파란색
+                                    item.windSpeed > 6.5 -> Color(0xFFDC2626)
+                                    item.windSpeed >= 3.5 -> Color(0xFF2563EB)
                                     else -> Slate600
                                 }
                                 val windWeight = if (item.windSpeed >= 3.5) FontWeight.Bold else FontWeight.Normal
@@ -734,18 +789,20 @@ fun GolfWeatherDetailDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(Spacing.xs))
-                AutoLoguePrimaryButton(
-                    text = "확인",
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Surface(color = if (isEasyMode) EasyTheme.surface else Color.Transparent) {
+                    Box(modifier = Modifier.padding(Spacing.md)) {
+                        AutoLoguePrimaryButton(
+                            text = "확인",
+                            onClick = onDismiss,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-// [2줄 구조 메트릭 카드] 1줄: 타이틀 / 2줄: 정보 상세정보 (한 줄 나란히)
 @Composable
 private fun MetricQuadrantCard(
     title: String,
@@ -753,26 +810,25 @@ private fun MetricQuadrantCard(
     subtext: String,
     highlightColor: Color,
     bgColor: Color,
+    isEasyMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = bgColor,
-        border = BorderStroke(1.dp, highlightColor.copy(alpha = 0.25f)),
+        shape = RoundedCornerShape(if (isEasyMode) 18.dp else 10.dp),
+        color = if (isEasyMode) EasyTheme.surface else bgColor,
+        border = if (isEasyMode) null else BorderStroke(1.dp, highlightColor.copy(alpha = 0.25f)),
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
-            // 1번째 줄: 타이틀
+        Column(modifier = Modifier.padding(horizontal = if (isEasyMode) 14.dp else 10.dp, vertical = if (isEasyMode) 12.dp else 9.dp)) {
             Text(
                 text = title,
                 fontSize = 11.sp,
-                color = Slate600,
-                fontWeight = FontWeight.Medium,
+                color = if (isEasyMode) EasyTheme.textSecondary else Slate600,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(modifier = Modifier.height(4.dp))
-            // 2번째 줄: 정보 상세정보 (강조된 값과 상세정보를 한 줄로 나란히 표시)
             Row(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -780,15 +836,16 @@ private fun MetricQuadrantCard(
             ) {
                 Text(
                     text = value,
-                    fontSize = 15.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    color = highlightColor
+                    color = if (isEasyMode) EasyTheme.textPrimary else highlightColor
                 )
                 if (subtext.isNotBlank()) {
                     Text(
                         text = subtext,
                         fontSize = 10.sp,
-                        color = Slate500,
+                        color = highlightColor,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(bottom = 1.dp)

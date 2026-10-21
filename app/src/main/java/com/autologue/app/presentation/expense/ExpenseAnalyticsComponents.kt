@@ -32,7 +32,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autologue.app.presentation.common.EasyTheme
 import com.autologue.app.presentation.common.HairlineDivider
+import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.common.MetricBadge
 import com.autologue.app.presentation.theme.*
 import kotlin.math.abs
@@ -67,11 +69,15 @@ fun ExpensePeriodComparisonSection(
     onSelectComparisonBasis: (AnalyticsComparisonBasis) -> Unit,
     onNavigateToCategoryTransactions: (String, PeriodSpec) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.xl, vertical = Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(
+                horizontal = if (isEasyMode) 0.dp else Spacing.xl,
+                vertical = if (isEasyMode) 2.dp else Spacing.md
+            ),
+        verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 14.dp else 12.dp)
     ) {
         // 1. 주기 선택 탭 바: [월간] | [분기별] | [반기별] | [연간]
         PeriodUnitTabSelector(
@@ -140,14 +146,18 @@ fun PeriodUnitTabSelector(
     selectedUnit: AnalyticsPeriodUnit,
     onSelectUnit: (AnalyticsPeriodUnit) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(38.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(Slate100)
-            .border(1.dp, Slate200, RoundedCornerShape(10.dp))
-            .padding(3.dp),
+            .height(if (isEasyMode) 42.dp else 38.dp)
+            .clip(RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp))
+            .background(if (isEasyMode) EasyTheme.surface else Slate100)
+            .then(
+                if (isEasyMode) Modifier
+                else Modifier.border(1.dp, Slate200, RoundedCornerShape(10.dp))
+            )
+            .padding(if (isEasyMode) 4.dp else 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         AnalyticsPeriodUnit.entries.forEach { unit ->
@@ -156,10 +166,16 @@ fun PeriodUnitTabSelector(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(if (isSelected) PureWhite else Color.Transparent)
+                    .clip(RoundedCornerShape(if (isEasyMode) 10.dp else 7.dp))
+                    .background(
+                        if (isEasyMode) {
+                            if (isSelected) EasyTheme.tossBlueSoft else Color.Transparent
+                        } else {
+                            if (isSelected) PureWhite else Color.Transparent
+                        }
+                    )
                     .then(
-                        if (isSelected) Modifier.border(1.dp, Slate300, RoundedCornerShape(7.dp))
+                        if (!isEasyMode && isSelected) Modifier.border(1.dp, Slate300, RoundedCornerShape(7.dp))
                         else Modifier
                     )
                     .clickable { onSelectUnit(unit) },
@@ -167,9 +183,14 @@ fun PeriodUnitTabSelector(
             ) {
                 Text(
                     text = unit.shortLabel,
-                    fontSize = 12.sp,
+                    fontSize = if (isEasyMode) 13.sp else 12.sp,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isSelected) Slate900 else Slate600
+                    color = if (isEasyMode) {
+                        if (isSelected) EasyTheme.tossBlue else EasyTheme.textSecondary
+                    } else {
+                        if (isSelected) Slate900 else Slate600
+                    },
+                    maxLines = 1
                 )
             }
         }
@@ -184,16 +205,17 @@ fun PeriodNavigationAndBasisBar(
     onNext: () -> Unit,
     onSelectBasis: (AnalyticsComparisonBasis) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 20.dp else 12.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = if (isEasyMode) 14.dp else 12.dp, vertical = if (isEasyMode) 11.dp else 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -203,9 +225,9 @@ fun PeriodNavigationAndBasisBar(
             ) {
                 // 좌측: 기간 네비게이터 (< 2026년 4분기 (10~12월) >)
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Slate50,
-                    border = BorderStroke(1.dp, Slate200)
+                    shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -213,30 +235,31 @@ fun PeriodNavigationAndBasisBar(
                     ) {
                         IconButton(
                             onClick = onPrevious,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(30.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ChevronLeft,
                                 contentDescription = "이전 기간",
-                                tint = Slate700,
+                                tint = if (isEasyMode) EasyTheme.textPrimary else Slate700,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
                         Text(
                             text = currentPeriod.displayTitle,
-                            fontSize = 13.sp,
+                            fontSize = if (isEasyMode) 13.5.sp else 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Slate900,
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                            maxLines = 1,
                             modifier = Modifier.padding(horizontal = 8.dp)
                         )
                         IconButton(
                             onClick = onNext,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(30.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ChevronRight,
                                 contentDescription = "다음 기간",
-                                tint = Slate700,
+                                tint = if (isEasyMode) EasyTheme.textPrimary else Slate700,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -247,11 +270,14 @@ fun PeriodNavigationAndBasisBar(
                 if (currentPeriod.unit != AnalyticsPeriodUnit.YEARLY) {
                     Row(
                         modifier = Modifier
-                            .height(30.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Slate100)
-                            .border(1.dp, Slate200, RoundedCornerShape(8.dp))
-                            .padding(2.dp),
+                            .height(if (isEasyMode) 34.dp else 30.dp)
+                            .clip(RoundedCornerShape(if (isEasyMode) 11.dp else 8.dp))
+                            .background(if (isEasyMode) EasyTheme.chipBg else Slate100)
+                            .then(
+                                if (isEasyMode) Modifier
+                                else Modifier.border(1.dp, Slate200, RoundedCornerShape(8.dp))
+                            )
+                            .padding(if (isEasyMode) 3.dp else 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val seqSelected = effectiveBasis == AnalyticsComparisonBasis.PREVIOUS_PERIOD
@@ -260,42 +286,54 @@ fun PeriodNavigationAndBasisBar(
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                .clip(RoundedCornerShape(6.dp))
+                                .clip(RoundedCornerShape(if (isEasyMode) 8.dp else 6.dp))
                                 .background(if (seqSelected) PureWhite else Color.Transparent)
                                 .then(
-                                    if (seqSelected) Modifier.border(1.dp, Slate300, RoundedCornerShape(6.dp))
+                                    if (!isEasyMode && seqSelected) Modifier.border(1.dp, Slate300, RoundedCornerShape(6.dp))
                                     else Modifier
                                 )
                                 .clickable { onSelectBasis(AnalyticsComparisonBasis.PREVIOUS_PERIOD) }
-                                .padding(horizontal = 8.dp),
+                                .padding(horizontal = 9.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = currentPeriod.sequentialBasisLabel(),
-                                fontSize = 11.sp,
+                                fontSize = if (isEasyMode) 11.5.sp else 11.sp,
                                 fontWeight = if (seqSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (seqSelected) Slate900 else Slate600
+                                color = if (isEasyMode) {
+                                    if (seqSelected) EasyTheme.tossBlue else EasyTheme.textSecondary
+                                } else {
+                                    if (seqSelected) Slate900 else Slate600
+                                },
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                .clip(RoundedCornerShape(6.dp))
+                                .clip(RoundedCornerShape(if (isEasyMode) 8.dp else 6.dp))
                                 .background(if (yoySelected) PureWhite else Color.Transparent)
                                 .then(
-                                    if (yoySelected) Modifier.border(1.dp, Slate300, RoundedCornerShape(6.dp))
+                                    if (!isEasyMode && yoySelected) Modifier.border(1.dp, Slate300, RoundedCornerShape(6.dp))
                                     else Modifier
                                 )
                                 .clickable { onSelectBasis(AnalyticsComparisonBasis.YEAR_OVER_YEAR) }
-                                .padding(horizontal = 8.dp),
+                                .padding(horizontal = 9.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "전년 대비",
-                                fontSize = 11.sp,
+                                fontSize = if (isEasyMode) 11.5.sp else 11.sp,
                                 fontWeight = if (yoySelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (yoySelected) Slate900 else Slate600
+                                color = if (isEasyMode) {
+                                    if (yoySelected) EasyTheme.tossBlue else EasyTheme.textSecondary
+                                } else {
+                                    if (yoySelected) Slate900 else Slate600
+                                },
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -317,6 +355,7 @@ private fun AnalyticsSubViewTabBar(
     categoryCount: Int,
     onSelectSubTab: (ExpenseAnalyticsSubTab) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -329,19 +368,29 @@ private fun AnalyticsSubViewTabBar(
             }
             Surface(
                 onClick = { onSelectSubTab(tab) },
-                shape = RoundedCornerShape(10.dp),
-                color = if (isSelected) Slate900 else PureWhite,
-                border = BorderStroke(1.dp, if (isSelected) Slate900 else Slate200),
+                shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                color = if (isEasyMode) {
+                    if (isSelected) EasyTheme.textPrimary else EasyTheme.surface
+                } else {
+                    if (isSelected) Slate900 else PureWhite
+                },
+                border = if (isEasyMode) null else BorderStroke(1.dp, if (isSelected) Slate900 else Slate200),
                 modifier = Modifier
                     .weight(1f)
-                    .height(36.dp)
+                    .height(if (isEasyMode) 40.dp else 36.dp)
             ) {
-                Box(contentAlignment = Alignment.Center) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 6.dp)) {
                     Text(
                         text = labelText,
-                        fontSize = 12.sp,
+                        fontSize = if (isEasyMode) 12.5.sp else 12.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                        color = if (isSelected) PureWhite else Slate700
+                        color = if (isEasyMode) {
+                            if (isSelected) PureWhite else EasyTheme.textSecondary
+                        } else {
+                            if (isSelected) PureWhite else Slate700
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -353,16 +402,17 @@ private fun AnalyticsSubViewTabBar(
 private fun ExpenseTotalComparisonOverviewCard(
     report: ExpensePeriodComparisonReport
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 상단 헤더: 선택 기간 타이틀 및 결제 건수
@@ -373,14 +423,18 @@ private fun ExpenseTotalComparisonOverviewCard(
             ) {
                 Text(
                     text = "${report.currentPeriod.displayTitle} 총 지출",
-                    fontSize = 12.5.sp,
+                    fontSize = if (isEasyMode) 14.sp else 12.5.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Slate600
+                    color = if (isEasyMode) EasyTheme.textSecondary else Slate600,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 MetricBadge(
                     text = "총 ${report.currentTxCount}건 · 일평균 %,d원".format(report.currentDailyAverage),
-                    textColor = Slate700,
-                    backgroundColor = Slate100
+                    textColor = if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                    backgroundColor = if (isEasyMode) EasyTheme.chipBg else Slate100
                 )
             }
 
@@ -392,9 +446,9 @@ private fun ExpenseTotalComparisonOverviewCard(
             ) {
                 Text(
                     text = "%,d원".format(report.currentTotalExpense),
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Slate900
+                    fontSize = if (isEasyMode) 28.sp else 26.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (isEasyMode) EasyTheme.textPrimary else Slate900
                 )
 
                 val activeDelta = report.activeDeltaAmount
@@ -406,12 +460,13 @@ private fun ExpenseTotalComparisonOverviewCard(
                 val badgeBg = when {
                     activeDelta > 0L -> IncreaseRoseBg
                     activeDelta < 0L -> DecreaseTealBg
-                    else -> Slate100
+                    else -> if (isEasyMode) EasyTheme.chipBg else Slate100
                 }
                 val badgeBorder = when {
-                    activeDelta > 0L -> IncreaseRoseBorder
-                    activeDelta < 0L -> DecreaseTealBorder
-                    else -> Slate200
+                    isEasyMode -> null
+                    activeDelta > 0L -> BorderStroke(1.dp, IncreaseRoseBorder)
+                    activeDelta < 0L -> BorderStroke(1.dp, DecreaseTealBorder)
+                    else -> BorderStroke(1.dp, Slate200)
                 }
                 val badgeTextCol = when {
                     activeDelta > 0L -> IncreaseRoseText
@@ -419,15 +474,17 @@ private fun ExpenseTotalComparisonOverviewCard(
                     else -> Slate700
                 }
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(if (isEasyMode) 10.dp else 8.dp),
                     color = badgeBg,
-                    border = BorderStroke(1.dp, badgeBorder)
+                    border = badgeBorder
                 ) {
                     Text(
                         text = "${ExpenseAnalyticsEngine.formatSignedAmount(activeDelta)} ($activePctStr)",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = badgeTextCol,
+                        maxLines = 1,
+                        softWrap = false,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                     )
                 }
@@ -493,6 +550,7 @@ private fun DeltaSummarySubCard(
     isFocused: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val isEasyMode = LocalEasyMode.current
     val pctText = ExpenseAnalyticsEngine.formatSignedPercent(deltaPercent, currentAmount, baselineAmount)
     val deltaColor = when {
         deltaAmount > 0L -> IncreaseRoseText
@@ -500,16 +558,24 @@ private fun DeltaSummarySubCard(
         else -> Slate700
     }
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = if (isFocused) AccentSoftBlueBg else Slate50,
-        border = BorderStroke(
-            width = if (isFocused) 1.5.dp else 1.dp,
-            color = if (isFocused) AccentOutlineBlue else Slate200
-        ),
+        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+        color = if (isEasyMode) {
+            if (isFocused) EasyTheme.tossBlueSoft.copy(alpha = 0.65f) else EasyTheme.surfaceSubtle
+        } else {
+            if (isFocused) AccentSoftBlueBg else Slate50
+        },
+        border = if (isEasyMode) {
+            if (isFocused) BorderStroke(1.dp, EasyTheme.tossBlue.copy(alpha = 0.4f)) else null
+        } else {
+            BorderStroke(
+                width = if (isFocused) 1.5.dp else 1.dp,
+                color = if (isFocused) AccentOutlineBlue else Slate200
+            )
+        },
         modifier = modifier
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(if (isEasyMode) 12.dp else 10.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             Text(
@@ -549,20 +615,21 @@ private fun ExpenseTopChangeAndInsightCard(
     onJumpToDeltaTable: () -> Unit,
     onNavigateToCategory: (String) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     val largest = report.largestChangeItem
     val topInc = report.topIncreaseItem
     val topDec = report.topDecreaseItem
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -572,22 +639,26 @@ private fun ExpenseTopChangeAndInsightCard(
             ) {
                 Text(
                     text = "최대 변동 지출 강조 및 소비 인사이트",
-                    fontSize = 14.sp,
+                    fontSize = if (isEasyMode) 15.sp else 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Slate900
+                    color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 MetricBadge(
                     text = if (report.effectiveBasis == AnalyticsComparisonBasis.PREVIOUS_PERIOD) {
                         report.currentPeriod.sequentialBasisLabel()
                     } else {
                         report.currentPeriod.yoyBasisLabel()
                     },
-                    textColor = AccentOutlineBlue,
-                    backgroundColor = Color(0xFFEFF6FF)
+                    textColor = if (isEasyMode) EasyTheme.tossBlue else AccentOutlineBlue,
+                    backgroundColor = if (isEasyMode) EasyTheme.tossBlueSoft else Color(0xFFEFF6FF)
                 )
             }
 
-            // 1. 가장 변경폭이 큰 지출 항목 하이라이트 박스 (Clean Outline 강조)
+            // 1. 가장 변경폭이 큰 지출 항목 하이라이트 박스 (줄바꿈/겹침 방지)
             if (largest != null) {
                 val isInc = largest.deltaAmount >= 0L
                 val outlineCol = if (isInc) IncreaseBarFill else DecreaseBarFill
@@ -600,50 +671,54 @@ private fun ExpenseTopChangeAndInsightCard(
                 )
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
                     color = tintBg,
-                    border = BorderStroke(1.5.dp, outlineCol),
+                    border = if (isEasyMode) BorderStroke(1.dp, outlineCol.copy(alpha = 0.35f)) else BorderStroke(1.5.dp, outlineCol),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onNavigateToCategory(largest.categoryName) }
                 ) {
                     Column(
-                        modifier = Modifier.padding(14.dp),
+                        modifier = Modifier.padding(if (isEasyMode) 16.dp else 14.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = outlineCol
+                        ) {
+                            Text(
+                                text = if (isInc) "최대 지출 증가 항목" else "최대 지출 절감 항목",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PureWhite,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(5.dp),
-                                    color = outlineCol
-                                ) {
-                                    Text(
-                                        text = if (isInc) "최대 지출 증가 항목" else "최대 지출 절감 항목",
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = PureWhite,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                    )
-                                }
-                                Text(
-                                    text = largest.categoryName,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Slate900
-                                )
-                            }
+                            Text(
+                                text = largest.categoryName,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "${ExpenseAnalyticsEngine.formatSignedAmount(largest.deltaAmount)} ($pctStr)",
                                 fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = textCol
+                                fontWeight = FontWeight.ExtraBold,
+                                color = textCol,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
@@ -683,15 +758,15 @@ private fun ExpenseTopChangeAndInsightCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Slate50,
-                        border = BorderStroke(1.dp, Slate200),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                         modifier = Modifier
                             .weight(1f)
                             .clickable { onNavigateToCategory(topInc.categoryName) }
                     ) {
                         Column(
-                            modifier = Modifier.padding(10.dp),
+                            modifier = Modifier.padding(if (isEasyMode) 12.dp else 10.dp),
                             verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Text("가장 늘어난 항목", fontSize = 10.5.sp, color = Slate500, fontWeight = FontWeight.Medium)
@@ -715,15 +790,15 @@ private fun ExpenseTopChangeAndInsightCard(
                     }
 
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Slate50,
-                        border = BorderStroke(1.dp, Slate200),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                         modifier = Modifier
                             .weight(1f)
                             .clickable { onNavigateToCategory(topDec.categoryName) }
                     ) {
                         Column(
-                            modifier = Modifier.padding(10.dp),
+                            modifier = Modifier.padding(if (isEasyMode) 12.dp else 10.dp),
                             verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Text("가장 줄어든 항목", fontSize = 10.5.sp, color = Slate500, fontWeight = FontWeight.Medium)
@@ -750,20 +825,20 @@ private fun ExpenseTopChangeAndInsightCard(
 
             // 3. 구조화된 3줄 핵심 인사이트 리포트
             Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Slate50,
-                border = BorderStroke(1.dp, Slate200),
+                shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+                color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(if (isEasyMode) 14.dp else 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
                         text = "소비 변동 핵심 인사이트",
-                        fontSize = 12.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate800
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate800
                     )
                     InsightBulletRow(label = "총평", text = report.headlineInsight)
                     InsightBulletRow(label = "원인", text = report.causeAnalysisInsight)
@@ -774,15 +849,15 @@ private fun ExpenseTopChangeAndInsightCard(
             // 4. 항목별 증감 도표 탭 바로가기 버튼
             Surface(
                 onClick = onJumpToDeltaTable,
-                shape = RoundedCornerShape(8.dp),
-                color = Color(0xFFEFF6FF),
-                border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                color = if (isEasyMode) EasyTheme.tossBlueSoft else Color(0xFFEFF6FF),
+                border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFBFDBFE)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -790,13 +865,19 @@ private fun ExpenseTopChangeAndInsightCard(
                         text = "전체 카테고리(${report.categoryDeltas.size}개) 전월·전년 증감 도표 상세 보기",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = AccentOutlineBlue
+                        color = if (isEasyMode) EasyTheme.tossBlue else AccentOutlineBlue,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "도표 이동 >",
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = AccentOutlineBlue
+                        color = if (isEasyMode) EasyTheme.tossBlue else AccentOutlineBlue,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
@@ -809,30 +890,33 @@ private fun InsightBulletRow(
     label: String,
     text: String
 ) {
+    val isEasyMode = LocalEasyMode.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Surface(
-            shape = RoundedCornerShape(4.dp),
-            color = PureWhite,
-            border = BorderStroke(1.dp, Slate300),
+            shape = RoundedCornerShape(if (isEasyMode) 6.dp else 4.dp),
+            color = if (isEasyMode) EasyTheme.surface else PureWhite,
+            border = if (isEasyMode) null else BorderStroke(1.dp, Slate300),
             modifier = Modifier.padding(top = 1.dp)
         ) {
             Text(
                 text = label,
-                fontSize = 10.sp,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.Bold,
-                color = Slate700,
-                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                color = if (isEasyMode) EasyTheme.tossBlue else Slate700,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
         Text(
             text = text,
-            fontSize = 12.sp,
-            color = Slate800,
-            lineHeight = 17.sp,
+            fontSize = 12.5.sp,
+            color = if (isEasyMode) EasyTheme.textPrimary else Slate800,
+            lineHeight = 18.sp,
             modifier = Modifier.weight(1f)
         )
     }
@@ -842,6 +926,7 @@ private fun InsightBulletRow(
 private fun ExpensePeriodTrendBarChartCard(
     report: ExpensePeriodComparisonReport
 ) {
+    val isEasyMode = LocalEasyMode.current
     val bars = report.trendBars
     val maxExpense = bars.maxOfOrNull { it.totalExpense }?.coerceAtLeast(1L) ?: 1L
     val nonZeroBars = bars.filter { it.totalExpense > 0L }
@@ -850,15 +935,15 @@ private fun ExpensePeriodTrendBarChartCard(
     } else 0L
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -866,20 +951,23 @@ private fun ExpensePeriodTrendBarChartCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "최근 ${bars.size}개 ${report.unit.shortLabel} 총 지출 추이 도표",
-                        fontSize = 14.sp,
+                        fontSize = if (isEasyMode) 15.sp else 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate900
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "진한 막대: 선택 기간 · 점선 테두리: 비교 기준 기간",
-                        fontSize = 11.sp,
-                        color = Slate500
+                        fontSize = 11.5.sp,
+                        color = if (isEasyMode) EasyTheme.textMuted else Slate500
                     )
                 }
                 if (avgExpense > 0L) {
+                    Spacer(modifier = Modifier.width(6.dp))
                     MetricBadge(
                         text = "평균 %,d원".format(avgExpense),
                         textColor = Slate700,
@@ -893,9 +981,12 @@ private fun ExpensePeriodTrendBarChartCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(176.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Slate50)
-                    .border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp))
+                    .background(if (isEasyMode) EasyTheme.surfaceSubtle else Slate50)
+                    .then(
+                        if (isEasyMode) Modifier
+                        else Modifier.border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                    )
                     .padding(horizontal = 10.dp, vertical = 12.dp)
             ) {
                 // 평균 지출 점선 가이드라인
@@ -1020,20 +1111,21 @@ private fun ExpenseCategoryDeltaTableCard(
     onSelectSortMode: (ExpenseDeltaSortMode) -> Unit,
     onNavigateToCategory: (String) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     val maxCategoryAmount = remember(sortedItems) {
         sortedItems.maxOfOrNull { maxOf(it.currentAmount, it.comparisonAmount) }?.coerceAtLeast(1L) ?: 1L
     }
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 상단 타이틀 및 범례
@@ -1045,21 +1137,21 @@ private fun ExpenseCategoryDeltaTableCard(
                 ) {
                     Text(
                         text = "항목별 지출 증감 비교 도표",
-                        fontSize = 14.sp,
+                        fontSize = if (isEasyMode) 15.sp else 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate900
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900
                     )
                     Text(
                         text = "${report.currentPeriod.compactTitle} vs ${report.activeComparisonPeriod.compactTitle}",
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = AccentOutlineBlue
+                        color = if (isEasyMode) EasyTheme.tossBlue else AccentOutlineBlue
                     )
                 }
                 Text(
                     text = "상단 막대: ${report.currentPeriod.compactTitle} (현재) · 하단 막대: ${report.activeComparisonPeriod.compactTitle} (비교 기준)",
                     fontSize = 11.sp,
-                    color = Slate500
+                    color = if (isEasyMode) EasyTheme.textMuted else Slate500
                 )
             }
 
@@ -1074,16 +1166,22 @@ private fun ExpenseCategoryDeltaTableCard(
                     val isSelected = selectedSortMode == mode
                     Surface(
                         onClick = { onSelectSortMode(mode) },
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isSelected) Slate900 else Slate50,
-                        border = BorderStroke(1.dp, if (isSelected) Slate900 else Slate200)
+                        shape = RoundedCornerShape(if (isEasyMode) 11.dp else 8.dp),
+                        color = if (isEasyMode) {
+                            if (isSelected) EasyTheme.textPrimary else EasyTheme.chipBg
+                        } else {
+                            if (isSelected) Slate900 else Slate50
+                        },
+                        border = if (isEasyMode) null else BorderStroke(1.dp, if (isSelected) Slate900 else Slate200)
                     ) {
                         Text(
                             text = mode.label,
                             fontSize = 11.5.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             color = if (isSelected) PureWhite else Slate700,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
                         )
                     }
                 }
@@ -1136,6 +1234,7 @@ private fun CategoryDeltaComparisonRow(
     maxScaleAmount: Long,
     onClickCategory: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     val isHighlighted = item.isLargestMagnitudeChange || item.isLargestIncrease || item.isLargestDecrease
     val isIncrease = item.deltaAmount > 0L
     val isDecrease = item.deltaAmount < 0L
@@ -1145,12 +1244,14 @@ private fun CategoryDeltaComparisonRow(
         item.isLargestMagnitudeChange && isDecrease -> BorderStroke(1.5.dp, DecreaseBarFill)
         item.isLargestIncrease -> BorderStroke(1.dp, IncreaseRoseBorder)
         item.isLargestDecrease -> BorderStroke(1.dp, DecreaseTealBorder)
+        isEasyMode -> null
         else -> BorderStroke(1.dp, Slate200)
     }
 
     val containerBg = when {
         item.isLargestMagnitudeChange && isIncrease -> IncreaseRoseBg.copy(alpha = 0.55f)
         item.isLargestMagnitudeChange && isDecrease -> DecreaseTealBg.copy(alpha = 0.55f)
+        isEasyMode -> EasyTheme.surfaceSubtle
         else -> PureWhite
     }
 
@@ -1161,7 +1262,7 @@ private fun CategoryDeltaComparisonRow(
     )
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
         color = containerBg,
         border = borderStroke,
         modifier = Modifier

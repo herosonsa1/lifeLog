@@ -46,6 +46,7 @@ fun PasteSmsDialog(
         else SmsParser.parseMultiple(rawText)
     }
 
+    val isEasyMode = LocalEasyMode.current
     val fuelCount = parsedTransactions.count { it.category == ExpenseCategory.FUEL }
     val normalCount = parsedTransactions.size - fuelCount
     val totalAmount = parsedTransactions.sumOf { it.amount }
@@ -65,10 +66,10 @@ fun PasteSmsDialog(
             contentAlignment = Alignment.Center
         ) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = PureWhite,
-                tonalElevation = 6.dp,
-                shadowElevation = 10.dp,
+                shape = RoundedCornerShape(if (isEasyMode) 24.dp else 16.dp),
+                color = if (isEasyMode) EasyTheme.surface else PureWhite,
+                tonalElevation = if (isEasyMode) 0.dp else 6.dp,
+                shadowElevation = if (isEasyMode) 0.dp else 10.dp,
                 modifier = Modifier
                     .fillMaxWidth(0.94f)
                     .heightIn(max = 680.dp)
@@ -76,7 +77,7 @@ fun PasteSmsDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp)
+                        .padding(if (isEasyMode) 22.dp else 20.dp)
                 ) {
                     // 1. 헤더
                     Row(
@@ -87,43 +88,50 @@ fun PasteSmsDialog(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Indigo50),
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp))
+                                    .background(if (isEasyMode) EasyTheme.tossBlueSoft else Indigo50),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ContentPaste,
                                     contentDescription = null,
-                                    tint = Indigo600,
+                                    tint = if (isEasyMode) EasyTheme.tossBlue else Indigo600,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
                                     text = "결제 문자 간편 등록",
-                                    style = AppTypography.h3.copy(fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Slate900)
+                                    style = AppTypography.h3.copy(
+                                        fontSize = if (isEasyMode) 18.sp else 17.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900
+                                    )
                                 )
                                 Text(
                                     text = "RCS(채팅+) 및 카드 결제 문자 일괄 파싱",
-                                    style = AppTypography.caption.copy(color = Slate500, fontSize = 11.sp)
+                                    style = AppTypography.caption.copy(
+                                        color = if (isEasyMode) EasyTheme.textMuted else Slate500,
+                                        fontSize = 11.5.sp
+                                    )
                                 )
                             }
                         }
                         IconButton(
                             onClick = onDismiss,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "닫기",
-                                tint = Slate400
+                                tint = if (isEasyMode) EasyTheme.textSecondary else Slate400
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     // 2. 클립보드 붙여넣기 퀵 액션 바
                     Row(
@@ -133,40 +141,44 @@ fun PasteSmsDialog(
                     ) {
                         Text(
                             text = "문자 내용 입력",
-                            style = AppTypography.caption.copy(fontWeight = FontWeight.SemiBold, color = Slate700)
+                            style = AppTypography.caption.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                fontSize = 12.5.sp
+                            )
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Blue50)
+                                .clip(RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp))
+                                .background(if (isEasyMode) EasyTheme.tossBlueSoft else Blue50)
                                 .clickable {
                                     val clip = clipboardManager.getText()?.text
                                     if (!clip.isNullOrBlank()) {
                                         rawText = clip
                                     }
                                 }
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                                .padding(horizontal = 11.dp, vertical = 6.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ContentPaste,
                                 contentDescription = null,
-                                tint = Blue600,
+                                tint = if (isEasyMode) EasyTheme.tossBlue else Blue600,
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = "클립보드에서 가져오기",
                                 style = AppTypography.caption.copy(
-                                    color = Blue700,
+                                    color = if (isEasyMode) EasyTheme.tossBlue else Blue700,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp
+                                    fontSize = 11.5.sp
                                 )
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // 3. 문자 텍스트 입력창
                     OutlinedTextField(
@@ -178,16 +190,22 @@ fun PasteSmsDialog(
                         placeholder = {
                             Text(
                                 text = "문자 앱에서 복사한 카드 결제 문자를 여기에 붙여넣으세요.\n(여러 건을 한꺼번에 붙여넣어도 자동으로 분리·인식됩니다)",
-                                style = AppTypography.caption.copy(color = Slate400, fontSize = 12.sp)
+                                style = AppTypography.caption.copy(
+                                    color = if (isEasyMode) EasyTheme.textMuted else Slate400,
+                                    fontSize = 12.sp
+                                )
                             )
                         },
-                        textStyle = AppTypography.body.copy(fontSize = 12.sp, color = Slate800),
-                        shape = RoundedCornerShape(10.dp),
+                        textStyle = AppTypography.body.copy(
+                            fontSize = 12.5.sp,
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate800
+                        ),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Blue500,
-                            unfocusedBorderColor = Slate200,
-                            focusedContainerColor = Slate50,
-                            unfocusedContainerColor = Slate50
+                            focusedBorderColor = if (isEasyMode) EasyTheme.tossBlue else Blue500,
+                            unfocusedBorderColor = if (isEasyMode) Color.Transparent else Slate200,
+                            focusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                            unfocusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50
                         )
                     )
 
@@ -197,29 +215,30 @@ fun PasteSmsDialog(
                     if (rawText.isNotBlank()) {
                         if (parsedTransactions.isEmpty()) {
                             Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = Amber50,
-                                border = BorderStroke(1.dp, Amber200),
+                                shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                                color = if (isEasyMode) EasyTheme.appleAmberSoft else Amber50,
+                                border = if (isEasyMode) null else BorderStroke(1.dp, Amber200),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = "⚠️ 인식된 카드 결제 문자가 없습니다.\n카드사 승인 문자(금액, 상호명 등)가 올바른지 확인해주세요.",
-                                    style = AppTypography.caption.copy(color = Amber800, fontSize = 11.5.sp),
-                                    modifier = Modifier.padding(10.dp)
+                                    text = if (isEasyMode) "인식된 카드 결제 문자가 없습니다.\n카드사 승인 문자(금액, 상호명 등)가 올바른지 확인해주세요."
+                                           else "⚠️ 인식된 카드 결제 문자가 없습니다.\n카드사 승인 문자(금액, 상호명 등)가 올바른지 확인해주세요.",
+                                    style = AppTypography.caption.copy(color = Amber800, fontSize = 12.sp),
+                                    modifier = Modifier.padding(12.dp)
                                 )
                             }
                         } else {
                             // 분석 요약 배너
                             Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = Emerald50,
-                                border = BorderStroke(1.dp, Emerald200),
+                                shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                                color = if (isEasyMode) EasyTheme.appleGreenSoft else Emerald50,
+                                border = if (isEasyMode) null else BorderStroke(1.dp, Emerald200),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
@@ -227,7 +246,7 @@ fun PasteSmsDialog(
                                         Icon(
                                             imageVector = Icons.Default.CheckCircle,
                                             contentDescription = null,
-                                            tint = Emerald600,
+                                            tint = if (isEasyMode) EasyTheme.appleGreen else Emerald600,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
@@ -245,7 +264,7 @@ fun PasteSmsDialog(
                                         style = AppTypography.caption.copy(
                                             color = Emerald800,
                                             fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 12.sp
+                                            fontSize = 12.5.sp
                                         )
                                     )
                                 }
@@ -268,8 +287,8 @@ fun PasteSmsDialog(
                     } else {
                         // 입력 전 힌트 배너
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Slate100,
+                            shape = RoundedCornerShape(if (isEasyMode) 16.dp else 8.dp),
+                            color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
@@ -284,23 +303,24 @@ fun PasteSmsDialog(
                                 Icon(
                                     imageVector = Icons.Default.Payment,
                                     contentDescription = null,
-                                    tint = Slate400,
+                                    tint = if (isEasyMode) EasyTheme.textMuted else Slate400,
                                     modifier = Modifier.size(32.dp)
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
                                     text = "갤럭시 '채팅+(RCS)' 메시지도 완벽 지원합니다.",
                                     style = AppTypography.caption.copy(
-                                        color = Slate700,
+                                        color = if (isEasyMode) EasyTheme.textPrimary else Slate700,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 12.sp
+                                        fontSize = 12.5.sp
                                     )
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = "문자 앱에서 결제 문자를 복사한 뒤 상단의\n[클립보드에서 가져오기]를 눌러보세요.",
                                     style = AppTypography.caption.copy(
-                                        color = Slate500,
-                                        fontSize = 11.sp,
+                                        color = if (isEasyMode) EasyTheme.textSecondary else Slate500,
+                                        fontSize = 11.5.sp,
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                     )
                                 )
@@ -318,9 +338,11 @@ fun PasteSmsDialog(
                     ) {
                         TextButton(
                             onClick = onDismiss,
-                            colors = ButtonDefaults.textButtonColors(contentColor = Slate600)
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = if (isEasyMode) EasyTheme.textSecondary else Slate600
+                            )
                         ) {
-                            Text("취소", style = AppTypography.h3.copy(fontSize = 13.sp))
+                            Text("취소", style = AppTypography.h3.copy(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold))
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
@@ -330,18 +352,20 @@ fun PasteSmsDialog(
                                 }
                             },
                             enabled = parsedTransactions.isNotEmpty(),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                            elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp)
+                                        else ButtonDefaults.buttonElevation(),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Blue600,
+                                containerColor = if (isEasyMode) EasyTheme.tossBlue else Blue600,
                                 contentColor = PureWhite,
-                                disabledContainerColor = Slate200,
-                                disabledContentColor = Slate400
+                                disabledContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate200,
+                                disabledContentColor = if (isEasyMode) EasyTheme.textMuted else Slate400
                             )
                         ) {
                             Text(
                                 text = if (parsedTransactions.isEmpty()) "등록할 내역 없음"
                                 else "가계부 및 차계부에 등록 (${parsedTransactions.size}건)",
-                                style = AppTypography.h3.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                style = AppTypography.h3.copy(fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
                             )
                         }
                     }
@@ -353,14 +377,15 @@ fun PasteSmsDialog(
 
 @Composable
 private fun ParsedTransactionItemRow(tx: Transaction) {
+    val isEasyMode = LocalEasyMode.current
     val isFuel = tx.category == ExpenseCategory.FUEL
     val isCancel = tx.amount < 0 || tx.transferMemo?.contains("승인취소") == true
     val dtStr = tx.timestamp.format(DateTimeFormatter.ofPattern("M/d HH:mm"))
 
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (isFuel) Amber50.copy(alpha = 0.5f) else Slate50,
-        border = BorderStroke(1.dp, if (isFuel) Amber200 else Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+        color = if (isFuel) Amber50.copy(alpha = 0.6f) else if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+        border = if (isEasyMode) null else BorderStroke(1.dp, if (isFuel) Amber200 else Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(

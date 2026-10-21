@@ -22,10 +22,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.autologue.app.data.preferences.UserAccount
-import com.autologue.app.presentation.common.AutoLoguePrimaryButton
-import com.autologue.app.presentation.common.AutoLogueSecondaryButton
-import com.autologue.app.presentation.common.HairlineDivider
-import com.autologue.app.presentation.common.MetricBadge
+import com.autologue.app.presentation.common.*
 import com.autologue.app.presentation.theme.*
 
 @Composable
@@ -35,6 +32,7 @@ fun AccountManageDialog(
     onAddAccount: (bankName: String, accountNumberPattern: String, alias: String) -> Unit,
     onDeleteAccount: (id: String) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     var showAddForm by remember { mutableStateOf(false) }
     var newBank by remember { mutableStateOf("") }
     var newAccountPattern by remember { mutableStateOf("") }
@@ -57,9 +55,9 @@ fun AccountManageDialog(
             contentAlignment = Alignment.Center
         ) {
             Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = PureWhite),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                shape = RoundedCornerShape(if (isEasyMode) 28.dp else 20.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isEasyMode) EasyTheme.bg else PureWhite),
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isEasyMode) 2.dp else 8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.85f)
@@ -67,7 +65,7 @@ fun AccountManageDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(Spacing.lg)
+                        .padding(if (isEasyMode) 20.dp else Spacing.lg)
                 ) {
                     // 헤더
                     Row(
@@ -75,65 +73,100 @@ fun AccountManageDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.AccountBalance,
-                                contentDescription = null,
-                                tint = AppColors.primary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            if (!isEasyMode) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalance,
+                                    contentDescription = null,
+                                    tint = AppColors.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
                             Column {
                                 Text(
                                     text = "내 계좌 정보 관리",
-                                    style = AppTypography.h2.copy(fontWeight = FontWeight.Bold)
+                                    style = if (isEasyMode) {
+                                        AppTypography.h2.copy(
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = EasyTheme.textPrimary
+                                        )
+                                    } else {
+                                        AppTypography.h2.copy(fontWeight = FontWeight.Bold)
+                                    }
                                 )
                                 Text(
                                     text = "등록된 계좌는 계좌번호 대신 별칭 뱃지로 안전하게 노출됩니다.",
                                     fontSize = 12.sp,
-                                    color = Slate500
+                                    color = if (isEasyMode) EasyTheme.textSecondary else Slate500
                                 )
                             }
                         }
-                        IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "닫기", tint = Slate500)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            EasyModalModeSwitchChip()
+                            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "닫기",
+                                    tint = if (isEasyMode) EasyTheme.textSecondary else Slate500
+                                )
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(Spacing.md))
-                    HairlineDivider()
-                    Spacer(modifier = Modifier.height(Spacing.sm))
+                    if (!isEasyMode) {
+                        HairlineDivider()
+                        Spacer(modifier = Modifier.height(Spacing.sm))
+                    }
 
                     // 계좌 목록
                     LazyColumn(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                        verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 10.dp else Spacing.sm)
                     ) {
                         if (accounts.isEmpty()) {
                             item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = Spacing.xxl),
-                                    contentAlignment = Alignment.Center
+                                Surface(
+                                    shape = RoundedCornerShape(if (isEasyMode) 18.dp else 12.dp),
+                                    color = if (isEasyMode) EasyTheme.surface else Color.Transparent,
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text("등록된 계좌가 없습니다. 아래 버튼을 눌러 계좌를 추가하세요.", fontSize = 13.sp, color = Slate400)
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = Spacing.xxl),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "등록된 계좌가 없습니다. 아래 버튼을 눌러 계좌를 추가하세요.",
+                                            fontSize = 13.sp,
+                                            color = if (isEasyMode) EasyTheme.textSecondary else Slate400
+                                        )
+                                    }
                                 }
                             }
                         } else {
                             items(accounts) { acc ->
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Slate50,
-                                    border = BorderStroke(1.dp, Slate200),
+                                    shape = RoundedCornerShape(if (isEasyMode) 18.dp else 12.dp),
+                                    color = if (isEasyMode) EasyTheme.surface else Slate50,
+                                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(12.dp),
+                                            .padding(if (isEasyMode) 16.dp else 12.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -141,22 +174,22 @@ fun AccountManageDialog(
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 MetricBadge(
                                                     text = acc.badgeLabel,
-                                                    textColor = Indigo700,
-                                                    backgroundColor = Indigo50
+                                                    textColor = if (isEasyMode) EasyTheme.blue else Indigo700,
+                                                    backgroundColor = if (isEasyMode) EasyTheme.blueBg else Indigo50
                                                 )
                                                 Spacer(modifier = Modifier.width(6.dp))
                                                 Text(
                                                     text = acc.alias.ifBlank { "기본 계좌" },
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    fontSize = 14.sp,
-                                                    color = Slate800
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.5.sp,
+                                                    color = if (isEasyMode) EasyTheme.textPrimary else Slate800
                                                 )
                                             }
                                             Spacer(modifier = Modifier.height(4.dp))
                                             Text(
-                                                text = " · 계좌패턴: ${acc.accountNumberPattern}",
+                                                text = "계좌패턴 · ${acc.accountNumberPattern}",
                                                 fontSize = 12.sp,
-                                                color = Slate500
+                                                color = if (isEasyMode) EasyTheme.textSecondary else Slate500
                                             )
                                         }
 
@@ -167,7 +200,7 @@ fun AccountManageDialog(
                                             Icon(
                                                 imageVector = Icons.Default.Delete,
                                                 contentDescription = "삭제",
-                                                tint = Color(0xFFEF4444),
+                                                tint = if (isEasyMode) EasyTheme.coral else Color(0xFFEF4444),
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
@@ -180,82 +213,95 @@ fun AccountManageDialog(
                         if (showAddForm) {
                             item {
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color(0xFFF1F5F9),
-                                    border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                                    shape = RoundedCornerShape(if (isEasyMode) 20.dp else 12.dp),
+                                    color = if (isEasyMode) EasyTheme.surface else Color(0xFFF1F5F9),
+                                    border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFCBD5E1)),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = Spacing.xs)
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Text("새 계좌 등록", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Slate800)
-                                        Spacer(modifier = Modifier.height(8.dp))
+                                    Column(
+                                        modifier = Modifier.padding(if (isEasyMode) 16.dp else 12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "새 계좌 등록",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            color = if (isEasyMode) EasyTheme.textPrimary else Slate800
+                                        )
 
                                         // 빠른 은행 선택 칩
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
                                             quickBanks.take(4).forEach { b ->
                                                 val isSelected = newBank == b
                                                 Surface(
                                                     onClick = { newBank = b },
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = if (isSelected) AppColors.primary else PureWhite,
-                                                    border = BorderStroke(1.dp, if (isSelected) AppColors.primary else Slate300)
+                                                    shape = RoundedCornerShape(if (isEasyMode) 10.dp else 6.dp),
+                                                    color = if (isSelected) {
+                                                        if (isEasyMode) EasyTheme.blue else AppColors.primary
+                                                    } else {
+                                                        if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite
+                                                    },
+                                                    border = if (isEasyMode) {
+                                                        null
+                                                    } else {
+                                                        BorderStroke(1.dp, if (isSelected) AppColors.primary else Slate300)
+                                                    }
                                                 ) {
                                                     Text(
                                                         text = b,
-                                                        fontSize = 11.sp,
-                                                        color = if (isSelected) PureWhite else Slate700,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                                        fontSize = 11.5.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (isSelected) PureWhite else if (isEasyMode) EasyTheme.textSecondary else Slate700,
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                                     )
                                                 }
                                             }
                                         }
 
-                                        Spacer(modifier = Modifier.height(8.dp))
-
-                                        OutlinedTextField(
+                                        AutoLogueTextField(
                                             value = newBank,
                                             onValueChange = { newBank = it },
-                                            label = { Text("은행명 (예: NH농협, KB국민)") },
+                                            label = "은행명",
+                                            placeholder = "예: NH농협, KB국민",
                                             singleLine = true,
                                             modifier = Modifier.fillMaxWidth()
                                         )
 
-                                        Spacer(modifier = Modifier.height(6.dp))
-
-                                        OutlinedTextField(
+                                        AutoLogueTextField(
                                             value = newAccountPattern,
                                             onValueChange = { newAccountPattern = it },
-                                            label = { Text("계좌번호 또는 마스킹 (예: 312-****-9414-21, 0749)") },
+                                            label = "계좌번호 또는 마스킹",
+                                            placeholder = "예: 312-****-9414-21, 0749",
                                             singleLine = true,
                                             modifier = Modifier.fillMaxWidth()
                                         )
 
-                                        Spacer(modifier = Modifier.height(6.dp))
-
-                                        OutlinedTextField(
+                                        AutoLogueTextField(
                                             value = newAlias,
                                             onValueChange = { newAlias = it },
-                                            label = { Text("계좌 별칭 (예: 생활비 통장, 급여 통장)") },
+                                            label = "계좌 별칭",
+                                            placeholder = "예: 생활비 통장, 급여 통장",
                                             singleLine = true,
                                             modifier = Modifier.fillMaxWidth()
                                         )
-
-                                        Spacer(modifier = Modifier.height(10.dp))
 
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.End,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            TextButton(onClick = { showAddForm = false }) {
-                                                Text("취소", color = Slate600)
-                                            }
+                                            AutoLogueSecondaryButton(
+                                                text = "취소",
+                                                onClick = { showAddForm = false }
+                                            )
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Button(
+                                            AutoLoguePrimaryButton(
+                                                text = "추가 완료",
                                                 onClick = {
                                                     if (newBank.isNotBlank() && newAccountPattern.isNotBlank()) {
                                                         onAddAccount(newBank, newAccountPattern, newAlias)
@@ -264,11 +310,8 @@ fun AccountManageDialog(
                                                         newAlias = ""
                                                         showAddForm = false
                                                     }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = AppColors.primary)
-                                            ) {
-                                                Text("추가 완료", color = PureWhite)
-                                            }
+                                                }
+                                            )
                                         }
                                     }
                                 }
@@ -277,8 +320,10 @@ fun AccountManageDialog(
                     }
 
                     Spacer(modifier = Modifier.height(Spacing.sm))
-                    HairlineDivider()
-                    Spacer(modifier = Modifier.height(Spacing.sm))
+                    if (!isEasyMode) {
+                        HairlineDivider()
+                        Spacer(modifier = Modifier.height(Spacing.sm))
+                    }
 
                     // 하단 액션 버튼
                     Row(
@@ -287,26 +332,19 @@ fun AccountManageDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (!showAddForm) {
-                            OutlinedButton(
-                                onClick = { showAddForm = true },
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, AppColors.primary)
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, tint = AppColors.primary, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("새 계좌 추가", color = AppColors.primary, fontSize = 13.sp)
-                            }
+                            AutoLogueOutlinedButton(
+                                text = "새 계좌 추가",
+                                icon = Icons.Default.Add,
+                                onClick = { showAddForm = true }
+                            )
                         } else {
                             Spacer(modifier = Modifier.width(1.dp))
                         }
 
-                        Button(
-                            onClick = onDismiss,
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Slate800)
-                        ) {
-                            Text("닫기", color = PureWhite, fontSize = 13.sp)
-                        }
+                        AutoLoguePrimaryButton(
+                            text = "닫기",
+                            onClick = onDismiss
+                        )
                     }
                 }
             }

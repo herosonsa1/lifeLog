@@ -19,7 +19,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autologue.app.presentation.common.EasyTheme
 import com.autologue.app.presentation.common.HairlineDivider
+import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.common.MetricBadge
 import com.autologue.app.presentation.expense.AnalyticsComparisonBasis
 import com.autologue.app.presentation.expense.AnalyticsPeriodUnit
@@ -57,11 +59,15 @@ fun GolfAnalyticsSection(
     onNextPeriod: () -> Unit,
     onSelectComparisonBasis: (AnalyticsComparisonBasis) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.xl, vertical = Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(
+                horizontal = if (isEasyMode) 0.dp else Spacing.xl,
+                vertical = if (isEasyMode) 2.dp else Spacing.md
+            ),
+        verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 14.dp else 12.dp)
     ) {
         // 1. 주기 선택 탭: [월간] | [분기별] | [반기별] | [연간]
         PeriodUnitTabSelector(
@@ -138,25 +144,30 @@ private fun GolfAnalyticsSubViewTabBar(
     selectedSubTab: GolfAnalyticsSubTab,
     onSelectSubTab: (GolfAnalyticsSubTab) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
-        color = Slate100,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, Slate200),
+        color = if (isEasyMode) EasyTheme.surface else Slate100,
+        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(3.dp),
+                .padding(if (isEasyMode) 4.dp else 3.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             GolfAnalyticsSubTab.values().forEach { tab ->
                 val isSelected = selectedSubTab == tab
                 Surface(
                     onClick = { onSelectSubTab(tab) },
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (isSelected) PureWhite else Color.Transparent,
-                    border = if (isSelected) BorderStroke(1.dp, Slate300) else null,
+                    shape = RoundedCornerShape(if (isEasyMode) 10.dp else 8.dp),
+                    color = if (isEasyMode) {
+                        if (isSelected) EasyTheme.textPrimary else Color.Transparent
+                    } else {
+                        if (isSelected) PureWhite else Color.Transparent
+                    },
+                    border = if (!isEasyMode && isSelected) BorderStroke(1.dp, Slate300) else null,
                     modifier = Modifier.weight(1f)
                 ) {
                     Box(
@@ -165,9 +176,13 @@ private fun GolfAnalyticsSubViewTabBar(
                     ) {
                         Text(
                             text = tab.label,
-                            fontSize = 11.5.sp,
+                            fontSize = if (isEasyMode) 12.sp else 11.5.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSelected) Slate900 else Slate600,
+                            color = if (isEasyMode) {
+                                if (isSelected) PureWhite else EasyTheme.textSecondary
+                            } else {
+                                if (isSelected) Slate900 else Slate600
+                            },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -182,6 +197,7 @@ private fun GolfAnalyticsSubViewTabBar(
 private fun GolfOverviewTripleSummaryCard(
     report: GolfPeriodComparisonReport
 ) {
+    val isEasyMode = LocalEasyMode.current
     val cur = report.currentSnapshot
     val prev = report.previousSnapshot
     val yoy = report.yoySnapshot
@@ -189,13 +205,13 @@ private fun GolfOverviewTripleSummaryCard(
     val yoyLabel = report.currentPeriod.yoyBasisLabel()
 
     Surface(
-        color = PureWhite,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Slate200),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -203,19 +219,24 @@ private fun GolfOverviewTripleSummaryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "${report.currentPeriod.displayTitle} 골프 활동 요약",
-                        fontSize = 14.sp,
+                        fontSize = if (isEasyMode) 15.sp else 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate900
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "$seqLabel(${report.previousPeriod.compactTitle}) 및 $yoyLabel(${report.yoyPeriod.compactTitle}) 동시 비교",
-                        fontSize = 11.sp,
-                        color = Slate500
+                        fontSize = 11.5.sp,
+                        color = if (isEasyMode) EasyTheme.textMuted else Slate500,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
+                Spacer(modifier = Modifier.width(6.dp))
                 MetricBadge(
                     text = "총 활동 ${cur.totalActivityCount}회",
                     textColor = MenuColors.golf,
@@ -255,9 +276,9 @@ private fun GolfOverviewTripleSummaryCard(
 
             // 3) 평균 스코어 & 최저타(라베) 비교 서브카드
             Surface(
-                color = Slate50,
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, Slate200),
+                color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+                border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -363,10 +384,11 @@ private fun GolfPrimaryMetricBox(
     accentColor: Color,
     modifier: Modifier = Modifier
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
-        color = Slate50,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, Slate200),
+        color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+        shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = modifier
     ) {
         Column(
@@ -480,10 +502,11 @@ private fun SecondarySubMetricChip(
     value: String,
     modifier: Modifier = Modifier
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
-        color = Slate50,
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Slate200),
+        color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+        shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = modifier
     ) {
         Column(
@@ -512,17 +535,18 @@ private fun GolfTopChangeAndInsightCard(
     onJumpToActivityTable: () -> Unit,
     onJumpToScoreTable: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     val topAct = report.topChangedActivityMetric
     val topScore = report.topChangedScoreMetric
 
     Surface(
-        color = PureWhite,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.5.dp, Slate800),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        border = if (isEasyMode) null else BorderStroke(1.5.dp, Slate800),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -532,14 +556,18 @@ private fun GolfTopChangeAndInsightCard(
             ) {
                 Text(
                     text = "핵심 변동 강조 및 골프 라이프 인사이트",
-                    fontSize = 13.5.sp,
+                    fontSize = if (isEasyMode) 15.sp else 13.5.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Slate900
+                    color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.width(6.dp))
                 MetricBadge(
                     text = "자동 원인 진단",
-                    textColor = PureWhite,
-                    backgroundColor = Slate900
+                    textColor = if (isEasyMode) EasyTheme.appleGreen else PureWhite,
+                    backgroundColor = if (isEasyMode) EasyTheme.appleGreenSoft else Slate900
                 )
             }
 
@@ -639,9 +667,9 @@ private fun GolfTopChangeAndInsightCard(
 
             // 3단 인사이트 문장 박스
             Surface(
-                color = Slate50,
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, Slate200),
+                color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+                border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -693,13 +721,14 @@ private fun InsightBulletItem(
 private fun GolfPeriodTrendChartCard(
     report: GolfPeriodComparisonReport
 ) {
+    val isEasyMode = LocalEasyMode.current
     val items = report.trendItems
     val maxCount = (items.maxOfOrNull { it.totalActivityCount } ?: 1).coerceAtLeast(1)
 
     Surface(
-        color = PureWhite,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Slate200),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -854,10 +883,11 @@ private fun GolfDeltaTableCard(
     showSeparateYoyBar: Boolean,
     rows: List<GolfMetricDeltaRow>
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
-        color = PureWhite,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Slate200),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -901,6 +931,7 @@ private fun GolfMetricComparisonItemCard(
     yoyPeriodLabel: String,
     showSeparateYoyBar: Boolean
 ) {
+    val isEasyMode = LocalEasyMode.current
     val deltaVal = row.deltaFromComparison ?: 0.0
     val hasChange = row.deltaFromComparison != null && abs(deltaVal) >= 0.05
     val isPositiveOutcome = if (row.lowerIsBetter) deltaVal < -0.04 else deltaVal > 0.04
@@ -910,6 +941,7 @@ private fun GolfMetricComparisonItemCard(
         row.isHighlightedChange && isPositiveOutcome -> BorderStroke(1.5.dp, GolfPositiveFill)
         row.isHighlightedChange && isNegativeOutcome -> BorderStroke(1.5.dp, GolfCautionFill)
         row.isHighlightedChange -> BorderStroke(1.5.dp, Slate800)
+        isEasyMode -> null
         else -> BorderStroke(1.dp, Slate200)
     }
 
@@ -930,8 +962,8 @@ private fun GolfMetricComparisonItemCard(
     }
 
     Surface(
-        color = if (row.isHighlightedChange) Slate50 else PureWhite,
-        shape = RoundedCornerShape(12.dp),
+        color = if (row.isHighlightedChange) Slate50 else if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+        shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
         border = borderStroke,
         modifier = Modifier.fillMaxWidth()
     ) {

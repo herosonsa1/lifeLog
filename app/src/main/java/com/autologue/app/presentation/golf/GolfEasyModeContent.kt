@@ -124,17 +124,15 @@ fun GolfEasyModeContent(
                             requestedBasis = golfAnalyticsBasis
                         )
                     }
-                    EasySectionCard(contentPadding = PaddingValues(vertical = 8.dp)) {
-                        GolfAnalyticsSection(
-                            report = golfReport,
-                            selectedSubTab = golfAnalyticsSubTab,
-                            onSelectSubTab = onSelectAnalyticsSubTab,
-                            onSelectPeriodUnit = onSelectAnalyticsUnit,
-                            onPreviousPeriod = onPreviousAnalyticsPeriod,
-                            onNextPeriod = onNextAnalyticsPeriod,
-                            onSelectComparisonBasis = onSelectAnalyticsBasis
-                        )
-                    }
+                    GolfAnalyticsSection(
+                        report = golfReport,
+                        selectedSubTab = golfAnalyticsSubTab,
+                        onSelectSubTab = onSelectAnalyticsSubTab,
+                        onSelectPeriodUnit = onSelectAnalyticsUnit,
+                        onPreviousPeriod = onPreviousAnalyticsPeriod,
+                        onNextPeriod = onNextAnalyticsPeriod,
+                        onSelectComparisonBasis = onSelectAnalyticsBasis
+                    )
                 }
             } else {
                 // 2. 골프 핵심 요약 히어로 카드 + 원탭 액션

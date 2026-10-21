@@ -3135,6 +3135,7 @@ fun DateRangeFilterDialog(
     onOpenCategoryManage: () -> Unit,
     onOpenUserManage: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     var tempYearMonth by remember { mutableStateOf(currentYearMonth) }
 
     Dialog(
@@ -3146,17 +3147,17 @@ fun DateRangeFilterDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 20.dp)
                 .heightIn(max = 680.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = PureWhite,
-            shadowElevation = 8.dp,
-            border = BorderStroke(1.dp, Slate200)
+            shape = RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp),
+            color = if (isEasyMode) EasyTheme.bg else PureWhite,
+            shadowElevation = if (isEasyMode) 2.dp else 8.dp,
+            border = if (isEasyMode) null else BorderStroke(1.dp, Slate200)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 16.dp)
+                    .padding(horizontal = if (isEasyMode) 20.dp else 18.dp, vertical = if (isEasyMode) 20.dp else 16.dp)
             ) {
-                // 상단 헤더: 타이틀 + 조건 초기화 버튼
+                // 상단 헤더: 타이틀 + 쉬운 모드 전환 + 조건 초기화 버튼
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -3164,29 +3165,48 @@ fun DateRangeFilterDialog(
                 ) {
                     Text(
                         text = "조회조건 필터 설정",
-                        style = AppTypography.h2.copy(fontWeight = FontWeight.Bold, color = Slate900)
+                        style = if (isEasyMode) {
+                            AppTypography.h2.copy(
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = EasyTheme.textPrimary
+                            )
+                        } else {
+                            AppTypography.h2.copy(fontWeight = FontWeight.Bold, color = Slate900)
+                        },
+                        modifier = Modifier.weight(1f)
                     )
-                    Box(
-                        modifier = Modifier
-                            .height(28.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFFFEF2F2))
-                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(6.dp))
-                            .clickable { onClearAllFilters() }
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "조건 초기화",
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFDC2626)
-                        )
+                        EasyModalModeSwitchChip()
+                        Box(
+                            modifier = Modifier
+                                .height(28.dp)
+                                .clip(RoundedCornerShape(if (isEasyMode) 8.dp else 6.dp))
+                                .background(Color(0xFFFEF2F2))
+                                .then(
+                                    if (isEasyMode) Modifier else Modifier.border(1.dp, Color(0xFFFECACA), RoundedCornerShape(6.dp))
+                                )
+                                .clickable { onClearAllFilters() }
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "조건 초기화",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFDC2626)
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // 중앙 스크롤 영역 (3열/4열 균등 그리드 정렬)
                 Column(
@@ -3413,9 +3433,11 @@ fun DateRangeFilterDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(42.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Slate50)
-                                .border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(if (isEasyMode) 12.dp else 10.dp))
+                                .background(if (isEasyMode) EasyTheme.surface else Slate50)
+                                .then(
+                                    if (isEasyMode) Modifier else Modifier.border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                                )
                                 .padding(horizontal = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -3443,8 +3465,8 @@ fun DateRangeFilterDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(38.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(AppColors.primary)
+                                    .clip(RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp))
+                                    .background(if (isEasyMode) EasyTheme.blue else AppColors.primary)
                                     .clickable { onSelectMonth(tempYearMonth) },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -3459,7 +3481,9 @@ fun DateRangeFilterDialog(
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // 하단 버튼 영역 (가로폭 100% 2열 균등 배치)
@@ -3471,32 +3495,34 @@ fun DateRangeFilterDialog(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(42.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Slate100)
-                            .border(1.dp, Slate300, RoundedCornerShape(10.dp))
+                            .height(if (isEasyMode) 48.dp else 42.dp)
+                            .clip(RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp))
+                            .background(if (isEasyMode) EasyTheme.surfaceSubtle else Slate100)
+                            .then(
+                                if (isEasyMode) Modifier else Modifier.border(1.dp, Slate300, RoundedCornerShape(10.dp))
+                            )
                             .clickable { onDismiss() },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = "닫기",
-                            fontSize = 13.sp,
+                            fontSize = 13.5.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Slate700
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate700
                         )
                     }
                     Box(
                         modifier = Modifier
                             .weight(1.3f)
-                            .height(42.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(AppColors.primary)
+                            .height(if (isEasyMode) 48.dp else 42.dp)
+                            .clip(RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp))
+                            .background(if (isEasyMode) EasyTheme.blue else AppColors.primary)
                             .clickable { onDismiss() },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = "적용 완료",
-                            fontSize = 13.sp,
+                            fontSize = 13.5.sp,
                             fontWeight = FontWeight.Bold,
                             color = PureWhite
                         )
@@ -3520,6 +3546,7 @@ fun ExpenseTransactionDateTimeSelector(
     referenceYearMonth: YearMonth? = null,
     sectionTitle: String = "카드 사용 일자 및 일시 지정"
 ) {
+    val isEasyMode = LocalEasyMode.current
     val context = LocalContext.current
     var showDirectInput by remember { mutableStateOf(false) }
 
@@ -3544,13 +3571,13 @@ fun ExpenseTransactionDateTimeSelector(
     }
 
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFFF8FAFC),
-        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+        shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+        color = if (isEasyMode) EasyTheme.surface else Color(0xFFF8FAFC),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFBFDBFE)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(if (isEasyMode) 14.dp else 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // 상단 타이틀 및 현재 지정 일시 배지
@@ -3561,19 +3588,22 @@ fun ExpenseTransactionDateTimeSelector(
             ) {
                 Text(
                     text = sectionTitle,
-                    style = AppTypography.caption.copy(color = Color(0xFF1E3A8A), fontWeight = FontWeight.Bold)
+                    style = AppTypography.caption.copy(
+                        color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF1E3A8A),
+                        fontWeight = FontWeight.Bold
+                    )
                 )
                 Surface(
-                    shape = RoundedCornerShape(5.dp),
-                    color = Color(0xFFEFF6FF),
-                    border = BorderStroke(1.dp, Color(0xFF93C5FD))
+                    shape = RoundedCornerShape(if (isEasyMode) 8.dp else 5.dp),
+                    color = if (isEasyMode) EasyTheme.blueBg else Color(0xFFEFF6FF),
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFF93C5FD))
                 ) {
                     Text(
                         text = selectedDateTime.format(fullBadgeFmt),
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1D4ED8),
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.5.dp)
+                        color = if (isEasyMode) EasyTheme.blue else Color(0xFF1D4ED8),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                     )
                 }
             }
@@ -3597,9 +3627,9 @@ fun ExpenseTransactionDateTimeSelector(
                             selectedDateTime.dayOfMonth
                         ).show()
                     },
-                    shape = RoundedCornerShape(8.dp),
-                    color = PureWhite,
-                    border = BorderStroke(1.2.dp, Color(0xFF93C5FD)),
+                    shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+                    border = if (isEasyMode) null else BorderStroke(1.2.dp, Color(0xFF93C5FD)),
                     modifier = Modifier.weight(1.1f)
                 ) {
                     Column(
@@ -3618,7 +3648,7 @@ fun ExpenseTransactionDateTimeSelector(
                                 Icon(
                                     imageVector = Icons.Default.CalendarMonth,
                                     contentDescription = "사용 일자 선택",
-                                    tint = Color(0xFF2563EB),
+                                    tint = if (isEasyMode) EasyTheme.blue else Color(0xFF2563EB),
                                     modifier = Modifier.size(13.dp)
                                 )
                                 Text(
@@ -3632,7 +3662,7 @@ fun ExpenseTransactionDateTimeSelector(
                                 text = "달력 ▾",
                                 fontSize = 9.5.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF2563EB)
+                                color = if (isEasyMode) EasyTheme.blue else Color(0xFF2563EB)
                             )
                         }
                         Text(
@@ -3659,9 +3689,9 @@ fun ExpenseTransactionDateTimeSelector(
                             false
                         ).show()
                     },
-                    shape = RoundedCornerShape(8.dp),
-                    color = PureWhite,
-                    border = BorderStroke(1.2.dp, Color(0xFF93C5FD)),
+                    shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+                    border = if (isEasyMode) null else BorderStroke(1.2.dp, Color(0xFF93C5FD)),
                     modifier = Modifier.weight(1f)
                 ) {
                     Column(
@@ -3975,15 +4005,32 @@ fun AddManualExpenseDialog(
     var isFixedExpense by remember { mutableStateOf(false) }
     var memo by remember { mutableStateOf("") }
 
+    val isEasyMode = LocalEasyMode.current
     val isBankMode = selectedCategory == ExpenseCategory.TRANSFER || selectedCategory == ExpenseCategory.INCOME
 
     AlertDialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
         title = {
-            Text(
-                text = "지출 직접 추가",
-                style = AppTypography.h2
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "지출 직접 추가",
+                    style = if (isEasyMode) {
+                        AppTypography.h2.copy(
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = EasyTheme.textPrimary
+                        )
+                    } else {
+                        AppTypography.h2
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                EasyModalModeSwitchChip()
+            }
         },
         text = {
             Column(
@@ -4423,8 +4470,10 @@ fun AddManualExpenseDialog(
                     }
                 },
                 enabled = amount > 0 && !isSaving,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                shape = RoundedCornerShape(10.dp)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isEasyMode) EasyTheme.blue else Color(0xFF2563EB)
+                ),
+                shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp)
             ) {
                 if (isSaving) {
                     CircularProgressIndicator(
@@ -4445,8 +4494,8 @@ fun AddManualExpenseDialog(
                 onClick = { if (!isSaving) onDismiss() }
             )
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal
     )
 }
 
@@ -4596,6 +4645,7 @@ fun EditTransactionDialog(
     var editingCatItemTarget by remember { mutableStateOf<com.autologue.app.data.preferences.ManagedCategoryItem?>(null) }
     var editingCatNewName by remember { mutableStateOf("") }
 
+    val isEasyMode = LocalEasyMode.current
     val isEffectiveIncome = isDeposit || selectedCategory == ExpenseCategory.INCOME
     val isBankTx = transaction.isBankAccountTransaction(selectedCategory)
     val txDirLabel = if (isEffectiveIncome) "입금" else "출금"
@@ -4608,10 +4658,26 @@ fun EditTransactionDialog(
     AlertDialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
         title = {
-            Text(
-                text = "결제 내역 상세 설정 및 수정",
-                style = AppTypography.h2
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "결제 내역 상세 설정",
+                    style = if (isEasyMode) {
+                        AppTypography.h2.copy(
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = EasyTheme.textPrimary
+                        )
+                    } else {
+                        AppTypography.h2
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                EasyModalModeSwitchChip()
+            }
         },
         text = {
             Column(
@@ -4626,13 +4692,13 @@ fun EditTransactionDialog(
                 ) {
                     // 상단 결제 요약
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Slate50,
-                        shadowElevation = 1.5.dp,
-                        border = BorderStroke(1.dp, Slate200),
+                        shape = RoundedCornerShape(if (isEasyMode) 18.dp else 8.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Slate50,
+                        shadowElevation = if (isEasyMode) 0.dp else 1.5.dp,
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(Spacing.md)) {
+                        Column(modifier = Modifier.padding(if (isEasyMode) 16.dp else Spacing.md)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -4640,13 +4706,21 @@ fun EditTransactionDialog(
                             ) {
                                 Text(
                                     text = "%,d원".format(transaction.amount),
-                                    style = AppTypography.h1.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
+                                    style = if (isEasyMode) {
+                                        AppTypography.h1.copy(
+                                            fontSize = 22.sp,
+                                            color = EasyTheme.textPrimary,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    } else {
+                                        AppTypography.h1.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
+                                    }
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Surface(
-                                        shape = RoundedCornerShape(4.dp),
+                                        shape = RoundedCornerShape(if (isEasyMode) 8.dp else 4.dp),
                                         color = if (isEffectiveIncome) Color(0xFFECFDF5) else Color(0xFFEFF6FF),
-                                        border = BorderStroke(1.dp, if (isEffectiveIncome) Color(0xFF6EE7B7) else Color(0xFFBFDBFE))
+                                        border = if (isEasyMode) null else BorderStroke(1.dp, if (isEffectiveIncome) Color(0xFF6EE7B7) else Color(0xFFBFDBFE))
                                     ) {
                                         Text(
                                             text = txTypeBadgeLabel,
@@ -4658,9 +4732,9 @@ fun EditTransactionDialog(
                                     }
                                     if (isFixedExpense) {
                                         Surface(
-                                            shape = RoundedCornerShape(4.dp),
+                                            shape = RoundedCornerShape(if (isEasyMode) 8.dp else 4.dp),
                                             color = if (isEffectiveIncome) Color(0xFFD1FAE5) else Color(0xFFEDE9FE),
-                                            border = BorderStroke(1.dp, if (isEffectiveIncome) Color(0xFF6EE7B7) else Color(0xFFC4B5FD))
+                                            border = if (isEasyMode) null else BorderStroke(1.dp, if (isEffectiveIncome) Color(0xFF6EE7B7) else Color(0xFFC4B5FD))
                                         ) {
                                             Text(
                                                 text = if (isEffectiveIncome) "고정수입" else "고정지출",
@@ -4673,7 +4747,7 @@ fun EditTransactionDialog(
                                     }
                                     if (!isBankTx && isCorporate) {
                                         Surface(
-                                            shape = RoundedCornerShape(4.dp),
+                                            shape = RoundedCornerShape(if (isEasyMode) 8.dp else 4.dp),
                                             color = Color(0xFF1E293B)
                                         ) {
                                             Text(
@@ -5604,15 +5678,27 @@ fun EditTransactionDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-                HairlineDivider()
+                if (!isEasyMode) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HairlineDivider()
+                }
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // 저장 버튼 바로 위에 배치된 [1회성 저장 / 영구저장] 선택 및 영구저장 항목 지정 카드
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (isOneTimeSave) Color(0xFFFFFBEB) else Color(0xFFEFF6FF),
-                    border = BorderStroke(1.dp, if (isOneTimeSave) Color(0xFFFDE68A) else Color(0xFFBFDBFE)),
+                    shape = RoundedCornerShape(if (isEasyMode) 18.dp else 8.dp),
+                    color = if (isEasyMode) {
+                        EasyTheme.surface
+                    } else if (isOneTimeSave) {
+                        Color(0xFFFFFBEB)
+                    } else {
+                        Color(0xFFEFF6FF)
+                    },
+                    border = if (isEasyMode) {
+                        null
+                    } else {
+                        BorderStroke(1.dp, if (isOneTimeSave) Color(0xFFFDE68A) else Color(0xFFBFDBFE))
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -6042,8 +6128,10 @@ fun EditTransactionDialog(
                         }
                     },
                     enabled = !isSaving,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isEasyMode) EasyTheme.blue else Color(0xFF2563EB)
+                    ),
+                    shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
                 ) {
                     if (isSaving) {
@@ -6066,8 +6154,8 @@ fun EditTransactionDialog(
                 onClick = { if (!isSaving) onDismiss() }
             )
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal
     )
 }
 
@@ -6116,17 +6204,22 @@ fun ExpenseInlineFilterChip(
     height: Dp = 30.dp,
     fontSize: TextUnit = 11.5.sp
 ) {
-    val bgColor = if (isSelected) selectedContainerColor else unselectedContainerColor
+    val isEasyMode = LocalEasyMode.current
+    val resolvedSelectedBg = if (isEasyMode && selectedContainerColor == AppColors.primary) EasyTheme.blue else selectedContainerColor
+    val resolvedUnselectedBg = if (isEasyMode && unselectedContainerColor == PureWhite) EasyTheme.surfaceSubtle else unselectedContainerColor
+    val bgColor = if (isSelected) resolvedSelectedBg else resolvedUnselectedBg
     val bdColor = if (isSelected) selectedBorderColor else unselectedBorderColor
     val fgColor = if (isSelected) selectedContentColor else unselectedContentColor
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(if (isEasyMode) 10.dp else 8.dp)
 
     Row(
         modifier = modifier
             .height(height)
             .clip(shape)
             .background(bgColor)
-            .border(1.dp, bdColor, shape)
+            .then(
+                if (isEasyMode) Modifier else Modifier.border(1.dp, bdColor, shape)
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -6182,8 +6275,9 @@ fun ExpenseUniformFilterGrid(
     horizontalSpacing: Dp = 6.dp,
     verticalSpacing: Dp = 6.dp
 ) {
+    val isEasyMode = LocalEasyMode.current
     val rows = options.chunked(columns.coerceAtLeast(1))
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp)
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -6196,17 +6290,29 @@ fun ExpenseUniformFilterGrid(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 rowItems.forEach { item ->
-                    val bgColor = if (item.isSelected) item.selectedContainerColor else item.unselectedContainerColor
+                    val resolvedSelectedBg = if (isEasyMode && item.selectedContainerColor == AppColors.primary) {
+                        EasyTheme.blue
+                    } else {
+                        item.selectedContainerColor
+                    }
+                    val resolvedUnselectedBg = if (isEasyMode && item.unselectedContainerColor == Slate50) {
+                        EasyTheme.surface
+                    } else {
+                        item.unselectedContainerColor
+                    }
+                    val bgColor = if (item.isSelected) resolvedSelectedBg else resolvedUnselectedBg
                     val bdColor = if (item.isSelected) item.selectedBorderColor else item.unselectedBorderColor
                     val fgColor = if (item.isSelected) item.selectedContentColor else item.unselectedContentColor
 
                     Row(
                         modifier = Modifier
                             .weight(1f)
-                            .height(itemHeight)
+                            .height(if (isEasyMode) (itemHeight + 2.dp) else itemHeight)
                             .clip(shape)
                             .background(bgColor)
-                            .border(1.dp, bdColor, shape)
+                            .then(
+                                if (isEasyMode) Modifier else Modifier.border(1.dp, bdColor, shape)
+                            )
                             .clickable(onClick = item.onClick)
                             .padding(horizontal = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,

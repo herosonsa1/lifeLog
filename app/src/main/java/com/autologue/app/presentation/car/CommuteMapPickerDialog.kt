@@ -311,6 +311,8 @@ fun CommuteMapPickerDialog(
         }
     }
 
+    val isEasyMode = LocalEasyMode.current
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -326,42 +328,60 @@ fun CommuteMapPickerDialog(
             contentAlignment = Alignment.Center
         ) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = AppColors.surface,
-                shadowElevation = 12.dp,
+                shape = RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp),
+                color = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+                shadowElevation = if (isEasyMode) 0.dp else 12.dp,
                 modifier = Modifier
                     .fillMaxWidth(0.95f)
                     .fillMaxHeight(0.92f)
             ) {
-            Column(modifier = Modifier.fillMaxSize().padding(Spacing.md)) {
+            Column(modifier = Modifier.fillMaxSize().padding(if (isEasyMode) 18.dp else Spacing.md)) {
                 // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.LocationOn,
-                            contentDescription = null,
-                            tint = MenuColors.carLedger,
-                            modifier = Modifier.size(26.dp)
-                        )
-                        Spacer(modifier = Modifier.width(Spacing.xs))
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        if (!isEasyMode) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = MenuColors.carLedger,
+                                modifier = Modifier.size(26.dp)
+                            )
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                        }
                         Column {
                             Text(
                                 text = "출퇴근 지도 거점 및 경로 설정",
-                                style = AppTypography.h2.copy(fontSize = 17.sp)
+                                style = AppTypography.h2.copy(
+                                    fontSize = if (isEasyMode) 18.sp else 17.sp,
+                                    fontWeight = if (isEasyMode) FontWeight.ExtraBold else FontWeight.Bold,
+                                    color = if (isEasyMode) EasyTheme.textPrimary else AppColors.textPrimary
+                                )
                             )
                             Text(
                                 text = "지도를 탭하거나 드래그하여 거점을 이동하세요",
-                                style = AppTypography.captionMuted
+                                style = AppTypography.captionMuted.copy(
+                                    color = if (isEasyMode) EasyTheme.textSecondary else AppColors.textMuted
+                                )
                             )
                         }
                     }
 
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "닫기", tint = Slate500)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        EasyModalModeSwitchChip()
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "닫기",
+                                tint = if (isEasyMode) EasyTheme.textSecondary else Slate500
+                            )
+                        }
                     }
                 }
 
@@ -371,14 +391,17 @@ fun CommuteMapPickerDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Slate100, RoundedCornerShape(8.dp))
+                        .background(
+                            if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
+                            RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp)
+                        )
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     TabButton(
-                        text = "1. 우리집 위치 (🏠)",
+                        text = if (isEasyMode) "1. 우리집 위치" else "1. 우리집 위치 (🏠)",
                         selected = activeTab == CommutePickerTab.HOME,
-                        color = MenuColors.carLedger,
+                        color = if (isEasyMode) EasyTheme.blue else MenuColors.carLedger,
                         modifier = Modifier.weight(1f),
                         onClick = {
                             activeTab = CommutePickerTab.HOME
@@ -387,9 +410,9 @@ fun CommuteMapPickerDialog(
                         }
                     )
                     TabButton(
-                        text = "2. 회사 위치 (🏢)",
+                        text = if (isEasyMode) "2. 회사 위치" else "2. 회사 위치 (🏢)",
                         selected = activeTab == CommutePickerTab.COMPANY,
-                        color = MenuColors.diary,
+                        color = if (isEasyMode) EasyTheme.blue else MenuColors.diary,
                         modifier = Modifier.weight(1f),
                         onClick = {
                             activeTab = CommutePickerTab.COMPANY
@@ -398,9 +421,9 @@ fun CommuteMapPickerDialog(
                         }
                     )
                     TabButton(
-                        text = "3. 경로·거리 (🚗)",
+                        text = if (isEasyMode) "3. 경로·거리" else "3. 경로·거리 (🚗)",
                         selected = activeTab == CommutePickerTab.ROUTE,
-                        color = MenuColors.golf,
+                        color = if (isEasyMode) EasyTheme.blue else MenuColors.golf,
                         modifier = Modifier.weight(1f),
                         onClick = {
                             activeTab = CommutePickerTab.ROUTE

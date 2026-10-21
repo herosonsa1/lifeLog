@@ -1,5 +1,7 @@
 package com.autologue.app.presentation.common
 
+import android.view.HapticFeedbackConstants
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,17 +12,22 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
@@ -35,11 +42,12 @@ fun HairlineDivider(
     color: Color = AppColors.border,
     thickness: Dp = 0.5.dp
 ) {
+    val isEasyMode = LocalEasyMode.current
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(thickness)
-            .background(color)
+            .background(if (isEasyMode && color == AppColors.border) EasyTheme.divider else color)
     )
 }
 
@@ -97,8 +105,64 @@ fun AutoLogueCompactTopBar(
     }
 }
 
+/**
+ * 팝업 모달 상단 우측에서 언제든 '쉬운 모드 ↔ 고급모드'를 즉시 전환할 수 있는 토스·애플 감성 캡슐 칩
+ */
+@Composable
+fun EasyModalModeSwitchChip(
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val isEasy by EasyModeManager.isEasyMode.collectAsState()
+
+    Surface(
+        onClick = {
+            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            val next = EasyModeManager.toggleEasyMode(context)
+            Toast.makeText(
+                context,
+                if (next) "쉬운 모드 UI/UX가 적용되었습니다." else "고급모드(기존 UI/UX)로 전환되었습니다.",
+                Toast.LENGTH_SHORT
+            ).show()
+        },
+        shape = RoundedCornerShape(14.dp),
+        color = if (isEasy) EasyTheme.tossBlueSoft else Slate100,
+        border = if (isEasy) null else BorderStroke(1.dp, Slate200),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Icon(
+                imageVector = if (isEasy) Icons.Default.AutoAwesome else Icons.Default.Tune,
+                contentDescription = "쉬운 모드 전환",
+                tint = if (isEasy) EasyTheme.tossBlue else Slate600,
+                modifier = Modifier.size(12.dp)
+            )
+            Text(
+                text = if (isEasy) "쉬운모드" else "고급모드",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (isEasy) EasyTheme.tossBlue else Slate700,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
+
 private val SINGLE_LINE_BREAK_REGEX = Regex("""[\r\n\t]+""")
 private val MULTI_SPACE_INPUT_REGEX = Regex(""" {2,}""")
+private val LEADING_EMOJI_STRIP_REGEX = Regex("""^[\p{So}\p{Cn}\uFE0F\u200D\s]+""")
+
+fun cleanEasyLabelText(raw: String, isEasyMode: Boolean): String {
+    if (!isEasyMode) return raw
+    val stripped = raw.replace(LEADING_EMOJI_STRIP_REGEX, "").trimStart()
+    return if (stripped.isNotEmpty()) stripped else raw
+}
 
 private fun normalizeSingleLineFieldText(raw: String): String {
     if (!raw.contains('\n') && !raw.contains('\r') && !raw.contains('\t')) return raw
@@ -106,7 +170,7 @@ private fun normalizeSingleLineFieldText(raw: String): String {
 }
 
 /**
- * 표준 Input 텍스트필드 (상단 라벨 + 기존 톤의 소프트 배경 + 그림자 입체 효과 + 슬레이트 테두리)
+ * 표준 Input 텍스트필드 (쉬운 모드: 토스·애플 스타일 무테두리 소프트 그레이 입력 필드 / 고급모드: 기존 슬레이트 테두리 + 그림자)
  * isCompact = true 설정 시 입력필드 높이를 컴팩트하게 줄여 다이얼로그나 그리드 내에서 깔끔하게 표출합니다.
  */
 @Composable
@@ -126,6 +190,7 @@ fun AutoLogueTextField(
     isCompact: Boolean = false,
     visualTransformation: VisualTransformation = VisualTransformation.None
 ) {
+    val isEasyMode = LocalEasyMode.current
     val displayValue = if (singleLine) normalizeSingleLineFieldText(value) else value
     val effectiveKeyboardOptions = if (singleLine && keyboardOptions.imeAction == androidx.compose.ui.text.input.ImeAction.Default) {
         keyboardOptions.copy(imeAction = androidx.compose.ui.text.input.ImeAction.Done)
@@ -140,18 +205,33 @@ fun AutoLogueTextField(
 
     Column(modifier = modifier) {
         if (label != null) {
+            val cleanedLabel = cleanEasyLabelText(label, isEasyMode)
             Text(
-                text = label,
-                style = if (isCompact) AppTypography.caption.copy(fontSize = 11.sp, color = Slate600, fontWeight = FontWeight.SemiBold)
-                        else AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold),
-                modifier = Modifier.padding(bottom = if (isCompact) 2.dp else 4.dp, start = 2.dp)
+                text = cleanedLabel,
+                style = if (isEasyMode) {
+                    AppTypography.caption.copy(
+                        fontSize = if (isCompact) 12.sp else 12.5.sp,
+                        color = EasyTheme.textSecondary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                } else if (isCompact) {
+                    AppTypography.caption.copy(fontSize = 11.sp, color = Slate600, fontWeight = FontWeight.SemiBold)
+                } else {
+                    AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
+                },
+                maxLines = 1,
+                modifier = Modifier.padding(bottom = if (isEasyMode) 5.dp else if (isCompact) 2.dp else 4.dp, start = 2.dp)
             )
         }
+        val fieldShape = RoundedCornerShape(
+            if (isEasyMode) (if (isCompact) 11.dp else 14.dp)
+            else (if (isCompact) 6.dp else 8.dp)
+        )
         Surface(
-            shape = RoundedCornerShape(if (isCompact) 6.dp else 8.dp),
-            color = Slate50,
-            shadowElevation = if (isCompact) 0.5.dp else 1.5.dp,
-            border = BorderStroke(1.dp, Slate200),
+            shape = fieldShape,
+            color = if (isEasyMode) EasyTheme.chipBg else Slate50,
+            shadowElevation = if (isEasyMode) 0.dp else if (isCompact) 0.5.dp else 1.5.dp,
+            border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
             modifier = Modifier.fillMaxWidth()
         ) {
             if (isCompact) {
@@ -165,16 +245,19 @@ fun AutoLogueTextField(
                     keyboardActions = keyboardActions,
                     visualTransformation = visualTransformation,
                     textStyle = AppTypography.body.copy(
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Slate900
+                        fontSize = if (isEasyMode) 14.sp else 13.sp,
+                        fontWeight = if (isEasyMode) FontWeight.SemiBold else FontWeight.Medium,
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900
                     ),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color(0xFF2563EB)),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)),
                     decorationBox = { innerTextField ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                .padding(
+                                    horizontal = if (isEasyMode) 12.dp else 8.dp,
+                                    vertical = if (isEasyMode) 9.dp else 6.dp
+                                ),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (leadingIcon != null) {
@@ -185,8 +268,9 @@ fun AutoLogueTextField(
                                 if (displayValue.isEmpty() && placeholder != null) {
                                     Text(
                                         text = placeholder,
-                                        fontSize = 12.sp,
-                                        color = Slate400
+                                        fontSize = if (isEasyMode) 13.sp else 12.sp,
+                                        color = if (isEasyMode) EasyTheme.textMuted else Slate400,
+                                        maxLines = 1
                                     )
                                 }
                                 innerTextField()
@@ -203,7 +287,15 @@ fun AutoLogueTextField(
                 OutlinedTextField(
                     value = displayValue,
                     onValueChange = effectiveOnValueChange,
-                    placeholder = if (placeholder != null) { { Text(placeholder, fontSize = 13.sp, color = Slate400) } } else null,
+                    placeholder = if (placeholder != null) {
+                        {
+                            Text(
+                                placeholder,
+                                fontSize = if (isEasyMode) 13.5.sp else 13.sp,
+                                color = if (isEasyMode) EasyTheme.textMuted else Slate400
+                            )
+                        }
+                    } else null,
                     singleLine = singleLine,
                     maxLines = maxLines,
                     minLines = minLines,
@@ -212,16 +304,16 @@ fun AutoLogueTextField(
                     leadingIcon = leadingIcon,
                     trailingIcon = trailingIcon,
                     visualTransformation = visualTransformation,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = fieldShape,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Slate50,
-                        unfocusedContainerColor = Slate50,
-                        disabledContainerColor = Slate100,
-                        focusedBorderColor = Color(0xFF2563EB),
+                        focusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                        unfocusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                        disabledContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
+                        focusedBorderColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB),
                         unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = Slate900,
-                        unfocusedTextColor = Slate900,
-                        cursorColor = Color(0xFF2563EB)
+                        focusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                        unfocusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                        cursorColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -292,7 +384,7 @@ class NumberCommaVisualTransformation : VisualTransformation {
 }
 
 /**
- * 인라인 컴팩트 입력창 + 슬림 추가 버튼 (그림자 효과 적용)
+ * 인라인 컴팩트 입력창 + 슬림 추가 버튼 (쉬운 모드: 토스·애플 무테두리 칩 스타일 / 고급모드: 기존 그림자 효과)
  */
 @Composable
 fun AutoLogueCompactInputRow(
@@ -303,33 +395,43 @@ fun AutoLogueCompactInputRow(
     buttonText: String = "추가",
     modifier: Modifier = Modifier
 ) {
+    val isEasyMode = LocalEasyMode.current
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = Slate50,
-            shadowElevation = 1.5.dp,
-            border = BorderStroke(1.dp, Slate200),
+            shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+            color = if (isEasyMode) EasyTheme.chipBg else Slate50,
+            shadowElevation = if (isEasyMode) 0.dp else 1.5.dp,
+            border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
             modifier = Modifier
                 .weight(1f)
-                .height(38.dp)
+                .height(if (isEasyMode) 42.dp else 38.dp)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 if (value.isEmpty()) {
-                    Text(placeholder, fontSize = 12.sp, color = Slate400)
+                    Text(
+                        placeholder,
+                        fontSize = if (isEasyMode) 13.sp else 12.sp,
+                        color = if (isEasyMode) EasyTheme.textMuted else Slate400,
+                        maxLines = 1
+                    )
                 }
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
                     singleLine = true,
-                    textStyle = AppTypography.body.copy(color = Slate900, fontSize = 13.sp),
+                    textStyle = AppTypography.body.copy(
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                        fontSize = if (isEasyMode) 14.sp else 13.sp,
+                        fontWeight = if (isEasyMode) FontWeight.SemiBold else FontWeight.Normal
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -337,16 +439,24 @@ fun AutoLogueCompactInputRow(
         Spacer(modifier = Modifier.width(8.dp))
         Button(
             onClick = onAddClick,
-            shape = RoundedCornerShape(8.dp),
-            elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp, pressedElevation = 0.5.dp),
+            shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+            elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp)
+                        else ButtonDefaults.buttonElevation(defaultElevation = 2.dp, pressedElevation = 0.5.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF2563EB),
+                containerColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB),
                 contentColor = PureWhite
             ),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-            modifier = Modifier.height(38.dp)
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+            modifier = Modifier.height(if (isEasyMode) 42.dp else 38.dp)
         ) {
-            Text(buttonText, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PureWhite)
+            Text(
+                cleanEasyLabelText(buttonText, isEasyMode),
+                fontSize = if (isEasyMode) 13.sp else 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = PureWhite,
+                maxLines = 1,
+                softWrap = false
+            )
         }
     }
 }
@@ -364,15 +474,19 @@ fun AutoLogueActionChipButton(
     contentColor: Color = Color(0xFF1D4ED8),
     modifier: Modifier = Modifier
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val isEasyMode = LocalEasyMode.current
+    val shape = RoundedCornerShape(if (isEasyMode) 10.dp else 8.dp)
     Box(
         modifier = modifier
-            .height(32.dp)
+            .height(if (isEasyMode) 34.dp else 32.dp)
             .clip(shape)
             .background(containerColor, shape)
-            .border(BorderStroke(1.dp, borderColor), shape)
+            .then(
+                if (isEasyMode) Modifier
+                else Modifier.border(BorderStroke(1.dp, borderColor), shape)
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = if (isEasyMode) 12.dp else 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -384,18 +498,19 @@ fun AutoLogueActionChipButton(
                 Spacer(modifier = Modifier.width(4.dp))
             }
             Text(
-                text = text,
-                fontSize = 11.5.sp,
+                text = cleanEasyLabelText(text, isEasyMode),
+                fontSize = if (isEasyMode) 12.sp else 11.5.sp,
                 fontWeight = FontWeight.Bold,
                 color = contentColor,
-                maxLines = 1
+                maxLines = 1,
+                softWrap = false
             )
         }
     }
 }
 
 /**
- * 표준 Primary 액션 버튼 (선명한 로열 블루 배경 + 순백 텍스트 + 입체 그림자)
+ * 표준 Primary 액션 버튼 (쉬운 모드: 토스 블루 플랫 라운드 버튼 / 고급모드: 로열 블루 + 입체 그림자)
  */
 @Composable
 fun AutoLoguePrimaryButton(
@@ -405,18 +520,23 @@ fun AutoLoguePrimaryButton(
     enabled: Boolean = true,
     icon: ImageVector? = null
 ) {
+    val isEasyMode = LocalEasyMode.current
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(8.dp),
-        elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.5.dp, pressedElevation = 0.5.dp),
+        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+        elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp)
+                    else ButtonDefaults.buttonElevation(defaultElevation = 2.5.dp, pressedElevation = 0.5.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = AppColors.actionPrimaryBg,
+            containerColor = if (isEasyMode) EasyTheme.tossBlue else AppColors.actionPrimaryBg,
             contentColor = AppColors.actionPrimaryText,
-            disabledContainerColor = Slate100,
-            disabledContentColor = Slate400
+            disabledContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate100,
+            disabledContentColor = if (isEasyMode) EasyTheme.textMuted else Slate400
         ),
-        contentPadding = PaddingValues(horizontal = Spacing.lg, vertical = 10.dp),
+        contentPadding = PaddingValues(
+            horizontal = if (isEasyMode) 18.dp else Spacing.lg,
+            vertical = if (isEasyMode) 12.dp else 10.dp
+        ),
         modifier = modifier
     ) {
         if (icon != null) {
@@ -424,14 +544,20 @@ fun AutoLoguePrimaryButton(
             Spacer(modifier = Modifier.width(Spacing.xs))
         }
         Text(
-            text = text,
-            style = AppTypography.h3.copy(color = AppColors.actionPrimaryText, fontWeight = FontWeight.Bold)
+            text = cleanEasyLabelText(text, isEasyMode),
+            style = AppTypography.h3.copy(
+                fontSize = if (isEasyMode) 14.5.sp else 14.sp,
+                color = AppColors.actionPrimaryText,
+                fontWeight = FontWeight.Bold
+            ),
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
 
 /**
- * 표준 보조 / 취소 버튼 (부드러운 슬레이트 배경 + 테두리 + 그림자 효과)
+ * 표준 보조 / 취소 버튼 (쉬운 모드: 토스 소프트 그레이 무테두리 버튼 / 고급모드: 슬레이트 배경 + 테두리 + 그림자)
  */
 @Composable
 fun AutoLogueSecondaryButton(
@@ -441,34 +567,50 @@ fun AutoLogueSecondaryButton(
     enabled: Boolean = true,
     icon: ImageVector? = null
 ) {
+    val isEasyMode = LocalEasyMode.current
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(8.dp),
-        elevation = ButtonDefaults.buttonElevation(defaultElevation = 1.5.dp, pressedElevation = 0.5.dp),
-        border = BorderStroke(1.dp, AppColors.actionSecondaryBorder),
+        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+        elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp)
+                    else ButtonDefaults.buttonElevation(defaultElevation = 1.5.dp, pressedElevation = 0.5.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, AppColors.actionSecondaryBorder),
         colors = ButtonDefaults.buttonColors(
-            containerColor = AppColors.actionSecondaryBg,
-            contentColor = AppColors.actionSecondaryText,
+            containerColor = if (isEasyMode) EasyTheme.chipBg else AppColors.actionSecondaryBg,
+            contentColor = if (isEasyMode) EasyTheme.textSecondary else AppColors.actionSecondaryText,
             disabledContainerColor = Slate50,
             disabledContentColor = Slate300
         ),
-        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = 10.dp),
+        contentPadding = PaddingValues(
+            horizontal = if (isEasyMode) 16.dp else Spacing.md,
+            vertical = if (isEasyMode) 12.dp else 10.dp
+        ),
         modifier = modifier
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = AppColors.actionSecondaryText)
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = if (isEasyMode) EasyTheme.textSecondary else AppColors.actionSecondaryText
+            )
             Spacer(modifier = Modifier.width(Spacing.xs))
         }
         Text(
-            text = text,
-            style = AppTypography.body.copy(color = AppColors.actionSecondaryText, fontWeight = FontWeight.SemiBold)
+            text = cleanEasyLabelText(text, isEasyMode),
+            style = AppTypography.body.copy(
+                fontSize = if (isEasyMode) 14.sp else 13.sp,
+                color = if (isEasyMode) EasyTheme.textSecondary else AppColors.actionSecondaryText,
+                fontWeight = FontWeight.SemiBold
+            ),
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
 
 /**
- * 표준 삭제 / 위험 버튼 (산뜻한 소프트 레드 배경 + 테두리 + 그림자 효과)
+ * 표준 삭제 / 위험 버튼 (쉬운 모드: 토스·애플 소프트 레드 무테두리 버튼 / 고급모드: 테두리 + 그림자 효과)
  */
 @Composable
 fun AutoLogueDangerButton(
@@ -478,28 +620,44 @@ fun AutoLogueDangerButton(
     enabled: Boolean = true,
     icon: ImageVector? = Icons.Default.Delete
 ) {
+    val isEasyMode = LocalEasyMode.current
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(8.dp),
-        elevation = ButtonDefaults.buttonElevation(defaultElevation = 1.5.dp, pressedElevation = 0.5.dp),
-        border = BorderStroke(1.dp, AppColors.actionDangerBorder),
+        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+        elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp)
+                    else ButtonDefaults.buttonElevation(defaultElevation = 1.5.dp, pressedElevation = 0.5.dp),
+        border = if (isEasyMode) null else BorderStroke(1.dp, AppColors.actionDangerBorder),
         colors = ButtonDefaults.buttonColors(
-            containerColor = AppColors.actionDangerBg,
-            contentColor = AppColors.actionDangerText,
+            containerColor = if (isEasyMode) EasyTheme.appleRedSoft else AppColors.actionDangerBg,
+            contentColor = if (isEasyMode) EasyTheme.appleRed else AppColors.actionDangerText,
             disabledContainerColor = Slate50,
             disabledContentColor = Slate300
         ),
-        contentPadding = PaddingValues(horizontal = Spacing.md, vertical = 10.dp),
+        contentPadding = PaddingValues(
+            horizontal = if (isEasyMode) 16.dp else Spacing.md,
+            vertical = if (isEasyMode) 12.dp else 10.dp
+        ),
         modifier = modifier
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = AppColors.actionDangerText)
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = if (isEasyMode) EasyTheme.appleRed else AppColors.actionDangerText
+            )
             Spacer(modifier = Modifier.width(Spacing.xs))
         }
         Text(
-            text = text,
-            style = AppTypography.body.copy(color = AppColors.actionDangerText, fontWeight = FontWeight.Bold)
+            text = cleanEasyLabelText(text, isEasyMode),
+            style = AppTypography.body.copy(
+                fontSize = if (isEasyMode) 14.sp else 13.sp,
+                color = if (isEasyMode) EasyTheme.appleRed else AppColors.actionDangerText,
+                fontWeight = FontWeight.Bold
+            ),
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
@@ -518,15 +676,19 @@ fun AutoLogueOutlinedButton(
     containerColor: Color = Color(0xFFEFF6FF),
     borderColor: Color = Color(0xFF93C5FD)
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val isEasyMode = LocalEasyMode.current
+    val shape = RoundedCornerShape(if (isEasyMode) 10.dp else 8.dp)
     Box(
         modifier = modifier
-            .height(32.dp)
+            .height(if (isEasyMode) 34.dp else 32.dp)
             .clip(shape)
             .background(if (enabled) containerColor else Slate50, shape)
-            .border(BorderStroke(1.dp, if (enabled) borderColor else Slate200), shape)
+            .then(
+                if (isEasyMode) Modifier
+                else Modifier.border(BorderStroke(1.dp, if (enabled) borderColor else Slate200), shape)
+            )
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 9.dp),
+            .padding(horizontal = if (isEasyMode) 11.dp else 9.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -538,13 +700,14 @@ fun AutoLogueOutlinedButton(
                 Spacer(modifier = Modifier.width(3.dp))
             }
             Text(
-                text = text,
+                text = cleanEasyLabelText(text, isEasyMode),
                 style = AppTypography.caption.copy(
-                    fontSize = 11.5.sp,
+                    fontSize = if (isEasyMode) 12.sp else 11.5.sp,
                     color = if (enabled) contentColor else Slate400,
                     fontWeight = FontWeight.Bold
                 ),
-                maxLines = 1
+                maxLines = 1,
+                softWrap = false
             )
         }
     }
@@ -593,7 +756,7 @@ fun <T> UnderlineTabBar(
 }
 
 /**
- * 표준 정밀 텍스트 뱃지 / 태그
+ * 표준 정밀 텍스트 뱃지 / 태그 (줄바꿈 방지 maxLines = 1, softWrap = false 기본 적용)
  */
 @Composable
 fun MetricBadge(
@@ -602,18 +765,26 @@ fun MetricBadge(
     textColor: Color = AppColors.textSecondary,
     backgroundColor: Color = AppColors.surfaceVariant
 ) {
+    val isEasyMode = LocalEasyMode.current
     Box(
         modifier = modifier
-            .clip(AppShapes.tag)
+            .clip(if (isEasyMode) RoundedCornerShape(8.dp) else AppShapes.tag)
             .background(backgroundColor)
-            .padding(horizontal = 6.dp, vertical = Spacing.xxs)
+            .padding(
+                horizontal = if (isEasyMode) 8.dp else 6.dp,
+                vertical = if (isEasyMode) 3.dp else Spacing.xxs
+            ),
+        contentAlignment = Alignment.Center
     ) {
         Text(
-            text = text,
+            text = cleanEasyLabelText(text, isEasyMode),
             style = AppTypography.caption.copy(
                 color = textColor,
-                fontWeight = FontWeight.SemiBold
-            )
+                fontWeight = FontWeight.SemiBold,
+                fontSize = if (isEasyMode) 11.5.sp else 11.sp
+            ),
+            maxLines = 1,
+            softWrap = false
         )
     }
 }

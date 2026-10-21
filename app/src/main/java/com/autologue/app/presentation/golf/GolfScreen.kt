@@ -59,10 +59,13 @@ import com.autologue.app.presentation.common.AutoLoguePrimaryButton
 import com.autologue.app.presentation.common.AutoLogueSecondaryButton
 import com.autologue.app.presentation.common.AutoLogueDangerButton
 import com.autologue.app.presentation.common.AutoLogueOutlinedButton
+import com.autologue.app.presentation.common.EasyModalModeSwitchChip
+import com.autologue.app.presentation.common.EasyTheme
 import com.autologue.app.presentation.common.HairlineDivider
 import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.common.MetricBadge
 import com.autologue.app.presentation.common.StandardTopBarSettingsTrigger
+import com.autologue.app.presentation.common.cleanEasyLabelText
 import com.autologue.app.presentation.common.TopMenuAccentBar
 import com.autologue.app.presentation.theme.*
 import java.time.Duration
@@ -1133,6 +1136,8 @@ fun GolfRoundDetailDialog(
         }
     }
 
+    val isEasyMode = LocalEasyMode.current
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -1151,100 +1156,169 @@ fun GolfRoundDetailDialog(
                 modifier = Modifier
                     .fillMaxWidth(0.95f)
                     .fillMaxHeight(0.92f),
-                shape = AppShapes.modal,
-                color = AppColors.surface,
-                tonalElevation = 6.dp
+                shape = if (isEasyMode) RoundedCornerShape(28.dp) else AppShapes.modal,
+                color = if (isEasyMode) EasyTheme.bg else AppColors.surface,
+                tonalElevation = if (isEasyMode) 0.dp else 6.dp
             ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // 1. Header
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.md),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("라운드 상세 기록", style = AppTypography.h2)
-                        Spacer(modifier = Modifier.width(Spacing.xs))
-                        MetricBadge(
-                            text = if (round.golfType == GolfType.FIELD) "FIELD" else "SCREEN",
-                            textColor = if (round.golfType == GolfType.FIELD) Forest700 else Indigo700,
-                            backgroundColor = if (round.golfType == GolfType.FIELD) Forest50 else Indigo50
-                        )
-                    }
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "닫기", tint = AppColors.secondary)
+                Surface(color = if (isEasyMode) EasyTheme.surface else Color.Transparent) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = if (isEasyMode) 18.dp else Spacing.md),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "라운드 상세 기록",
+                                style = if (isEasyMode) {
+                                    AppTypography.h2.copy(
+                                        fontSize = 19.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = EasyTheme.textPrimary
+                                    )
+                                } else {
+                                    AppTypography.h2
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            MetricBadge(
+                                text = if (round.golfType == GolfType.FIELD) "필드" else "스크린",
+                                textColor = if (round.golfType == GolfType.FIELD) Forest700 else Indigo700,
+                                backgroundColor = if (round.golfType == GolfType.FIELD) Forest50 else Indigo50
+                            )
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            EasyModalModeSwitchChip()
+                            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "닫기",
+                                    tint = if (isEasyMode) EasyTheme.textSecondary else AppColors.secondary
+                                )
+                            }
+                        }
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // 2. Scrollable Body
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(Spacing.xl),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.lg)
+                        .padding(horizontal = if (isEasyMode) 16.dp else Spacing.xl, vertical = if (isEasyMode) 16.dp else Spacing.xl),
+                    verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 12.dp else Spacing.lg)
                 ) {
                     // Club Name & Location Search Section with Recommendations
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = clubName,
-                            onValueChange = {
-                                clubName = it
-                                if (selectedPreset != null && it != selectedPreset?.name) {
-                                    selectedPreset = null
-                                    selectedAddress = null
-                                    selectedLatitude = null
-                                    selectedLongitude = null
-                                }
-                            },
-                            label = { Text("골프장명 (위치 검색)") },
-                            placeholder = { Text("예: 남촌CC, 안양CC, 코리아CC") },
-                            leadingIcon = {
-                                Icon(imageVector = Icons.Default.Place, contentDescription = null, tint = Color(0xFF059669))
-                            },
-                            trailingIcon = {
-                                if (clubName.isNotBlank()) {
-                                    IconButton(onClick = {
-                                        clubName = ""
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = if (isEasyMode) RoundedCornerShape(20.dp) else RoundedCornerShape(0.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Color.Transparent
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(if (isEasyMode) 18.dp else 0.dp)
+                        ) {
+                            if (isEasyMode) {
+                                Text(
+                                    text = "구장 및 코스 정보",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EasyTheme.textPrimary
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
+                            OutlinedTextField(
+                                value = clubName,
+                                onValueChange = {
+                                    clubName = it
+                                    if (selectedPreset != null && it != selectedPreset?.name) {
                                         selectedPreset = null
                                         selectedAddress = null
                                         selectedLatitude = null
                                         selectedLongitude = null
-                                        showSuggestions = false
-                                    }) {
-                                        Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
                                     }
-                                }
-                            },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(modifier = Modifier.height(Spacing.xs))
-
-                        // 코스명 별도 입력 필드 (라커룸 스캔/직접 입력 코스명 온전 보존 및 자유로운 편집)
-                        OutlinedTextField(
-                            value = courseName,
-                            onValueChange = { courseName = it },
-                            label = { Text("코스명 (선택 입력)") },
-                            placeholder = { Text("예: 동/서 코스, 마운틴, 레이크, 잣나무") },
-                            leadingIcon = {
-                                Icon(imageVector = Icons.Default.Flag, contentDescription = null, tint = Color(0xFF10B981))
-                            },
-                            trailingIcon = {
-                                if (courseName.isNotBlank()) {
-                                    IconButton(onClick = { courseName = "" }) {
-                                        Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                },
+                                label = { Text("골프장명 (위치 검색)") },
+                                placeholder = { Text("예: 남촌CC, 안양CC, 코리아CC") },
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.Place, contentDescription = null, tint = Color(0xFF059669))
+                                },
+                                trailingIcon = {
+                                    if (clubName.isNotBlank()) {
+                                        IconButton(onClick = {
+                                            clubName = ""
+                                            selectedPreset = null
+                                            selectedAddress = null
+                                            selectedLatitude = null
+                                            selectedLongitude = null
+                                            showSuggestions = false
+                                        }) {
+                                            Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                        }
                                     }
-                                }
-                            },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                                },
+                                singleLine = true,
+                                shape = if (isEasyMode) RoundedCornerShape(14.dp) else OutlinedTextFieldDefaults.shape,
+                                colors = if (isEasyMode) {
+                                    OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = EasyTheme.surfaceSubtle,
+                                        unfocusedContainerColor = EasyTheme.surfaceSubtle,
+                                        focusedBorderColor = EasyTheme.golfAccent,
+                                        unfocusedBorderColor = Color.Transparent,
+                                        focusedLabelColor = EasyTheme.golfAccent,
+                                        unfocusedLabelColor = EasyTheme.textSecondary
+                                    )
+                                } else {
+                                    OutlinedTextFieldDefaults.colors()
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Spacer(modifier = Modifier.height(Spacing.xs))
+
+                            // 코스명 별도 입력 필드 (라커룸 스캔/직접 입력 코스명 온전 보존 및 자유로운 편집)
+                            OutlinedTextField(
+                                value = courseName,
+                                onValueChange = { courseName = it },
+                                label = { Text("코스명 (선택 입력)") },
+                                placeholder = { Text("예: 동/서 코스, 마운틴, 레이크, 잣나무") },
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.Flag, contentDescription = null, tint = Color(0xFF10B981))
+                                },
+                                trailingIcon = {
+                                    if (courseName.isNotBlank()) {
+                                        IconButton(onClick = { courseName = "" }) {
+                                            Icon(imageVector = Icons.Default.Clear, contentDescription = "지우기", modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                shape = if (isEasyMode) RoundedCornerShape(14.dp) else OutlinedTextFieldDefaults.shape,
+                                colors = if (isEasyMode) {
+                                    OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = EasyTheme.surfaceSubtle,
+                                        unfocusedContainerColor = EasyTheme.surfaceSubtle,
+                                        focusedBorderColor = EasyTheme.golfAccent,
+                                        unfocusedBorderColor = Color.Transparent,
+                                        focusedLabelColor = EasyTheme.golfAccent,
+                                        unfocusedLabelColor = EasyTheme.textSecondary
+                                    )
+                                } else {
+                                    OutlinedTextFieldDefaults.colors()
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
 
                         // [위치 확정 상태] 둥근 캡슐 바 (초록색 에메랄드 테마: 골프장명 + 코스명 동시 표출)
                         if (!selectedAddress.isNullOrBlank() || selectedPreset != null) {
@@ -1453,24 +1527,31 @@ fun GolfRoundDetailDialog(
                                 }
                             }
                         }
+                        }
                     }
 
                     // Round Time & Duration Box
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        color = Slate50,
-                        shadowElevation = 2.dp,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Slate200)
+                        shape = if (isEasyMode) RoundedCornerShape(20.dp) else RoundedCornerShape(10.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Slate50,
+                        shadowElevation = if (isEasyMode) 0.dp else 2.dp,
+                        border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(1.dp, Slate200)
                     ) {
-                        Column(modifier = Modifier.padding(Spacing.md)) {
+                        Column(modifier = Modifier.padding(if (isEasyMode) 18.dp else Spacing.md)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("🕒 라운딩 일시 및 소요 시간", style = AppTypography.body.copy(fontWeight = FontWeight.Bold))
+                                    Text(
+                                        text = if (isEasyMode) "라운딩 일시 및 소요 시간" else "🕒 라운딩 일시 및 소요 시간",
+                                        style = AppTypography.body.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary
+                                        )
+                                    )
                                 }
                                 AutoLogueActionChipButton(
                                     text = "시간 수정",
@@ -1482,7 +1563,7 @@ fun GolfRoundDetailDialog(
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
 
                             val currentStartTime = selectedDate.atTime(startHour, startMinute)
                             val currentEndTime = selectedDate.atTime(endHour, endMinute)
@@ -1492,14 +1573,20 @@ fun GolfRoundDetailDialog(
 
                             Text(
                                 text = "${currentStartTime.format(DateTimeFormatter.ofPattern("yyyy년 M월 d일 (E)", Locale.KOREA))}",
-                                style = AppTypography.bodySecondary.copy(fontWeight = FontWeight.Medium)
+                                style = AppTypography.bodySecondary.copy(
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isEasyMode) EasyTheme.textSecondary else Slate600
+                                )
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "시작 %02d:%02d ~ 종료 %02d:%02d (%d시간 %d분 소요)".format(
                                     startHour, startMinute, endHour, endMinute, durHours, durMinutes
                                 ),
-                                style = AppTypography.h3.copy(color = AppColors.primary, fontWeight = FontWeight.Bold)
+                                style = AppTypography.h3.copy(
+                                    color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
                             )
                         }
                     }
@@ -1522,18 +1609,24 @@ fun GolfRoundDetailDialog(
                     // Scorecard Section
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        color = Slate50,
-                        shadowElevation = 2.dp,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Slate200)
+                        shape = if (isEasyMode) RoundedCornerShape(20.dp) else RoundedCornerShape(10.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Slate50,
+                        shadowElevation = if (isEasyMode) 0.dp else 2.dp,
+                        border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(1.dp, Slate200)
                     ) {
-                        Column(modifier = Modifier.padding(Spacing.md)) {
+                        Column(modifier = Modifier.padding(if (isEasyMode) 18.dp else Spacing.md)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("📊 스코어카드", style = AppTypography.body.copy(fontWeight = FontWeight.Bold))
+                                Text(
+                                    text = if (isEasyMode) "스코어카드" else "📊 스코어카드",
+                                    style = AppTypography.body.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary
+                                    )
+                                )
                                 AutoLogueActionChipButton(
                                     text = "스코어카드 스캔(OCR)",
                                     icon = Icons.Default.CameraAlt,
@@ -1667,15 +1760,19 @@ fun GolfRoundDetailDialog(
                             if (scorecardStats != null) {
                                 Spacer(modifier = Modifier.height(Spacing.xs))
                                 Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = Slate50,
-                                    border = BorderStroke(1.dp, Slate200),
+                                    shape = if (isEasyMode) RoundedCornerShape(14.dp) else RoundedCornerShape(8.dp),
+                                    color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                                         Text(
                                             text = "스코어 성적 집계 (읽기 전용)",
-                                            style = AppTypography.caption.copy(fontSize = 11.sp, color = Slate600, fontWeight = FontWeight.SemiBold)
+                                            style = AppTypography.caption.copy(
+                                                fontSize = 11.sp,
+                                                color = if (isEasyMode) EasyTheme.textSecondary else Slate600,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
                                         )
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Row(
@@ -1706,8 +1803,8 @@ fun GolfRoundDetailDialog(
                                 ) {
                                     round.holeScores.forEachIndexed { idx, score ->
                                         Surface(
-                                            shape = RoundedCornerShape(4.dp),
-                                            color = Slate100,
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
                                             modifier = Modifier.width(32.dp)
                                         ) {
                                             Column(
@@ -1732,7 +1829,7 @@ fun GolfRoundDetailDialog(
                                 ) {
                                     Text("스코어카드 원본 이미지 (터치하여 확대)", style = AppTypography.captionMuted)
                                     Text(
-                                        text = "📷 사진 재등록",
+                                        text = if (isEasyMode) "사진 재등록" else "📷 사진 재등록",
                                         style = AppTypography.caption.copy(color = Emerald600, fontWeight = FontWeight.Bold),
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(4.dp))
@@ -1749,7 +1846,7 @@ fun GolfRoundDetailDialog(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 200.dp, max = 340.dp)
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .clip(RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp))
                                         .background(Color(0xFF0F172A))
                                         .clickable { onPhotoClick(round.scorecardPhotoUri) },
                                     contentAlignment = Alignment.Center
@@ -1811,7 +1908,7 @@ fun GolfRoundDetailDialog(
                                         color = Color.Black.copy(alpha = 0.6f)
                                     ) {
                                         Text(
-                                            text = "🔍 크게 보기",
+                                            text = if (isEasyMode) "크게 보기" else "🔍 크게 보기",
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                             fontSize = 10.sp,
                                             color = PureWhite
@@ -1825,20 +1922,23 @@ fun GolfRoundDetailDialog(
                     // Matching Round Photos Gallery Section
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        color = Slate50,
-                        shadowElevation = 2.dp,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Slate200)
+                        shape = if (isEasyMode) RoundedCornerShape(20.dp) else RoundedCornerShape(10.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Slate50,
+                        shadowElevation = if (isEasyMode) 0.dp else 2.dp,
+                        border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(1.dp, Slate200)
                     ) {
-                        Column(modifier = Modifier.padding(Spacing.md)) {
+                        Column(modifier = Modifier.padding(if (isEasyMode) 18.dp else Spacing.md)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "📸 라운딩 현장 사진 (${round.matchingPhotoUris.size}장)",
-                                    style = AppTypography.body.copy(fontWeight = FontWeight.Bold)
+                                    text = if (isEasyMode) "라운딩 현장 사진 (${round.matchingPhotoUris.size}장)" else "📸 라운딩 현장 사진 (${round.matchingPhotoUris.size}장)",
+                                    style = AppTypography.body.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary
+                                    )
                                 )
                                 AutoLogueActionChipButton(
                                     text = "사진 추가",
@@ -1865,8 +1965,8 @@ fun GolfRoundDetailDialog(
                                         Box(
                                             modifier = Modifier
                                                 .size(80.dp)
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(Slate100)
+                                                .clip(RoundedCornerShape(if (isEasyMode) 12.dp else 6.dp))
+                                                .background(if (isEasyMode) EasyTheme.surfaceSubtle else Slate100)
                                                 .clickable { onPhotoClick(uri) }
                                         ) {
                                             SubcomposeAsyncImage(
@@ -1930,39 +2030,50 @@ fun GolfRoundDetailDialog(
                     // Companions Section
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        color = Slate50,
-                        shadowElevation = 2.dp,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Slate200)
+                        shape = if (isEasyMode) RoundedCornerShape(20.dp) else RoundedCornerShape(10.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Slate50,
+                        shadowElevation = if (isEasyMode) 0.dp else 2.dp,
+                        border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(1.dp, Slate200)
                     ) {
-                        Column(modifier = Modifier.padding(Spacing.md)) {
-                            Text("👥 동반자 (동행인)", style = AppTypography.body.copy(fontWeight = FontWeight.Bold))
+                        Column(modifier = Modifier.padding(if (isEasyMode) 18.dp else Spacing.md)) {
+                            Text(
+                                text = if (isEasyMode) "동반자 (동행인)" else "👥 동반자 (동행인)",
+                                style = AppTypography.body.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary
+                                )
+                            )
                             Spacer(modifier = Modifier.height(Spacing.xs))
 
                             // Companion Chips
                             if (companionsList.isNotEmpty()) {
                                 FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     companionsList.forEach { companion ->
                                         Surface(
                                             shape = AppShapes.pill,
-                                            color = Slate100,
-                                            border = androidx.compose.foundation.BorderStroke(0.5.dp, Slate300)
+                                            color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
+                                            border = if (isEasyMode) null else androidx.compose.foundation.BorderStroke(0.5.dp, Slate300)
                                         ) {
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                             ) {
-                                                Text("👤 $companion", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = AppColors.primary)
+                                                Text(
+                                                    text = if (isEasyMode) companion else "👤 $companion",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary
+                                                )
                                                 Spacer(modifier = Modifier.width(4.dp))
                                                 Icon(
                                                     Icons.Default.Close,
                                                     contentDescription = "동반자 삭제",
                                                     modifier = Modifier
-                                                        .size(12.dp)
+                                                        .size(13.dp)
                                                         .clickable { companionsList = companionsList.filter { it != companion } },
                                                     tint = Slate500
                                                 )
@@ -1990,81 +2101,93 @@ fun GolfRoundDetailDialog(
                     }
 
                     // Memo Section
-                    AutoLogueTextField(
-                        value = memo,
-                        onValueChange = { memo = it },
-                        label = "라운딩 메모 / 코스 후기",
-                        placeholder = "코스 난이도, 날씨, 샷 감각 등 메모를 남겨보세요",
-                        singleLine = false,
-                        minLines = 2,
-                        maxLines = 4,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = if (isEasyMode) RoundedCornerShape(20.dp) else RoundedCornerShape(0.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Color.Transparent
+                    ) {
+                        Box(modifier = Modifier.padding(if (isEasyMode) 18.dp else 0.dp)) {
+                            AutoLogueTextField(
+                                value = memo,
+                                onValueChange = { memo = it },
+                                label = "라운딩 메모 / 코스 후기",
+                                placeholder = "코스 난이도, 날씨, 샷 감각 등 메모를 남겨보세요",
+                                singleLine = false,
+                                minLines = 2,
+                                maxLines = 4,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // 3. Footer Action Buttons
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.md),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    AutoLogueDangerButton(
-                        text = "기록 삭제",
-                        onClick = onDelete
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        AutoLogueSecondaryButton(
-                            text = "취소",
-                            onClick = onDismiss
+                Surface(color = if (isEasyMode) EasyTheme.surface else Color.Transparent) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = if (isEasyMode) 14.dp else Spacing.md),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AutoLogueDangerButton(
+                            text = "기록 삭제",
+                            onClick = onDelete
                         )
 
-                        AutoLoguePrimaryButton(
-                            text = "저장하기",
-                            onClick = {
-                                val sTime = selectedDate.atTime(startHour, startMinute)
-                                val eTime = selectedDate.atTime(endHour, endMinute)
-                                val resolvedPreset = selectedPreset
-                                    ?: GOLF_COURSE_PRESETS.firstOrNull { normalizeGolfName(it.name) == normalizeGolfName(clubName) }
-                                val baseClub = resolvedPreset?.name ?: clubName.trim()
-                                val cleanCourse = courseName.trim()
-                                val finalClub = if (cleanCourse.isNotBlank() && !baseClub.contains(cleanCourse)) {
-                                    val cSuffix = if (cleanCourse.endsWith("코스")) cleanCourse else "$cleanCourse 코스"
-                                    "$baseClub ($cSuffix)"
-                                } else {
-                                    baseClub
-                                }
-                                val finalMemo = if (cleanCourse.isNotBlank() && !memo.contains("코스")) {
-                                    "[코스: $cleanCourse] $memo".trim()
-                                } else {
-                                    memo.trim()
-                                }
-                                val finalLat = selectedLatitude ?: resolvedPreset?.latitude
-                                val finalLng = selectedLongitude ?: resolvedPreset?.longitude
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            AutoLogueSecondaryButton(
+                                text = "취소",
+                                onClick = onDismiss
+                            )
 
-                                onSaveDetails(
-                                    finalClub,
-                                    totalScoreText.toIntOrNull(),
-                                    totalPuttsText.toIntOrNull(),
-                                    finalMemo,
-                                    sTime,
-                                    eTime,
-                                    companionsList,
-                                    finalLat,
-                                    finalLng,
-                                    penaltyText.toIntOrNull(),
-                                    girText.toDoubleOrNull(),
-                                    driveText.toDoubleOrNull(),
-                                    tempoText.toDoubleOrNull(),
-                                    stepsText.toIntOrNull()
-                                )
-                                onDismiss()
-                            }
-                        )
+                            AutoLoguePrimaryButton(
+                                text = "저장하기",
+                                onClick = {
+                                    val sTime = selectedDate.atTime(startHour, startMinute)
+                                    val eTime = selectedDate.atTime(endHour, endMinute)
+                                    val resolvedPreset = selectedPreset
+                                        ?: GOLF_COURSE_PRESETS.firstOrNull { normalizeGolfName(it.name) == normalizeGolfName(clubName) }
+                                    val baseClub = resolvedPreset?.name ?: clubName.trim()
+                                    val cleanCourse = courseName.trim()
+                                    val finalClub = if (cleanCourse.isNotBlank() && !baseClub.contains(cleanCourse)) {
+                                        val cSuffix = if (cleanCourse.endsWith("코스")) cleanCourse else "$cleanCourse 코스"
+                                        "$baseClub ($cSuffix)"
+                                    } else {
+                                        baseClub
+                                    }
+                                    val finalMemo = if (cleanCourse.isNotBlank() && !memo.contains("코스")) {
+                                        "[코스: $cleanCourse] $memo".trim()
+                                    } else {
+                                        memo.trim()
+                                    }
+                                    val finalLat = selectedLatitude ?: resolvedPreset?.latitude
+                                    val finalLng = selectedLongitude ?: resolvedPreset?.longitude
+
+                                    onSaveDetails(
+                                        finalClub,
+                                        totalScoreText.toIntOrNull(),
+                                        totalPuttsText.toIntOrNull(),
+                                        finalMemo,
+                                        sTime,
+                                        eTime,
+                                        companionsList,
+                                        finalLat,
+                                        finalLng,
+                                        penaltyText.toIntOrNull(),
+                                        girText.toDoubleOrNull(),
+                                        driveText.toDoubleOrNull(),
+                                        tempoText.toDoubleOrNull(),
+                                        stepsText.toIntOrNull()
+                                    )
+                                    onDismiss()
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -2618,6 +2741,7 @@ fun GolfDutchPayDialog(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val view = LocalView.current
+    val isEasyMode = LocalEasyMode.current
 
     var greenFeeText by remember { mutableStateOf("960000") }
     var cartFeeText by remember { mutableStateOf("100000") }
@@ -2637,14 +2761,27 @@ fun GolfDutchPayDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(decorFitsSystemWindows = false),
         modifier = Modifier.imePadding(),
+        shape = if (isEasyMode) RoundedCornerShape(24.dp) else AlertDialogDefaults.shape,
+        containerColor = if (isEasyMode) EasyTheme.surface else AlertDialogDefaults.containerColor,
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("💸 동반자 1/N 정산기", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Spacer(modifier = Modifier.weight(1f))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (isEasyMode) "동반자 1/N 정산기" else "💸 동반자 1/N 정산기",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = if (isEasyMode) EasyTheme.textPrimary else Color.Unspecified
+                    )
+                    EasyModalModeSwitchChip()
+                }
                 Text(
                     text = round?.getDisplayClubName() ?: "골프 라운딩",
                     fontSize = 12.sp,
-                    color = Color(0xFF2563EB),
+                    color = if (isEasyMode) EasyTheme.golfAccent else Color(0xFF2563EB),
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -2654,40 +2791,56 @@ fun GolfDutchPayDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("총 라운딩 비용을 입력하시면 1인당 정산 금액이 자동 계산됩니다.", fontSize = 12.sp, color = Color(0xFF64748B))
+                Text(
+                    text = "총 라운딩 비용을 입력하시면 1인당 정산 금액이 자동 계산됩니다.",
+                    fontSize = 12.sp,
+                    color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B)
+                )
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = greenFeeText,
                     onValueChange = { greenFeeText = it.filter { c -> c.isDigit() } },
-                    label = { Text("그린피 총액 (원)") },
+                    label = "그린피 총액 (원)",
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    visualTransformation = NumberCommaVisualTransformation(),
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
+                    AutoLogueTextField(
                         value = cartFeeText,
                         onValueChange = { cartFeeText = it.filter { c -> c.isDigit() } },
-                        label = { Text("카트비 (원)") },
+                        label = "카트비 (원)",
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        visualTransformation = NumberCommaVisualTransformation(),
                         singleLine = true,
+                        isCompact = true,
                         modifier = Modifier.weight(1f)
                     )
-                    OutlinedTextField(
+                    AutoLogueTextField(
                         value = caddieFeeText,
                         onValueChange = { caddieFeeText = it.filter { c -> c.isDigit() } },
-                        label = { Text("캐디피 (원)") },
+                        label = "캐디피 (원)",
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        visualTransformation = NumberCommaVisualTransformation(),
                         singleLine = true,
+                        isCompact = true,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = foodFeeText,
                     onValueChange = { foodFeeText = it.filter { c -> c.isDigit() } },
-                    label = { Text("그늘집 / 식음료 (원)") },
+                    label = "그늘집 / 식음료 (원)",
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    visualTransformation = NumberCommaVisualTransformation(),
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -2696,51 +2849,69 @@ fun GolfDutchPayDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("정산 인원수", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF334155))
+                    Text(
+                        text = "정산 인원수",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF334155)
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(
+                        Surface(
                             onClick = { if (playerCount > 1) playerCount-- },
-                            contentPadding = PaddingValues(0.dp),
-                            modifier = Modifier.size(32.dp)
-                        ) { Text("-", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isEasyMode) EasyTheme.surfaceSubtle else Color.Transparent,
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Slate300),
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("-", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = EasyTheme.textPrimary)
+                            }
+                        }
 
                         Text(
                             text = "${playerCount}명",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else Color.Unspecified,
                             modifier = Modifier.padding(horizontal = 12.dp)
                         )
 
-                        OutlinedButton(
+                        Surface(
                             onClick = { playerCount++ },
-                            contentPadding = PaddingValues(0.dp),
-                            modifier = Modifier.size(32.dp)
-                        ) { Text("+", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isEasyMode) EasyTheme.surfaceSubtle else Color.Transparent,
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Slate300),
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("+", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = EasyTheme.textPrimary)
+                            }
+                        }
                     }
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFFF1F5F9),
-                    border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF1F5F9),
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFCBD5E1)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(14.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("총 라운딩 비용", fontSize = 12.sp, color = Color(0xFF64748B))
-                            Text("%,d원".format(totalExpense), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
+                            Text("총 라운딩 비용", fontSize = 12.sp, color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B))
+                            Text("%,d원".format(totalExpense), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF0F172A))
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("1인당 정산 금액", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
-                            Text("%,d원".format(perPersonExpense), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2563EB))
+                            Text("1인당 정산 금액", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF1E293B))
+                            Text("%,d원".format(perPersonExpense), fontSize = 19.sp, fontWeight = FontWeight.Bold, color = if (isEasyMode) EasyTheme.accent else Color(0xFF2563EB))
                         }
                     }
                 }
@@ -2752,16 +2923,16 @@ fun GolfDutchPayDialog(
                     view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                     val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
                     val club = round?.clubName ?: "골프 라운딩"
-                    val shareText = """[AutoLogue 라운딩 1/N 정산 안내]
-⛳ $club
+                    val shareText = """[라운딩 1/N 정산 안내]
+$club
 • 총 비용: %,d원 (${playerCount}인 기준)
   - 그린피: %,d원
   - 카트비: %,d원
   - 캐디피: %,d원
   - 그늘집: %,d원
-👉 1인당 정산 금액: %,d원
+1인당 정산 금액: %,d원
 
-즐거운 라운딩이었습니다! 정산 부탁드립니다 🏌️‍♂️""".trimIndent().format(
+즐거운 라운딩이었습니다! 정산 부탁드립니다.""".trimIndent().format(
                         totalExpense, greenFee, cartFee, caddieFee, foodFee, perPersonExpense
                     )
                     val clip = ClipData.newPlainText("골프 정산 안내", shareText)
@@ -2769,7 +2940,9 @@ fun GolfDutchPayDialog(
                     Toast.makeText(context, "카카오톡 정산 메시지가 클립보드에 복사되었습니다!", Toast.LENGTH_LONG).show()
                     onDismiss()
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+                shape = if (isEasyMode) RoundedCornerShape(14.dp) else ButtonDefaults.shape,
+                colors = ButtonDefaults.buttonColors(containerColor = if (isEasyMode) EasyTheme.accent else Color(0xFF2563EB)),
+                elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp) else ButtonDefaults.buttonElevation()
             ) {
                 Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
@@ -2778,7 +2951,7 @@ fun GolfDutchPayDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("닫기", color = Color(0xFF64748B))
+                Text("닫기", color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B))
             }
         }
     )
@@ -3067,11 +3240,42 @@ fun AddGolfReservationDialog(
         )
     }
 
+    val isEasyMode = LocalEasyMode.current
+    val easyFieldColors = if (isEasyMode) {
+        OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = EasyTheme.surfaceSubtle,
+            unfocusedContainerColor = EasyTheme.surfaceSubtle,
+            focusedBorderColor = EasyTheme.golfAccent,
+            unfocusedBorderColor = Color.Transparent,
+            focusedLabelColor = EasyTheme.golfAccent,
+            unfocusedLabelColor = EasyTheme.textSecondary
+        )
+    } else {
+        OutlinedTextFieldDefaults.colors()
+    }
+    val easyFieldShape = if (isEasyMode) RoundedCornerShape(14.dp) else OutlinedTextFieldDefaults.shape
+
     AlertDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(decorFitsSystemWindows = false),
         modifier = Modifier.imePadding(),
-        title = { Text("골프 라운드 예약 등록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
+        shape = if (isEasyMode) RoundedCornerShape(24.dp) else AlertDialogDefaults.shape,
+        containerColor = if (isEasyMode) EasyTheme.surface else AlertDialogDefaults.containerColor,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "골프 라운드 예약 등록",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = if (isEasyMode) EasyTheme.textPrimary else Color.Unspecified
+                )
+                EasyModalModeSwitchChip()
+            }
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -3079,7 +3283,11 @@ fun AddGolfReservationDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("골프장명과 일정을 등록하면 실시간 D-Day 및 정확한 날씨 예보를 제공합니다.", fontSize = 12.sp, color = Color(0xFF64748B))
+                Text(
+                    text = "골프장명과 일정을 등록하면 실시간 D-Day 및 정확한 날씨 예보를 제공합니다.",
+                    fontSize = 12.sp,
+                    color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B)
+                )
 
                 // 골프장명 입력 필드 & 캘린더 스타일 위치 추천 칩 (media_1788831189823.png 스타일)
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -3114,6 +3322,8 @@ fun AddGolfReservationDialog(
                             }
                         },
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -3131,7 +3341,7 @@ fun AddGolfReservationDialog(
                         Surface(
                             shape = RoundedCornerShape(24.dp),
                             color = Color(0xFFECFDF5),
-                            border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFA7F3D0)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -3198,8 +3408,8 @@ fun AddGolfReservationDialog(
                         // 메인 추천 캡슐 바 (둥근 모서리 + 원형 핀 아이콘 + 장소명)
                         Surface(
                             shape = RoundedCornerShape(24.dp),
-                            color = Color(0xFFF1F5F9),
-                            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                            color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF1F5F9),
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFE2E8F0)),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
@@ -3276,8 +3486,8 @@ fun AddGolfReservationDialog(
                                 items(suggestions.drop(1)) { subItem ->
                                     Surface(
                                         shape = RoundedCornerShape(16.dp),
-                                        color = Color(0xFFF8FAFC),
-                                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF8FAFC),
+                                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFCBD5E1)),
                                         modifier = Modifier.clickable {
                                             val (_, courseFromInput) = splitClubAndCourse(clubName)
                                             if (courseName.isBlank() && courseFromInput.isNotBlank()) {
@@ -3316,17 +3526,23 @@ fun AddGolfReservationDialog(
                     }
                 }
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = courseName,
                     onValueChange = { courseName = it },
-                    label = { Text("코스명 (선택)") },
-                    placeholder = { Text("예: 잣나무 / 자작나무 코스") },
+                    label = "코스명 (선택)",
+                    placeholder = "예: 잣나무 / 자작나무 코스",
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 // 티오프 일시 (달력 날짜 선택 & 24시간 형식 시간 직접 입력)
-                Text("티오프 일시 (날짜 선택 / 24시간 형식 직접 입력)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF334155))
+                Text(
+                    text = "티오프 일시 (날짜 선택 / 24시간 형식 직접 입력)",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF334155)
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3335,15 +3551,15 @@ fun AddGolfReservationDialog(
                     // 날짜 선택 버튼 (달력 팝업)
                     Surface(
                         onClick = { datePickerDialog.show() },
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFFF8FAFC),
-                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF8FAFC),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFCBD5E1)),
                         modifier = Modifier
                             .weight(1.1f)
                             .height(56.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -3387,36 +3603,42 @@ fun AddGolfReservationDialog(
                             )
                         },
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(0.9f)
                     )
                 }
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = companionsText,
                     onValueChange = { companionsText = it },
-                    label = { Text("동반자 명단 (선택, 쉼표 구분)") },
-                    placeholder = { Text("예: 김프로, 박대표, 이이사") },
+                    label = "동반자 명단 (선택, 쉼표 구분)",
+                    placeholder = "예: 김프로, 박대표, 이이사",
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = feeText,
                     onValueChange = { feeText = it.filter { c -> c.isDigit() } },
-                    label = { Text("예상 1인 그린피 (원, 선택)") },
-                    placeholder = { Text("예: 240000") },
+                    label = "예상 1인 그린피 (원, 선택)",
+                    placeholder = "예: 240,000",
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    visualTransformation = NumberCommaVisualTransformation(),
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = memoText,
                     onValueChange = { memoText = it },
-                    label = { Text("메모 (선택)") },
-                    placeholder = { Text("예: 주말 친목 모임 라운딩, 준비물 등") },
+                    label = "메모 (선택)",
+                    placeholder = "예: 주말 친목 모임 라운딩, 준비물 등",
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -3463,14 +3685,16 @@ fun AddGolfReservationDialog(
                     val fee = feeText.toLongOrNull() ?: 0L
                     onConfirm(finalClubName, courseName.trim(), teeOff, comps, fee, memoText.trim(), finalLat, finalLng)
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+                shape = if (isEasyMode) RoundedCornerShape(14.dp) else ButtonDefaults.shape,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp) else ButtonDefaults.buttonElevation()
             ) {
-                Text("예약 등록", color = Color.White)
+                Text("예약 등록", color = Color.White, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("취소", color = Color(0xFF64748B))
+                Text("취소", color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B))
             }
         }
     )
@@ -3497,6 +3721,21 @@ fun AddDirectGolfRoundDialog(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    val isEasyMode = LocalEasyMode.current
+    val easyFieldColors = if (isEasyMode) {
+        OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = EasyTheme.surfaceSubtle,
+            unfocusedContainerColor = EasyTheme.surfaceSubtle,
+            focusedBorderColor = EasyTheme.golfAccent,
+            unfocusedBorderColor = Color.Transparent,
+            focusedLabelColor = EasyTheme.golfAccent,
+            unfocusedLabelColor = EasyTheme.textSecondary
+        )
+    } else {
+        OutlinedTextFieldDefaults.colors()
+    }
+    val easyFieldShape = if (isEasyMode) RoundedCornerShape(14.dp) else OutlinedTextFieldDefaults.shape
+
     var clubName by remember { mutableStateOf("") }
     var courseName by remember { mutableStateOf("") }
     var companionsText by remember { mutableStateOf("") }
@@ -3658,7 +3897,23 @@ fun AddDirectGolfRoundDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(decorFitsSystemWindows = false),
         modifier = Modifier.imePadding(),
-        title = { Text("이전 골프 라운드 직접 기록", fontWeight = FontWeight.Bold, fontSize = 17.sp) },
+        shape = if (isEasyMode) RoundedCornerShape(24.dp) else AlertDialogDefaults.shape,
+        containerColor = if (isEasyMode) EasyTheme.surface else AlertDialogDefaults.containerColor,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "이전 골프 라운드 직접 기록",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = if (isEasyMode) EasyTheme.textPrimary else Color.Unspecified
+                )
+                EasyModalModeSwitchChip()
+            }
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -3666,7 +3921,11 @@ fun AddDirectGolfRoundDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("골프장 위치 검색과 추천을 통해 과거 라운딩 일시의 날씨와 스코어를 함께 직접 기록합니다.", fontSize = 12.sp, color = Color(0xFF64748B))
+                Text(
+                    text = "골프장 위치 검색과 추천을 통해 과거 라운딩 일시의 날씨와 스코어를 함께 직접 기록합니다.",
+                    fontSize = 12.sp,
+                    color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B)
+                )
 
                 // 골프장명 입력 필드 & 위치 추천 칩
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -3702,6 +3961,8 @@ fun AddDirectGolfRoundDialog(
                             }
                         },
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -3719,7 +3980,7 @@ fun AddDirectGolfRoundDialog(
                         Surface(
                             shape = RoundedCornerShape(24.dp),
                             color = Color(0xFFECFDF5),
-                            border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFA7F3D0)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -3785,8 +4046,8 @@ fun AddDirectGolfRoundDialog(
 
                         Surface(
                             shape = RoundedCornerShape(24.dp),
-                            color = Color(0xFFF1F5F9),
-                            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                            color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF1F5F9),
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFE2E8F0)),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
@@ -3872,8 +4133,8 @@ fun AddDirectGolfRoundDialog(
                                 suggestions.drop(1).forEach { subItem ->
                                     Surface(
                                         shape = RoundedCornerShape(14.dp),
-                                        color = Color(0xFFF8FAFC),
-                                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF8FAFC),
+                                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFE2E8F0)),
                                         modifier = Modifier.clickable {
                                             val (_, courseFromInput) = splitClubAndCourse(clubName)
                                             if (courseName.isBlank() && courseFromInput.isNotBlank()) {
@@ -3913,17 +4174,23 @@ fun AddDirectGolfRoundDialog(
                     }
                 }
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = courseName,
                     onValueChange = { courseName = it },
-                    label = { Text("코스명 (선택)") },
-                    placeholder = { Text("예: 서 코스, 동 코스") },
+                    label = "코스명 (선택)",
+                    placeholder = "예: 서 코스, 동 코스",
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 // 라운딩 일시
-                Text("라운딩 일시 (날짜 선택 & 시작/종료 시간)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF334155))
+                Text(
+                    text = "라운딩 일시 (날짜 선택 & 시작/종료 시간)",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF334155)
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3932,15 +4199,15 @@ fun AddDirectGolfRoundDialog(
                     // 날짜 선택 버튼
                     Surface(
                         onClick = { datePickerDialog.show() },
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFFF8FAFC),
-                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                        shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                        color = if (isEasyMode) EasyTheme.surfaceSubtle else Color(0xFFF8FAFC),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFCBD5E1)),
                         modifier = Modifier
                             .weight(1.2f)
                             .height(56.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -3975,6 +4242,8 @@ fun AddDirectGolfRoundDialog(
                         label = { Text("시작") },
                         placeholder = { Text("07:30") },
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(0.9f)
                     )
@@ -3992,6 +4261,8 @@ fun AddDirectGolfRoundDialog(
                         label = { Text("종료") },
                         placeholder = { Text("13:00") },
                         singleLine = true,
+                        shape = easyFieldShape,
+                        colors = easyFieldColors,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(0.9f)
                     )
@@ -4011,53 +4282,58 @@ fun AddDirectGolfRoundDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
+                    AutoLogueTextField(
                         value = totalScoreText,
                         onValueChange = { totalScoreText = it.filter { ch -> ch.isDigit() }.take(3) },
-                        label = { Text("총 타수 (타, 선택)") },
-                        placeholder = { Text("예: 88") },
+                        label = "총 타수 (타, 선택)",
+                        placeholder = "예: 88",
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
+                        isCompact = true,
                         modifier = Modifier.weight(1f)
                     )
 
-                    OutlinedTextField(
+                    AutoLogueTextField(
                         value = totalPuttsText,
                         onValueChange = { totalPuttsText = it.filter { ch -> ch.isDigit() }.take(2) },
-                        label = { Text("총 퍼트수 (P, 선택)") },
-                        placeholder = { Text("예: 32") },
+                        label = "총 퍼트수 (P, 선택)",
+                        placeholder = "예: 32",
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
+                        isCompact = true,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = companionsText,
                     onValueChange = { companionsText = it },
-                    label = { Text("동반자 명단 (선택, 쉼표 구분)") },
-                    placeholder = { Text("예: 김프로, 박대표, 이이사") },
+                    label = "동반자 명단 (선택, 쉼표 구분)",
+                    placeholder = "예: 김프로, 박대표, 이이사",
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = feeText,
                     onValueChange = { feeText = it.filter { c -> c.isDigit() } },
-                    label = { Text("지출 그린피 (원, 선택)") },
-                    placeholder = { Text("예: 220,000") },
+                    label = "지출 그린피 (원, 선택)",
+                    placeholder = "예: 220,000",
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
+                    isCompact = true,
                     visualTransformation = NumberCommaVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                OutlinedTextField(
+                AutoLogueTextField(
                     value = memoText,
                     onValueChange = { memoText = it },
-                    label = { Text("메모 / 라운딩 후기 (선택)") },
-                    placeholder = { Text("예: 코스 컨디션 매우 좋음, 드라이버 비거리 안정적") },
+                    label = "메모 / 라운딩 후기 (선택)",
+                    placeholder = "예: 코스 컨디션 매우 좋음, 드라이버 비거리 안정적",
                     singleLine = true,
+                    isCompact = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -4104,21 +4380,23 @@ fun AddDirectGolfRoundDialog(
 
                     onConfirm(finalClubName, courseName.trim(), sTime, sTime, eTime, score, putts, comps, fee, memoText.trim(), finalLat, finalLng)
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+                shape = if (isEasyMode) RoundedCornerShape(14.dp) else ButtonDefaults.shape,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                elevation = if (isEasyMode) ButtonDefaults.buttonElevation(0.dp, 0.dp) else ButtonDefaults.buttonElevation()
             ) {
-                Text("기록 저장", color = Color.White)
+                Text("기록 저장", color = Color.White, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("취소", color = Color(0xFF64748B))
+                Text("취소", color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B))
             }
         }
     )
 }
 
 /**
- * 📊 골프 라이프 종합 통계 모달 다이얼로그 (연도별 및 전체 연도 종합 집계 분석)
+ * 골프 라이프 종합 통계 모달 다이얼로그 (연도별 및 전체 연도 종합 집계 분석)
  */
 @Composable
 fun GolfStatisticsDialog(
@@ -4127,6 +4405,8 @@ fun GolfStatisticsDialog(
     onSelectYear: (Int?) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -4135,94 +4415,121 @@ fun GolfStatisticsDialog(
             modifier = Modifier
                 .fillMaxWidth(0.94f)
                 .fillMaxHeight(0.88f),
-            shape = RoundedCornerShape(16.dp),
-            color = AppColors.background,
-            shadowElevation = 8.dp
+            shape = RoundedCornerShape(if (isEasyMode) 28.dp else 16.dp),
+            color = if (isEasyMode) EasyTheme.bg else AppColors.background,
+            shadowElevation = if (isEasyMode) 0.dp else 8.dp
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // 1. 헤더 (타이틀 + 닫기 버튼)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.md),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("📊 골프 라이프 종합 통계", style = AppTypography.h2)
-                            Spacer(modifier = Modifier.width(Spacing.xs))
-                            MetricBadge(
-                                text = if (selectedYear != null) "${selectedYear}년" else "전체 연도",
-                                textColor = Forest700,
-                                backgroundColor = Forest50
+                Surface(color = if (isEasyMode) EasyTheme.surface else Color.Transparent) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.xl, vertical = if (isEasyMode) 18.dp else Spacing.md),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (isEasyMode) "골프 라이프 종합 통계" else "📊 골프 라이프 종합 통계",
+                                    style = if (isEasyMode) {
+                                        AppTypography.h2.copy(
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = EasyTheme.textPrimary
+                                        )
+                                    } else {
+                                        AppTypography.h2
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(Spacing.xs))
+                                MetricBadge(
+                                    text = if (selectedYear != null) "${selectedYear}년" else "전체 연도",
+                                    textColor = Forest700,
+                                    backgroundColor = Forest50
+                                )
+                            }
+                            Text(
+                                text = "평균 타수, 퍼트, 비거리, 템포, GIR 세부 종합 분석",
+                                style = AppTypography.captionMuted
                             )
                         }
-                        Text(
-                            text = "평균 타수, 퍼트, 비거리, 템포, GIR 세부 종합 분석",
-                            style = AppTypography.captionMuted
-                        )
-                    }
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "닫기", tint = AppColors.secondary)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            EasyModalModeSwitchChip()
+                            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "닫기", tint = AppColors.secondary)
+                            }
+                        }
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // 2. 연도별 필터 칩 바 (가로 스크롤)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // "전체 연도" 칩
-                    FilterChip(
-                        selected = selectedYear == null,
-                        onClick = { onSelectYear(null) },
-                        label = { Text("전체 연도") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MenuColors.golf,
-                            selectedLabelColor = Color.White
-                        )
-                    )
-
-                    // 등록된 연도 목록 칩
-                    statistics.availableYears.forEach { year ->
+                Surface(color = if (isEasyMode) EasyTheme.surface else Color.Transparent) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = Spacing.xl, vertical = Spacing.sm),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         FilterChip(
-                            selected = selectedYear == year,
-                            onClick = { onSelectYear(year) },
-                            label = { Text("${year}년") },
+                            selected = selectedYear == null,
+                            onClick = { onSelectYear(null) },
+                            label = { Text("전체 연도") },
+                            border = if (isEasyMode) null else FilterChipDefaults.filterChipBorder(enabled = true, selected = selectedYear == null),
                             colors = FilterChipDefaults.filterChipColors(
+                                containerColor = if (isEasyMode) EasyTheme.surfaceSubtle else Color.Transparent,
                                 selectedContainerColor = MenuColors.golf,
                                 selectedLabelColor = Color.White
                             )
                         )
+
+                        statistics.availableYears.forEach { year ->
+                            FilterChip(
+                                selected = selectedYear == year,
+                                onClick = { onSelectYear(year) },
+                                label = { Text("${year}년") },
+                                border = if (isEasyMode) null else FilterChipDefaults.filterChipBorder(enabled = true, selected = selectedYear == year),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    containerColor = if (isEasyMode) EasyTheme.surfaceSubtle else Color.Transparent,
+                                    selectedContainerColor = MenuColors.golf,
+                                    selectedLabelColor = Color.White
+                                )
+                            )
+                        }
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // 3. 본문 스크롤 (Bento Grid 통계 카드들)
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(Spacing.xl),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                        .padding(horizontal = if (isEasyMode) 16.dp else Spacing.xl, vertical = if (isEasyMode) 16.dp else Spacing.xl),
+                    verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 12.dp else Spacing.md)
                 ) {
                     // 라운드 요약 상단 배너
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFF0FDF4),
-                        border = BorderStroke(1.dp, Color(0xFFBBF7D0))
+                        shape = RoundedCornerShape(if (isEasyMode) 20.dp else 12.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Color(0xFFF0FDF4),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFBBF7D0))
                     ) {
                         Row(
-                            modifier = Modifier.padding(Spacing.md),
+                            modifier = Modifier.padding(if (isEasyMode) 18.dp else Spacing.md),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -4230,19 +4537,19 @@ fun GolfStatisticsDialog(
                                 Text(
                                     text = if (selectedYear != null) "${selectedYear}년 총 라운드" else "누적 총 라운드",
                                     fontSize = 12.sp,
-                                    color = Color(0xFF166534),
+                                    color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF166534),
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
                                     text = "${statistics.totalRounds}회 라운딩",
-                                    fontSize = 20.sp,
+                                    fontSize = 22.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF14532D)
+                                    color = if (isEasyMode) EasyTheme.textPrimary else Color(0xFF14532D)
                                 )
                             }
                             if (statistics.bestScore != null) {
                                 Surface(
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
                                     color = Color(0xFFDCFCE7)
                                 ) {
                                     Column(
@@ -4261,7 +4568,7 @@ fun GolfStatisticsDialog(
                     // Row 1: 평균 타수 & 평균 퍼트수
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                        horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 12.dp else Spacing.md)
                     ) {
                         GolfStatCard(
                             title = "평균 타수",
@@ -4284,7 +4591,7 @@ fun GolfStatisticsDialog(
                     // Row 2: 평균 비거리 & 평균 페널티
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                        horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 12.dp else Spacing.md)
                     ) {
                         val driveVal = when {
                             statistics.averageDriveDistance != null && statistics.averageAdjustedDriveDistance != null ->
@@ -4314,7 +4621,7 @@ fun GolfStatisticsDialog(
                     // Row 3: 그린 적중률(GIR) & 티샷 템포
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+                        horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 12.dp else Spacing.md)
                     ) {
                         GolfStatCard(
                             title = "그린 적중률 (GIR)",
@@ -4337,12 +4644,12 @@ fun GolfStatisticsDialog(
                     // Row 4: 전체 걸음수 (전폭 카드)
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFF8FAFC),
-                        border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                        shape = RoundedCornerShape(if (isEasyMode) 20.dp else 12.dp),
+                        color = if (isEasyMode) EasyTheme.surface else Color(0xFFF8FAFC),
+                        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFE2E8F0))
                     ) {
                         Row(
-                            modifier = Modifier.padding(Spacing.md),
+                            modifier = Modifier.padding(if (isEasyMode) 18.dp else Spacing.md),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -4377,19 +4684,23 @@ fun GolfStatisticsDialog(
                     }
                 }
 
-                HairlineDivider()
+                if (!isEasyMode) {
+                    HairlineDivider()
+                }
 
                 // 4. 하단 닫기 바
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(Spacing.md),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    AutoLoguePrimaryButton(
-                        text = "닫기",
-                        onClick = onDismiss
-                    )
+                Surface(color = if (isEasyMode) EasyTheme.surface else Color.Transparent) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(Spacing.md),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        AutoLoguePrimaryButton(
+                            text = "닫기",
+                            onClick = onDismiss
+                        )
+                    }
                 }
             }
         }
@@ -4405,13 +4716,14 @@ private fun GolfStatCard(
     accentColor: Color,
     modifier: Modifier = Modifier
 ) {
+    val isEasyMode = LocalEasyMode.current
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0xFFF8FAFC),
-        border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+        shape = RoundedCornerShape(if (isEasyMode) 20.dp else 12.dp),
+        color = if (isEasyMode) EasyTheme.surface else Color(0xFFF8FAFC),
+        border = if (isEasyMode) null else BorderStroke(1.dp, Color(0xFFE2E8F0))
     ) {
-        Column(modifier = Modifier.padding(Spacing.md)) {
+        Column(modifier = Modifier.padding(if (isEasyMode) 16.dp else Spacing.md)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -4419,9 +4731,9 @@ private fun GolfStatCard(
             ) {
                 Text(
                     text = title,
-                    fontSize = 11.sp,
-                    color = Color(0xFF64748B),
-                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                    color = if (isEasyMode) EasyTheme.textSecondary else Color(0xFF64748B),
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -4432,15 +4744,15 @@ private fun GolfStatCard(
                 text = value,
                 fontSize = if (value.length > 10) 14.sp else 20.sp,
                 fontWeight = FontWeight.Bold,
-                color = accentColor,
+                color = if (isEasyMode) EasyTheme.textPrimary else accentColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = subValue,
-                fontSize = 10.sp,
-                color = Color(0xFF94A3B8),
+                fontSize = 11.sp,
+                color = if (isEasyMode) EasyTheme.textMuted else Color(0xFF94A3B8),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -4454,20 +4766,33 @@ fun GolfGalleryScanDialog(
     onConfirm: (Int?) -> Unit
 ) {
     var selectedDays by remember { mutableStateOf<Int?>(0) }
+    val isEasyMode = LocalEasyMode.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(
-                text = "갤러리 골프 미디어 백그라운드 스캔",
-                style = AppTypography.h2
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "갤러리 골프 미디어 스캔",
+                    style = AppTypography.h2.copy(
+                        color = if (isEasyMode) EasyTheme.textPrimary else AppColors.primary
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+                EasyModalModeSwitchChip()
+            }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
                     text = "마지막 분석 완료 시점 이후 새로 추가된 사진·스크린샷만 초고속 분석하거나, 과거 전체 기간을 백그라운드 병렬 엔진으로 스캔합니다. 이미 일반 사진으로 확인된 항목은 즉시 건너뛰어 훨씬 빠르게 완료됩니다.",
-                    style = AppTypography.bodySecondary
+                    style = AppTypography.bodySecondary.copy(
+                        color = if (isEasyMode) EasyTheme.textSecondary else AppColors.secondary
+                    )
                 )
 
                 Column(
@@ -4484,12 +4809,21 @@ fun GolfGalleryScanDialog(
                     periods.forEach { (days, label) ->
                         val isSelected = selectedDays == days
                         Surface(
-                            shape = AppShapes.card,
-                            color = if (isSelected) MenuColors.golf.copy(alpha = 0.08f) else AppColors.surface,
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) MenuColors.golf else AppColors.border
-                            ),
+                            shape = if (isEasyMode) RoundedCornerShape(14.dp) else AppShapes.card,
+                            color = when {
+                                isEasyMode && isSelected -> EasyTheme.golfAccent.copy(alpha = 0.1f)
+                                isEasyMode -> EasyTheme.surfaceSubtle
+                                isSelected -> MenuColors.golf.copy(alpha = 0.08f)
+                                else -> AppColors.surface
+                            },
+                            border = if (isEasyMode) {
+                                if (isSelected) BorderStroke(1.5.dp, EasyTheme.golfAccent) else null
+                            } else {
+                                BorderStroke(
+                                    1.dp,
+                                    if (isSelected) MenuColors.golf else AppColors.border
+                                )
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { selectedDays = days }
@@ -4504,7 +4838,7 @@ fun GolfGalleryScanDialog(
                                     selected = isSelected,
                                     onClick = { selectedDays = days },
                                     colors = RadioButtonDefaults.colors(
-                                        selectedColor = MenuColors.golf
+                                        selectedColor = if (isEasyMode) EasyTheme.golfAccent else MenuColors.golf
                                     )
                                 )
                                 Spacer(modifier = Modifier.width(Spacing.sm))
@@ -4530,8 +4864,8 @@ fun GolfGalleryScanDialog(
                 onClick = onDismiss
             )
         },
-        containerColor = AppColors.surface,
-        shape = AppShapes.modal
+        containerColor = if (isEasyMode) EasyTheme.surface else AppColors.surface,
+        shape = if (isEasyMode) RoundedCornerShape(24.dp) else AppShapes.modal
     )
 }
 

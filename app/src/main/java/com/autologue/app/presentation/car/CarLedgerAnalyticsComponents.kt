@@ -25,7 +25,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autologue.app.presentation.common.EasyTheme
 import com.autologue.app.presentation.common.HairlineDivider
+import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.common.MetricBadge
 import com.autologue.app.presentation.expense.AnalyticsComparisonBasis
 import com.autologue.app.presentation.expense.AnalyticsPeriodUnit
@@ -65,11 +67,15 @@ fun CarLedgerAnalyticsSection(
     onSelectComparisonBasis: (AnalyticsComparisonBasis) -> Unit,
     onJumpToLogTabWithFilter: (LogFilterMode) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.xl, vertical = Spacing.md),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(
+                horizontal = if (isEasyMode) 0.dp else Spacing.xl,
+                vertical = if (isEasyMode) 2.dp else Spacing.md
+            ),
+        verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 14.dp else 12.dp)
     ) {
         // 1. 주기 조건 탭: [월간] | [분기별] | [반기별] | [연간]
         PeriodUnitTabSelector(
@@ -140,27 +146,36 @@ private fun CarAnalyticsSubViewTabBar(
     selectedSubTab: CarLedgerAnalyticsSubTab,
     onSelectSubTab: (CarLedgerAnalyticsSubTab) -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 8.dp else 6.dp)
     ) {
         CarLedgerAnalyticsSubTab.entries.forEach { tab ->
             val isSelected = selectedSubTab == tab
             Surface(
                 onClick = { onSelectSubTab(tab) },
-                shape = RoundedCornerShape(10.dp),
-                color = if (isSelected) Slate900 else PureWhite,
-                border = BorderStroke(1.dp, if (isSelected) Slate900 else Slate200),
+                shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                color = if (isEasyMode) {
+                    if (isSelected) EasyTheme.textPrimary else EasyTheme.surface
+                } else {
+                    if (isSelected) Slate900 else PureWhite
+                },
+                border = if (isEasyMode) null else BorderStroke(1.dp, if (isSelected) Slate900 else Slate200),
                 modifier = Modifier
                     .weight(1f)
-                    .height(36.dp)
+                    .height(if (isEasyMode) 40.dp else 36.dp)
             ) {
-                Box(contentAlignment = Alignment.Center) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 6.dp)) {
                     Text(
                         text = tab.label,
-                        fontSize = 11.5.sp,
+                        fontSize = if (isEasyMode) 12.5.sp else 11.5.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                        color = if (isSelected) PureWhite else Slate700,
+                        color = if (isEasyMode) {
+                            if (isSelected) PureWhite else EasyTheme.textSecondary
+                        } else {
+                            if (isSelected) PureWhite else Slate700
+                        },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -174,6 +189,7 @@ private fun CarAnalyticsSubViewTabBar(
 private fun CarOverviewDualSummaryCard(
     report: CarLedgerComparisonReport
 ) {
+    val isEasyMode = LocalEasyMode.current
     val basisLabel = if (report.effectiveBasis == AnalyticsComparisonBasis.PREVIOUS_PERIOD) {
         "${report.currentPeriod.sequentialBasisLabel()} (${report.previousPeriod.compactTitle})"
     } else {
@@ -181,16 +197,16 @@ private fun CarOverviewDualSummaryCard(
     }
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(if (isEasyMode) 20.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 14.dp else 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -199,21 +215,25 @@ private fun CarOverviewDualSummaryCard(
             ) {
                 Text(
                     text = "${report.currentPeriod.displayTitle} 주행 · 유지비 요약",
-                    fontSize = 13.sp,
+                    fontSize = if (isEasyMode) 15.sp else 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Slate900
+                    color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 MetricBadge(
                     text = basisLabel,
-                    textColor = CarDrivingPrimaryFill,
-                    backgroundColor = CarDrivingSoftBg
+                    textColor = if (isEasyMode) EasyTheme.tossBlue else CarDrivingPrimaryFill,
+                    backgroundColor = if (isEasyMode) EasyTheme.tossBlueSoft else CarDrivingSoftBg
                 )
             }
 
             // 좌/우 2열 메인 요약 카드: [총 주행거리 증감] vs [총 차량유지비 증감]
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 10.dp else 8.dp)
             ) {
                 // 1) 총 주행거리 카드
                 val distPctStr = CarLedgerAnalyticsEngine.formatSignedPercentForDouble(
@@ -222,41 +242,46 @@ private fun CarOverviewDualSummaryCard(
                     report.activeComparisonDistanceKm
                 )
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Slate50,
-                    border = BorderStroke(1.dp, Slate200),
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                     modifier = Modifier.weight(1f)
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(if (isEasyMode) 14.dp else 12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
                             text = "총 주행거리 (${report.currentTripCount}회)",
-                            fontSize = 11.sp,
+                            fontSize = if (isEasyMode) 12.sp else 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Slate600
+                            color = if (isEasyMode) EasyTheme.textSecondary else Slate600,
+                            maxLines = 1
                         )
                         Text(
                             text = "%,.1f km".format(report.currentTotalDistanceKm),
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Slate900
+                            fontSize = if (isEasyMode) 21.sp else 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                            maxLines = 1
                         )
                         Text(
                             text = "${CarLedgerAnalyticsEngine.formatSignedKm(report.activeDistanceDeltaKm)} ($distPctStr)",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = when {
-                                report.activeDistanceDeltaKm > 0.05 -> CarDrivingPrimaryFill
+                                report.activeDistanceDeltaKm > 0.05 -> if (isEasyMode) EasyTheme.tossBlue else CarDrivingPrimaryFill
                                 report.activeDistanceDeltaKm < -0.05 -> CarCostDecreaseText
-                                else -> Slate600
-                            }
+                                else -> if (isEasyMode) EasyTheme.textSecondary else Slate600
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "비교 기간: %,.1f km".format(report.activeComparisonDistanceKm),
-                            fontSize = 10.5.sp,
-                            color = Slate500
+                            fontSize = 11.sp,
+                            color = if (isEasyMode) EasyTheme.textMuted else Slate500,
+                            maxLines = 1
                         )
                     }
                 }
@@ -268,26 +293,28 @@ private fun CarOverviewDualSummaryCard(
                     report.activeComparisonTotalCost
                 )
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Slate50,
-                    border = BorderStroke(1.dp, Slate200),
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                     modifier = Modifier.weight(1f)
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(if (isEasyMode) 14.dp else 12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
                             text = "총 차량유지비 (${report.currentCostCount}건)",
-                            fontSize = 11.sp,
+                            fontSize = if (isEasyMode) 12.sp else 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Slate600
+                            color = if (isEasyMode) EasyTheme.textSecondary else Slate600,
+                            maxLines = 1
                         )
                         Text(
                             text = "%,d원".format(report.currentTotalCost),
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Slate900
+                            fontSize = if (isEasyMode) 21.sp else 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                            maxLines = 1
                         )
                         Text(
                             text = "${ExpenseAnalyticsEngine.formatSignedAmount(report.activeCostDeltaAmount)} ($costPctStr)",
@@ -296,13 +323,16 @@ private fun CarOverviewDualSummaryCard(
                             color = when {
                                 report.activeCostDeltaAmount > 0L -> CarCostIncreaseText
                                 report.activeCostDeltaAmount < 0L -> CarCostDecreaseText
-                                else -> Slate600
-                            }
+                                else -> if (isEasyMode) EasyTheme.textSecondary else Slate600
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "비교 기간: %,d원".format(report.activeComparisonTotalCost),
-                            fontSize = 10.5.sp,
-                            color = Slate500
+                            fontSize = 11.sp,
+                            color = if (isEasyMode) EasyTheme.textMuted else Slate500,
+                            maxLines = 1
                         )
                     }
                 }
@@ -311,43 +341,46 @@ private fun CarOverviewDualSummaryCard(
             // 하단 보조 지표 서브카드: [전년 동기 대비] & [1km당 차량유지비]
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(if (isEasyMode) 10.dp else 8.dp)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = PureWhite,
-                    border = BorderStroke(1.dp, Slate200),
+                    shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                     modifier = Modifier.weight(1f)
                 ) {
                     Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                        modifier = Modifier.padding(if (isEasyMode) 12.dp else 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
                         Text(
                             text = "${report.currentPeriod.yoyBasisLabel()} (${report.yoyPeriod.compactTitle})",
-                            fontSize = 10.5.sp,
-                            color = Slate500,
-                            fontWeight = FontWeight.Medium
+                            fontSize = 11.sp,
+                            color = if (isEasyMode) EasyTheme.textMuted else Slate500,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
                         )
                         Text(
                             text = "주행 ${CarLedgerAnalyticsEngine.formatSignedKm(report.yoyDistanceDeltaKm)}",
-                            fontSize = 11.5.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Slate800
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate800,
+                            maxLines = 1
                         )
                         Text(
                             text = "유지비 ${ExpenseAnalyticsEngine.formatSignedAmount(report.yoyCostDeltaAmount)}",
-                            fontSize = 11.5.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (report.yoyCostDeltaAmount > 0L) CarCostIncreaseText else CarCostDecreaseText
+                            color = if (report.yoyCostDeltaAmount > 0L) CarCostIncreaseText else CarCostDecreaseText,
+                            maxLines = 1
                         )
                     }
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = PureWhite,
-                    border = BorderStroke(1.dp, Slate200),
+                    shape = RoundedCornerShape(if (isEasyMode) 14.dp else 10.dp),
+                    color = if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                     modifier = Modifier.weight(1f)
                 ) {
                     val costPerKmDiff = report.currentCostPerKm - report.activeComparisonCostPerKm
@@ -357,25 +390,29 @@ private fun CarOverviewDualSummaryCard(
                         else -> "변동 없음"
                     }
                     Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                        modifier = Modifier.padding(if (isEasyMode) 12.dp else 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
                         Text(
                             text = "1km당 유지비 · 총 주유량",
-                            fontSize = 10.5.sp,
-                            color = Slate500,
-                            fontWeight = FontWeight.Medium
+                            fontSize = 11.sp,
+                            color = if (isEasyMode) EasyTheme.textMuted else Slate500,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
                         )
                         Text(
                             text = if (report.currentCostPerKm > 0L) "%,d원/km ($costPerKmSign)".format(report.currentCostPerKm) else "산출 전",
-                            fontSize = 11.5.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Slate800
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate800,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "주유량 %.1fL (비교 %.1fL)".format(report.currentTotalFuelLiters, report.activeComparisonTotalFuelLiters),
                             fontSize = 11.sp,
-                            color = Slate600
+                            color = if (isEasyMode) EasyTheme.textSecondary else Slate600,
+                            maxLines = 1
                         )
                     }
                 }
@@ -390,19 +427,20 @@ private fun CarTopChangeAndCorrelationInsightCard(
     onJumpToCostTable: () -> Unit,
     onJumpToDrivingTable: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     val largestCost = report.largestCostChangeItem
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(if (isEasyMode) 20.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isEasyMode) 14.dp else 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -410,19 +448,23 @@ private fun CarTopChangeAndCorrelationInsightCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "최대 변동 유지비 강조 및 주행 상관관계 인사이트",
-                    fontSize = 14.sp,
+                    text = if (isEasyMode) "최대 변동 유지비 · 상관관계 인사이트" else "최대 변동 유지비 강조 및 주행 상관관계 인사이트",
+                    fontSize = if (isEasyMode) 15.sp else 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Slate900
+                    color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 MetricBadge(
                     text = "자동 진단",
-                    textColor = CarDrivingPrimaryFill,
-                    backgroundColor = CarDrivingSoftBg
+                    textColor = if (isEasyMode) EasyTheme.tossBlue else CarDrivingPrimaryFill,
+                    backgroundColor = if (isEasyMode) EasyTheme.tossBlueSoft else CarDrivingSoftBg
                 )
             }
 
-            // 1. 가장 변경폭이 큰 차량유지비 항목 하이라이트 박스 (Clean Outline 강조)
+            // 1. 가장 변경폭이 큰 차량유지비 항목 하이라이트 박스 (줄바꿈/겹침 없는 2단 레이아웃)
             if (largestCost != null && (largestCost.currentAmount > 0L || largestCost.comparisonAmount > 0L)) {
                 val isInc = largestCost.deltaAmount >= 0L
                 val outlineCol = if (isInc) CarCostIncreaseFill else CarCostDecreaseFill
@@ -435,51 +477,54 @@ private fun CarTopChangeAndCorrelationInsightCard(
                 )
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
                     color = tintBg,
-                    border = BorderStroke(1.5.dp, outlineCol),
+                    border = if (isEasyMode) BorderStroke(1.dp, outlineCol.copy(alpha = 0.35f)) else BorderStroke(1.5.dp, outlineCol),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onJumpToCostTable() }
                 ) {
                     Column(
-                        modifier = Modifier.padding(14.dp),
+                        modifier = Modifier.padding(if (isEasyMode) 16.dp else 14.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = outlineCol
+                        ) {
+                            Text(
+                                text = if (isInc) "최대 증가 유지비" else "최대 절감 유지비",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PureWhite,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(5.dp),
-                                    color = outlineCol
-                                ) {
-                                    Text(
-                                        text = if (isInc) "최대 증가 유지비" else "최대 절감 유지비",
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = PureWhite,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                    )
-                                }
-                                Text(
-                                    text = largestCost.type.displayName,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Slate900
-                                )
-                            }
-
+                            Text(
+                                text = largestCost.type.displayName,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "${ExpenseAnalyticsEngine.formatSignedAmount(largestCost.deltaAmount)} ($pctStr)",
                                 fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = textCol
+                                fontWeight = FontWeight.ExtraBold,
+                                color = textCol,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
@@ -489,23 +534,23 @@ private fun CarTopChangeAndCorrelationInsightCard(
                                 largestCost.currentAmount,
                                 largestCost.currentSharePercent
                             ),
-                            fontSize = 11.5.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
-                            color = Slate700
+                            color = if (isEasyMode) EasyTheme.textSecondary else Slate700
                         )
 
                         Text(
                             text = "세부 내역: ${largestCost.causeSummary}",
-                            fontSize = 11.5.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Slate800
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate800
                         )
 
                         if (largestCost.topPlacesSummary.isNotBlank()) {
                             Text(
                                 text = "주요 지출 장소: ${largestCost.topPlacesSummary}",
-                                fontSize = 11.sp,
-                                color = Slate600
+                                fontSize = 11.5.sp,
+                                color = if (isEasyMode) EasyTheme.textSecondary else Slate600
                             )
                         }
                     }
@@ -514,20 +559,20 @@ private fun CarTopChangeAndCorrelationInsightCard(
 
             // 2. 주행거리-유지비 상관관계 3줄 인사이트 박스
             Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Slate50,
-                border = BorderStroke(1.dp, Slate200),
+                shape = RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp),
+                color = if (isEasyMode) EasyTheme.surfaceSubtle else Slate50,
+                border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(if (isEasyMode) 14.dp else 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
                         text = "주행거리 · 유지비 상관관계 분석 결과",
-                        fontSize = 12.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate800
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate800
                     )
                     CarInsightRow(label = "주행·비용", text = report.correlationInsight)
                     CarInsightRow(label = "최대변동", text = report.costHighlightInsight)
@@ -542,34 +587,36 @@ private fun CarTopChangeAndCorrelationInsightCard(
             ) {
                 Surface(
                     onClick = onJumpToCostTable,
-                    shape = RoundedCornerShape(8.dp),
-                    color = CarDrivingSoftBg,
-                    border = BorderStroke(1.dp, CarDrivingBorder),
+                    shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.tossBlueSoft else CarDrivingSoftBg,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, CarDrivingBorder),
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = "유지비 항목별 도표 >",
-                        fontSize = 11.5.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = CarDrivingPrimaryFill,
+                        color = if (isEasyMode) EasyTheme.tossBlue else CarDrivingPrimaryFill,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(vertical = 9.dp)
+                        maxLines = 1,
+                        modifier = Modifier.padding(vertical = 10.dp)
                     )
                 }
                 Surface(
                     onClick = onJumpToDrivingTable,
-                    shape = RoundedCornerShape(8.dp),
-                    color = Slate50,
-                    border = BorderStroke(1.dp, Slate300),
+                    shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate300),
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = "주행거리 상세 도표 >",
-                        fontSize = 11.5.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate800,
+                        color = if (isEasyMode) EasyTheme.textSecondary else Slate800,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(vertical = 9.dp)
+                        maxLines = 1,
+                        modifier = Modifier.padding(vertical = 10.dp)
                     )
                 }
             }
@@ -582,30 +629,33 @@ private fun CarInsightRow(
     label: String,
     text: String
 ) {
+    val isEasyMode = LocalEasyMode.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Surface(
-            shape = RoundedCornerShape(4.dp),
-            color = PureWhite,
-            border = BorderStroke(1.dp, Slate300),
+            shape = RoundedCornerShape(if (isEasyMode) 6.dp else 4.dp),
+            color = if (isEasyMode) EasyTheme.surface else PureWhite,
+            border = if (isEasyMode) null else BorderStroke(1.dp, Slate300),
             modifier = Modifier.padding(top = 1.dp)
         ) {
             Text(
                 text = label,
-                fontSize = 10.sp,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.Bold,
-                color = Slate700,
-                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                color = if (isEasyMode) EasyTheme.tossBlue else Slate700,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
         Text(
             text = text,
-            fontSize = 12.sp,
-            color = Slate800,
-            lineHeight = 17.sp,
+            fontSize = 12.5.sp,
+            color = if (isEasyMode) EasyTheme.textPrimary else Slate800,
+            lineHeight = 18.sp,
             modifier = Modifier.weight(1f)
         )
     }
@@ -615,20 +665,21 @@ private fun CarInsightRow(
 private fun CarPeriodDualTrendChartCard(
     report: CarLedgerComparisonReport
 ) {
+    val isEasyMode = LocalEasyMode.current
     val items = report.trendItems
     val maxDist = items.maxOfOrNull { it.totalDistanceKm }?.coerceAtLeast(1.0) ?: 1.0
     val maxCost = items.maxOfOrNull { it.totalMaintenanceCost }?.coerceAtLeast(1L) ?: 1L
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -639,14 +690,14 @@ private fun CarPeriodDualTrendChartCard(
                 Column {
                     Text(
                         text = "최근 ${items.size}개 ${report.unit.shortLabel} 주행거리 · 차량유지비 추이",
-                        fontSize = 14.sp,
+                        fontSize = if (isEasyMode) 15.sp else 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate900
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900
                     )
                     Text(
                         text = "좌측 파란 막대: 주행거리(km) · 우측 슬레이트 막대: 유지비(원)",
-                        fontSize = 11.sp,
-                        color = Slate500
+                        fontSize = 11.5.sp,
+                        color = if (isEasyMode) EasyTheme.textMuted else Slate500
                     )
                 }
             }
@@ -655,9 +706,12 @@ private fun CarPeriodDualTrendChartCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(184.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Slate50)
-                    .border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(if (isEasyMode) 16.dp else 10.dp))
+                    .background(if (isEasyMode) EasyTheme.surfaceSubtle else Slate50)
+                    .then(
+                        if (isEasyMode) Modifier
+                        else Modifier.border(1.dp, Slate200, RoundedCornerShape(10.dp))
+                    )
                     .padding(horizontal = 8.dp, vertical = 12.dp)
             ) {
                 Row(
@@ -778,20 +832,21 @@ private fun CarCostBreakdownDeltaCard(
     report: CarLedgerComparisonReport,
     onNavigateToRefuelLogs: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     val maxCostScale = remember(report.costDeltas) {
         report.costDeltas.maxOfOrNull { maxOf(it.currentAmount, it.comparisonAmount) }?.coerceAtLeast(1L) ?: 1L
     }
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -802,14 +857,14 @@ private fun CarCostBreakdownDeltaCard(
                 Column {
                     Text(
                         text = "차량유지비 항목별(주유 · 주차 · 정비) 증감 도표",
-                        fontSize = 14.sp,
+                        fontSize = if (isEasyMode) 15.sp else 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Slate900
+                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900
                     )
                     Text(
                         text = "${report.currentPeriod.compactTitle} vs ${report.activeComparisonPeriod.compactTitle} 비교 (가장 변동폭이 큰 지출 최상단 강조)",
-                        fontSize = 11.sp,
-                        color = Slate500
+                        fontSize = 11.5.sp,
+                        color = if (isEasyMode) EasyTheme.textMuted else Slate500
                     )
                 }
             }
@@ -828,16 +883,18 @@ private fun CarCostBreakdownDeltaCard(
                 val borderStroke = when {
                     item.isLargestMagnitudeChange && isInc -> BorderStroke(1.5.dp, CarCostIncreaseFill)
                     item.isLargestMagnitudeChange && isDec -> BorderStroke(1.5.dp, CarCostDecreaseFill)
+                    isEasyMode -> null
                     else -> BorderStroke(1.dp, Slate200)
                 }
                 val bgTint = when {
-                    item.isLargestMagnitudeChange && isInc -> CarCostIncreaseBg.copy(alpha = 0.5f)
-                    item.isLargestMagnitudeChange && isDec -> CarCostDecreaseBg.copy(alpha = 0.5f)
+                    item.isLargestMagnitudeChange && isInc -> CarCostIncreaseBg.copy(alpha = 0.55f)
+                    item.isLargestMagnitudeChange && isDec -> CarCostDecreaseBg.copy(alpha = 0.55f)
+                    isEasyMode -> EasyTheme.surfaceSubtle
                     else -> PureWhite
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
                     color = bgTint,
                     border = borderStroke,
                     modifier = Modifier
@@ -845,7 +902,7 @@ private fun CarCostBreakdownDeltaCard(
                         .clickable { onNavigateToRefuelLogs() }
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(if (isEasyMode) 14.dp else 12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Row(
@@ -876,17 +933,20 @@ private fun CarCostBreakdownDeltaCard(
                                     text = item.type.displayName,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Slate900
+                                    color = Slate900,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 if (item.isLargestMagnitudeChange && item.deltaAmount != 0L) {
                                     MetricBadge(
-                                        text = "최대 변동 지출",
+                                        text = "최대 변동",
                                         textColor = PureWhite,
                                         backgroundColor = if (isInc) CarCostIncreaseFill else CarCostDecreaseFill
                                     )
                                 }
                             }
 
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "${ExpenseAnalyticsEngine.formatSignedAmount(item.deltaAmount)} ($pctStr)",
                                 fontSize = 13.5.sp,
@@ -895,7 +955,9 @@ private fun CarCostBreakdownDeltaCard(
                                     isInc -> CarCostIncreaseText
                                     isDec -> CarCostDecreaseText
                                     else -> Slate600
-                                }
+                                },
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
@@ -929,9 +991,9 @@ private fun CarCostBreakdownDeltaCard(
                         }
 
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Slate50,
-                            border = BorderStroke(1.dp, Slate200),
+                            shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                            color = if (isEasyMode) EasyTheme.surface else Slate50,
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
@@ -992,33 +1054,34 @@ private fun CarDrivingPurposeDeltaCard(
     report: CarLedgerComparisonReport,
     onNavigateToDrivingLogs: () -> Unit
 ) {
+    val isEasyMode = LocalEasyMode.current
     val maxKmScale = remember(report.drivingDeltas) {
         report.drivingDeltas.maxOfOrNull { maxOf(it.currentDistanceKm, it.comparisonDistanceKm) }?.coerceAtLeast(1.0) ?: 1.0
     }
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = PureWhite,
-        border = BorderStroke(1.dp, Slate200),
+        shape = RoundedCornerShape(if (isEasyMode) 22.dp else 14.dp),
+        color = if (isEasyMode) EasyTheme.surface else PureWhite,
+        border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(if (isEasyMode) 20.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Column {
                 Text(
                     text = "주행 목적별(출퇴근 · 골프 · 일반) 주행거리 비교 도표",
-                    fontSize = 14.sp,
+                    fontSize = if (isEasyMode) 15.sp else 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Slate900
+                    color = if (isEasyMode) EasyTheme.textPrimary else Slate900
                 )
                 Text(
                     text = "${report.currentPeriod.compactTitle} vs ${report.activeComparisonPeriod.compactTitle} 주행량 증감 비교",
-                    fontSize = 11.sp,
-                    color = Slate500
+                    fontSize = 11.5.sp,
+                    color = if (isEasyMode) EasyTheme.textMuted else Slate500
                 )
             }
 
@@ -1033,22 +1096,23 @@ private fun CarDrivingPurposeDeltaCard(
                     item.comparisonDistanceKm
                 )
 
-                val borderStroke = if (item.isLargestMagnitudeChange) {
-                    BorderStroke(1.5.dp, CarDrivingPrimaryFill)
-                } else {
-                    BorderStroke(1.dp, Slate200)
+                val borderStroke = when {
+                    item.isLargestMagnitudeChange -> BorderStroke(1.5.dp, CarDrivingPrimaryFill)
+                    isEasyMode -> null
+                    else -> BorderStroke(1.dp, Slate200)
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (item.isLargestMagnitudeChange) CarDrivingSoftBg.copy(alpha = 0.45f) else PureWhite,
+                    shape = RoundedCornerShape(if (isEasyMode) 16.dp else 12.dp),
+                    color = if (item.isLargestMagnitudeChange) CarDrivingSoftBg.copy(alpha = 0.45f)
+                            else if (isEasyMode) EasyTheme.surfaceSubtle else PureWhite,
                     border = borderStroke,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onNavigateToDrivingLogs() }
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(if (isEasyMode) 14.dp else 12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Row(
@@ -1079,17 +1143,20 @@ private fun CarDrivingPurposeDeltaCard(
                                     text = item.purpose.displayName,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Slate900
+                                    color = Slate900,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 if (item.isLargestMagnitudeChange) {
                                     MetricBadge(
-                                        text = "최대 변동 주행",
+                                        text = "최대 변동",
                                         textColor = PureWhite,
                                         backgroundColor = CarDrivingPrimaryFill
                                     )
                                 }
                             }
 
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "${CarLedgerAnalyticsEngine.formatSignedKm(item.deltaDistanceKm)} ($pctStr)",
                                 fontSize = 13.5.sp,
@@ -1098,7 +1165,9 @@ private fun CarDrivingPurposeDeltaCard(
                                     isInc -> CarDrivingPrimaryFill
                                     isDec -> CarCostDecreaseText
                                     else -> Slate600
-                                }
+                                },
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
@@ -1127,9 +1196,9 @@ private fun CarDrivingPurposeDeltaCard(
                         }
 
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Slate50,
-                            border = BorderStroke(1.dp, Slate200),
+                            shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                            color = if (isEasyMode) EasyTheme.surface else Slate50,
+                            border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
