@@ -3,7 +3,7 @@
 - **프로젝트명**: LifeLog (스마트 라이프로그 & 통합 가계·차계·골프 플랫폼)
 - **프로젝트 위치**: `C:\myWork\workspace\scratch\lifeLog`
 - **GitHub 저장소**: [https://github.com/herosonsa1/lifeLog.git](https://github.com/herosonsa1/lifeLog.git)
-- **문서 최종 갱신일**: 2026-09-30
+- **문서 최종 갱신일**: 2026-10-22
 
 ---
 
@@ -2875,3 +2875,212 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - `isProtectedFuelStation()`에서 `"가계부 결제 내역 자동 분석"` 노트는 수동 보호 대상에서 제외.
    - `TransactionRepositoryImpl.cleanInvalidTransactions()`에서도 승인일자가 불명확하거나 가맹점명이 광고/비결제 문구인 기존 트랜잭션을 즉시 삭제.
 - **산출물 및 배포**: `나의일상다이어리_v1.0.23.apk` (`versionCode = 24`).
+
+
+---
+
+## 82. 가맹점명 및 단일 행 입력란 개행 문자(`\n`, `\r`) 정제 및 줄바꿈 깨짐 방지 (2026-10-19, `v1.0.24`)
+
+### 82.1. 사용자 핵심 요청 사항
+- 문자 파싱이나 복사·붙여넣기 과정에서 가맹점명 내부에 개행 문자(`\n`, `\r`)가 섞여 들어올 때 내역 카드와 수정 모달 입력란이 여러 줄로 깨지는 현상 해결.
+
+### 82.2. 주요 개선 및 구현 내역
+1. **단일 행 텍스트 정제 유틸리티 적용 ([`SmsParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/SmsParser.kt), [`NotificationParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/NotificationParser.kt), [`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt))**:
+   - 파싱 단계와 수기 입력·수정 모달에서 가맹점명(`merchantName`) 및 단일 행 입력 필드의 줄바꿈 문자(`\r`, `\n`, 연속 공백)를 단일 공백으로 자동 치환하고 앞뒤 공백을 제거하도록 보강.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.24.apk` (`versionCode = 25`), GitHub 커밋 `b3513d5`.
+
+---
+
+## 83. 중복 내역 통합 시 상세 결제명 최우선 노출 및 `'카드 6'`·`'카드 2'` 원문/문자함 자가 복원 (2026-10-19, `v1.0.25`)
+
+### 83.1. 사용자 핵심 요청 사항
+- 동일 시각·동일 금액 중복 내역 통합 시 `'카드 6'`, `'카드 2'`처럼 축약·손실된 이름 대신 구체적인 가맹점명이 최우선 노출되도록 개선하고, 기존 DB에 `'카드 6'`·`'카드 2'`로 잘못 저장된 항목의 원래 사용처명을 원문(`originalText`) 및 단말기 SMS 문자함 대조로 자가 복원.
+
+### 83.2. 주요 개선 및 구현 내역
+1. **`TransactionDeduplicator` 구체적 가맹점명 우선순위 강화 및 자가 복원 ([`Transaction.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/Transaction.kt), [`TransactionRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/TransactionRepositoryImpl.kt), [`SmsParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/SmsParser.kt))**:
+   - `'카드 \d+'` 형태의 불완전 가맹점명을 플레이스홀더 등급으로 낮춰 정상 가맹점명이 항상 대표 항목으로 선택되도록 개선.
+   - 기존 DB 레코드 중 `'카드 6'`, `'카드 2'` 등 축약 명칭으로 남아 있는 내역은 `originalText` 재파싱 및 SMS 문자함 동일 시각·금액 원문 매칭으로 실제 가맹점명을 자동 복구.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.25.apk` (`versionCode = 26`), GitHub 커밋 `1f0d964`.
+
+---
+
+## 84. 구글 API 키 없는 고정밀 한국 상세 지도(지역 경계선·실제 도로 경로·자동 확대) 및 외부 지도 앱 경로 인식 개선 (2026-10-19, `v1.0.26` ~ `v1.0.28`)
+
+### 84.1. 사용자 핵심 요청 사항
+- 별도의 유료 Google Maps API 키 설정 없이도 빈 화면이 나오지 않는 한국 상세 지도와 시·군·구 경계선, 실제 도로 주행 경로(OSRM), 지점 마커 자동 확대 및 대각선 분리 라벨을 구현하고, 티맵·카카오내비·네이버지도 등 외부 지도 앱 실행 중 이동 경로도 정확히 인식하도록 개선.
+
+### 84.2. 주요 개선 및 구현 내역
+1. **100% 네이티브 Compose 슬리피 타일(Slippy Tile) 한국 상세 지도 및 OSRM 도로 경로 엔진 ([`DiaryRouteMap.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryRouteMap.kt), [`OsrmRouteFetcher.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/util/OsrmRouteFetcher.kt), [`KoreaSigunguBoundaryOverlay.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/KoreaSigunguBoundaryOverlay.kt))**:
+   - WebView 기반 타일 로딩 실패(빈 화면) 문제를 해결하기 위해 100% 네이티브 Compose Canvas 기반 슬리피 타일 렌더러와 메모리·디스크 캐시를 구축.
+   - 대한민국 시·군·구 행정구역 경계선 오버레이, OSRM 기반 실제 도로망 폴리라인 렌더링, 경로 전체 바운딩 박스 자동 줌/패닝 및 인접 마커 대각선 분리 배치를 적용.
+2. **외부 내비게이션 앱(티맵·카카오내비·네이버지도) 연동 경로 수집 강화 ([`CarDrivingTrackingService.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/service/CarDrivingTrackingService.kt))**:
+   - 외부 지도/내비게이션 앱 사용 시에도 백그라운드 위치 추적 및 거점 경유 포인트가 누락 없이 기록되도록 개선.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.26.apk` ~ `v1.0.28.apk` (`versionCode = 27 ~ 29`), GitHub 커밋 `4b04e6c`, `240b3df`.
+
+---
+
+## 85. 마지막 구동 시점 체크포인트 기반 증분(Incremental) 동기화 및 갤러리·결제 내역 5~15배 초고속 백그라운드 분석 + 최상단 진행률(%) 배너 (2026-10-19 ~ 2026-10-20, `v1.0.27`, `v1.0.29`, `v1.0.32`)
+
+### 85.1. 사용자 핵심 요청 사항
+- 앱을 켤 때마다 이미 분석 완료된 과거 문자와 갤러리 사진을 처음부터 다시 스캔하느라 느려지는 문제를 해결하고, 백그라운드에서도 중단 없이 끝까지 분석을 완주하며 앱 최상단에 전체 건수와 진행률(`%`)을 실시간 표시.
+
+### 85.2. 주요 개선 및 구현 내역
+1. **체크포인트 기반 증분(Incremental) 동기화 및 5~15배 초고속 병렬 분석 ([`SyncCheckpointPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/SyncCheckpointPreferences.kt), [`SmsSyncHelper.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/util/SmsSyncHelper.kt), [`PhotoTimelineAnalyzer.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/util/PhotoTimelineAnalyzer.kt))**:
+   - 마지막 동기화 완료 시각(`lastSmsSyncTimestamp`, `lastPhotoSyncTimestamp`) 및 분석 완료 미디어 ID 체크포인트를 저장하여 신규 수신 문자와 새로 촬영된 사진만 즉시 증분 스캔하도록 개선.
+   - EXIF 메타데이터 선필터링과 배치 DB 트랜잭션으로 과거 내역 및 갤러리(사진 위치·골프 OCR) 분석 속도를 5~15배 단축하고 메인 UI 스레드 차단을 완전히 제거.
+2. **포그라운드 서비스 백그라운드 완주 보장 및 앱 최상단 실시간 진행률(`%`) 배너 ([`DataSyncForegroundService.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/service/DataSyncForegroundService.kt), [`GlobalSyncProgressManager.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/util/GlobalSyncProgressManager.kt), [`MainScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/MainScreen.kt))**:
+   - 대량 동기화 수행 시 포그라운드 서비스를 가동해 화면을 끄거나 다른 앱으로 전환해도 백그라운드에서 끝까지 작업을 완주.
+   - 앱 최상단 전역 진행률 배너에서 현재 단계, 처리 건수(`현재/전체 건`), 진행률(`%`) 프로그레스 바를 실시간 표출.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.27.apk`, `v1.0.29.apk`, `v1.0.32.apk`, GitHub 커밋 `44a6d62`, `d9660ac`, `7d7303a`.
+
+---
+
+## 86. 가계부·차계부·스마트 골프 월간/분기별/반기별/연간 비교 도표 및 전년 동기 대비(YoY) 인사이트 통계 탭 신설 (2026-10-20, `v1.0.30` ~ `v1.0.31`)
+
+### 86.1. 사용자 핵심 요청 사항
+- 가계부(내 소비), 스마트 차계부, 스마트 골프 3대 메뉴에 각각 월간·분기별·반기별·연간 비교 도표와 직전 기간 및 전년 동기 대비 증감 분석(최대 변동 지출, 주행거리·주유비 추이, 라운딩·스크린·스코어 통계) 화면을 추가.
+
+### 86.2. 주요 개선 및 구현 내역
+1. **가계부 소비 통계 리포트 고도화 ([`ExpenseAnalyticsComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseAnalyticsComponents.kt))**:
+   - 월간/분기/반기/연간 주기 선택, 이전 기간 및 전년 동기 대비 증감액·증감률, 최다 지출 및 최대 급증 카테고리 인사이트, 카테고리별·사용자별 도넛 차트 및 상세 비교 테이블 구현.
+2. **차계부 운행·주유·유지비 통계 리포트 신설 ([`CarLedgerAnalyticsComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerAnalyticsComponents.kt))**:
+   - 기간별 주행거리(`km`), 주유 금액, 주차·정비 비용, 평균 연비(`km/L`), `km`당 운행 단가 추이 막대그래프 및 차량별(벤츠·볼보) 비교 통계 구현.
+3. **스마트 골프 라운딩·스크린·스코어 종합 통계 리포트 신설 ([`GolfAnalyticsComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/golf/GolfAnalyticsComponents.kt))**:
+   - 월간/분기/반기/연간 및 전년 동기 대비 필드 라운딩·스크린 골프 횟수, 평균 타수·최저 타수(Best Score), 구장별·동반자별 방문 및 스코어 요약 통계 구현.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.30.apk`, `v1.0.31.apk` (`versionCode = 31 ~ 32`), GitHub 커밋 `441c27c`, `0d1f5e0`.
+
+---
+
+## 87. 결제내역 수정/저장 시 기본값을 `'1회성 저장'`으로 변경 (2026-10-20, `v1.0.33`)
+
+### 87.1. 사용자 핵심 요청 사항
+- 결제내역 상세 수정 팝업에서 항목을 고치고 저장할 때 의도치 않게 동일 가맹점 전체 내역이 일괄 변경되지 않도록, 기본 저장 옵션을 `'영구 규칙 저장'`이 아닌 **`'이번 내역만 1회성 저장'`**으로 변경.
+
+### 87.2. 주요 개선 및 구현 내역
+1. **상세 수정 모달 기본 저장 모드 전환 ([`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt))**:
+   - `EditTransactionDialog` 오픈 시 영구 규칙 체크 기본값을 `false`(1회성 저장 기본)로 설정하고, 사용자가 명시적으로 영구 규칙 적용을 켰을 때만 동일 가맹점 규칙으로 저장되도록 개선.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.33.apk` (`versionCode = 34`), GitHub 커밋 `66bc9ac`.
+
+---
+
+## 88. 차계부 기록 항목 직접 수정, 평일(공휴일 제외) 출퇴근 적용, 출퇴근 외 운행 필터 및 소모품 알림 기본 접힘 개선 (2026-10-20, `v1.0.35`)
+
+### 88.1. 사용자 핵심 요청 사항
+- 차계부 각 기록(주행·주유·주차·정비)을 터치해 직접 수정할 수 있게 하고, 출퇴근 자동 기록은 주말·공휴일을 제외한 평일에만 생성하며, `'출퇴근 외'` 일반 운행만 모아보는 필터와 소모품 교체 주기 카드 기본 접힘 상태를 적용.
+
+### 88.2. 주요 개선 및 구현 내역
+1. **차계부 기록 상세 수정 모달 및 평일(공휴일 제외) 출퇴근 판별 ([`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt), [`KoreanHolidayCalendar.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/util/KoreanHolidayCalendar.kt), [`CarDrivingTrackingService.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/service/CarDrivingTrackingService.kt))**:
+   - 차계부 리스트 항목 클릭 시 차량, 구분(주행/주유/주차/정비), 장소/경로명, 주행거리(`km`), 금액, 메모를 수정·삭제할 수 있는 모달 추가.
+   - 대한민국 법정공휴일·대체공휴일 달력(`KoreanHolidayCalendar`)을 연동하여 주말과 공휴일에는 출퇴근 자동 주행으로 분류하지 않고 일반 주행으로 기록.
+   - 차계부 필터에 `'출퇴근 외'`(일반 운행) 필터를 추가하고, 소모품 교체 주기 알림 카드를 기본 접힘(Collapsed) 상태로 배치하여 화면 공간 확보.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.35.apk` (`versionCode = 36`), GitHub 커밋 `4fe13ba`.
+
+---
+
+## 89. 일자·월간 캘린더 텍스트 터치 시 연도·월·일자 선택 팝업 즉시 이동 기능 추가 (2026-10-20, `v1.0.36`)
+
+### 89.1. 사용자 핵심 요청 사항
+- 좌우 화살표(`<`, `>`)를 여러 번 누르지 않고도 상단 날짜·월 텍스트를 터치하면 원하는 연도·월·일자로 한 번에 이동할 수 있는 캘린더 선택 팝업 제공.
+
+### 89.2. 주요 개선 및 구현 내역
+1. **연도·월·일자 빠른 이동 피커 팝업 구현 ([`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt), [`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt), [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt))**:
+   - 다이어리, 가계부, 차계부의 상단 날짜/연월 표시 영역을 터치하면 연도·월·일자를 즉시 선택해 이동할 수 있는 캘린더 모달을 연동.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.36.apk` (`versionCode = 37`), GitHub 커밋 `b344973`.
+
+---
+
+## 90. 정기지출(고정항목) 판단 기준 제목 앞자리 텍스트(예별손, 동양 등) 지정 및 월별 변형 내역 자동 매칭 구현 (2026-10-20, `v1.0.37`)
+
+### 90.1. 사용자 핵심 요청 사항
+- 매달 결제일이나 뒷자리 번호·메모가 조금씩 바뀌는 보험료·자동이체 내역(예: `예별손해보험...`, `동양생명...`)도 앞자리 핵심 키워드(접두어) 기준으로 고정항목(정기지출/정기수입)으로 자동 인식되도록 개선.
+
+### 90.2. 주요 개선 및 구현 내역
+1. **접두어(Prefix) 기반 고정항목 매칭 규칙 구현 ([`ExpenseCustomMetaPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/ExpenseCustomMetaPreferences.kt), [`RecurringExpenseDetector.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/expense/RecurringExpenseDetector.kt), [`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt))**:
+   - 고정항목 지정 시 가맹점명 앞자리 기준 텍스트(예: `예별손`, `동양` 등)를 지정하거나 자동 추출하여, 이후 월별 변형 내역이 수신되더라도 앞자리 텍스트가 일치하면 고정항목으로 자동 분류·집계되도록 구현.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.37.apk` (`versionCode = 38`), GitHub 커밋 `8e8b2b8`.
+
+---
+
+## 91. 지도 경로 화면 기본값 설정, 지점별 네모 텍스트 박스 가독성 강화 및 다량 경로 표기 모드(작은숫자/점·경로)·출퇴근 경로 제외 필터 추가 (2026-10-20, `v1.0.38` ~ `v1.0.39`)
+
+### 91.1. 사용자 핵심 요청 사항
+- 지도 화면 진입 시 최적화된 기본 보기 옵션을 적용하고, 지점별 네모 텍스트 박스의 글자 가독성을 높이며, 주간·월간 등 경로가 많을 때 지점 박스가 지도를 가리지 않도록 `'작은 숫자'` 또는 `'점·경로만'` 보기 모드와 `'출퇴근 경로 제외'` 필터를 추가.
+
+### 91.2. 주요 개선 및 구현 내역
+1. **지점 라벨 가독성 개선 및 마커 표기 모드 3종·출퇴근 제외 토글 ([`DiaryRouteMap.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryRouteMap.kt), [`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt))**:
+   - 지도 상단 컨트롤 바에서 **표기 모드(`상세 박스` / `작은 숫자` / `점·경로만`)** 전환과 **`출퇴근 제외`** 필터 토글을 즉시 조작할 수 있도록 구현하고, 다량 마커 표시 시 자동으로 깔끔한 모드로 전환되도록 개선.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.38.apk`, `v1.0.39.apk` (`versionCode = 39 ~ 40`), GitHub 커밋 `33a1be1`, `1e3aaf8`.
+
+---
+
+## 92. 카드사용내역 수기 추가 및 상세 수정 모달 내 사용 일자·일시 지정 기능 추가 (2026-10-20, `v1.0.40`)
+
+### 92.1. 사용자 핵심 요청 사항
+- 가계부 내역을 직접 추가하거나 기존 내역을 수정할 때 사용 일자(`YYYY-MM-DD`)와 시각(`HH:mm`)까지 자유롭게 변경·지정할 수 있도록 개선.
+
+### 92.2. 주요 개선 및 구현 내역
+1. **수기 등록 및 상세 수정 모달 내 날짜·시간 선택기 연동 ([`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt), [`ExpenseViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseViewModel.kt))**:
+   - `AddManualExpenseDialog`와 `EditTransactionDialog`에 사용 일자 캘린더 피커 및 시간(시·분) 선택 UI를 추가하여 원하는 일시로 거래 시각(`timestamp`)을 저장·수정하도록 구현.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.40.apk` (`versionCode = 41`), GitHub 커밋 `2b45c38`.
+
+---
+
+## 93. 우리카드 전용 문자 파서 신설 및 3개월 내역 동기화 시 누락 방지 (2026-10-20, `v1.0.41`)
+
+### 93.1. 사용자 핵심 요청 사항
+- 우리카드 승인·결제 문자 포맷이 누락 없이 전수 인식되도록 전용 파서를 추가하고, 최근 3개월 문자 동기화 시 우리카드 내역이 빠지지 않도록 보강.
+
+### 93.2. 주요 개선 및 구현 내역
+1. **우리카드 다중 포맷 전용 파서(`parseWooriCard`) 구현 및 동기화 스캔 범위 보강 ([`SmsParser.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/parser/SmsParser.kt), [`SmsSyncHelper.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/util/SmsSyncHelper.kt))**:
+   - `[Web발신] 우리카드(XXXX)승인`, `우리체크승인`, 줄바꿈 분리형 및 한 줄 요약형 우리카드 문자를 정확히 파싱하는 `parseWooriCard()`를 구현하고 단위 테스트로 검증.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.41.apk` (`versionCode = 42`), GitHub 커밋 `72a33dd`.
+
+---
+
+## 94. 5대 메인 화면 토스·애플 스타일 `'쉬운 모드'` 기본(Default) 적용 및 기존 상세 UI/UX `'고급 모드'` 전환 체제 구축 (2026-10-21, `v1.0.45` ~ `v1.0.46`)
+
+### 94.1. 사용자 핵심 요청 사항
+- 복잡한 설정과 다단 필터 때문에 어려워하는 사용자를 위해 토스(Toss)·애플(Apple) 스타일의 여백 중심 카드형 **`'쉬운 모드(Easy Mode)'`**를 신설하여 앱의 **기본값(Default)**으로 설정하고, 기존의 세밀한 기능 화면은 **`'고급 모드(Advanced Mode)'`**로 언제든 1초 만에 전환할 수 있게 구현.
+
+### 94.2. 주요 개선 및 구현 내역
+1. **전역 모드 상태 관리자(`EasyModeManager`) 및 상단 모드 전환 바 구현 ([`EasyModeManager.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/EasyModeManager.kt), [`MainScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/MainScreen.kt))**:
+   - `EasyModeManager`의 초기 기본값을 `true`(쉬운 모드 기본 적용)로 설정하고 `StateFlow<Boolean>`으로 5대 화면(다이어리, 내 소비, 차계부, 골프, 설정)에 실시간 연동.
+   - 각 메인 화면 상단과 설정 화면에서 `'쉬운 모드'` ↔ `'고급 모드'`를 즉시 오갈 수 있는 원탭 전환 버튼 제공.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.45.apk`, `v1.0.46.apk` (`versionCode = 46 ~ 47`), GitHub 커밋 `bd85e24`, `630e0db`.
+
+---
+
+## 95. 요일 `(월)` 축약 표기, 불러오기 버튼 세로 줄바꿈 해소, 사용자명·차량 배지 고유 색상 차등화 및 차계부 경로 지명 간소화·증감 도표 포맷 예외 수정 (2026-10-21, `v1.0.47` ~ `v1.0.50`)
+
+### 95.1. 사용자 핵심 요청 사항
+- 날짜 옆 요일을 `'월요일'` 대신 `'(월)'`로 간결하게 표기하고 상단 `'불러오기'` 버튼 텍스트가 세로로 깨지지 않게 수정.
+- 내 소비 화면의 사용자명 배지·필터 칩과 차계부의 차량(`벤츠`, `볼보`) 배지에 서로 구분되는 고유 색상을 부여.
+- 통계 화면 항목별 증감 도표 클릭 시 발생하던 `UnknownFormatConversionException` 강제 종료 해결.
+- 차계부 출퇴근 화살표를 `➔`로 통일하고, 일반 주행 경로 표기 시 서울은 `'동'` 단위, 경기도는 `'시·군'` 단위로 간소화.
+
+### 95.2. 주요 개선 및 구현 내역
+1. **요일 축약 표기 및 상단 버튼 한 줄 고정 (`maxLines = 1`, `softWrap = false`) 적용 (`v1.0.47`, 커밋 `10f0018`)**.
+2. **내 소비 사용자명 배지 및 필터 칩 팔레트 차등 적용 (`v1.0.48`, 커밋 `b877eed`)**.
+3. **항목별 증감 도표(`ExpenseAnalyticsComponents.kt`) 퍼센트(`%`) 포맷 문자열 이스케이프(`%%`) 처리로 `UnknownFormatConversionException` 크래시 수정 (`v1.0.49`, 커밋 `5c238a9`)**.
+4. **차계부 출퇴근 화살표(`집 ➔ 회사`, `회사 ➔ 집`) 통일, `벤츠`(네이비 블루)·`볼보`(에메랄드 틸) 배지 색상 분리 및 서울(동)/경기(시·군) 경로 지명 축약 (`v1.0.50`, 커밋 `3dfa9e8`)**.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.47.apk` ~ `v1.0.50.apk` (`versionCode = 48 ~ 51`), GitHub 커밋 `10f0018`, `b877eed`, `5c238a9`, `3dfa9e8`.
+
+---
+
+## 96. 통계 화면 3종 및 전체 팝업 모달(19종) 토스·애플 쉬운 모드 UI/UX 전면 개편 (2026-10-21, `v1.0.52`)
+
+### 96.1. 사용자 핵심 요청 사항
+- *"차계부, 내소비, 골프 등에서의 통계 화면과 모든 팝업 모달창도 쉬운 모드로 개편해줘. 토스/애플의 직관적인 UI/UX를 적용해서 개편해줘."*
+
+### 96.2. 주요 개선 및 구현 내역
+1. **공통 쉬운 모드 모달 전환 칩(`EasyModalModeSwitchChip`) 신설 ([`CommonComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/CommonComponents.kt), [`EasyModeManager.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/EasyModeManager.kt))**:
+   - 모든 통계 화면과 팝업 모달 상단 우측에 토스·애플 스타일 캡슐형 전환 칩(`쉬운 모드` / `고급 상세`)을 배치하여, 모달을 닫지 않고도 그 자리에서 즉시 쉬운 요약 화면과 고급 상세 설정 화면을 전환할 수 있도록 구현.
+2. **3대 통계 화면(차계부·내 소비·골프) 토스·애플 스타일 쉬운 모드 개편**:
+   - **차계부 통계 ([`CarLedgerAnalyticsComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerAnalyticsComponents.kt))**: `CarLedgerEasyAnalyticsSummaryCard`를 통해 총 운행거리, 총 차량 지출, 평균 연비 3대 핵심 지표와 직전 기간 대비 증감 배지, 주유·주차·정비 비율 바를 한눈에 표시하고 복잡한 세부 표는 `'고급 상세 통계 펼쳐보기'`로 분리.
+   - **내 소비 통계 ([`ExpenseAnalyticsComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseAnalyticsComponents.kt))**: `ExpenseEasyAnalyticsHeroCard`를 통해 선택한 주기의 총 지출·총 수입·고정항목 비중과 상위 3대 지출 카테고리 바만 깔끔하게 요약 표시.
+   - **골프 통계 ([`GolfAnalyticsComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/golf/GolfAnalyticsComponents.kt))**: `GolfEasyAnalyticsSummaryCard`를 통해 총 라운딩 횟수(필드/스크린), 평균 타수, 베스트 스코어를 대형 타이포그래피 카드로 요약 제공.
+3. **앱 전체 19종 팝업 모달 쉬운 모드 UI/UX 전면 적용**:
+   - **골프 모달 ([`GolfScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/golf/GolfScreen.kt), [`GolfWeatherComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/golf/GolfWeatherComponents.kt))**: 라운딩 등록/수정 모달에서 쉬운 모드 시 구장명·구분·총 타수·동반자 핵심 항목만 노출(전·후반 세부 스코어 및 사진·메모는 고급 모드 전환 시 표시)하고, 날씨 모달에서도 핵심 기온·강수·바람 요약 카드 우선 노출.
+   - **차계부 모달 ([`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt), [`ConsumableMaintenanceDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/ConsumableMaintenanceDialog.kt), [`VehicleManageDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/VehicleManageDialog.kt), [`CommuteMapPickerDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CommuteMapPickerDialog.kt))**: 주유·운행 등록 및 수정, 소모품 교체 주기 설정, 차량 프로필 관리, 출퇴근 거점 지도 설정 모달에 쉬운 모드 직관 레이아웃 및 전환 칩 적용.
+   - **내 소비·다이어리·공통 모달 ([`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt), [`ExpenseMetaDialogs.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseMetaDialogs.kt), [`AccountManageDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/AccountManageDialog.kt), [`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt), [`PasteSmsDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/PasteSmsDialog.kt))**: 수기 내역 추가, 거래 상세 수정, 월간 예산 설정, 상세 필터, 카테고리·결제수단·사용자·영구 규칙 관리, 계좌/카드 별칭 관리, 다이어리 타임라인 추가/수정 및 문자 붙여넣기 모달까지 전수 토스·애플 쉬운 모드 카드 디자인 적용.
+- **산출물 및 배포**: `나의일상다이어리_v1.0.52.apk` (`versionCode = 53`), GitHub 커밋 `5e9ef91`.
