@@ -311,11 +311,18 @@ class ExpenseCustomMetaPreferences private constructor(
             userClassificationList.clear()
             val ucArr = root.optJSONArray("userClassifications")
             if (ucArr != null) {
+                val usedColors = mutableSetOf<Int>()
                 for (i in 0 until ucArr.length()) {
                     val o = ucArr.optJSONObject(i) ?: continue
                     val name = o.optString("name").trim()
-                    val colorIndex = o.optInt("colorIndex", i % BADGE_COLOR_COUNT)
+                    val rawColorIndex = (o.optInt("colorIndex", i % BADGE_COLOR_COUNT) % BADGE_COLOR_COUNT + BADGE_COLOR_COUNT) % BADGE_COLOR_COUNT
+                    val colorIndex = if (rawColorIndex !in usedColors) {
+                        rawColorIndex
+                    } else {
+                        (0 until BADGE_COLOR_COUNT).firstOrNull { it !in usedColors } ?: rawColorIndex
+                    }
                     if (name.isNotBlank() && userClassificationList.none { it.name.equals(name, ignoreCase = true) }) {
+                        usedColors.add(colorIndex)
                         userClassificationList.add(UserClassificationItem(name, colorIndex))
                     }
                 }
@@ -1161,7 +1168,10 @@ class ExpenseCustomMetaPreferences private constructor(
         val existing = userClassificationList.firstOrNull { it.name.equals(clean, ignoreCase = true) }
         if (existing != null) return existing
 
-        val nextColor = preferredColorIndex ?: (userClassificationList.size % BADGE_COLOR_COUNT)
+        val usedColors = userClassificationList.map { it.colorIndex }.toSet()
+        val nextColor = preferredColorIndex
+            ?: (0 until BADGE_COLOR_COUNT).firstOrNull { it !in usedColors }
+            ?: (userClassificationList.size % BADGE_COLOR_COUNT)
         val newItem = UserClassificationItem(clean, nextColor)
         userClassificationList.add(newItem)
         saveToPrefs()

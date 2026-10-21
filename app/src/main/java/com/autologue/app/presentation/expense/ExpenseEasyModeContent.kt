@@ -400,14 +400,17 @@ internal fun ExpenseEasyModeContent(
                                     )
                                 }
 
-                                // 사용자 분류 칩
+                                // 사용자 분류 칩 (사용자별 고유 배지 색상 적용)
                                 uiState.userClassifications.forEach { uc ->
                                     val count = quickFilterSnapshot.userCounts[uc.name] ?: 0
                                     if (count > 0 || uiState.selectedUserClassification == uc.name) {
+                                        val (uFg, uBg) = getUserClassificationBadgeColors(uc.colorIndex)
                                         EasyFilterPill(
                                             label = "${uc.name} $count",
                                             isSelected = uiState.selectedUserClassification == uc.name,
-                                            onClick = { onToggleUserFilter(uc.name) }
+                                            onClick = { onToggleUserFilter(uc.name) },
+                                            accentFg = uFg,
+                                            accentBg = uBg
                                         )
                                     }
                                 }
@@ -660,6 +663,7 @@ internal fun ExpenseEasyModeContent(
                                         categoryName = catName,
                                         cardLabel = cardLabel,
                                         userLabel = userClass?.name,
+                                        userColorIndex = userClass?.colorIndex,
                                         isCorporate = isCorp,
                                         isRecurring = isRecurring,
                                         isSelectionMode = uiState.isSelectionMode,
@@ -1001,21 +1005,55 @@ internal fun ExpenseEasyModeContent(
 private fun EasyFilterPill(
     label: String,
     isSelected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    accentFg: Color? = null,
+    accentBg: Color? = null
 ) {
+    val containerColor = when {
+        isSelected && accentFg != null -> accentFg
+        isSelected -> EasyTheme.textPrimary
+        accentBg != null -> accentBg.copy(alpha = 0.72f)
+        else -> EasyTheme.surface
+    }
+    val contentColor = when {
+        isSelected -> Color.White
+        accentFg != null -> accentFg
+        else -> EasyTheme.textSecondary
+    }
+    val borderStroke = when {
+        isSelected -> null
+        accentFg != null -> BorderStroke(1.dp, accentFg.copy(alpha = 0.25f))
+        else -> BorderStroke(1.dp, EasyTheme.borderSubtle)
+    }
+
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(20.dp),
-        color = if (isSelected) EasyTheme.textPrimary else EasyTheme.surface,
-        border = if (isSelected) null else BorderStroke(1.dp, EasyTheme.borderSubtle)
+        color = containerColor,
+        border = borderStroke
     ) {
-        Text(
-            text = label,
-            fontSize = 13.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = if (isSelected) Color.White else EasyTheme.textSecondary,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            if (accentFg != null) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(if (isSelected) Color.White else accentFg)
+                )
+            }
+            Text(
+                text = label,
+                fontSize = 13.sp,
+                fontWeight = if (isSelected || accentFg != null) FontWeight.Bold else FontWeight.Medium,
+                color = contentColor,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
     }
 }
 
@@ -1025,6 +1063,7 @@ private fun EasyTossTransactionRow(
     categoryName: String,
     cardLabel: String,
     userLabel: String?,
+    userColorIndex: Int?,
     isCorporate: Boolean,
     isRecurring: Boolean,
     isSelectionMode: Boolean,
@@ -1105,6 +1144,8 @@ private fun EasyTossTransactionRow(
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = EasyTheme.appleAmber,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                         )
                     }
@@ -1119,21 +1160,28 @@ private fun EasyTossTransactionRow(
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = EasyTheme.applePurple,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                         )
                     }
                 }
                 if (!userLabel.isNullOrBlank()) {
+                    val (uFg, uBg) = getUserClassificationBadgeColors(
+                        userColorIndex ?: ((userLabel.hashCode() and 0x7fffffff) % 10)
+                    )
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = EasyTheme.chipBg
+                        color = uBg
                     ) {
                         Text(
                             text = userLabel,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = EasyTheme.textSecondary,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = uFg,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
