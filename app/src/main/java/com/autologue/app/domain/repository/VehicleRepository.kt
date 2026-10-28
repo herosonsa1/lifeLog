@@ -19,7 +19,6 @@ interface VehicleRepository {
     suspend fun syncDrivingLogsFromDiary(diaryEntries: List<com.autologue.app.domain.model.DiaryEntry>): Int
     suspend fun clearTripDrivingLogs(): Int
     suspend fun recordCommuteTrip(isToWork: Boolean, homeName: String, companyName: String, distanceKm: Double): Long
-    suspend fun syncAndCleanWithGolfRounds(validRounds: List<com.autologue.app.domain.model.GolfRound>): Int
     suspend fun renameGasStationGlobally(
         oldStationName: String,
         newStationName: String,

@@ -14,13 +14,17 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,24 +44,42 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
+import com.autologue.app.data.sync.DailyRouteAggregator
+import com.autologue.app.data.sync.PlaceResolver
 import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
+import com.autologue.app.domain.model.estimateRealisticCommuteMinutes
+import com.autologue.app.domain.model.estimateRealisticNonCommuteMinutes
+import com.autologue.app.domain.model.extractDrivingDurationMinutesFromText
+import com.autologue.app.domain.model.formatDrivingDurationLabel
 import com.autologue.app.presentation.common.HairlineDivider
+import com.autologue.app.presentation.common.buildHighlightedDurationText
+import com.autologue.app.presentation.common.LocalEasyMode
 import com.autologue.app.presentation.diary.MapPeriodFilter
 import com.autologue.app.presentation.theme.*
 import com.autologue.app.util.LocationDistanceUtils
 import kotlinx.coroutines.delay
 import java.time.format.DateTimeFormatter
 import java.util.*
+
+enum class MapListSheetMode(val label: String) {
+    LIST_EXPANDED("목록 크게"),
+    SPLIT("반반"),
+    MAP_EXPANDED("지도 크게")
+}
 
 /**
  * 개별 운행 주행 세션(Trip) 또는 일자별 이동 경로 그룹
@@ -70,15 +92,22 @@ data class RouteTripGroup(
     val date: java.time.LocalDate,
     val steps: List<RouteStep>,
     val totalDistanceKm: Double = 0.0,
+    val durationMinutes: Int? = null,
     val isCommuteTrip: Boolean = false
 )
 
+fun isStopoverStep(step: RouteStep): Boolean {
+    return DailyRouteAggregator.isStopoverWaypointStep(step)
+}
+
 fun isDepartureStep(step: RouteStep): Boolean {
+    if (isStopoverStep(step)) return false
     return step.tags.any { it.contains("출발") || it.contains("승차") } ||
         step.title.contains("출발") || step.title.contains("승차")
 }
 
 fun isArrivalStep(step: RouteStep): Boolean {
+    if (isStopoverStep(step) || isDepartureStep(step)) return false
     return step.tags.any { it.contains("도착") || it.contains("하차") } ||
         step.title.contains("도착") || step.title.contains("하차")
 }
@@ -87,7 +116,7 @@ fun isArrivalStep(step: RouteStep): Boolean {
  * 집(거주지: 하남시 학암동/위례동/수서/더샵 등) 텍스트 또는 좌표(반경 2.3km) 여부 판별
  */
 fun isHomePlaceOrCoord(text: String, lat: Double? = null, lng: Double? = null): Boolean {
-    if (text.contains("학암") || text.contains("위례") || text.contains("우리집") ||
+    if (text.contains("7101동") || text.contains("학암") || text.contains("위례") || text.contains("우리집") ||
         text.contains("수서") || text.contains("더샵") || text.contains("광평로") ||
         text.contains("자곡") || text.contains("세곡") ||
         Regex("(^|[^가-힣a-zA-Z0-9])집($|[^가-힣a-zA-Z0-9])").containsMatchIn(text)
@@ -121,19 +150,15 @@ fun isOfficePlaceOrCoord(text: String, lat: Double? = null, lng: Double? = null)
 
 /**
  * 개별 RouteStep이 출퇴근(출근/퇴근/왕복) 주행 지점인지 판별합니다.
- * - 골프 라운드(GOLF)나 제3의 외출 목적지(강남, 분당, 춘천 등)로 향하는 주행은 출퇴근에서 제외하여 보존합니다.
+ * - 제3의 외출 목적지(강남, 분당, 춘천 등)로 향하는 주행은 출퇴근에서 제외하여 보존합니다.
  */
 fun isCommuteStep(step: RouteStep, contextSteps: List<RouteStep> = emptyList()): Boolean {
-    if (step.stepType == RouteStepType.GOLF) return false
     val fullText = buildString {
         append(step.title).append(" ")
         if (!step.description.isNullOrBlank()) append(step.description).append(" ")
         if (!step.locationName.isNullOrBlank()) append(step.locationName).append(" ")
         if (!step.address.isNullOrBlank()) append(step.address).append(" ")
         append(step.tags.joinToString(" "))
-    }
-    if (fullText.contains("골프") || fullText.contains("CC") || fullText.contains("라운딩") || fullText.contains("라운드")) {
-        return false
     }
     if (fullText.contains("출근") || fullText.contains("퇴근") || fullText.contains("출퇴근") ||
         fullText.contains("집->회사") || fullText.contains("회사->집") ||
@@ -216,7 +241,8 @@ fun filterOutCommuteSteps(steps: List<RouteStep>): List<RouteStep> {
 }
 
 fun segmentRouteIntoTrips(steps: List<RouteStep>): List<RouteTripGroup> {
-    val valid = steps.filter { it.latitude != null && it.longitude != null }.sortedBy { it.time }
+    val consolidated = DailyRouteAggregator.consolidateGpsDrivingSteps(steps)
+    val valid = consolidated.filter { it.latitude != null && it.longitude != null }.sortedBy { it.time }
     if (valid.isEmpty()) return emptyList()
 
     val groups = mutableListOf<RouteTripGroup>()
@@ -230,12 +256,13 @@ fun segmentRouteIntoTrips(steps: List<RouteStep>): List<RouteTripGroup> {
         } else 0L
 
         val isNewDeparture = isDepartureStep(step)
+        val isCurrentStopover = isStopoverStep(step)
         val isCurrentArrival = isArrivalStep(step)
-        val isLastDeparture = lastStep != null && isDepartureStep(lastStep)
+        val isLastDriveAnchor = lastStep != null && (isDepartureStep(lastStep) || isStopoverStep(lastStep))
 
-        // 출발(승차) 직후 도착(하차)으로 이어지는 1회 주행 세션(최대 4시간 이내)은
-        // 주행 시간이 40분을 넘더라도 절대 1지점씩 쪼개지 않고 하나의 주행 트립(출발➔도착)으로 묶음
-        val isPairedDriveSession = isLastDeparture && isCurrentArrival && !isDifferentDay && minutesGap <= 240L
+        // 출발(승차) ➔ (1시간 이내 동일 위치 경유지) ➔ 도착(하차)으로 이어지는 연속 주행 세션은
+        // 하나의 주행 트립으로 유지하고 중간에서 쪼개지지 않도록 보장
+        val isPairedDriveSession = isLastDriveAnchor && (isCurrentArrival || isCurrentStopover) && !isDifferentDay && minutesGap <= 300L
         val isTimeGap = lastStep != null && !isPairedDriveSession && minutesGap > 60L
 
         if (currentGroupSteps.isNotEmpty() &&
@@ -273,7 +300,6 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
         tag ?: com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(s.title)
     }.firstOrNull() ?: "🚗"
 
-    val hasGolf = steps.any { it.stepType == RouteStepType.GOLF || it.title.contains("골프") || it.title.contains("CC") }
     val firstText = listOfNotNull(first.title, first.description, first.locationName, first.address).joinToString(" ")
     val lastText = listOfNotNull(last.title, last.description, last.locationName, last.address).joinToString(" ")
     val firstIsHome = isHomePlaceOrCoord(firstText, first.latitude, first.longitude)
@@ -281,19 +307,16 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
     val lastIsHome = isHomePlaceOrCoord(lastText, last.latitude, last.longitude)
     val lastIsOffice = isOfficePlaceOrCoord(lastText, last.latitude, last.longitude)
 
-    val isCommuteToWork = !hasGolf && (
+    val isCommuteToWork =
         steps.any { (it.title.contains("회사") || it.title.contains("출근")) && isArrivalStep(it) } ||
             (firstIsHome && lastIsOffice) ||
             (steps.size == 1 && firstIsOffice && first.time.hour < 12)
-        )
-    val isCommuteToHome = !hasGolf && (
+    val isCommuteToHome =
         steps.any { (it.title.contains("집") || it.title.contains("퇴근")) && isArrivalStep(it) } ||
             (firstIsOffice && lastIsHome)
-        )
-    val isCommuteGroup = !hasGolf && (isCommuteToWork || isCommuteToHome || steps.all { isCommuteStep(it, steps) })
+    val isCommuteGroup = isCommuteToWork || isCommuteToHome || steps.all { isCommuteStep(it, steps) }
 
     val tripName = when {
-        hasGolf -> "골프 라운드"
         isCommuteToWork -> "출근 주행"
         isCommuteToHome -> "퇴근/귀가"
         first.time.hour < 11 -> "오전 주행"
@@ -302,10 +325,28 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
     }
 
     val distKm = LocationDistanceUtils.calculateRouteDrivingDistanceKm(steps)
-    val startPlace = first.locationName ?: first.title.replace(Regex("\\[.*?\\]"), "").trim()
-    val endPlace = last.locationName ?: last.title.replace(Regex("\\[.*?\\]"), "").trim()
+    val startPlace = DailyRouteAggregator.resolveStepDisplayPlaceName(first)
+    val endPlace = DailyRouteAggregator.resolveStepDisplayPlaceName(last)
+    val stopoverSteps = steps.filter { isStopoverStep(it) }
+    val explicitDuration = steps.asReversed().firstNotNullOfOrNull {
+        if (isArrivalStep(it)) {
+            extractDrivingDurationMinutesFromText(it.description) ?: extractDrivingDurationMinutesFromText(it.title)
+        } else null
+    }
+    val spanMinutes = if (steps.size >= 2) {
+        java.time.Duration.between(first.time, last.time).toMinutes().toInt().takeIf { it in 1..600 }
+    } else null
+    val tripDurationMin = explicitDuration ?: spanMinutes
 
-    val subtitle = if (steps.size > 1) "$startPlace ➔ $endPlace" else startPlace
+    val subtitle = when {
+        stopoverSteps.size == 1 && steps.size >= 3 -> {
+            val stopPlace = DailyRouteAggregator.resolveStepDisplayPlaceName(stopoverSteps.first())
+            "$startPlace ➔ $stopPlace(경유) ➔ $endPlace"
+        }
+        stopoverSteps.size >= 2 && steps.size >= 3 -> "$startPlace ➔ 경유 ${stopoverSteps.size}곳 ➔ $endPlace"
+        steps.size > 1 -> "$startPlace ➔ $endPlace"
+        else -> startPlace
+    }
     val timeStr = first.time.format(DateTimeFormatter.ofPattern("M/d a h:mm", Locale.KOREAN))
     val title = "$timeStr $tripName"
 
@@ -317,6 +358,7 @@ private fun createTripGroup(steps: List<RouteStep>): RouteTripGroup {
         date = date,
         steps = steps,
         totalDistanceKm = distKm,
+        durationMinutes = tripDurationMin,
         isCommuteTrip = isCommuteGroup
     )
 }
@@ -382,10 +424,11 @@ fun ensureStepCoordinates(step: RouteStep): RouteStep {
 
     val text = listOfNotNull(step.locationName, step.address, step.title).joinToString(" ")
     val inferred: Pair<Double, Double>? = when {
-        text.contains("수서") || text.contains("더샵") || text.contains("광평로") || text.contains("자곡") || text.contains("세곡") || text.contains("집") -> 37.4847 to 127.0945
+        text.contains("7101동") || text.contains("위례") || text.contains("학암") -> 37.4785 to 127.1465
+        text.contains("수서") || text.contains("더샵") || text.contains("광평로") || text.contains("자곡") || text.contains("세곡") -> 37.4847 to 127.0945
+        text.contains("집") -> 37.4785 to 127.1465
         text.contains("영등포") || text.contains("문래") || text.contains("당산") -> 37.5172 to 126.9068
         text.contains("여의도") -> 37.5219 to 126.9245
-        text.contains("위례") || text.contains("학암") -> 37.4785 to 127.1465
         text.contains("감일") || text.contains("하남") || text.contains("미사") -> 37.5393 to 127.2149
         text.contains("송파") || text.contains("잠실") || text.contains("문정") || text.contains("가락") -> 37.5145 to 127.1060
         text.contains("강남") || text.contains("역삼") || text.contains("삼성") || text.contains("테헤란") || text.contains("청담") || text.contains("논현") || text.contains("대치") || text.contains("개포") || text.contains("일원") -> 37.5085 to 127.0550
@@ -437,6 +480,9 @@ fun GoogleMapRouteView(
     onRemoveCompanion: ((String, String) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val isEasyMode = LocalEasyMode.current
+
     val nonTransactionSteps = remember(routeSteps) {
         routeSteps.filter {
             it.stepType != RouteStepType.TRANSACTION &&
@@ -447,6 +493,9 @@ fun GoogleMapRouteView(
     val validCoordinateSteps = remember(nonTransactionSteps) {
         nonTransactionSteps
             .map { ensureStepCoordinates(it) }
+            .map { DailyRouteAggregator.normalizeStepForDisplay(it) }
+            .let { DailyRouteAggregator.consolidateGpsDrivingSteps(it) }
+            .let { DailyRouteAggregator.enrichStepPairDurations(it) }
             .filter { it.latitude != null && it.longitude != null && (it.latitude != 0.0 || it.longitude != 0.0) }
     }
 
@@ -472,9 +521,11 @@ fun GoogleMapRouteView(
         mutableStateOf(false)
     }
     var selectedTripGroupId by remember { mutableStateOf<String?>(null) }
-    // 기본값: 캡처 화면 설정과 동일하게 상세 한국 지도 모드(true) + 지도 확대 보기(true, 480dp, '⤡ 기본 크기' 표시)
     var isOnlineMapMode by remember { mutableStateOf(true) }
-    var isMapExpanded by remember { mutableStateOf(true) }
+    // 기본값: 지도와 하단 이동 지점 리스트를 동시에 볼 수 있는 균형 분할(SPLIT)
+    var sheetMode by remember { mutableStateOf(MapListSheetMode.SPLIT) }
+    var customMapHeightDp by remember { mutableStateOf<Float?>(null) }
+    val listState = rememberLazyListState()
 
     val tripGroups = remember(filteredCoordinateSteps) { segmentRouteIntoTrips(filteredCoordinateSteps) }
     val selectedTripGroup = remember(tripGroups, selectedTripGroupId) {
@@ -484,17 +535,21 @@ fun GoogleMapRouteView(
         selectedTripGroup?.steps ?: filteredCoordinateSteps
     }
 
-    // 하단 상세 목록 및 지도 표시 거점:
-    // 단순 10분 단위 중간 주행 경유지(isIntermediateDrivingStep)만 제외하고,
-    // 모든 승차(출발)·하차(도착) 거점 및 사진/골프/메모 활동 거점은 하나도 누락 없이 모두 표시합니다.
+    // GPS 주행 스텝은 [최초 출발지], [1시간 이내 동일 위치 재출발 경유지], [최종 도착지], [단독 주행 거점]을 표시하고
+    // 중간 주행 GPS 샘플은 전면 배제합니다.
     val bottomDisplaySteps = remember(activeDisplaySteps) {
         val keySteps = activeDisplaySteps.filter { step ->
             step.stepType != RouteStepType.DRIVING ||
                 isDepartureStep(step) ||
+                isStopoverStep(step) ||
                 isArrivalStep(step) ||
-                !com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(step)
+                !DailyRouteAggregator.isIntermediateDrivingStep(step)
         }
-        if (keySteps.isNotEmpty()) keySteps.sortedBy { it.time } else activeDisplaySteps
+        if (keySteps.isNotEmpty()) {
+            keySteps.sortedBy { it.time }
+        } else {
+            activeDisplaySteps.filterNot { DailyRouteAggregator.isIntermediateDrivingStep(it) }.sortedBy { it.time }
+        }
     }
 
     val effectivePointDisplayMode = remember(pointDisplayMode, bottomDisplaySteps.size) {
@@ -507,16 +562,17 @@ fun GoogleMapRouteView(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(AppColors.background)) {
-        // 1. Top Period Filter Chips Bar
+        // 1. 상단 기간 필터 + (쉬운모드에서는 출퇴근 제외 통합) + 외부 지도 열기 버튼
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                .padding(horizontal = Spacing.md, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.horizontalScroll(rememberScrollState()).weight(1f)
             ) {
                 MapPeriodFilter.values().forEach { filter ->
@@ -532,16 +588,45 @@ fun GoogleMapRouteView(
                     ) {
                         Text(
                             text = filter.title,
-                            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 6.dp),
-                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            fontSize = 11.5.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSelected) PureWhite else AppColors.textSecondary
+                            color = if (isSelected) PureWhite else AppColors.textSecondary,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+
+                if (isEasyMode) {
+                    val commuteBtnText = when {
+                        isCommuteExcluded && commuteStepCount > 0 -> "출퇴근 제외됨 ($commuteStepCount)"
+                        isCommuteExcluded -> "출퇴근 제외됨"
+                        commuteStepCount > 0 -> "출퇴근 제외 ($commuteStepCount)"
+                        else -> "출퇴근 제외"
+                    }
+                    Surface(
+                        shape = AppShapes.pill,
+                        color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFF1F5F9),
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFCBD5E1)
+                        ),
+                        modifier = Modifier.clickable { isCommuteExcluded = !isCommuteExcluded }
+                    ) {
+                        Text(
+                            text = commuteBtnText,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isCommuteExcluded) PureWhite else Color(0xFF334155),
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
                 }
             }
 
-            // 상단 우측 지도 앱 열기 버튼
             if (bottomDisplaySteps.isNotEmpty()) {
                 IconButton(
                     onClick = {
@@ -558,43 +643,39 @@ fun GoogleMapRouteView(
                             )
                         }
                     },
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Map,
                         contentDescription = "지도 앱에서 전체 이동 경로 열기",
                         tint = AppColors.primary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
         }
 
-        // 1-1. 출퇴근 경로 제외 토글 + 지점 표기 모드(자동 / 기본 / 작은숫자 / 점·경로) 컨트롤 바
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.md, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            // 좌측: 출퇴근 경로 제외 토글 칩
-            Surface(
-                shape = AppShapes.pill,
-                color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFF1F5F9),
-                border = BorderStroke(
-                    width = 1.dp,
-                    color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFCBD5E1)
-                ),
-                modifier = Modifier.clickable { isCommuteExcluded = !isCommuteExcluded }
+        // 1-1. 고급모드 전용: 출퇴근 경로 제외 토글 + 지점 표시 모드 스위치
+        if (!isEasyMode) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.md, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                Surface(
+                    shape = AppShapes.pill,
+                    color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFF1F5F9),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (isCommuteExcluded) Color(0xFF1D4ED8) else Color(0xFFCBD5E1)
+                    ),
+                    modifier = Modifier.clickable { isCommuteExcluded = !isCommuteExcluded }
                 ) {
                     val commuteBtnText = when {
-                        isCommuteExcluded && commuteStepCount > 0 -> "✓ 출퇴근 제외됨 ($commuteStepCount)"
-                        isCommuteExcluded -> "✓ 출퇴근 제외됨"
+                        isCommuteExcluded && commuteStepCount > 0 -> "출퇴근 제외됨 ($commuteStepCount)"
+                        isCommuteExcluded -> "출퇴근 제외됨"
                         commuteStepCount > 0 -> "출퇴근 제외 ($commuteStepCount)"
                         else -> "출퇴근 제외"
                     }
@@ -602,102 +683,108 @@ fun GoogleMapRouteView(
                         text = commuteBtnText,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (isCommuteExcluded) PureWhite else Color(0xFF334155)
+                        color = if (isCommuteExcluded) PureWhite else Color(0xFF334155),
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
-            // 우측: 지점 표시 모드 스위치 ([자동] | [기본] | [작은숫자] | [점·경로])
-            Surface(
-                shape = AppShapes.pill,
-                color = Color(0xFFF1F5F9),
-                border = BorderStroke(1.dp, Color(0xFFCBD5E1))
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(2.dp)
+                Surface(
+                    shape = AppShapes.pill,
+                    color = Color(0xFFF1F5F9),
+                    border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                    modifier = Modifier.weight(1f, fill = false)
                 ) {
-                    MapPointDisplayMode.values().forEach { mode ->
-                        val isModeSelected = pointDisplayMode == mode
-                        val labelText = if (mode == MapPointDisplayMode.AUTO && isModeSelected) {
-                            when (effectivePointDisplayMode) {
-                                MapPointDisplayMode.DOT_ONLY -> "자동·점만"
-                                MapPointDisplayMode.COMPACT -> "자동·작게"
-                                else -> "자동·기본"
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(2.dp)
+                    ) {
+                        MapPointDisplayMode.values().forEach { mode ->
+                            val isModeSelected = pointDisplayMode == mode
+                            val labelText = if (mode == MapPointDisplayMode.AUTO && isModeSelected) {
+                                when (effectivePointDisplayMode) {
+                                    MapPointDisplayMode.DOT_ONLY -> "자동·점만"
+                                    MapPointDisplayMode.COMPACT -> "자동·작게"
+                                    else -> "자동·기본"
+                                }
+                            } else {
+                                mode.title
                             }
-                        } else {
-                            mode.title
-                        }
-                        Surface(
-                            shape = AppShapes.pill,
-                            color = if (isModeSelected) Color(0xFF0F172A) else Color.Transparent,
-                            modifier = Modifier.clickable { pointDisplayMode = mode }
-                        ) {
-                            Text(
-                                text = labelText,
-                                fontSize = 10.5.sp,
-                                fontWeight = if (isModeSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isModeSelected) PureWhite else Color(0xFF475569),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
+                            Surface(
+                                shape = AppShapes.pill,
+                                color = if (isModeSelected) Color(0xFF0F172A) else Color.Transparent,
+                                modifier = Modifier.clickable { pointDisplayMode = mode }
+                            ) {
+                                Text(
+                                    text = labelText,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = if (isModeSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isModeSelected) PureWhite else Color(0xFF475569),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        // 1-2. 스마트 운행 트립(Trip) & 일자별 세그먼트 칩 바
+        // 1-2. 운행 세션(Trip) 세그먼트 칩 바
         if (tripGroups.size > 1) {
             Surface(
-                color = Color(0xFF0F172A),
+                color = Color(0xFFF8FAFC),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = Spacing.md, vertical = 6.dp),
+                        .padding(horizontal = Spacing.md, vertical = 5.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val isAllSelected = selectedTripGroupId == null
+                    val totalPointsCount = filteredCoordinateSteps.count {
+                        it.stepType != RouteStepType.DRIVING || isDepartureStep(it) || isStopoverStep(it) || isArrivalStep(it)
+                    }
                     Surface(
                         shape = AppShapes.pill,
-                        color = if (isAllSelected) Color(0xFF2563EB) else Color(0xFF1E293B),
+                        color = if (isAllSelected) AppColors.primary else PureWhite,
                         border = BorderStroke(
                             1.dp,
-                            if (isAllSelected) Color(0xFF60A5FA) else Color(0xFF334155)
+                            if (isAllSelected) AppColors.primary else Color(0xFFCBD5E1)
                         ),
                         modifier = Modifier.clickable {
                             selectedTripGroupId = null
                             mapFocusStep = null
                         }
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        ) {
-                            Text(
-                                text = "🌐 전체 모아보기 (${bottomDisplaySteps.size}개)",
-                                fontSize = 11.sp,
-                                fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isAllSelected) PureWhite else Color(0xFF94A3B8)
-                            )
-                        }
+                        Text(
+                            text = "전체 동선 (${totalPointsCount}곳)",
+                            fontSize = 11.sp,
+                            fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isAllSelected) PureWhite else Color(0xFF334155),
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
                     }
 
                     tripGroups.forEach { group ->
                         val isSelected = selectedTripGroupId == group.id
                         Surface(
                             shape = AppShapes.pill,
-                            color = if (isSelected) Color(0xFF2563EB) else Color(0xFF1E293B),
+                            color = if (isSelected) AppColors.primary else PureWhite,
                             border = BorderStroke(
                                 1.dp,
-                                if (isSelected) Color(0xFF60A5FA) else Color(0xFF334155)
+                                if (isSelected) AppColors.primary else Color(0xFFCBD5E1)
                             ),
                             modifier = Modifier.clickable {
                                 selectedTripGroupId = group.id
@@ -706,22 +793,16 @@ fun GoogleMapRouteView(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                             ) {
                                 Text(
-                                    text = "${group.brandEmoji} ${group.title} · ${group.steps.size}지점",
+                                    text = "${group.brandEmoji} ${group.title}",
                                     fontSize = 11.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) PureWhite else Color(0xFFE2E8F0)
+                                    color = if (isSelected) PureWhite else Color(0xFF1E293B),
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
-                                if (group.totalDistanceKm > 0) {
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "(%.1fkm)".format(group.totalDistanceKm),
-                                        fontSize = 10.sp,
-                                        color = if (isSelected) Color(0xFFBFDBFE) else Color(0xFF64748B)
-                                    )
-                                }
                             }
                         }
                     }
@@ -731,608 +812,840 @@ fun GoogleMapRouteView(
 
         HairlineDivider()
 
-        // 2. Interactive Korea Map Area (기본 340dp / 확대 시 480dp, 100% 네이티브 Compose 슬리피 타일 + 시·군·구 행정경계 + 실제 도로 경로 + 번호 지점 핀)
-        val mapHeight = if (isMapExpanded) 480.dp else 340.dp
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(mapHeight)
-                .clipToBounds()
-                .background(Color(0xFFEEF2F6))
-        ) {
-            if (bottomDisplaySteps.isNotEmpty()) {
-                MidKoreaStaticMapView(
-                    steps = bottomDisplaySteps,
-                    focusedStep = mapFocusStep,
-                    zoomToFocusedStep = isSingleStepZoomed,
-                    pointDisplayMode = pointDisplayMode,
-                    onStepClick = { step ->
-                        mapFocusStep = step
-                        isSingleStepZoomed = true
-                        onStepSelected(step)
-                    },
-                    useRealMapTiles = isOnlineMapMode,
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // 좌측 상단: 현재 선택된 트립/지점 상태 배지 + 지도 크기 확대/축소 버튼
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .padding(Spacing.sm)
-                        .align(Alignment.TopStart)
-                ) {
-                    Surface(
-                        shape = AppShapes.pill,
-                        color = Color(0xFF0F172A).copy(alpha = 0.90f),
-                        border = BorderStroke(1.dp, Color(0xFF334155)),
-                        shadowElevation = 4.dp
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 5.dp)
-                        ) {
-                            val badgeText = when {
-                                mapFocusStep != null -> "📍 ${mapFocusStep?.locationName ?: mapFocusStep?.title}"
-                                selectedTripGroup != null -> "${selectedTripGroup.brandEmoji} ${selectedTripGroup.subtitle} (${bottomDisplaySteps.size}지점)"
-                                else -> "🚗 이동 동선 (${bottomDisplaySteps.size}개 거점)"
-                            }
-                            Text(
-                                text = badgeText,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF93C5FD)
-                            )
-                            if (mapFocusStep != null || selectedTripGroup != null) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = Color(0xFF2563EB).copy(alpha = 0.35f),
-                                    modifier = Modifier.clickable {
-                                        if (mapFocusStep != null) {
-                                            mapFocusStep = null
-                                            isSingleStepZoomed = false
-                                        } else {
-                                            selectedTripGroupId = null
-                                            isSingleStepZoomed = false
-                                        }
-                                    }
-                                ) {
-                                    Text(
-                                        text = if (mapFocusStep != null) "전체 경로" else "전체 복귀",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = PureWhite,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // 지도 높이 확대/축소 버튼
-                    Surface(
-                        shape = AppShapes.pill,
-                        color = Color(0xFF0F172A).copy(alpha = 0.90f),
-                        border = BorderStroke(1.dp, Color(0xFF334155)),
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.clickable { isMapExpanded = !isMapExpanded }
-                    ) {
-                        Text(
-                            text = if (isMapExpanded) "⤡ 기본 크기" else "⤢ 크게 보기",
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFE2E8F0),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                        )
-                    }
-                }
-
-                // 우측 상단: [🇰🇷 상세 한국 지도] | [🧭 행정구역 벡터 맵] 전환 스위치
-                Surface(
-                    shape = AppShapes.pill,
-                    color = Color(0xFF0F172A).copy(alpha = 0.92f),
-                    border = BorderStroke(1.dp, Color(0xFF334155)),
-                    shadowElevation = 4.dp,
-                    modifier = Modifier
-                        .padding(Spacing.sm)
-                        .align(Alignment.TopEnd)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(3.dp)
-                    ) {
-                        Surface(
-                            shape = AppShapes.pill,
-                            color = if (isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
-                            modifier = Modifier.clickable { isOnlineMapMode = true }
-                        ) {
-                            Text(
-                                text = "🗺️ 상세 한국 지도",
-                                fontSize = 11.sp,
-                                fontWeight = if (isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isOnlineMapMode) PureWhite else Color(0xFF94A3B8),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Surface(
-                            shape = AppShapes.pill,
-                            color = if (!isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
-                            modifier = Modifier.clickable { isOnlineMapMode = false }
-                        ) {
-                            Text(
-                                text = "🧭 행정구역 벡터",
-                                fontSize = 11.sp,
-                                fontWeight = if (!isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
-                                color = if (!isOnlineMapMode) PureWhite else Color(0xFF94A3B8),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                }
-
-                // 우측 하단: 외부 지도 앱 열기 버튼 모음 ([🚗 자동차 길찾기] + [🗺️ 구글맵 경로 열기])
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(10.dp)
-                ) {
-                    if (mapFocusStep == null && bottomDisplaySteps.size > 1) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF1D4ED8).copy(alpha = 0.94f),
-                            border = BorderStroke(1.dp, Color(0xFF60A5FA)),
-                            shadowElevation = 4.dp,
-                            modifier = Modifier.clickable {
-                                openCarNavigationApp(context, bottomDisplaySteps)
-                            }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DirectionsCar,
-                                    contentDescription = "자동차 내비 길찾기",
-                                    tint = PureWhite,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "자동차 길찾기",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PureWhite
-                                )
-                            }
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF0F172A).copy(alpha = 0.92f),
-                        border = BorderStroke(1.dp, Color(0xFF334155)),
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.clickable {
-                            if (mapFocusStep != null) {
-                                openGoogleMapsLocation(
-                                    context = context,
-                                    latitude = mapFocusStep!!.latitude!!,
-                                    longitude = mapFocusStep!!.longitude!!,
-                                    label = mapFocusStep!!.locationName ?: mapFocusStep!!.title,
-                                    address = mapFocusStep!!.address
-                                )
-                            } else {
-                                openGoogleMapsRoute(context, bottomDisplaySteps)
-                            }
-                        }
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.OpenInNew,
-                                contentDescription = "앱에서 열기",
-                                tint = Color(0xFF60A5FA),
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = if (mapFocusStep != null) "지점 앱에서 열기" else "구글맵 경로 열기",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = PureWhite
-                            )
-                        }
-                    }
-                }
-            } else {
-                // Empty Coordinates State (출퇴근 제외 필터로 인해 비어있는 경우와 원래 위치 기록이 없는 경우를 구분)
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isCommuteExcluded && commuteStepCount > 0) {
-                        MidKoreaStaticMapView(
-                            steps = emptyList(),
-                            useRealMapTiles = isOnlineMapMode,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = Color.White.copy(alpha = 0.96f),
-                            border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier.padding(horizontal = 24.dp)
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)
-                            ) {
-                                Text(
-                                    text = "출퇴근 경로 ${commuteStepCount}개 지점이 제외되었습니다",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A)
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "선택한 기간에는 출퇴근 외 다른 외출·방문 기록이 없습니다.",
-                                    style = AppTypography.captionMuted.copy(color = Color(0xFF475569))
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Button(
-                                    onClick = { isCommuteExcluded = false },
-                                    shape = AppShapes.pill,
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                                ) {
-                                    Text(
-                                        text = "출퇴근 경로 포함해서 보기",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = PureWhite
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("📍", fontSize = 36.sp)
-                            Spacer(modifier = Modifier.height(Spacing.xs))
-                            Text(
-                                text = "해당 기간에 등록된 GPS 위치 정보가 없습니다.",
-                                style = AppTypography.bodySecondary.copy(color = Color(0xFF475569))
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "사진(GPS) 또는 실제 이동 기록의 위치가 자동으로 표시됩니다.",
-                                style = AppTypography.captionMuted.copy(color = Color(0xFF64748B))
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        HairlineDivider()
-
-        // 3. Staggered Vertical List: 모든 출발·도착 거점 및 방문 장소 리스트
-        LazyColumn(
+        // 2 & 3. 적응형 분할 영역 (지도 + 드래그/원터치 분할 컨트롤 바 + 하단 이동 지점 리스트)
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .background(AppColors.background),
-            contentPadding = PaddingValues(vertical = Spacing.sm)
         ) {
-            itemsIndexed(bottomDisplaySteps) { index, step ->
-                val isFocused = mapFocusStep?.id == step.id || (mapFocusStep == null && selectedStep?.id == step.id)
-                val isFirst = index == 0
-                val isLast = index == bottomDisplaySteps.size - 1 && bottomDisplaySteps.size > 1
+            val totalBodyDp = maxHeight
+            val handleBarDp = 42.dp
+            val splitMapDp = (totalBodyDp * 0.42f).coerceIn(144.dp, 232.dp)
+            val expandedMapDp = (totalBodyDp - handleBarDp - 128.dp).coerceAtLeast(splitMapDp)
+            val maxDragMapDp = (totalBodyDp - handleBarDp - 88.dp).coerceAtLeast(140.dp)
 
+            val presetMapDp = when (sheetMode) {
+                MapListSheetMode.LIST_EXPANDED -> 0.dp
+                MapListSheetMode.SPLIT -> splitMapDp
+                MapListSheetMode.MAP_EXPANDED -> expandedMapDp
+            }
+            val rawTargetDp = customMapHeightDp?.dp?.coerceIn(0.dp, maxDragMapDp) ?: presetMapDp
+            val animatedMapHeight by animateDpAsState(
+                targetValue = rawTargetDp,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                label = "adaptiveMapHeight"
+            )
+            val currentMapHeight = if (customMapHeightDp != null) rawTargetDp else animatedMapHeight
+
+            val listScrollConnection = remember(sheetMode, customMapHeightDp, splitMapDp) {
+                object : NestedScrollConnection {
+                    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                        if (source == NestedScrollSource.Drag && available.y < -18f) {
+                            if (sheetMode == MapListSheetMode.MAP_EXPANDED ||
+                                (customMapHeightDp != null && customMapHeightDp!! > splitMapDp.value + 24f)
+                            ) {
+                                customMapHeightDp = null
+                                sheetMode = MapListSheetMode.SPLIT
+                            }
+                        }
+                        return Offset.Zero
+                    }
+                }
+            }
+
+            Column(modifier = Modifier.fillMaxSize()) {
+                // 2. 인터랙티브 지도 영역 (목록 크게 모드일 때는 0dp로 접혀 리스트 전체 확인 가능)
+                if (currentMapHeight > 4.dp) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(currentMapHeight)
+                            .clipToBounds()
+                            .background(Color(0xFFEEF2F6))
+                    ) {
+                        if (bottomDisplaySteps.isNotEmpty()) {
+                            MidKoreaStaticMapView(
+                                steps = bottomDisplaySteps,
+                                focusedStep = mapFocusStep,
+                                zoomToFocusedStep = isSingleStepZoomed,
+                                pointDisplayMode = pointDisplayMode,
+                                onStepClick = { step ->
+                                    mapFocusStep = step
+                                    isSingleStepZoomed = true
+                                    onStepSelected(step)
+                                },
+                                useRealMapTiles = isOnlineMapMode,
+                                modifier = Modifier.fillMaxSize()
+                            )
+
+                            // 좌측 상단: 현재 포커스 지점 / 동선 배지 (말줄임 및 최대 폭 제한으로 우측 스위치와 충돌 방지)
+                            Surface(
+                                shape = AppShapes.pill,
+                                color = Color(0xFF0F172A).copy(alpha = 0.88f),
+                                border = BorderStroke(1.dp, Color(0xFF334155)),
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .widthIn(max = 220.dp)
+                                    .align(Alignment.TopStart)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                ) {
+                                    val badgeText = when {
+                                        mapFocusStep != null -> DailyRouteAggregator.resolveStepDisplayPlaceName(mapFocusStep!!)
+                                        selectedTripGroup != null -> selectedTripGroup.subtitle
+                                        else -> "이동 동선 ${bottomDisplaySteps.size}곳"
+                                    }
+                                    Text(
+                                        text = badgeText,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFBAE6FD),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (mapFocusStep != null || selectedTripGroup != null) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = Color(0xFF2563EB),
+                                            modifier = Modifier.clickable {
+                                                if (mapFocusStep != null) {
+                                                    mapFocusStep = null
+                                                    isSingleStepZoomed = false
+                                                } else {
+                                                    selectedTripGroupId = null
+                                                    isSingleStepZoomed = false
+                                                }
+                                            }
+                                        ) {
+                                            Text(
+                                                text = "전체",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = PureWhite,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 우측 상단: [상세지도 | 벡터] 간결 전환 스위치
+                            Surface(
+                                shape = AppShapes.pill,
+                                color = Color(0xFF0F172A).copy(alpha = 0.88f),
+                                border = BorderStroke(1.dp, Color(0xFF334155)),
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .align(Alignment.TopEnd)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(2.5.dp)
+                                ) {
+                                    Surface(
+                                        shape = AppShapes.pill,
+                                        color = if (isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
+                                        modifier = Modifier.clickable { isOnlineMapMode = true }
+                                    ) {
+                                        Text(
+                                            text = "상세지도",
+                                            fontSize = 10.5.sp,
+                                            fontWeight = if (isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isOnlineMapMode) PureWhite else Color(0xFFCBD5E1),
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.5.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Surface(
+                                        shape = AppShapes.pill,
+                                        color = if (!isOnlineMapMode) Color(0xFF2563EB) else Color.Transparent,
+                                        modifier = Modifier.clickable { isOnlineMapMode = false }
+                                    ) {
+                                        Text(
+                                            text = "벡터",
+                                            fontSize = 10.5.sp,
+                                            fontWeight = if (!isOnlineMapMode) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (!isOnlineMapMode) PureWhite else Color(0xFFCBD5E1),
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.5.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // 우측 하단: 외부 내비/구글맵 바로 열기
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                            ) {
+                                if (mapFocusStep == null && bottomDisplaySteps.size > 1) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFF1D4ED8).copy(alpha = 0.94f),
+                                        border = BorderStroke(1.dp, Color(0xFF60A5FA)),
+                                        modifier = Modifier.clickable {
+                                            openCarNavigationApp(context, bottomDisplaySteps)
+                                        }
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DirectionsCar,
+                                                contentDescription = "자동차 내비 길찾기",
+                                                tint = PureWhite,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "자동차 길찾기",
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = PureWhite,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF0F172A).copy(alpha = 0.90f),
+                                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                                    modifier = Modifier.clickable {
+                                        if (mapFocusStep != null) {
+                                            openGoogleMapsLocation(
+                                                context = context,
+                                                latitude = mapFocusStep!!.latitude!!,
+                                                longitude = mapFocusStep!!.longitude!!,
+                                                label = mapFocusStep!!.locationName ?: mapFocusStep!!.title,
+                                                address = mapFocusStep!!.address
+                                            )
+                                        } else {
+                                            openGoogleMapsRoute(context, bottomDisplaySteps)
+                                        }
+                                    }
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.OpenInNew,
+                                            contentDescription = "앱에서 열기",
+                                            tint = Color(0xFF60A5FA),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = if (mapFocusStep != null) "지점 열기" else "구글맵 경로",
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = PureWhite,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isCommuteExcluded && commuteStepCount > 0) {
+                                    MidKoreaStaticMapView(
+                                        steps = emptyList(),
+                                        useRealMapTiles = isOnlineMapMode,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = Color.White.copy(alpha = 0.96f),
+                                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                                        modifier = Modifier.padding(horizontal = 24.dp)
+                                    ) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)
+                                        ) {
+                                            Text(
+                                                text = "출퇴근 경로 ${commuteStepCount}개 지점이 제외되었습니다",
+                                                fontSize = 13.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0F172A)
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Button(
+                                                onClick = { isCommuteExcluded = false },
+                                                shape = AppShapes.pill,
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "출퇴근 포함 보기",
+                                                    fontSize = 11.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = PureWhite
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = "해당 기간에 등록된 GPS 위치 기록이 없습니다.",
+                                            style = AppTypography.bodySecondary.copy(color = Color(0xFF475569))
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2-1. 드래그 핸들 & 원터치 분할 뷰 컨트롤 바 ([목록 크게] | [반반] | [지도 크게])
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isFocused) Color(0xFFF8FAFC) else AppColors.surface,
-                    border = BorderStroke(
-                        width = if (isFocused) 1.5.dp else 1.dp,
-                        color = if (isFocused) AppColors.primary else Color(0xFFE2E8F0)
-                    ),
+                    color = PureWhite,
+                    border = BorderStroke(0.5.dp, Color(0xFFE2E8F0)),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Spacing.md, vertical = 4.dp)
+                        .height(handleBarDp)
+                        .draggable(
+                            orientation = Orientation.Vertical,
+                            state = rememberDraggableState { deltaPx ->
+                                val deltaDp = with(density) { deltaPx.toDp().value }
+                                val baseDp = customMapHeightDp ?: currentMapHeight.value
+                                customMapHeightDp = (baseDp + deltaDp).coerceIn(0f, maxDragMapDp.value)
+                            },
+                            onDragStopped = {
+                                val dragged = customMapHeightDp
+                                if (dragged != null && dragged < 64f) {
+                                    customMapHeightDp = null
+                                    sheetMode = MapListSheetMode.LIST_EXPANDED
+                                }
+                            }
+                        )
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        // Top Header: Number Badge, Time, Type Pill
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // 상단 중앙 드래그 핸들 인디케이터 바
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 4.dp)
+                                .size(width = 34.dp, height = 3.5.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFCBD5E1))
+                        )
+
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(start = Spacing.md, end = Spacing.md, top = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                val badgeBg = when {
-                                    isFocused -> AppColors.primary
-                                    isFirst -> Color(0xFF16A34A)
-                                    isLast -> Color(0xFFDC2626)
-                                    else -> Color(0xFF2563EB)
-                                }
-                                val badgeText = "${index + 1}"
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(badgeBg),
-                                    contentAlignment = Alignment.Center
+                                Text(
+                                    text = "이동 지점",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0F172A),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                                Surface(
+                                    shape = AppShapes.pill,
+                                    color = Color(0xFFEFF6FF)
                                 ) {
                                     Text(
-                                        text = badgeText,
-                                        fontSize = 12.sp,
+                                        text = "${bottomDisplaySteps.size}곳",
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = PureWhite
+                                        color = AppColors.primary,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                     )
                                 }
+                            }
 
-                                Text(
-                                    text = step.time.format(DateTimeFormatter.ofPattern("M월 d일 (E) a h:mm", Locale.KOREA)),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AppColors.textPrimary
-                                )
-
-                                val (typeLabel, typeBg, typeFg) = when (step.stepType) {
-                                    RouteStepType.TRANSACTION -> Triple("💳 결제/방문", Emerald50, Emerald700)
-                                    RouteStepType.PHOTO -> Triple("📸 사진 기록", Indigo50, Indigo700)
-                                    RouteStepType.GOLF -> Triple("⛳ 골프 라운드", Forest50, Forest700)
-                                    RouteStepType.DRIVING -> {
-                                        val carTag = step.tags.firstOrNull {
-                                            it != "차량주행" && it != "차량" && it != "승차" && it != "하차" && it != "출발지점" && it != "도착지점"
-                                        }
-                                        val brandEmoji = com.autologue.app.util.VehicleBrandUtils.getBrandEmoji(carTag ?: step.title)
-                                        if (carTag != null) {
-                                            val cleanTag = if (carTag.startsWith("⭐") || carTag.startsWith("🛡️") || carTag.startsWith("🚗")) carTag else "$brandEmoji $carTag"
-                                            Triple(cleanTag, Amber50, Amber700)
-                                        } else {
-                                            Triple("$brandEmoji 차량 주행", Amber50, Amber700)
+                            // 원터치 비율 전환 스위치
+                            Surface(
+                                shape = AppShapes.pill,
+                                color = Color(0xFFF1F5F9),
+                                border = BorderStroke(0.5.dp, Color(0xFFCBD5E1))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(2.dp)
+                                ) {
+                                    MapListSheetMode.values().forEach { mode ->
+                                        val isSelected = customMapHeightDp == null && sheetMode == mode
+                                        Surface(
+                                            shape = AppShapes.pill,
+                                            color = if (isSelected) AppColors.primary else Color.Transparent,
+                                            modifier = Modifier.clickable {
+                                                customMapHeightDp = null
+                                                sheetMode = mode
+                                            }
+                                        ) {
+                                            Text(
+                                                text = mode.label,
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) PureWhite else Color(0xFF475569),
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.5.dp)
+                                            )
                                         }
                                     }
-                                    RouteStepType.MEMO -> Triple("📝 메모 기록", Slate100, Slate700)
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(AppShapes.pill)
-                                        .background(typeBg)
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(text = typeLabel, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = typeFg)
                                 }
                             }
-
-                            val pointSubtitle = when {
-                                isFirst -> "🟢 출발 지점"
-                                isLast -> "🔴 최종 도착지 (${bottomDisplaySteps.size})"
-                                isArrivalStep(step) -> "🔵 경유 도착 (${index + 1})"
-                                isDepartureStep(step) -> "🟢 경유 출발 (${index + 1})"
-                                else -> "지점 ${index + 1} / ${bottomDisplaySteps.size}"
-                            }
-
-                            Text(
-                                text = pointSubtitle,
-                                fontSize = 11.sp,
-                                fontWeight = if (isFirst || isLast) FontWeight.Bold else FontWeight.Medium,
-                                color = when {
-                                    isFirst -> Color(0xFF16A34A)
-                                    isLast -> Color(0xFFDC2626)
-                                    else -> Color(0xFF2563EB)
-                                }
-                            )
                         }
+                    }
+                }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Location Title
+                // 3. 하단 이동 지점 리스트 (출발지 · 1시간 이내 동일 위치 경유지 · 도착지)
+                if (bottomDisplaySteps.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .background(AppColors.background),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Text(
-                            text = step.locationName ?: step.title,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0F172A)
+                            text = if (isCommuteExcluded && commuteStepCount > 0) {
+                                "출퇴근 외 이동 지점이 없습니다."
+                            } else {
+                                "표시할 이동 지점 목록이 없습니다."
+                            },
+                            style = AppTypography.bodySecondary.copy(color = Color(0xFF64748B))
                         )
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .nestedScroll(listScrollConnection)
+                            .background(AppColors.background),
+                        contentPadding = PaddingValues(top = 6.dp, bottom = 92.dp)
+                    ) {
+                        itemsIndexed(
+                            items = bottomDisplaySteps,
+                            key = { idx, item -> "${item.id}_$idx" }
+                        ) { index, step ->
+                            val isFocused = mapFocusStep?.id == step.id || (mapFocusStep == null && selectedStep?.id == step.id)
+                            val isStopover = isStopoverStep(step)
+                            val isDeparture = isDepartureStep(step)
+                            val isArrival = isArrivalStep(step)
 
-                        // Address
-                        val addr = step.address ?: ""
-                        if (addr.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "📍 $addr",
-                                fontSize = 12.sp,
-                                color = Color(0xFF64748B)
-                            )
-                        }
-
-                        // Companions Tag Row
-                        if (step.companions.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isFocused) Color(0xFFF8FAFC) else AppColors.surface,
+                                border = BorderStroke(
+                                    width = if (isFocused) 1.5.dp else 1.dp,
+                                    color = if (isFocused) AppColors.primary else Color(0xFFE2E8F0)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Spacing.md, vertical = 4.dp)
                             ) {
-                                Text("동행인:", fontSize = 11.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Medium)
-                                step.companions.forEach { companion ->
-                                    Surface(
-                                        shape = AppShapes.pill,
-                                        color = Indigo50,
-                                        border = BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.3f))
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    // Top Header: Number Badge, Time, Vehicle/Type Pill, Role Label
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .padding(end = 8.dp)
+                                        ) {
+                                            val badgeBg = when {
+                                                isFocused -> AppColors.primary
+                                                isDeparture -> Color(0xFF16A34A)
+                                                isStopover -> Color(0xFF2563EB)
+                                                isArrival -> Color(0xFFDC2626)
+                                                else -> Color(0xFF475569)
+                                            }
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(22.dp)
+                                                    .clip(CircleShape)
+                                                    .background(badgeBg),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "${index + 1}",
+                                                    fontSize = 11.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = PureWhite,
+                                                    maxLines = 1,
+                                                    softWrap = false
+                                                )
+                                            }
+
+                                            Text(
+                                                text = step.time.format(DateTimeFormatter.ofPattern("M/d(E) a h:mm", Locale.KOREA)),
+                                                fontSize = 12.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AppColors.textPrimary,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+
+                                            val (typeLabel, typeBg, typeFg) = when (step.stepType) {
+                                                RouteStepType.TRANSACTION -> Triple("결제/방문", Emerald50, Emerald700)
+                                                RouteStepType.PHOTO -> Triple("사진 기록", Indigo50, Indigo700)
+                                                RouteStepType.DRIVING -> {
+                                                    val carTag = step.tags.firstOrNull {
+                                                        it != "차량주행" && it != "차량" && it != "승차" && it != "하차" &&
+                                                            it != "출발지점" && it != "도착지점" && it != "경유지"
+                                                    }
+                                                    val cleanCar = carTag
+                                                        ?.replace(Regex("^(?:[⭐🛡️🔵🔗🪽🚗📍]\\s*)+"), "")
+                                                        ?.trim()
+                                                    Triple(cleanCar?.ifBlank { "차량 주행" } ?: "차량 주행", Amber50, Amber700)
+                                                }
+                                                RouteStepType.MEMO -> Triple("메모 기록", Slate100, Slate700)
+                                            }
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(AppShapes.pill)
+                                                    .background(typeBg)
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = typeLabel,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = typeFg,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+
+                                        val (pointSubtitle, pointSubtitleColor) = when {
+                                            isStopover -> "경유지" to Color(0xFF2563EB)
+                                            isDeparture -> "출발 지점" to Color(0xFF16A34A)
+                                            isArrival -> "도착 지점" to Color(0xFFDC2626)
+                                            step.stepType == RouteStepType.DRIVING -> "주행 지점" to Color(0xFFDC2626)
+                                            step.stepType == RouteStepType.PHOTO -> "사진 방문지" to Color(0xFF4F46E5)
+                                            else -> "방문 지점" to Color(0xFF475569)
+                                        }
+
+                                        Surface(
+                                            shape = AppShapes.pill,
+                                            color = pointSubtitleColor.copy(alpha = 0.10f)
                                         ) {
                                             Text(
-                                                text = "👤 $companion",
+                                                text = pointSubtitle,
                                                 fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Indigo700
+                                                fontWeight = FontWeight.Bold,
+                                                color = pointSubtitleColor,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                             )
-                                            if (onRemoveCompanion != null) {
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = "동행인 삭제",
-                                                    tint = Indigo600,
-                                                    modifier = Modifier
-                                                        .size(11.dp)
-                                                        .clickable { onRemoveCompanion(step.id, companion) }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    // Location Title (제목에는 소요시간을 제외하고 최근접 대표 명칭 또는 순수 동 이름만 표기)
+                                    val basePlaceTitle = DailyRouteAggregator.resolveStepDisplayPlaceName(step)
+                                    val isStandaloneDriving = step.stepType == RouteStepType.DRIVING && !isDeparture && !isStopover && !isArrival
+                                    val needsDrivingDuration = isArrival || isStandaloneDriving
+                                    val stepFinalMinutes: Int? = if (needsDrivingDuration) {
+                                        val explicitMin = extractDrivingDurationMinutesFromText(step.description)
+                                            ?: extractDrivingDurationMinutesFromText(step.title)
+                                        val prevDep = if (isArrival && index > 0) {
+                                            bottomDisplaySteps.subList(0, index)
+                                                .lastOrNull {
+                                                    (isDepartureStep(it) || isStopoverStep(it)) &&
+                                                        !it.time.isAfter(step.time) &&
+                                                        java.time.Duration.between(it.time, step.time).toMinutes() in 0..360
+                                                }
+                                        } else null
+                                        val pairedMin = if (explicitMin == null && prevDep != null) {
+                                            java.time.Duration.between(prevDep.time, step.time).toMinutes().toInt()
+                                                .coerceAtLeast(1)
+                                        } else null
+                                        val rawMin = explicitMin ?: pairedMin
+                                        val isCommutePoint = isCommuteStep(step, bottomDisplaySteps)
+                                        when {
+                                            isCommutePoint && rawMin != null && rawMin in 20..22 &&
+                                                DailyRouteAggregator.isCommuteDrivingStepPair(prevDep, step) ->
+                                                estimateRealisticCommuteMinutes(
+                                                    step.time,
+                                                    DailyRouteAggregator.extractDistanceKmFromText(step.description) ?: 27.1
                                                 )
+                                            rawMin != null && rawMin > 0 -> rawMin
+                                            isCommutePoint -> estimateRealisticCommuteMinutes(
+                                                step.time,
+                                                DailyRouteAggregator.extractDistanceKmFromText(step.description) ?: 27.1
+                                            )
+                                            else -> estimateRealisticNonCommuteMinutes(
+                                                step.time,
+                                                DailyRouteAggregator.extractDistanceKmFromText(step.description) ?: 3.5
+                                            )
+                                        }
+                                    } else null
+                                    Text(
+                                        text = basePlaceTitle,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0F172A)
+                                    )
+
+                                    val hintDesc = when {
+                                        isStopover && !step.description.isNullOrBlank() -> step.description
+                                        needsDrivingDuration && stepFinalMinutes != null && stepFinalMinutes > 0 ->
+                                            DailyRouteAggregator.upsertStepDurationDescription(step.description, stepFinalMinutes)
+                                        else -> null
+                                    }
+                                    if (!hintDesc.isNullOrBlank()) {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = buildHighlightedDurationText(hintDesc, Color(0xFF111827)),
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF64748B)
+                                        )
+                                    }
+
+                                    // Address (호수 제거 및 7101동 -> 집 정제)
+                                    val addr = PlaceResolver.sanitizeAddressForDisplay(step.address).orEmpty()
+                                    if (addr.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = addr,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF64748B)
+                                        )
+                                    }
+
+                                    // Companions Tag Row
+                                    if (step.companions.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text("동행인:", fontSize = 11.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Medium)
+                                            step.companions.forEach { companion ->
+                                                Surface(
+                                                    shape = AppShapes.pill,
+                                                    color = Indigo50,
+                                                    border = BorderStroke(0.5.dp, Indigo600.copy(alpha = 0.3f))
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = companion,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = Indigo700
+                                                        )
+                                                        if (onRemoveCompanion != null) {
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                            Icon(
+                                                                imageVector = Icons.Default.Close,
+                                                                contentDescription = "동행인 삭제",
+                                                                tint = Indigo600,
+                                                                modifier = Modifier
+                                                                    .size(11.dp)
+                                                                    .clickable { onRemoveCompanion(step.id, companion) }
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Photo Carousel
+                                    if (step.photoUris.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        LazyRow(
+                                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            items(step.photoUris) { photoUrl ->
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(56.dp)
+                                                        .clip(RoundedCornerShape(6.dp))
+                                                        .background(AppColors.surfaceVariant)
+                                                        .clickable { onPhotoClick(photoUrl) }
+                                                ) {
+                                                    AsyncImage(
+                                                        model = photoUrl,
+                                                        contentDescription = "장소 사진",
+                                                        contentScale = ContentScale.Crop,
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    // Action Buttons Row
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                if (sheetMode == MapListSheetMode.LIST_EXPANDED ||
+                                                    (customMapHeightDp != null && customMapHeightDp!! < 110f)
+                                                ) {
+                                                    customMapHeightDp = null
+                                                    sheetMode = MapListSheetMode.SPLIT
+                                                }
+                                                mapFocusStep = step
+                                                isSingleStepZoomed = true
+                                                onStepSelected(step)
+                                            },
+                                            shape = AppShapes.button,
+                                            border = BorderStroke(0.5.dp, if (isFocused) AppColors.primary else Color(0xFFCBD5E1)),
+                                            modifier = Modifier.weight(1f).height(34.dp),
+                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                        ) {
+                                            Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text("지도에서 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary, maxLines = 1, softWrap = false)
+                                        }
+
+                                        if (step.latitude != null && step.longitude != null) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    openGoogleMapsLocation(
+                                                        context = context,
+                                                        latitude = step.latitude,
+                                                        longitude = step.longitude,
+                                                        label = step.locationName ?: step.title,
+                                                        address = step.address
+                                                    )
+                                                },
+                                                shape = AppShapes.button,
+                                                border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
+                                                modifier = Modifier.weight(1f).height(34.dp),
+                                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                            ) {
+                                                Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color(0xFF2563EB))
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text("구글맵 앱 열기", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF2563EB), maxLines = 1, softWrap = false)
+                                            }
+                                        }
+
+                                        if (onAddCompanionClick != null) {
+                                            OutlinedButton(
+                                                onClick = { onAddCompanionClick(step) },
+                                                shape = AppShapes.button,
+                                                border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
+                                                modifier = Modifier.height(34.dp),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                            ) {
+                                                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text("동행인", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary, maxLines = 1, softWrap = false)
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        // Photo Carousel
-                        if (step.photoUris.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                items(step.photoUris) { photoUrl ->
-                                    Box(
-                                        modifier = Modifier
-                                            .size(56.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(AppColors.surfaceVariant)
-                                            .clickable { onPhotoClick(photoUrl) }
+                            // 동일 주행 트립 내 연속 이동 구간 표시 (별개 운행의 도착지 ➔ 다음 운행 출발지 사이에는 불필요한 연결 배너 생략)
+                            if (index < bottomDisplaySteps.size - 1) {
+                                val nextStep = bottomDisplaySteps[index + 1]
+                                val isSeparatedTrips = isArrival && isDepartureStep(nextStep)
+                                if (!isSeparatedTrips) {
+                                    val segKm = if (step.latitude != null && step.longitude != null &&
+                                        nextStep.latitude != null && nextStep.longitude != null
                                     ) {
-                                        AsyncImage(
-                                            model = photoUrl,
-                                            contentDescription = "장소 사진",
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
+                                        LocationDistanceUtils.calculateDrivingDistanceKm(
+                                            step.latitude, step.longitude,
+                                            nextStep.latitude, nextStep.longitude
                                         )
+                                    } else 0.0
+
+                                    Surface(
+                                        shape = AppShapes.pill,
+                                        color = Color(0xFFF1F5F9),
+                                        border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = Spacing.xl, vertical = 3.dp)
+                                            .clickable {
+                                                mapFocusStep = null
+                                                openGoogleMapsRoute(context, listOf(step, nextStep))
+                                            }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = if (segKm >= 0.1) {
+                                                    "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 이동 구간 (약 %.1f km)".format(segKm)
+                                                } else {
+                                                    "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 이동 구간"
+                                                },
+                                                fontSize = 10.5.sp,
+                                                color = Color(0xFF334155),
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f).padding(end = 6.dp)
+                                            )
+                                            Text(
+                                                text = "구간 경로 →",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF2563EB),
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Action Buttons Row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    mapFocusStep = step
-                                    isSingleStepZoomed = true
-                                    onStepSelected(step)
-                                },
-                                shape = AppShapes.button,
-                                border = BorderStroke(0.5.dp, if (isFocused) AppColors.primary else Color(0xFFCBD5E1)),
-                                modifier = Modifier.weight(1f).height(34.dp),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                            ) {
-                                Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text("지도에서 보기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
-                            }
-
-                            if (step.latitude != null && step.longitude != null) {
-                                OutlinedButton(
-                                    onClick = {
-                                        openGoogleMapsLocation(
-                                            context = context,
-                                            latitude = step.latitude,
-                                            longitude = step.longitude,
-                                            label = step.locationName ?: step.title,
-                                            address = step.address
-                                        )
-                                    },
-                                    shape = AppShapes.button,
-                                    border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
-                                    modifier = Modifier.weight(1f).height(34.dp),
-                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                ) {
-                                    Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color(0xFF2563EB))
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text("구글맵 앱 열기", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF2563EB))
-                                }
-                            }
-
-                            if (onAddCompanionClick != null) {
-                                OutlinedButton(
-                                    onClick = { onAddCompanionClick(step) },
-                                    shape = AppShapes.button,
-                                    border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
-                                    modifier = Modifier.height(34.dp),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                                ) {
-                                    Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(13.dp), tint = AppColors.primary)
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text("동행인", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.primary)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Intermediate Route Indicator (두 거점 사이의 이동 거리 표시 및 구간 길찾기 실행 지원)
-                if (index < bottomDisplaySteps.size - 1) {
-                    val nextStep = bottomDisplaySteps[index + 1]
-                    val segKm = if (step.latitude != null && step.longitude != null &&
-                        nextStep.latitude != null && nextStep.longitude != null
-                    ) {
-                        LocationDistanceUtils.calculateDrivingDistanceKm(
-                            step.latitude, step.longitude,
-                            nextStep.latitude, nextStep.longitude
-                        )
-                    } else 0.0
-
-                    Surface(
-                        shape = AppShapes.pill,
-                        color = Color(0xFFF1F5F9),
-                        border = BorderStroke(0.5.dp, Color(0xFFCBD5E1)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.xl, vertical = 3.dp)
-                            .clickable {
-                                mapFocusStep = null
-                                openGoogleMapsRoute(context, listOf(step, nextStep))
-                            }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 5.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (segKm >= 0.1) {
-                                    "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 이동 구간 (약 %.1f km)".format(segKm)
-                                } else {
-                                    "↓ 지점 ${index + 1} ➔ 지점 ${index + 2} 이동 구간"
-                                },
-                                fontSize = 10.5.sp,
-                                color = Color(0xFF334155),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "구간 경로 열기 →",
-                                fontSize = 10.sp,
-                                color = Color(0xFF2563EB),
-                                fontWeight = FontWeight.Bold
-                            )
                         }
                     }
                 }
@@ -1613,12 +1926,7 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
         append("[")
         validSteps.forEachIndexed { index, step ->
             if (index > 0) append(",")
-            val rawName = (step.locationName ?: step.title)
-                .replace(Regex("\\[.*?\\]"), "")
-                .replace("승차 (출발)", "")
-                .replace("하차", "")
-                .trim()
-                .ifBlank { step.locationName ?: step.title }
+            val rawName = DailyRouteAggregator.resolveStepDisplayPlaceName(step)
             val title = rawName
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"")
@@ -1989,7 +2297,7 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
                       pinClass += ' end';
                       capClass += ' end';
                     }
-                    var shortTitle = (p.title || '').substring(0, 8);
+                    var shortTitle = (p.title || '').substring(0, 14);
                     var prefix = isStart ? '출발·' : (isEnd ? '도착·' : '');
                     var html = '<div class="pin-wrapper">' +
                                '<div class="' + pinClass + '">' + p.num + '</div>' +
@@ -1998,8 +2306,8 @@ fun buildInteractiveHtmlMap(steps: List<RouteStep>, focusStep: RouteStep? = null
                     icon = L.divIcon({
                       className: '',
                       html: html,
-                      iconSize: [96, 48],
-                      iconAnchor: [48, 14]
+                      iconSize: [140, 48],
+                      iconAnchor: [70, 14]
                     });
                   } else {
                     icon = L.divIcon({

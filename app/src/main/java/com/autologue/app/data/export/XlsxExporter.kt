@@ -2,7 +2,6 @@ package com.autologue.app.data.export
 
 import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.domain.model.DiaryEntry
-import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
@@ -15,37 +14,23 @@ import java.util.zip.ZipOutputStream
 object XlsxExporter {
 
     private val DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.KOREA)
-    private val DATE_ONLY_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.KOREA)
 
     fun exportToStream(
         diaryEntries: List<DiaryEntry>,
         transactions: List<Transaction>,
         vehicleLogs: List<VehicleLog>,
-        golfRounds: List<GolfRound>,
         outputStream: OutputStream,
         expenseCustomMetaPreferences: ExpenseCustomMetaPreferences? = null
     ) {
         ZipOutputStream(outputStream).use { zip ->
-            // 1. [Content_Types].xml
             addZipEntry(zip, "[Content_Types].xml", buildContentTypesXml())
-
-            // 2. _rels/.rels
             addZipEntry(zip, "_rels/.rels", buildRelsXml())
-
-            // 3. xl/_rels/workbook.xml.rels
             addZipEntry(zip, "xl/_rels/workbook.xml.rels", buildWorkbookRelsXml())
-
-            // 4. xl/workbook.xml
             addZipEntry(zip, "xl/workbook.xml", buildWorkbookXml())
-
-            // 5. xl/styles.xml
             addZipEntry(zip, "xl/styles.xml", buildStylesXml())
-
-            // 6. Sheets
             addZipEntry(zip, "xl/worksheets/sheet1.xml", buildDiarySheetXml(diaryEntries))
             addZipEntry(zip, "xl/worksheets/sheet2.xml", buildExpenseSheetXml(transactions, expenseCustomMetaPreferences))
             addZipEntry(zip, "xl/worksheets/sheet3.xml", buildCarSheetXml(vehicleLogs))
-            addZipEntry(zip, "xl/worksheets/sheet4.xml", buildGolfSheetXml(golfRounds))
         }
     }
 
@@ -74,7 +59,6 @@ object XlsxExporter {
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
 
     private fun buildRelsXml(): String = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -87,8 +71,7 @@ object XlsxExporter {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
-  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet4.xml"/>
-  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>"""
 
     private fun buildWorkbookXml(): String = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -97,7 +80,6 @@ object XlsxExporter {
     <sheet name="다이어리 타임라인" sheetId="1" r:id="rId1"/>
     <sheet name="스마트 가계부" sheetId="2" r:id="rId2"/>
     <sheet name="스마트 차계부" sheetId="3" r:id="rId3"/>
-    <sheet name="골프 라이프" sheetId="4" r:id="rId4"/>
   </sheets>
 </workbook>"""
 
@@ -144,8 +126,7 @@ object XlsxExporter {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
 """)
-        // Header
-        sb.append(makeRow(1, listOf("일시", "제목", "방문 장소", "상세 주소", "총 지출액(원)", "주행거리(km)", "골프 여부", "사진 수", "요약 내용")))
+        sb.append(makeRow(1, listOf("일시", "제목", "방문 장소", "상세 주소", "총 지출액(원)", "주행거리(km)", "사진 수", "요약 내용")))
 
         entries.forEachIndexed { idx, e ->
             sb.append(makeRow(
@@ -157,7 +138,6 @@ object XlsxExporter {
                     e.address ?: "-",
                     e.totalExpense,
                     e.drivingDistanceKm,
-                    if (e.hasGolfRound) "⛳ 라운드" else "-",
                     e.photoUris.size,
                     e.summary
                 )
@@ -178,7 +158,6 @@ object XlsxExporter {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
 """)
-        // Header
         sb.append(
             makeRow(
                 1,
@@ -235,7 +214,6 @@ object XlsxExporter {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
 """)
-        // Header
         sb.append(makeRow(1, listOf("일시", "유형", "주행거리(km)", "주유량(L)", "주유금액(원)", "추정연비(km/L)", "주유소명", "메모")))
 
         vehicleLogs.forEachIndexed { idx, v ->
@@ -255,35 +233,6 @@ object XlsxExporter {
                     v.estimatedEfficiencyKmPerL ?: 0.0,
                     v.gasStationName ?: "-",
                     v.note ?: "-"
-                )
-            ))
-        }
-
-        sb.append("""  </sheetData>
-</worksheet>""")
-        return sb.toString()
-    }
-
-    private fun buildGolfSheetXml(golfRounds: List<GolfRound>): String {
-        val sb = StringBuilder()
-        sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <sheetData>
-""")
-        // Header
-        sb.append(makeRow(1, listOf("일자", "골프장명", "유형", "총 타수(Score)", "총 퍼트수", "그린피 지출(원)", "메모")))
-
-        golfRounds.forEachIndexed { idx, g ->
-            sb.append(makeRow(
-                idx + 2,
-                listOf(
-                    g.roundDate.format(DATE_FORMATTER),
-                    g.clubName,
-                    if (g.golfType == com.autologue.app.domain.model.GolfType.SCREEN) "스크린" else "필드",
-                    g.totalScore ?: 0,
-                    g.totalPutts ?: 0,
-                    g.greenFeeExpense,
-                    g.memo ?: "-"
                 )
             ))
         }

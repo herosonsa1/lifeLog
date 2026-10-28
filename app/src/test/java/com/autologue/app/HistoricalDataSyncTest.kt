@@ -42,7 +42,7 @@ class HistoricalDataSyncTest {
         val time = java.time.LocalDateTime.of(2026, 9, 7, 6, 30)
 
         // 앱 동기화/업데이트 반복으로 동일한 장소·시간의 사진 32장 스텝이 8회 중복 누적된 시나리오
-        val duplicateSteps = (1..8).map { index ->
+        val duplicateSteps = (1..8).map { _ ->
             com.autologue.app.domain.model.RouteStep(
                 id = java.util.UUID.randomUUID().toString(),
                 time = time,
@@ -59,9 +59,9 @@ class HistoricalDataSyncTest {
 
         val cleaned = com.autologue.app.data.sync.DailyRouteAggregator.deduplicateRouteSteps(duplicateSteps)
 
-        // 8개 중복 스텝이 완벽히 1개로 병합되었는지 검증
+        // 8개 중복 스텝이 완벽히 1개로 병합되고 순수 읍 명칭('주덕읍')으로 정규화되었는지 검증
         assertEquals(1, cleaned.size)
-        assertEquals("충청북 주덕읍", cleaned[0].title)
+        assertEquals("주덕읍", cleaned[0].title)
         assertEquals(32, cleaned[0].photoUris.size)
         assertEquals("사진 32장 촬영", cleaned[0].description)
     }
@@ -120,6 +120,9 @@ class HistoricalDataSyncTest {
         assertEquals(2, tripGroups.size)
         assertEquals(2, tripGroups[0].steps.size)
         assertEquals(2, tripGroups[1].steps.size)
+        assertEquals(60, tripGroups[0].durationMinutes)
+        assertEquals(62, tripGroups[1].durationMinutes)
+        assertEquals("학암동 ➔ 여의도동", tripGroups[0].subtitle)
 
         // 2. 전체 왕복 동선(하남 출발 -> 서울 -> 하남 도착)에서 경로 앱 실행 시 출발지(하남)와 주요 목적지(서울)가 선택되어야 함
         val endpoints = com.autologue.app.presentation.diary.map.resolveEffectiveRouteEndpoints(steps)

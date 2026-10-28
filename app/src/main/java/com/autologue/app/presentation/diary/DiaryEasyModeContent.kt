@@ -92,10 +92,14 @@ fun DiaryEasyModeContent(
     }
     val totalPlaces = remember(uiState.entries) {
         uiState.entries.flatMap { entry ->
-            val validSteps = entry.routeSteps.filterNot { DailyRouteAggregator.isIntermediateDrivingStep(it) }
+            val validSteps = entry.routeSteps.filterNot {
+                it.stepType == com.autologue.app.domain.model.RouteStepType.TRANSACTION ||
+                    DailyRouteAggregator.isIntermediateDrivingStep(it)
+            }
             if (validSteps.isNotEmpty()) {
                 validSteps.mapNotNull {
-                    it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") }
+                    DailyRouteAggregator.resolveStepDisplayPlaceName(it)
+                        .takeIf { p -> p.isNotBlank() && p != "사진 기록" && p != "출발 인근" && p != "도착 인근" }
                 }
             } else {
                 listOfNotNull(entry.placeName)
@@ -113,8 +117,8 @@ fun DiaryEasyModeContent(
             subtitle = "결제·사진·이동으로 자동 완성된 하루"
         )
 
-        // 알림 권한 미허용 시 토스 스타일 소프트 안내 배너
-        if (!isNotificationEnabled) {
+        // 알림 권한 미허용 시 토스 스타일 소프트 안내 배너 (이동 지도 모드에서는 지도·리스트 가용 공간 확보를 위해 생략)
+        if (!isNotificationEnabled && uiState.viewMode != TimelineViewMode.MAP_ROUTE) {
             Surface(
                 onClick = onOpenNotificationGuide,
                 shape = RoundedCornerShape(16.dp),
@@ -151,15 +155,20 @@ fun DiaryEasyModeContent(
             }
         }
 
+        val isMapRouteMode = uiState.viewMode == TimelineViewMode.MAP_ROUTE
+
         // 상단 컨트롤 & 모드 전환 카드
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 16.dp, vertical = if (isMapRouteMode) 4.dp else 6.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isMapRouteMode) 6.dp else 10.dp)
         ) {
             EasySectionCard(
-                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)
+                contentPadding = PaddingValues(
+                    horizontal = if (isMapRouteMode) 14.dp else 18.dp,
+                    vertical = if (isMapRouteMode) 10.dp else 16.dp
+                )
             ) {
                 EasyDateNavigatorRow(
                     title = dateTitle,
@@ -236,7 +245,7 @@ fun DiaryEasyModeContent(
                     }
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(if (isMapRouteMode) 8.dp else 12.dp))
 
                 EasySegmentedBar(
                     options = listOf(
@@ -511,13 +520,18 @@ private fun EasyDiaryJournalCard(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
             ) {
                 Text(
                     text = entry.date.format(DateTimeFormatter.ofPattern("M월 d일 (E) HH:mm", Locale.KOREA)),
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = EasyTheme.textMuted
+                    color = EasyTheme.textMuted,
+                    maxLines = 1,
+                    softWrap = false
                 )
                 if (!entry.placeName.isNullOrBlank()) {
                     Surface(
@@ -529,6 +543,8 @@ private fun EasyDiaryJournalCard(
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Bold,
                             color = EasyTheme.tossBlue,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
@@ -540,7 +556,9 @@ private fun EasyDiaryJournalCard(
                     text = "%.1f km 이동".format(displayKm),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
-                    color = EasyTheme.textSecondary
+                    color = EasyTheme.textSecondary,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }
@@ -570,20 +588,6 @@ private fun EasyDiaryJournalCard(
                     fontWeight = FontWeight.ExtraBold,
                     color = EasyTheme.textPrimary
                 )
-            } else if (entry.hasGolfRound) {
-                Spacer(modifier = Modifier.width(12.dp))
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = EasyTheme.appleGreenSoft
-                ) {
-                    Text(
-                        text = "골프 라운드",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = EasyTheme.appleGreen,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
             }
         }
 
@@ -670,7 +674,7 @@ private fun EasyDiaryJournalCard(
         if (entry.summary.isNotBlank()) {
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = entry.summary,
+                text = buildHighlightedDurationText(entry.summary),
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
                 color = EasyTheme.textSecondary,

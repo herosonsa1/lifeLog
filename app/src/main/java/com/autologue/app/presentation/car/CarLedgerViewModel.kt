@@ -33,9 +33,21 @@ import com.autologue.app.domain.model.buildUpdatedNote
 import com.autologue.app.domain.model.getExplicitUnitPrice
 import com.autologue.app.domain.model.isCustomFuel
 import com.autologue.app.domain.model.CarLogItemCategory
+import com.autologue.app.domain.model.extractDrivingDurationMinutes
+import com.autologue.app.domain.model.extractDrivingDurationMinutesFromText
+import com.autologue.app.domain.model.formatDrivingDurationLabel
+import com.autologue.app.domain.model.getUserCustomRouteTitle
+import com.autologue.app.domain.model.getUserTypeOverride
+import com.autologue.app.domain.model.isCommuteDrivingLog
 import com.autologue.app.domain.model.isNonCommuteDrivingLog
 import com.autologue.app.domain.model.isParkingLog
+import com.autologue.app.domain.model.isToHomeCommuteLog
+import com.autologue.app.domain.model.isToWorkCommuteLog
+import com.autologue.app.domain.model.isWatchdogTruncatedDurationLog
 import com.autologue.app.domain.model.resolveCarLogItemCategory
+import com.autologue.app.domain.model.resolveEffectiveDrivingDurationMinutes
+import com.autologue.app.domain.model.stripTrailingRouteMetricsParens
+import com.autologue.app.domain.model.upsertDurationIntoVehicleNote
 import javax.inject.Inject
 
 enum class LogFilterMode {
@@ -95,21 +107,21 @@ class CarLedgerViewModel @Inject constructor(
     private val vehicleRepository: VehicleRepository,
     private val transactionRepository: TransactionRepository,
     private val diaryRepository: DiaryRepository,
-    private val golfRepository: com.autologue.app.domain.repository.GolfRepository,
     private val locationPreferences: UserLocationPreferences,
     private val maintenancePreferences: VehicleMaintenancePreferences,
     private val multiVehiclePreferences: MultiVehiclePreferences,
     private val importer: com.autologue.app.data.sync.HistoricalDataImporter,
     private val processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase,
-    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences
+    private val syncCheckpointPreferences: com.autologue.app.data.preferences.SyncCheckpointPreferences,
+    private val placeResolver: com.autologue.app.data.sync.PlaceResolver
 ) : ViewModel() {
-
-    private val placeResolver = com.autologue.app.data.sync.PlaceResolver()
 
     private val _uiState = MutableStateFlow(CarLedgerUiState())
     val uiState: StateFlow<CarLedgerUiState> = _uiState.asStateFlow()
 
     private var loadDataJob: kotlinx.coroutines.Job? = null
+    @Volatile
+    private var hasUpgradedLegacyDrivingLogs = false
 
     init {
         loadData()
@@ -117,6 +129,149 @@ class CarLedgerViewModel @Inject constructor(
         observeMaintenanceConfig()
         observeVehicles()
         observeExpenseTransactionsForVehicleSync()
+        upgradeLegacyDrivingLogsOnce()
+    }
+
+    /**
+     * 기존 DB에 저장된 주행 기록 중 구형 행정구역 지명(예: 하남시, 영등포구 영등포동) 또는
+     * 운행 소요시간 누락 건에 대해 동일 일자 다이어리 GPS 승·하차 좌표 및 시각과 연동하여 1회 자동 보정합니다.
+     */
+    private fun upgradeLegacyDrivingLogsOnce() {
+        if (hasUpgradedLegacyDrivingLogs) return
+        hasUpgradedLegacyDrivingLogs = true
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val allLogs = vehicleRepository.getAllVehicleLogsFlow().first()
+                val allDiaries = diaryRepository.getDiaryEntriesFlow().first()
+                if (allLogs.isEmpty()) return@launch
+
+                val diariesByDate = allDiaries.groupBy { it.date.toLocalDate() }
+                val logsByDate = allLogs.groupBy { it.timestamp.toLocalDate() }
+                val routeBracketRegex = Regex("\\[([^\\[\\]]*?➔[^\\[\\]]*?)\\]")
+
+                for (log in allLogs) {
+                    if (log.logType != VehicleLogType.TRIP_DRIVING) continue
+                    if (log.getUserTypeOverride()?.isDrivingCategory == false) continue
+                    val note = log.note.orEmpty()
+                    val hasDuration = log.extractDrivingDurationMinutes() != null
+                    val isTruncatedWatchdog = log.isWatchdogTruncatedDurationLog()
+                    val isCommute = log.isCommuteDrivingLog()
+                    val hasCustomTitle = log.getUserCustomRouteTitle() != null
+                    val gpsPointCount = Regex("GPS\\s*(\\d+)\\s*개\\s*지점").find(note)?.groupValues?.get(1)?.toIntOrNull()
+
+                    val sameDayVehicleLogs = logsByDate[log.timestamp.toLocalDate()]
+                        .orEmpty()
+                        .filter { it.getAssignedVehicleId() == log.getAssignedVehicleId() }
+                    val hadEarlierToWork = sameDayVehicleLogs.any {
+                        it.id != log.id && it.timestamp.isBefore(log.timestamp) && it.isToWorkCommuteLog()
+                    }
+                    val hadEarlierToHome = sameDayVehicleLogs.any {
+                        it.id != log.id && it.timestamp.isBefore(log.timestamp) && it.isToHomeCommuteLog()
+                    }
+
+                    val bracketMatch = routeBracketRegex.find(note)
+                    val rawBracketRoute = bracketMatch?.groupValues?.get(1)?.let { stripTrailingRouteMetricsParens(it) }
+                    val routeParts = rawBracketRoute?.split("➔")?.map { it.trim() }.orEmpty()
+                    val isCorruptedDaytimeHomeSinglePoint = !isCommute &&
+                        !hasCustomTitle &&
+                        gpsPointCount == 1 &&
+                        hadEarlierToWork &&
+                        !hadEarlierToHome &&
+                        routeParts.size == 2 &&
+                        routeParts.all { part ->
+                            com.autologue.app.data.sync.PlaceResolver.containsHomeBuilding7101(part) ||
+                                part == "집" || part == "우리집"
+                        }
+
+                    val needsPlaceUpgrade = isCorruptedDaytimeHomeSinglePoint || (!isCommute && !hasCustomTitle && routeParts.size >= 2 && routeParts.any { part ->
+                        com.autologue.app.data.sync.PlaceResolver.isAdminOrPlaceholderPlaceName(part) ||
+                            part.endsWith("시") || part.endsWith("구") || part.endsWith("군")
+                    })
+
+                    if (hasDuration && !isTruncatedWatchdog && !needsPlaceUpgrade) continue
+
+                    val daySteps = diariesByDate[log.timestamp.toLocalDate()]
+                        ?.flatMap { it.routeSteps }
+                        ?.filter { it.stepType == com.autologue.app.domain.model.RouteStepType.DRIVING }
+                        ?.sortedBy { it.time }
+                        .orEmpty()
+
+                    // log.timestamp(하차 시각)와 가장 가까운 하차 스텝 및 직전 승차 스텝 매칭
+                    val arrStep = daySteps
+                        .filter { it.title.contains("하차") || it.title.contains("도착") || "하차" in it.tags }
+                        .minByOrNull { kotlin.math.abs(java.time.Duration.between(it.time, log.timestamp).toMinutes()) }
+                        ?.takeIf { kotlin.math.abs(java.time.Duration.between(it.time, log.timestamp).toMinutes()) <= 90L }
+
+                    val depStep = if (arrStep != null) {
+                        daySteps
+                            .filter {
+                                (it.title.contains("승차") || it.title.contains("출발") || "승차" in it.tags) &&
+                                    !it.time.isAfter(arrStep.time) &&
+                                    java.time.Duration.between(it.time, arrStep.time).toMinutes() <= 360L
+                            }
+                            .maxByOrNull { it.time }
+                    } else null
+
+                    val targetDurationMinutes: Int? = if (!hasDuration || isTruncatedWatchdog) {
+                        val candidateMin = extractDrivingDurationMinutesFromText(arrStep?.description)
+                            ?: extractDrivingDurationMinutesFromText(arrStep?.title)
+                            ?: if (depStep != null && arrStep != null) {
+                                java.time.Duration.between(depStep.time, arrStep.time).toMinutes().toInt()
+                                    .coerceAtLeast(1)
+                                    .takeIf { it in 1..600 }
+                            } else null
+                        val validDiaryMin = if (isCommute || isTruncatedWatchdog) {
+                            candidateMin?.takeIf { it >= 40 }
+                        } else {
+                            candidateMin
+                        }
+                        validDiaryMin ?: log.resolveEffectiveDrivingDurationMinutes()
+                    } else null
+
+                    var updatedNote = note
+                    if (isCorruptedDaytimeHomeSinglePoint && bracketMatch != null) {
+                        updatedNote = updatedNote.replaceRange(bracketMatch.range, "[회사 인근 주행]")
+                    } else if (needsPlaceUpgrade && bracketMatch != null) {
+                        val resolvedStart = if (depStep?.latitude != null && depStep.longitude != null &&
+                            LocationDistanceUtils.isValidCoordinate(depStep.latitude, depStep.longitude)
+                        ) {
+                            placeResolver.resolveGeoLocation(context, depStep.latitude, depStep.longitude).placeName
+                        } else {
+                            com.autologue.app.data.sync.PlaceResolver.cleanDisplayPlaceName(
+                                routeParts.first(),
+                                depStep?.address
+                            )
+                        }
+                        val resolvedEnd = if (arrStep?.latitude != null && arrStep.longitude != null &&
+                            LocationDistanceUtils.isValidCoordinate(arrStep.latitude, arrStep.longitude)
+                        ) {
+                            placeResolver.resolveGeoLocation(context, arrStep.latitude, arrStep.longitude).placeName
+                        } else {
+                            com.autologue.app.data.sync.PlaceResolver.cleanDisplayPlaceName(
+                                routeParts.last(),
+                                arrStep?.address
+                            )
+                        }
+                        if (resolvedStart.isNotBlank() && resolvedEnd.isNotBlank()) {
+                            val newRouteBracket = if (gpsPointCount == 1 && resolvedStart == resolvedEnd) {
+                                "[$resolvedStart 인근 주행]"
+                            } else {
+                                "[$resolvedStart ➔ $resolvedEnd]"
+                            }
+                            updatedNote = updatedNote.replaceRange(bracketMatch.range, newRouteBracket)
+                        }
+                    }
+
+                    if (targetDurationMinutes != null && targetDurationMinutes > 0) {
+                        updatedNote = upsertDurationIntoVehicleNote(updatedNote, targetDurationMinutes)
+                    }
+
+                    if (updatedNote != log.note.orEmpty()) {
+                        vehicleRepository.updateVehicleLog(log.copy(note = updatedNote))
+                    }
+                }
+            }
+        }
     }
 
     private fun observeExpenseTransactionsForVehicleSync() {
@@ -460,9 +615,7 @@ class CarLedgerViewModel @Inject constructor(
                 if (effectiveCategory.isDrivingCategory) {
                     val finalDistKm = (tripDistanceKm?.takeIf { it > 0.0 } ?: log.tripDistanceKm)
                         .let { Math.round(it * 10.0) / 10.0 }
-                    val rawRouteInput = gasStationName
-                        .replace(Regex("\\s*\\([0-9.]+\\s*km\\)", RegexOption.IGNORE_CASE), "")
-                        .trim()
+                    val rawRouteInput = stripTrailingRouteMetricsParens(gasStationName)
                     val customRoute = when {
                         rawRouteInput.isBlank() -> null
                         effectiveCategory == CarLogItemCategory.COMMUTE_TO_WORK &&
@@ -749,31 +902,10 @@ class CarLedgerViewModel @Inject constructor(
                     }
                 }
 
-                // 2. 실제 골프 라운드 DB(18홀 유효)와 대조 전, 미래 오탐(10/24 등) 및 '나인CC' 가짜 라운드 우선 제거
-                val today = LocalDate.now()
+                // 2. 다이어리 중복 내역 정제
                 runCatching {
-                    val rawRounds = golfRepository.getAllGolfRoundsList()
-                    for (r in rawRounds) {
-                        val rDay = (r.startTime ?: r.roundDate).toLocalDate()
-                        val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
-                            r.clubName.contains("나인 CC", ignoreCase = true) ||
-                            r.clubName == "나인"
-                        val isFutureFalseOcr = rDay.isAfter(today) && (
-                            r.totalScore != null ||
-                            r.holeScores.isNotEmpty() ||
-                            !r.scorecardPhotoUri.isNullOrBlank() ||
-                            r.matchingPhotoUris.isNotEmpty() ||
-                            isFakeNine ||
-                            rDay == LocalDate.of(2026, 10, 24)
-                        )
-                        if (isFakeNine || isFutureFalseOcr) {
-                            golfRepository.deleteGolfRound(r.id)
-                        }
-                    }
                     diaryRepository.cleanDuplicates()
                 }
-                val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
-                vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
 
                 // 3. 가짜 다이어리 이동 및 비정상 더미 주행 기록 상시 정제
                 vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
@@ -783,9 +915,8 @@ class CarLedgerViewModel @Inject constructor(
                 val txs = transactionRepository.getAllTransactionsFlow().first()
                 val addedCount = vehicleRepository.syncRefuelingFromTransactions(txs)
 
-                // 5. 재정제 및 골프 정합성 확정
+                // 5. 재정제 확정
                 vehicleRepository.cleanDuplicatesAndCorruptedLogs(home, comp, dist)
-                vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
 
                 val totalFuelLogs = vehicleRepository.getRefuelingLogsFlow().first().size
 
@@ -940,9 +1071,6 @@ class CarLedgerViewModel @Inject constructor(
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 vehicleRepository.clearTripDrivingLogs()
                 locationPreferences.resetConfig()
-                // 유효한 18홀 라운드에 대한 정상 주행기록만 복원
-                val allRounds = runCatching { golfRepository.getAllGolfRoundsList() }.getOrDefault(emptyList())
-                vehicleRepository.syncAndCleanWithGolfRounds(allRounds)
             }
             _uiState.value = _uiState.value.copy(isSyncing = false)
         }

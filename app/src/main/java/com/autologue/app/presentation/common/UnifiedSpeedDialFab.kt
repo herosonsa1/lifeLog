@@ -81,13 +81,13 @@ fun UnifiedSpeedDialFab(
             }
         ),
         QuickActionItem(
-            title = "골프 라커룸/스코어카드 스캔",
-            subtitle = "안내지 및 스코어카드 OCR 자동 분석",
-            icon = Icons.Default.SportsGolf,
-            iconBgColor = Color(0xFF059669),
-            targetRoute = Screen.Golf.route,
+            title = "라이프 궤도 종합 리포트",
+            subtitle = "소비·이동·일상 발자취 밸런스 분석",
+            icon = Icons.Default.Insights,
+            iconBgColor = Color(0xFF6366F1),
+            targetRoute = Screen.Lifestyle.route,
             onClick = {
-                navigateToTab(Screen.Golf.route)
+                navigateToTab(Screen.Lifestyle.route)
             }
         ),
         QuickActionItem(

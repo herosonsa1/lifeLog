@@ -6,6 +6,9 @@ import com.autologue.app.data.preferences.ExpenseCustomMetaPreferences
 import com.autologue.app.data.preferences.MerchantAliasPreferences
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
+import com.autologue.app.domain.model.estimateRealisticCommuteMinutes
+import com.autologue.app.domain.model.formatDrivingDurationLabel
+import com.autologue.app.domain.model.getUserTypeOverride
 import com.autologue.app.domain.model.normalizeInflatedDrivingLog
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.util.LocationDistanceUtils
@@ -677,6 +680,17 @@ class VehicleRepositoryImpl @Inject constructor(
                 note.contains("블루투스") ||
                 note.contains("GPS")
 
+            // 0. 미래 날짜/시각 오류 레코드 및 레거시 골프 라운드 자동 복원('라운딩 왕복 주행', '나인CC') 레코드 영구 삭제
+            val todayDate = java.time.LocalDate.now()
+            val nowTime = java.time.LocalDateTime.now()
+            val isLegacyGolfAutoLog = log.logType == VehicleLogType.TRIP_DRIVING && !isRealCarTracking &&
+                (note.contains("라운딩 왕복 주행") || note.contains("나인CC", ignoreCase = true) || note.contains("나인 CC", ignoreCase = true))
+            if (log.timestamp.toLocalDate().isAfter(todayDate) || log.timestamp.isAfter(nowTime.plusHours(1)) || isLegacyGolfAutoLog) {
+                vehicleLogDao.deleteVehicleLogById(log.id)
+                modifiedCount++
+                continue
+            }
+
             // 1. 다이어리 이동 동선(도보/대중교통 오인입) 레코드 전수 영구 삭제 (단, 실제 차량 GPS/블루투스 주행 기록은 보존)
             val isDiaryMovement = note.contains("다이어리 이동 동선") ||
                 (log.logType == VehicleLogType.TRIP_DRIVING && !isRealCarTracking &&
@@ -744,8 +758,15 @@ class VehicleRepositoryImpl @Inject constructor(
             // 5. 과거 '출퇴근 왕복'으로 잘못 묶여 있던 레코드를 실제 출근 편도로 정상화
             if (log.logType == VehicleLogType.TRIP_DRIVING && note.contains("출퇴근 왕복")) {
                 val oneWayDistance = if (commuteDistanceKm > 0.0) Math.round((commuteDistanceKm / 2.0) * 10.0) / 10.0 else log.tripDistanceKm
+                val estMin = estimateRealisticCommuteMinutes(log.timestamp, oneWayDistance)
+                val durLabel = formatDrivingDurationLabel(estMin)
+                val baseLabel = if (com.autologue.app.util.KoreanHolidayUtils.isCommuteEligibleWorkday(log.timestamp.toLocalDate())) {
+                    "출근 주행 [$homeName ➔ $companyName]"
+                } else {
+                    "일반 주행 [$homeName ➔ $companyName]"
+                }
                 val updated = log.copy(
-                    note = if (com.autologue.app.util.KoreanHolidayUtils.isCommuteEligibleWorkday(log.timestamp.toLocalDate())) "출근 주행 ($homeName ➔ $companyName)" else "일반 주행 ($homeName ➔ $companyName)",
+                    note = if (durLabel.isNotBlank()) "$baseLabel ($durLabel 운행)" else baseLabel,
                     tripDistanceKm = oneWayDistance
                 )
                 vehicleLogDao.updateVehicleLog(updated)
@@ -870,10 +891,12 @@ class VehicleRepositoryImpl @Inject constructor(
             return@withContext -1L
         }
 
+        val estMin = estimateRealisticCommuteMinutes(now, distanceKm)
+        val durText = formatDrivingDurationLabel(estMin)
         val direction = if (isToWork) {
-            String.format(java.util.Locale.US, "[집->회사(%.1fkm)] 출근 주행", distanceKm)
+            String.format(java.util.Locale.US, "[집->회사(%.1fkm)] 출근 주행 (%s 운행)", distanceKm, durText)
         } else {
-            String.format(java.util.Locale.US, "[회사->집(%.1fkm)] 퇴근 주행", distanceKm)
+            String.format(java.util.Locale.US, "[회사->집(%.1fkm)] 퇴근 주행 (%s 운행)", distanceKm, durText)
         }
         val log = VehicleLog(
             timestamp = now,
@@ -884,80 +907,6 @@ class VehicleRepositoryImpl @Inject constructor(
         vehicleLogDao.insertVehicleLog(log.toEntity())
     }
 
-    override suspend fun syncAndCleanWithGolfRounds(
-        validRounds: List<com.autologue.app.domain.model.GolfRound>
-    ): Int = withContext(Dispatchers.IO) {
-        val allLogs = vehicleLogDao.getAllVehicleLogsSync()
-        var changeCount = 0
-        val today = java.time.LocalDate.now()
-
-        // 1. 유효한 18홀 라운드만 필터링 (과거~오늘 날짜, 54~144타 또는 14홀 이상, 실제 유효한 골프장명)
-        val completeRounds = validRounds.filter { r ->
-            !r.roundDate.toLocalDate().isAfter(today) &&
-                (r.totalScore in 54..144 || r.holeScores.size >= 14) &&
-                r.clubName.isNotBlank() &&
-                com.autologue.app.data.sync.DailyRouteAggregator.isRealGolfClub(r.clubName) &&
-                r.clubName != "필드 골프장" &&
-                !r.clubName.contains("일반 사진")
-        }
-        val validRoundDates = completeRounds.map { it.roundDate.toLocalDate() }.toSet()
-
-        // 2. [유령 골프 주행 레코드 및 미래 오류 레코드 삭제]
-        val now = java.time.LocalDateTime.now()
-        for (log in allLogs) {
-            val note = log.note ?: ""
-            val isGolfLog = log.logType == VehicleLogType.TRIP_DRIVING &&
-                    (note.contains("골프") || note.contains("라운딩") || note.contains("CC") || note.contains("GC") || note.contains("C.C") || note.contains("G.C"))
-
-            // 미래 시각/날짜 오류 레코드 또는 '나인CC' 오탐 레코드 삭제 (예: 10/24 나인CC 왕복 주행, 8.8 등)
-            if (log.timestamp.toLocalDate().isAfter(today) ||
-                log.timestamp.isAfter(now.plusHours(1)) ||
-                note.contains("나인CC", ignoreCase = true) ||
-                note.contains("나인 CC", ignoreCase = true)
-            ) {
-                runCatching { android.util.Log.d("VehicleRepository", "미래/오탐 오류 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}, note=$note") }
-                vehicleLogDao.deleteVehicleLogById(log.id)
-                changeCount++
-                continue
-            }
-
-            // 실제 골프 라운드 DB에 없는 날짜의 가짜/오탐 골프 주행 기록(8.8, 9.1, 9.9, 8.28, 8.21, 10.24 등) 영구 삭제
-            if (isGolfLog && log.timestamp.toLocalDate() !in validRoundDates) {
-                runCatching { android.util.Log.d("VehicleRepository", "유령 골프 주행 레코드 삭제: id=${log.id}, date=${log.timestamp}, note=$note") }
-                vehicleLogDao.deleteVehicleLogById(log.id)
-                changeCount++
-            }
-        }
-
-        // 3. [누락된 실제 골프 라운드 주행 기록 복원/생성 (단, 사용자가 선택 삭제한 골프 주행 기록은 복원하지 않음)]
-        val updatedLogs = vehicleLogDao.getAllVehicleLogsSync()
-        for (round in completeRounds) {
-            val rDate = round.roundDate.toLocalDate()
-            if (rDate.isAfter(today)) continue
-            if (expenseCustomMetaPreferences.isGolfDrivingSyncDeleted(rDate)) continue
-
-            val hasDrivingOnDate = updatedLogs.any {
-                it.logType == VehicleLogType.TRIP_DRIVING && it.timestamp.toLocalDate() == rDate
-            }
-
-            if (!hasDrivingOnDate) {
-                val distanceKm = com.autologue.app.util.GolfCourseDistanceUtils.getEstimatedRoundTripKm(round.clubName)
-                val startTime = round.startTime ?: round.roundDate
-                val drivingTime = startTime.minusHours(2)
-                val newLog = VehicleLog(
-                    timestamp = drivingTime,
-                    logType = VehicleLogType.TRIP_DRIVING,
-                    tripDistanceKm = distanceKm,
-                    note = "${round.clubName} 라운딩 왕복 주행"
-                )
-                runCatching { android.util.Log.d("VehicleRepository", "골프 라운드 주행 기록 자동 복원: date=$rDate, club=${round.clubName}, km=$distanceKm") }
-                vehicleLogDao.insertVehicleLog(newLog.toEntity())
-                changeCount++
-            }
-        }
-
-        changeCount
-    }
 
     private fun VehicleLogEntity.toDomain(): VehicleLog {
         val effectiveType = if (logType == VehicleLogType.REFUELING && fuelCost in 1L until com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON) {

@@ -31,7 +31,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * 앱을 닫거나 화면을 끈 상태에서도 전체 데이터 수집·분석(결제 문자, 갤러리 사진 위치, 골프 OCR, 다이어리·차계부 구축)이
+ * 앱을 닫거나 화면을 끈 상태에서도 전체 데이터 수집·분석(결제 문자, 갤러리 사진 위치, 다이어리·차계부 구축)이
  * OS 프로세스 절전(Cached App Freezer)에 의해 중단되지 않고 끝까지 완주되도록 보장하는 포그라운드 서비스.
  */
 @AndroidEntryPoint
@@ -197,12 +197,11 @@ class DataSyncForegroundService : Service() {
             else -> "백그라운드 데이터 수집·분석 중 (%d%% 완료)".format(percent)
         }
 
-        val stageText = progress?.stage ?: "결제 문자·갤러리 사진·골프 기록을 분석하고 있습니다."
-        val summaryLine = if (progress != null && (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0)) {
+        val stageText = progress?.stage ?: "결제 문자 및 갤러리 사진을 분석하고 있습니다."
+        val summaryLine = if (progress != null && (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0)) {
             buildString {
                 append(stageText)
                 append("\n누적 반영: 결제 ${progress.syncedTxCount}건 · 사진 ${progress.syncedPhotoCount}장")
-                if (progress.syncedGolfCount > 0) append(" · 골프 ${progress.syncedGolfCount}건")
             }
         } else {
             stageText
@@ -240,7 +239,7 @@ class DataSyncForegroundService : Service() {
                 "백그라운드 데이터 수집 및 분석",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "결제 문자, 갤러리 사진 위치, 골프 스코어카드 OCR 등 백그라운드 수집·분석 진행률을 표시합니다."
+                description = "결제 문자, 갤러리 사진 위치, 일상 다이어리 등 백그라운드 수집·분석 진행률을 표시합니다."
                 setShowBadge(false)
             }
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

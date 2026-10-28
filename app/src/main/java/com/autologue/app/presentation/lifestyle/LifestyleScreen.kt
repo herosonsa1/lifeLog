@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DirectionsCar
@@ -25,7 +24,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Payments
-import androidx.compose.material.icons.filled.SportsGolf
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Button
@@ -34,7 +32,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,7 +54,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autologue.app.domain.model.FinancialVelocity
-import com.autologue.app.domain.model.GolfAthleticTrajectory
 import com.autologue.app.domain.model.LifeBalanceScores
 import com.autologue.app.domain.model.LifeOrbitPeriod
 import com.autologue.app.domain.model.LifestyleInsight
@@ -96,66 +92,66 @@ fun LifestyleScreen(
                 onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) }
             )
         } else {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(AppColors.background)
-        ) {
-            com.autologue.app.presentation.common.TopMenuAccentBar(color = MenuColors.lifestyle)
-            Box(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 4.dp)) {
-                LifestyleHeader(
-                    onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) },
-                    isSyncing = syncProgress?.isRunning == true
-                )
-            }
-            com.autologue.app.presentation.common.HairlineDivider()
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                    .background(AppColors.background)
             ) {
-                item {
-                    Spacer(modifier = Modifier.height(Spacing.xxs))
+                com.autologue.app.presentation.common.TopMenuAccentBar(color = MenuColors.lifestyle)
+                Box(modifier = Modifier.padding(horizontal = Spacing.md, vertical = 4.dp)) {
+                    LifestyleHeader(
+                        onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) },
+                        isSyncing = syncProgress?.isRunning == true
+                    )
                 }
+                com.autologue.app.presentation.common.HairlineDivider()
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.md)
+                ) {
+                    item {
+                        Spacer(modifier = Modifier.height(Spacing.xxs))
+                    }
 
-            syncProgress?.let { progress ->
-                item {
-                    SyncProgressBanner(progress = progress)
+                    syncProgress?.let { progress ->
+                        item {
+                            SyncProgressBanner(progress = progress)
+                        }
+                    }
+
+                    item {
+                        PeriodSelectorTabs(
+                            selectedPeriod = selectedPeriod,
+                            onPeriodSelected = { viewModel.selectPeriod(it) }
+                        )
+                    }
+
+                    item {
+                        LifeOrbitHeroCard(
+                            metrics = metrics,
+                            onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) }
+                        )
+                    }
+
+                    item {
+                        LifeBalanceRadarSection(scores = metrics.balanceScores)
+                    }
+
+                    item {
+                        OrbitCompassSection(insights = metrics.insights)
+                    }
+
+                    item {
+                        ThreePillarsBentoGrid(metrics = metrics)
+                    }
+
+                    item {
+                        Spacer(modifier = Modifier.height(Spacing.xl))
+                    }
                 }
             }
-
-            item {
-                PeriodSelectorTabs(
-                    selectedPeriod = selectedPeriod,
-                    onPeriodSelected = { viewModel.selectPeriod(it) }
-                )
-            }
-
-            item {
-                LifeOrbitHeroCard(
-                    metrics = metrics,
-                    onSyncClick = { viewModel.syncFromDevice(context, selectedPeriod.days) }
-                )
-            }
-
-            item {
-                LifeBalanceRadarSection(scores = metrics.balanceScores)
-            }
-
-            item {
-                OrbitCompassSection(insights = metrics.insights)
-            }
-
-            item {
-                FourPillarsBentoGrid(metrics = metrics)
-            }
-
-                item {
-                    Spacer(modifier = Modifier.height(Spacing.xl))
-                }
-            }
-        }
         }
 
         com.autologue.app.presentation.common.AutoLogueLoadingOverlay(
@@ -163,7 +159,7 @@ fun LifestyleScreen(
             accentColor = MenuColors.lifestyle,
             title = if (syncProgress?.isRunning == true) "라이프로그 동기화 중" else "라이프 궤도 분석 중",
             message = syncProgress?.stage?.ifBlank { null }
-                ?: "결제·이동·골프·다이어리 데이터를 종합 분석하고 있습니다..."
+                ?: "결제·이동·다이어리 데이터를 종합 분석하고 있습니다..."
         )
     }
 }
@@ -180,7 +176,7 @@ private fun LifestyleHeader(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
@@ -202,13 +198,19 @@ private fun LifestyleHeader(
                 Text(
                     text = "라이프 궤도",
                     style = AppTypography.h1,
-                    color = AppColors.textPrimary
+                    color = AppColors.textPrimary,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
             Text(
-                text = "내 모바일폰의 실제 결제·이동·스포츠·기록 기반 통합 인텔리전스",
+                text = "결제·이동·기록 기반 통합 인텔리전스",
                 style = AppTypography.caption,
                 color = AppColors.textSecondary,
+                maxLines = 1,
+                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp)
             )
         }
@@ -442,7 +444,7 @@ private fun LifeBalanceRadarSection(scores: LifeBalanceScores) {
                 color = AppColors.textPrimary
             )
             Text(
-                text = "일상 기록, 재정 건전성, 이동 반경, 스포츠 성취도의 균형도",
+                text = "일상 기록, 재정 건전성, 이동 반경, 기록 성취도의 균형도",
                 style = AppTypography.caption,
                 color = AppColors.textSecondary,
                 modifier = Modifier.padding(top = 1.dp, bottom = Spacing.sm)
@@ -588,7 +590,6 @@ private fun LifeBalanceRadarCanvas(scores: LifeBalanceScores) {
                 )
             }
         } else {
-            // 점수가 전혀 없을 때 중심에 원형 인디케이터 표시
             drawCircle(
                 color = Color.LightGray.copy(alpha = 0.6f),
                 radius = 4.dp.toPx(),
@@ -688,13 +689,13 @@ private fun InsightCard(insight: LifestyleInsight) {
 }
 
 @Composable
-private fun FourPillarsBentoGrid(metrics: LifestyleMetrics) {
+private fun ThreePillarsBentoGrid(metrics: LifestyleMetrics) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         Text(
-            text = "4대 라이프 인텔리전스 궤적",
+            text = "3대 라이프 인텔리전스 궤적",
             style = AppTypography.h3,
             color = AppColors.textPrimary,
             modifier = Modifier.padding(top = Spacing.xs)
@@ -706,10 +707,7 @@ private fun FourPillarsBentoGrid(metrics: LifestyleMetrics) {
         // 2. 모빌리티 궤도 (Mobility Orbit)
         MobilityPillarCard(data = metrics.mobilityOrbit)
 
-        // 3. 골프 & 체력 (Golf Trajectory)
-        GolfPillarCard(data = metrics.golfTrajectory)
-
-        // 4. 시공간 풋프린트 (Spatial Footprint)
+        // 3. 시공간 풋프린트 (Spatial Footprint)
         SpatialPillarCard(data = metrics.spatialFootprint)
     }
 }
@@ -757,34 +755,6 @@ private fun MobilityPillarCard(data: MobilityOrbit) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             PillarMetricItem(label = "주행 일수 / 주유비", value = "${data.drivingDaysCount}일 / ${String.format("%,d", data.totalFuelCost)}원")
             PillarMetricItem(label = "이동 활동 레벨", value = data.mobilityActivityLevel)
-        }
-    }
-}
-
-@Composable
-private fun GolfPillarCard(data: GolfAthleticTrajectory) {
-    PillarCardLayout(
-        title = "골프 & 체력 (Athletic Trajectory)",
-        icon = Icons.Default.SportsGolf,
-        accentColor = MenuColors.golf
-    ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            PillarMetricItem(label = "라운드 횟수", value = "${data.roundCount}회")
-            PillarMetricItem(
-                label = "평균 타수 / 베스트",
-                value = if (data.averageScore > 0) "${data.averageScore}타 / ${data.bestScore ?: "-"}타" else "기록 대기"
-            )
-        }
-        Spacer(modifier = Modifier.height(Spacing.xs))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            PillarMetricItem(
-                label = "평균 퍼트 수",
-                value = data.averagePutts?.let { "${it}개" } ?: "-"
-            )
-            PillarMetricItem(
-                label = "필드 누적 걸음수",
-                value = if (data.totalFieldSteps > 0) "${String.format("%,d", data.totalFieldSteps)}보" else "기록 없음"
-            )
         }
     }
 }

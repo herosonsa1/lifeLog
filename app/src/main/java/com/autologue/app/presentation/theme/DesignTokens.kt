@@ -12,14 +12,14 @@ import androidx.compose.ui.unit.sp
  * AutoLogue Spacing Scale (4px / 8px Consistent Grid)
  */
 object Spacing {
-    val xxs: Dp = 2.dp   // 초미세 요소 간격
-    val xs: Dp  = 4.dp   // 아이콘-텍스트 간격
-    val sm: Dp  = 8.dp   // 섹션 헤더 상하 간격
-    val md: Dp  = 12.dp  // 리스트 아이템 세로 패딩
-    val lg: Dp  = 16.dp  // 화면 기본 상하 패딩
-    val xl: Dp  = 20.dp  // 화면 좌우 표준 여백
-    val xxl: Dp = 24.dp  // 탭 간격, 대형 섹션 간격
-    val xxxl: Dp = 32.dp // 주요 블록 간 여백
+    val xxs: Dp = 2.dp
+    val xs: Dp  = 4.dp
+    val sm: Dp  = 8.dp
+    val md: Dp  = 12.dp
+    val lg: Dp  = 16.dp
+    val xl: Dp  = 20.dp
+    val xxl: Dp = 24.dp
+    val xxxl: Dp = 32.dp
 }
 
 /**
@@ -40,7 +40,7 @@ object AppColors {
     val background = PureWhite
     val surface = PureWhite
     val surfaceVariant = Slate50
-    val primary = Color(0xFF2563EB) // 선명하고 신뢰감 있는 코발트 블루 (이전 검정 탈피)
+    val primary = Color(0xFF2563EB)
     val primaryDark = Color(0xFF1D4ED8)
     val secondary = Slate700
     val textPrimary = Slate900
@@ -48,7 +48,7 @@ object AppColors {
     val textMuted = Slate400
     val border = Slate200
     val borderInput = Slate300
-    
+
     // Semantic States
     val successText = Forest700
     val successBg = Forest50
@@ -56,7 +56,7 @@ object AppColors {
     val warningBg = Amber50
     val errorText = Rose700
     val errorBg = Rose50
-    
+
     // Button Design System Tokens
     val actionPrimaryBg = Color(0xFF2563EB)
     val actionPrimaryText = PureWhite
@@ -70,7 +70,7 @@ object AppColors {
 
 /**
  * AutoLogue Menu Theme Colors
- * 각 메뉴별 고유 아이덴티티 및 즉각적인 시각적 구분을 위한 4원색 테마 팔레트
+ * 각 메뉴별 고유 아이덴티티 및 시각적 구분을 위한 테마 팔레트
  */
 object MenuColors {
     // 1. 다이어리 (Diary): 일상, 사진, 타임라인, 지도 - 스마트 로열 블루
@@ -88,12 +88,7 @@ object MenuColors {
     val carLedgerBg = Color(0xFFFFFBEB)
     val carLedgerBorder = Color(0xFFFDE68A)
 
-    // 4. 골프 (Golf): 필드 잔디, 라운딩, 스코어카드 - 필드 포레스트 그린
-    val golf = Color(0xFF15803D)
-    val golfBg = Color(0xFFF0FDF4)
-    val golfBorder = Color(0xFFBBF7D0)
-
-    // 5. 라이프 궤도 (Lifestyle): 삶의 궤적, 밸런스 레이더, 인텔리전스 - 딥 인디고 퍼플
+    // 4. 라이프 궤도 (Lifestyle): 삶의 궤적, 밸런스 레이더, 인텔리전스 - 딥 인디고 퍼플
     val lifestyle = Color(0xFF6366F1)
     val lifestyleBg = Color(0xFFEEF2FF)
     val lifestyleBorder = Color(0xFFC7D2FE)

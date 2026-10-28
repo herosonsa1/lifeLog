@@ -144,7 +144,6 @@ object EasyTheme {
     val red = appleRed
     val redSoft = appleRedSoft
     val coral = appleRed
-    val golfAccent = appleGreen
     val accent = tossBlue
     val accentSoft = tossBlueSoft
 }

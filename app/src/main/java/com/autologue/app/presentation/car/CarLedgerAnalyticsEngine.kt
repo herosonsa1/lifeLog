@@ -4,7 +4,6 @@ import com.autologue.app.domain.model.MIN_REFUEL_AMOUNT_WON
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.domain.model.isCommuteDrivingLog
-import com.autologue.app.domain.model.isGolfDrivingLog
 import com.autologue.app.domain.model.isParkingLog
 import com.autologue.app.domain.model.isToHomeCommuteLog
 import com.autologue.app.domain.model.isToWorkCommuteLog
@@ -34,7 +33,6 @@ enum class CarCostCategoryType(val displayName: String, val description: String)
 
 enum class CarDrivingPurposeType(val displayName: String, val description: String) {
     COMMUTE("출퇴근 주행", "집 ↔ 회사 정기 출퇴근 운행"),
-    GOLF("골프 라운딩 주행", "골프장(CC/GC) 왕복 운행"),
     GENERAL("일반 · 일상 주행", "주말 나들이, 쇼핑, 일상 이동 운행")
 }
 
@@ -151,7 +149,6 @@ object CarLedgerAnalyticsEngine {
     fun classifyDrivingPurpose(log: VehicleLog): CarDrivingPurposeType? {
         if (log.logType != VehicleLogType.TRIP_DRIVING) return null
         if (log.isCommuteDrivingLog()) return CarDrivingPurposeType.COMMUTE
-        if (log.isGolfDrivingLog()) return CarDrivingPurposeType.GOLF
         return CarDrivingPurposeType.GENERAL
     }
 

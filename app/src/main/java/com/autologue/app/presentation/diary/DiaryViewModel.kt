@@ -12,7 +12,6 @@ import com.autologue.app.domain.model.MonthlySummary
 import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
 import com.autologue.app.domain.repository.DiaryRepository
-import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.domain.usecase.diary.GetMonthlyCalendarDataUseCase
@@ -21,11 +20,9 @@ import com.autologue.app.domain.usecase.export.ExportResult
 import com.autologue.app.domain.usecase.sync.SyncHistoricalDataUseCase
 import com.autologue.app.domain.usecase.sync.SyncProgress
 import com.autologue.app.util.LocationDistanceUtils
-import com.autologue.app.util.GolfCourseDistanceUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -75,7 +72,6 @@ class DiaryViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val diaryRepository: DiaryRepository,
     private val transactionRepository: TransactionRepository,
-    private val golfRepository: GolfRepository,
     private val vehicleRepository: VehicleRepository,
     private val dailyRouteAggregator: DailyRouteAggregator,
     private val getMonthlyCalendarDataUseCase: GetMonthlyCalendarDataUseCase,
@@ -135,7 +131,9 @@ class DiaryViewModel @Inject constructor(
                         val hadInvalidTx = current.routeSteps.any { DailyRouteAggregator.isInvalidTransactionStep(it) }
                         val cleanedSteps = current.routeSteps
                             .filterNot { DailyRouteAggregator.isIntermediateDrivingStep(it) || DailyRouteAggregator.isInvalidTransactionStep(it) }
-                            .map { DailyRouteAggregator.normalizeDrivingStep(it) }
+                            .map { DailyRouteAggregator.normalizeStepForDisplay(it) }
+                            .let { DailyRouteAggregator.consolidateGpsDrivingSteps(it) }
+                            .let { DailyRouteAggregator.enrichStepPairDurations(it) }
                         if (cleanedSteps != current.routeSteps) {
                             current = current.copy(routeSteps = cleanedSteps)
                         }
@@ -145,11 +143,8 @@ class DiaryViewModel @Inject constructor(
                         }
                         if (current.drivingDistanceKm <= 0.0) {
                             val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
-                            val finalDist = if (calculated > 0.0) calculated else if (current.hasGolfRound) {
-                                GolfCourseDistanceUtils.getEstimatedRoundTripKm(current.placeName ?: "")
-                            } else 0.0
-                            if (finalDist > 0.0) current = current.copy(drivingDistanceKm = finalDist)
-                        } else if (!current.hasGolfRound && current.drivingDistanceKm > 65.0) {
+                            if (calculated > 0.0) current = current.copy(drivingDistanceKm = calculated)
+                        } else if (current.drivingDistanceKm > 65.0) {
                             val calculated = LocationDistanceUtils.calculateRouteDrivingDistanceKm(current.routeSteps)
                             val healedDist = if (calculated in 1.0..65.0) calculated else 27.1
                             val healedSummary = current.summary.replace(Regex("(\\d+(?:\\.\\d+)?)\\s*km", RegexOption.IGNORE_CASE)) { m ->
@@ -158,46 +153,98 @@ class DiaryViewModel @Inject constructor(
                             }
                             current = current.copy(drivingDistanceKm = healedDist, summary = healedSummary)
                         }
-                        if (hadIntermediateDriving) {
-                            val validPlaces = current.routeSteps
-                                .filter { step ->
-                                    when (step.stepType) {
-                                        RouteStepType.TRANSACTION -> false
-                                        RouteStepType.DRIVING -> DailyRouteAggregator.isBoardingOrAlightingStep(step)
-                                        else -> true
-                                    }
+                        val validPlaces = current.routeSteps
+                            .filter { step ->
+                                when (step.stepType) {
+                                    RouteStepType.TRANSACTION -> false
+                                    RouteStepType.DRIVING -> DailyRouteAggregator.isBoardingOrAlightingStep(step)
+                                    else -> true
                                 }
-                                .mapNotNull { it.locationName }
-                                .filter { it.isNotBlank() && !it.contains("사진 촬영") && !it.contains("사진 기록") }
-                                .distinct()
+                            }
+                            .mapNotNull { step ->
+                                step.locationName?.let { PlaceResolver.cleanDisplayPlaceName(it, step.address) }
+                            }
+                            .filter { it.isNotBlank() && !it.contains("사진 촬영") && !it.contains("사진 기록") && it != "출발 인근" && it != "도착 인근" }
+                            .distinct()
+
+                        val cleanMainPlace = validPlaces.firstOrNull()
+                            ?: current.placeName?.let { PlaceResolver.cleanDisplayPlaceName(it, current.address).ifBlank { it } }
+
+                        if (hadIntermediateDriving) {
                             val rebuiltMoveSummary = validPlaces.joinToString(" ➔ ").ifBlank { null }
                             val rebuiltTitle = when {
                                 validPlaces.size >= 2 -> "${validPlaces.first()} & ${validPlaces[1]}"
-                                validPlaces.size == 1 -> "${validPlaces.first()} 방문 및 일상"
+                                validPlaces.size == 1 -> "${validPlaces.first()} 일정"
                                 cleanedSteps.any { it.stepType == RouteStepType.DRIVING } -> "차량 주행 및 일상"
                                 else -> current.title
                             }
                             current = current.copy(
                                 title = rebuiltTitle,
-                                placeName = validPlaces.firstOrNull(),
+                                placeName = cleanMainPlace,
                                 movementSummary = rebuiltMoveSummary
                             )
                         } else {
                             val moveSummary = current.movementSummary
-                            if (moveSummary != null && moveSummary.contains("사진 기록")) {
-                                val cleanSummary = moveSummary
+                            val normalizedMoveSummary = if (!moveSummary.isNullOrBlank() && moveSummary != "기록된 활동 없음") {
+                                moveSummary
                                     .split("➔", "->")
-                                    .map { it.trim() }
+                                    .map { PlaceResolver.cleanDisplayPlaceName(it.trim()) }
                                     .filter { it.isNotBlank() && !it.contains("사진 기록") && !it.contains("사진 촬영") }
                                     .distinct()
                                     .joinToString(" ➔ ")
-                                current = current.copy(movementSummary = cleanSummary.ifBlank { null })
+                                    .ifBlank { null }
+                            } else {
+                                moveSummary
                             }
+                            val normalizedTitle = when {
+                                current.title.contains(" & ") -> {
+                                    val parts = current.title.split(" & ").map { it.trim() }
+                                    if (parts.size == 2 && parts.any { PlaceResolver.isAdminOrPlaceholderPlaceName(it) }) {
+                                        if (validPlaces.size >= 2) {
+                                            "${validPlaces.first()} & ${validPlaces.last()}"
+                                        } else {
+                                            "${PlaceResolver.cleanDisplayPlaceName(parts[0])} & ${PlaceResolver.cleanDisplayPlaceName(parts[1])}"
+                                        }
+                                    } else current.title
+                                }
+                                current.title.endsWith(" 일정") -> {
+                                    val prefix = current.title.removeSuffix(" 일정").trim()
+                                    if (PlaceResolver.isAdminOrPlaceholderPlaceName(prefix)) {
+                                        val best = validPlaces.firstOrNull() ?: PlaceResolver.cleanDisplayPlaceName(prefix, current.address)
+                                        if (best.isNotBlank()) "$best 일정" else current.title
+                                    } else current.title
+                                }
+                                else -> current.title
+                            }
+                            if (normalizedMoveSummary != moveSummary || cleanMainPlace != current.placeName || normalizedTitle != current.title) {
+                                current = current.copy(
+                                    title = normalizedTitle,
+                                    placeName = cleanMainPlace,
+                                    movementSummary = normalizedMoveSummary
+                                )
+                            }
+                        }
+                        val sanitizedAddr = PlaceResolver.sanitizeAddressForDisplay(current.address)
+                        val sanitizedSummary = current.summary
+                            .let { s ->
+                                if (PlaceResolver.containsHomeBuilding7101(s) || PlaceResolver.containsBuildingUnitNumber(s)) {
+                                    PlaceResolver.sanitizeAddressForDisplay(s) ?: s
+                                } else s
+                            }
+                            .let { s ->
+                                DailyRouteAggregator.ensureSummaryIncludesDrivingDuration(
+                                    rawSummary = s,
+                                    steps = current.routeSteps,
+                                    drivingDistanceKm = current.drivingDistanceKm,
+                                    referenceDate = current.date.toLocalDate()
+                                )
+                            }
+                        if (sanitizedAddr != current.address || sanitizedSummary != current.summary) {
+                            current = current.copy(address = sanitizedAddr, summary = sanitizedSummary)
                         }
                         current
                     }
                 }
-                // Room DB 업데이트 후 무한 재귀 호출 루프를 원천 차단하기 위해 세션 당 최초 1회만 레거시 점검
                 if (!hasUpgradedLegacyEntries && list.isNotEmpty()) {
                     hasUpgradedLegacyEntries = true
                     checkAndUpgradeLegacyEntries(list)
@@ -226,8 +273,6 @@ class DiaryViewModel @Inject constructor(
         }
         _uiState.update { it.copy(isLoading = true, loadingMessage = msg) }
 
-        // [H-05] 무거운 컬렉션 연산(filter/flatMap/sortedBy)을 Dispatchers.Default로 격리
-        //   → 30일치 rawEntries가 많을 경우 메인 스레드 ANR 방지
         filterJob = viewModelScope.launch(Dispatchers.Default) {
             val currentMode = _uiState.value.viewMode
             val currentMapFilter = _uiState.value.mapPeriodFilter
@@ -262,8 +307,9 @@ class DiaryViewModel @Inject constructor(
                 MapPeriodFilter.MONTHLY -> rawEntries.filter { it.date.toLocalDate() in currentDate.minusDays(30)..currentDate }.flatMap { it.routeSteps }.sortedBy { it.time }
                 MapPeriodFilter.ALL -> rawEntries.flatMap { it.routeSteps }.sortedBy { it.time }
             }.filter { it.stepType != RouteStepType.TRANSACTION && !DailyRouteAggregator.isIncomeOrTransferStep(it) }
+                .let { DailyRouteAggregator.consolidateGpsDrivingSteps(it) }
+                .let { DailyRouteAggregator.enrichStepPairDurations(it) }
 
-            // 원자적(CAS) StateFlow.update를 사용하여 백그라운드 동기화 완료 상태(isAutoSyncing=false)가 덮어씌워지는 경쟁 조건 원천 차단
             _uiState.update { current ->
                 val refreshedDetail = current.selectedDiaryDetail?.let { detail ->
                     rawEntries.firstOrNull { it.id == detail.id } ?: detail
@@ -285,15 +331,18 @@ class DiaryViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val allTxs = transactionRepository.getAllTransactionsFlow().first()
-                val allGolf = golfRepository.getAllGolfRoundsFlow().first()
                 val allVehicles = vehicleRepository.getAllVehicleLogsFlow().first()
+                var poiNetworkBudget = 25
 
                 for (entry in entries) {
                     val date = entry.date.toLocalDate()
-                    val dayGolf = allGolf.filter { it.roundDate.toLocalDate() == date && DailyRouteAggregator.isRealGolfClub(it.clubName) }
                     val isDummyTitle = entry.title.matches(Regex("^[0-9]+(-[0-9]+)?$")) || entry.title.contains("사진 촬영")
-                    val hasInvalidGolfTitle = entry.title.contains("일반 사진") || entry.title.contains("필드 골프장") || entry.placeName?.contains("일반 사진") == true || (entry.hasGolfRound && dayGolf.isEmpty())
-                    val hasInvalidGolfStep = entry.routeSteps.any { DailyRouteAggregator.isInvalidOrDummyGolfStep(it) || (it.stepType == RouteStepType.GOLF && dayGolf.isEmpty()) }
+                    val hasLegacyGolfResidue = entry.hasGolfRound ||
+                        entry.title.contains("라운딩") ||
+                        entry.title.contains("일반 사진") ||
+                        entry.title.contains("필드 골프장") ||
+                        entry.placeName?.contains("일반 사진") == true ||
+                        entry.summary.contains("스코어카드 자동 분석")
                     val hasTxCoordinates = entry.routeSteps.any { it.stepType == RouteStepType.TRANSACTION && (it.latitude != null || it.locationName != null) }
                     val hasLegacyPhotoTitle = entry.routeSteps.any { it.title.contains("사진 촬영") || it.locationName?.contains("사진 촬영") == true } || entry.movementSummary?.contains("사진 촬영") == true
                     val hasLegacyGuOnlyLocation = entry.title.contains("서울 송파") || entry.title.contains("서울 강남") || entry.title.contains("서울 영등포구") ||
@@ -306,23 +355,49 @@ class DiaryViewModel @Inject constructor(
                     }
                     val hasZeroDistanceWithValidSteps = entry.drivingDistanceKm <= 0.0 &&
                         entry.routeSteps.count { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 } >= 2
-                    val hasCorruptedGolfTitle = entry.title.contains("기록 삭제") || entry.title.contains("FIELD") || entry.title.contains("저장하기") || entry.title.contains("사진 기록 일정") || (entry.hasGolfRound && entry.title.contains("CC 일정") && dayGolf.any { !it.clubName.contains("FIELD") })
+                    val hasCorruptedTitle = entry.title.contains("기록 삭제") || entry.title.contains("FIELD") || entry.title.contains("저장하기") || entry.title.contains("사진 기록 일정")
                     val hasCorruptedMovement = entry.movementSummary?.contains("사진 기록") == true
-                    val hasGolfZeroDistance = entry.hasGolfRound && entry.drivingDistanceKm <= 0.0
                     val hasCorruptedMunjeong = (entry.title.contains("문정동") || entry.placeName?.contains("문정동") == true || entry.summary.contains("문정동") || entry.movementSummary?.contains("문정동") == true || entry.routeSteps.any { it.locationName?.contains("문정동") == true }) &&
                         entry.routeSteps.any { it.latitude != null && it.longitude != null && it.latitude != 0.0 && it.longitude != 0.0 }
                     val stepsExpense = DailyRouteAggregator.calculateRouteStepsExpense(entry.routeSteps)
                     val hasZeroOrUnderExpenseWithTxSteps = stepsExpense > 0L && entry.totalExpense < stepsExpense
-                    val hasBogusScorecardMemo = dayGolf.isEmpty() && entry.summary.contains("스코어카드 자동 분석")
                     val hasIntermediateDrivingSteps = entry.routeSteps.any { DailyRouteAggregator.isIntermediateDrivingStep(it) }
                     val hasLegacyDrivingText = entry.routeSteps.any {
                         it.stepType == RouteStepType.DRIVING && (
                             it.description?.contains("GPS 백그라운드 수신") == true ||
                             it.title.contains(" 도착 (") ||
-                            (it.title.contains(" 출발") && !it.title.contains("승차"))
+                            (it.title.contains(" 출발") && !it.title.contains("승차")) ||
+                            it.title.endsWith("승차 (출발)") ||
+                            Regex("\\(\\s*총?\\s*[0-9.]+\\s*km\\s*\\)", RegexOption.IGNORE_CASE).containsMatchIn(it.title) ||
+                            Regex("\\(\\s*(?:[0-9]+\\s*시간\\s*)?[0-9]+\\s*분\\s*\\)\\s*$").containsMatchIn(it.title)
                         )
+                    } || PlaceResolver.containsHomeBuilding7101(entry.title) ||
+                        PlaceResolver.containsBuildingUnitNumber(entry.title) ||
+                        PlaceResolver.containsBuildingUnitNumber(entry.address) ||
+                        entry.routeSteps.any {
+                            PlaceResolver.containsHomeBuilding7101(it.title) ||
+                                PlaceResolver.containsBuildingUnitNumber(it.title) ||
+                                PlaceResolver.containsBuildingUnitNumber(it.address)
+                        }
+                    val hasUnresolvedPoiWithCoords = poiNetworkBudget > 0 && entry.routeSteps.any { step ->
+                        val lat = step.latitude
+                        val lng = step.longitude
+                        lat != null && lng != null &&
+                            LocationDistanceUtils.isValidCoordinate(lat, lng) &&
+                            PlaceResolver.isAdminOrPlaceholderPlaceName(step.locationName) &&
+                            !placeResolver.isCoordinatePoiEvaluated(lat, lng)
                     }
-                    val needsUpgrade = isDummyTitle || hasInvalidGolfTitle || hasInvalidGolfStep || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps || hasCorruptedGolfTitle || hasCorruptedMovement || hasGolfZeroDistance || hasCorruptedMunjeong || hasZeroOrUnderExpenseWithTxSteps || hasBogusScorecardMemo || hasIntermediateDrivingSteps || hasLegacyDrivingText
+                    val hasMissingDrivingDuration = (entry.drivingDistanceKm > 0.0 || entry.routeSteps.any { it.stepType == RouteStepType.DRIVING }) && (
+                        !Regex("(?:\\d+\\s*시간\\s*)?\\d+\\s*분\\s*운행|\\d+\\s*시간\\s*운행").containsMatchIn(entry.summary) ||
+                            entry.routeSteps.any { step ->
+                                step.stepType == RouteStepType.DRIVING &&
+                                    !DailyRouteAggregator.isIntermediateDrivingStep(step) &&
+                                    !DailyRouteAggregator.isBoardingOnlyStep(step) &&
+                                    !DailyRouteAggregator.isStopoverWaypointStep(step) &&
+                                    !Regex("(?:\\d+\\s*시간\\s*)?\\d+\\s*분\\s*운행|\\d+\\s*시간\\s*운행").containsMatchIn(step.description.orEmpty())
+                            }
+                        )
+                    val needsUpgrade = isDummyTitle || hasLegacyGolfResidue || hasLegacyPhotoTitle || hasTxCoordinates || hasLegacyGuOnlyLocation || hasIncomeOrTransferInSteps || hasIncomeOrTransferInSummary || hasZeroDistanceWithValidSteps || hasCorruptedTitle || hasCorruptedMovement || hasCorruptedMunjeong || hasZeroOrUnderExpenseWithTxSteps || hasIntermediateDrivingSteps || hasLegacyDrivingText || hasUnresolvedPoiWithCoords || hasMissingDrivingDuration
 
                     if (needsUpgrade) {
                         val dayTxs = allTxs.filter { it.timestamp.toLocalDate() == date }
@@ -330,13 +405,22 @@ class DiaryViewModel @Inject constructor(
                         val existingPhotos = entry.routeSteps
                             .filter { it.stepType == RouteStepType.PHOTO }
                             .flatMap { step ->
-                                val isLegacyGu = step.locationName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암", "서울 문정동", "문정동")
-                                val cleanPlace = if (step.locationName?.contains("사진 촬영") == true || isLegacyGu) null else step.locationName
+                                val isAdminOrLegacy = PlaceResolver.isAdminOrPlaceholderPlaceName(step.locationName) ||
+                                    step.locationName?.contains("사진 촬영") == true ||
+                                    step.locationName?.contains("문정동") == true
                                 val lat = step.latitude
                                 val lng = step.longitude
-                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(appContext, lat, lng) else null
-                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "사진 기록"
-                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "" else step.address
+                                val canLookupPoi = isAdminOrLegacy && lat != null && lng != null &&
+                                    LocationDistanceUtils.isValidCoordinate(lat, lng) &&
+                                    poiNetworkBudget > 0
+                                val resolved = if (canLookupPoi) {
+                                    poiNetworkBudget--
+                                    placeResolver.resolveGeoLocation(appContext, lat!!, lng!!)
+                                } else null
+                                val targetPlace = resolved?.placeName
+                                    ?: step.locationName?.let { PlaceResolver.cleanDisplayPlaceName(it, step.address).ifBlank { it } }
+                                    ?: "사진 기록"
+                                val targetAddr = resolved?.address?.ifBlank { step.address.orEmpty() } ?: step.address
 
                                 step.photoUris.map { uri ->
                                     ScannedPhoto(
@@ -351,13 +435,21 @@ class DiaryViewModel @Inject constructor(
                                     )
                                 }
                             }.ifEmpty {
-                                val isLegacyGu = entry.placeName in listOf("서울 송파", "서울 강남", "서울 영등포구", "서울 마포 상암", "서울 문정동", "문정동")
-                                val cleanPlace = if (entry.placeName?.contains("사진 촬영") == true || isLegacyGu) null else entry.placeName
+                                val isAdminOrLegacy = PlaceResolver.isAdminOrPlaceholderPlaceName(entry.placeName) ||
+                                    entry.placeName?.contains("사진 촬영") == true
                                 val lat = entry.latitude
                                 val lng = entry.longitude
-                                val resolved = if (cleanPlace == null && lat != null && lng != null) placeResolver.resolveGeoLocation(appContext, lat, lng) else null
-                                val targetPlace = cleanPlace ?: resolved?.placeName ?: "사진 기록"
-                                val targetAddr = if (cleanPlace == null) resolved?.address ?: "" else entry.address
+                                val canLookupPoi = isAdminOrLegacy && lat != null && lng != null &&
+                                    LocationDistanceUtils.isValidCoordinate(lat, lng) &&
+                                    poiNetworkBudget > 0
+                                val resolved = if (canLookupPoi) {
+                                    poiNetworkBudget--
+                                    placeResolver.resolveGeoLocation(appContext, lat!!, lng!!)
+                                } else null
+                                val targetPlace = resolved?.placeName
+                                    ?: entry.placeName?.let { PlaceResolver.cleanDisplayPlaceName(it, entry.address).ifBlank { it } }
+                                    ?: "사진 기록"
+                                val targetAddr = resolved?.address?.ifBlank { entry.address.orEmpty() } ?: entry.address
 
                                 entry.photoUris.map {
                                     ScannedPhoto(
@@ -374,37 +466,59 @@ class DiaryViewModel @Inject constructor(
                             .distinctBy { it.uri }
 
                         val cleanExistingSteps = entry.routeSteps.filter {
-                            !DailyRouteAggregator.isInvalidOrDummyGolfStep(it) &&
-                            !(it.stepType == RouteStepType.GOLF && dayGolf.isEmpty()) &&
                             !DailyRouteAggregator.isIntermediateDrivingStep(it)
-                        }.map { DailyRouteAggregator.normalizeDrivingStep(it) }
+                        }.map { step ->
+                            val lat = step.latitude
+                            val lng = step.longitude
+                            if (step.stepType == RouteStepType.DRIVING &&
+                                lat != null && lng != null &&
+                                LocationDistanceUtils.isValidCoordinate(lat, lng) &&
+                                PlaceResolver.isAdminOrPlaceholderPlaceName(step.locationName) &&
+                                poiNetworkBudget > 0 &&
+                                !placeResolver.isCoordinatePoiEvaluated(lat, lng)
+                            ) {
+                                poiNetworkBudget--
+                                val resolved = placeResolver.resolveGeoLocation(appContext, lat, lng)
+                                DailyRouteAggregator.normalizeStepForDisplay(
+                                    step.copy(
+                                        locationName = resolved.placeName,
+                                        address = resolved.address.ifBlank { step.address.orEmpty() }
+                                    )
+                                )
+                            } else {
+                                DailyRouteAggregator.normalizeStepForDisplay(step)
+                            }
+                        }
 
-                        val upgraded = dailyRouteAggregator.aggregateForDate(
+                        val aggregated = dailyRouteAggregator.aggregateForDate(
                             date = date,
                             photos = existingPhotos,
                             transactions = dayTxs,
-                            golfRounds = dayGolf,
                             vehicleLogs = dayVehicles,
                             existingRouteSteps = cleanExistingSteps
-                        ).copy(
-                            id = entry.id,
-                            hasGolfRound = dayGolf.isNotEmpty(),
-                            summary = if (hasIncomeOrTransferInSummary || entry.summary.contains("사진 촬영") || entry.summary.contains("서울 송파") || entry.summary.contains("서울 강남") || entry.summary.contains("서울 영등포구") || entry.summary.contains("일반 사진") || entry.summary.contains("필드 골프장") || hasCorruptedGolfTitle || hasCorruptedMunjeong || hasBogusScorecardMemo || hasIntermediateDrivingSteps) "" else entry.summary
                         )
 
-                        val finalUpgraded = if (upgraded.summary.isBlank()) {
-                            dailyRouteAggregator.aggregateForDate(
-                                date = date,
-                                photos = existingPhotos,
-                                transactions = dayTxs,
-                                golfRounds = dayGolf,
-                                vehicleLogs = dayVehicles,
-                                existingRouteSteps = cleanExistingSteps
-                            ).copy(
-                                id = entry.id,
-                                hasGolfRound = dayGolf.isNotEmpty()
-                            )
-                        } else upgraded
+                        val shouldRebuildSummary = hasIncomeOrTransferInSummary ||
+                            entry.summary.contains("사진 촬영") ||
+                            entry.summary.contains("서울 송파") ||
+                            entry.summary.contains("서울 강남") ||
+                            entry.summary.contains("서울 영등포구") ||
+                            entry.summary.contains("일반 사진") ||
+                            entry.summary.contains("필드 골프장") ||
+                            entry.summary.contains("승차 (출발)") ||
+                            Regex("\\(\\s*총\\s*[0-9.]+\\s*km\\s*\\)").containsMatchIn(entry.summary) ||
+                            hasLegacyGolfResidue ||
+                            hasCorruptedTitle ||
+                            hasCorruptedMunjeong ||
+                            hasIntermediateDrivingSteps ||
+                            hasUnresolvedPoiWithCoords ||
+                            hasLegacyDrivingText
+
+                        val finalUpgraded = aggregated.copy(
+                            id = entry.id,
+                            hasGolfRound = false,
+                            summary = if (shouldRebuildSummary || entry.summary.isBlank()) aggregated.summary else entry.summary
+                        )
 
                         diaryRepository.updateDiaryEntry(finalUpgraded)
                     }
@@ -546,15 +660,12 @@ class DiaryViewModel @Inject constructor(
         val list = if (!contextList.isNullOrEmpty()) {
             contextList
         } else {
-            // 1. 현재 열려있는 DiaryDetail의 사진 목록 탐색
             val detailPhotos = _uiState.value.selectedDiaryDetail?.let { entry ->
                 (entry.photoUris + entry.routeSteps.flatMap { it.photoUris }).distinct()
             }
-            // 2. 현재 선택된 날짜/화면의 모든 엔트리 내 사진 목록 탐색
             val currentEntriesPhotos = _uiState.value.entries.flatMap { entry ->
                 entry.photoUris + entry.routeSteps.flatMap { it.photoUris }
             }.distinct()
-            // 3. 지도 경로 모드라면 지도 스텝의 사진 목록 탐색
             val mapPhotos = _uiState.value.mapRouteSteps.flatMap { it.photoUris }.distinct()
 
             when {
@@ -597,9 +708,6 @@ class DiaryViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 특정 사진을 기록에서 삭제하고, SharedPreferences에 영구 제외 등록하여 재동기화 시 재추가를 원천 방지합니다.
-     */
     fun deletePhoto(photoUrl: String) {
         viewModelScope.launch(Dispatchers.IO) {
             com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(
@@ -608,10 +716,8 @@ class DiaryViewModel @Inject constructor(
                 accentColor = com.autologue.app.presentation.theme.MenuColors.diary
             ) {
                 try {
-                    // 1. SharedPreferences 영구 제외 등록 (재동기화 시 재추가 원천 방지)
                     excludedPhotoPreferences.excludePhoto(photoUrl)
 
-                    // 2. Room DB의 모든 엔트리 중 해당 사진이 포함된 항목 탐색 및 제거
                     val entriesToUpdate = rawEntries.filter { entry ->
                         entry.photoUris.contains(photoUrl) || entry.routeSteps.any { it.photoUris.contains(photoUrl) }
                     }
@@ -621,7 +727,6 @@ class DiaryViewModel @Inject constructor(
                         val updatedRouteSteps = entry.routeSteps.mapNotNull { step ->
                             if (step.photoUris.contains(photoUrl)) {
                                 val newStepPhotos = step.photoUris.filter { it != photoUrl }
-                                // 사진 전용 스텝인데 사진이 0장이 된 경우 스텝 자체 제거
                                 if (step.stepType == RouteStepType.PHOTO && newStepPhotos.isEmpty()) {
                                     null
                                 } else {
@@ -648,13 +753,11 @@ class DiaryViewModel @Inject constructor(
                         )
                         diaryRepository.updateDiaryEntry(updatedEntry)
 
-                        // 만약 현재 열려있는 바텀시트 상세 다이어리라면 실시간 동기화
                         if (_uiState.value.selectedDiaryDetail?.id == updatedEntry.id) {
                             _uiState.update { it.copy(selectedDiaryDetail = updatedEntry) }
                         }
                     }
 
-                    // 3. 사진 프리뷰 팝업 상태 갱신
                     val currentList = _uiState.value.photoPreviewList
                     val updatedList = currentList.filter { it != photoUrl }
                     if (updatedList.isEmpty()) {
@@ -677,7 +780,6 @@ class DiaryViewModel @Inject constructor(
                         }
                     }
 
-                    // 4. 필터링된 엔트리 화면 갱신
                     updateFilteredEntries()
                 } catch (t: Throwable) {
                     t.printStackTrace()
@@ -728,7 +830,6 @@ class DiaryViewModel @Inject constructor(
                         }
                     }
 
-                    // 일자 전체 태그에서 동행인을 제거하여 오직 해당 지점에만 귀속되도록 정제
                     val cleanTags = entry.tags.filterNot { it.startsWith("👤 ") }
                     val updatedEntry = entry.copy(
                         routeSteps = updatedSteps,
@@ -736,7 +837,6 @@ class DiaryViewModel @Inject constructor(
                     )
                     diaryRepository.updateDiaryEntry(updatedEntry)
 
-                    // UI 상태 실시간 동기화
                     _uiState.update { current ->
                         current.copy(
                             companionTargetStep = updatedTargetStep ?: current.companionTargetStep,
@@ -751,9 +851,6 @@ class DiaryViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 특정 지점(스텝)에서 등록된 동행인을 개별 삭제합니다.
-     */
     fun removeCompanionFromStep(stepId: String, companionName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             com.autologue.app.presentation.common.GlobalLoadingRegistry.runWithLoading(

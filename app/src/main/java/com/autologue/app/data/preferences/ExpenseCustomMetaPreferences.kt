@@ -34,7 +34,8 @@ data class ManagedCategoryItem(
     val id: String,
     val displayName: String,
     val baseCategory: ExpenseCategory,
-    val isBuiltIn: Boolean
+    val isBuiltIn: Boolean,
+    val defaultUserName: String? = null
 )
 
 /**
@@ -113,10 +114,13 @@ class ExpenseCustomMetaPreferences private constructor(
     // 단위 테스트용 인메모리 생성자
     constructor() : this(null)
 
-    // 1. 커스텀 카테고리 목록 및 기본 카테고리 이름 변경/삭제 상태
+    // 1. 커스텀 카테고리 목록 및 기본 카테고리 이름 변경/삭제 상태 + 카테고리별 기본 사용자 매핑
     private val customCategoryList = java.util.concurrent.CopyOnWriteArrayList<String>()
     private val renamedDefaultCategories = ConcurrentHashMap<String, String>()
     private val deletedDefaultCategories = ConcurrentHashMap.newKeySet<String>()
+    private val categoryDefaultUserMap = ConcurrentHashMap<String, String>()
+    @Volatile
+    private var seededPresetCategoryDefaultUsersV1: Boolean = false
 
     // 거래 ID별 / (입출금구분+가맹점)별 기본 및 세부(커스텀) 카테고리 매핑
     private val txCustomCategoryMap = ConcurrentHashMap<Long, String>()
@@ -160,8 +164,12 @@ class ExpenseCustomMetaPreferences private constructor(
     val metaVersionFlow: StateFlow<Long> = _metaVersionFlow.asStateFlow()
 
     init {
-        loadFromPrefs()
-        refreshFlows()
+        val migrated = loadFromPrefs()
+        if (migrated && prefs != null) {
+            saveToPrefs()
+        } else {
+            refreshFlows()
+        }
     }
 
     /**
@@ -233,7 +241,64 @@ class ExpenseCustomMetaPreferences private constructor(
     }
 
     @Synchronized
-    private fun loadFromPrefs() {
+    private fun ensurePresetCategoryDefaultUsersInternal(): Boolean {
+        var changed = false
+        // 1) '정선우' 사용자 분류가 목록에 없으면 자동 추가
+        if (userClassificationList.none { it.name.equals(PRESET_DEFAULT_USER_NAME, ignoreCase = true) }) {
+            val usedColors = userClassificationList.map { it.colorIndex }.toSet()
+            val nextColor = (0 until BADGE_COLOR_COUNT).firstOrNull { it !in usedColors }
+                ?: (userClassificationList.size % BADGE_COLOR_COUNT)
+            userClassificationList.add(0, UserClassificationItem(PRESET_DEFAULT_USER_NAME, nextColor))
+            changed = true
+        }
+
+        // 2) 커스텀 프리셋 카테고리('담배', '보험', '통신') 보장 및 기본 사용자 '정선우' 지정
+        for (presetCustom in PRESET_CUSTOM_DEFAULT_USER_CATEGORIES) {
+            val matchedRenamedBuiltInKey = renamedDefaultCategories.entries
+                .firstOrNull { it.value.equals(presetCustom, ignoreCase = true) }
+                ?.key
+            if (matchedRenamedBuiltInKey != null) {
+                val builtInKey = "BUILTIN_$matchedRenamedBuiltInKey"
+                if (!categoryDefaultUserMap.containsKey(builtInKey)) {
+                    categoryDefaultUserMap[builtInKey] = PRESET_DEFAULT_USER_NAME
+                    changed = true
+                }
+                continue
+            }
+            val existingCustom = customCategoryList.firstOrNull { it.equals(presetCustom, ignoreCase = true) }
+            val canonicalCustom = if (existingCustom != null) {
+                existingCustom
+            } else {
+                customCategoryList.add(presetCustom)
+                changed = true
+                presetCustom
+            }
+            val customKey = "CUSTOM_$canonicalCustom"
+            if (categoryDefaultUserMap.entries.none { it.key.equals(customKey, ignoreCase = true) }) {
+                categoryDefaultUserMap[customKey] = PRESET_DEFAULT_USER_NAME
+                changed = true
+            }
+        }
+
+        // 3) 기본 내장 프리셋 카테고리('필드 라운드', '스크린 골프', '수입/입금', '이체/출금') 기본 사용자 '정선우' 지정
+        for (presetBuiltIn in PRESET_BUILTIN_DEFAULT_USER_CATEGORIES) {
+            val builtInKey = "BUILTIN_${presetBuiltIn.name}"
+            if (!categoryDefaultUserMap.containsKey(builtInKey)) {
+                categoryDefaultUserMap[builtInKey] = PRESET_DEFAULT_USER_NAME
+                changed = true
+            }
+        }
+
+        if (!seededPresetCategoryDefaultUsersV1) {
+            seededPresetCategoryDefaultUsersV1 = true
+            changed = true
+        }
+        return changed
+    }
+
+    @Synchronized
+    private fun loadFromPrefs(): Boolean {
+        var migrated = false
         runCatching {
             val raw = prefs?.getString(KEY_META_JSON, null)
             if (raw.isNullOrBlank()) {
@@ -243,7 +308,9 @@ class ExpenseCustomMetaPreferences private constructor(
                     userClassificationList.add(UserClassificationItem("가족", 1))
                     userClassificationList.add(UserClassificationItem("업무/법인", 2))
                 }
-                return
+                ensurePresetCategoryDefaultUsersInternal()
+                migrated = true
+                return@runCatching
             }
             val root = JSONObject(raw)
 
@@ -276,6 +343,19 @@ class ExpenseCustomMetaPreferences private constructor(
                     if (item.isNotBlank()) deletedDefaultCategories.add(item)
                 }
             }
+
+            categoryDefaultUserMap.clear()
+            root.optJSONObject("categoryDefaultUserMap")?.let { obj ->
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next().trim()
+                    val v = obj.optString(k).trim()
+                    if (k.isNotBlank() && v.isNotBlank()) {
+                        categoryDefaultUserMap[k] = v
+                    }
+                }
+            }
+            seededPresetCategoryDefaultUsersV1 = root.optBoolean("seededPresetCategoryDefaultUsersV1", false)
 
             txCustomCategoryMap.clear()
             root.optJSONObject("txCustomCategoryMap")?.let { obj ->
@@ -445,7 +525,14 @@ class ExpenseCustomMetaPreferences private constructor(
                     if (sig.isNotBlank()) deletedVehicleLogSignatures.add(sig)
                 }
             }
+
+            if (!seededPresetCategoryDefaultUsersV1) {
+                if (ensurePresetCategoryDefaultUsersInternal()) {
+                    migrated = true
+                }
+            }
         }
+        return migrated
     }
 
     @Synchronized
@@ -468,6 +555,11 @@ class ExpenseCustomMetaPreferences private constructor(
             val deletedDefArr = JSONArray()
             deletedDefaultCategories.forEach { deletedDefArr.put(it) }
             root.put("deletedDefaultCategories", deletedDefArr)
+
+            val catDefaultUserObj = JSONObject()
+            categoryDefaultUserMap.forEach { (k, v) -> catDefaultUserObj.put(k, v) }
+            root.put("categoryDefaultUserMap", catDefaultUserObj)
+            root.put("seededPresetCategoryDefaultUsersV1", seededPresetCategoryDefaultUsersV1)
 
             val txCatObj = JSONObject()
             txCustomCategoryMap.forEach { (k, v) -> txCatObj.put(k.toString(), v) }
@@ -543,18 +635,31 @@ class ExpenseCustomMetaPreferences private constructor(
         refreshFlows()
     }
 
+    private fun lookupCustomCategoryDefaultUserInternal(customCategoryName: String): String? {
+        val clean = customCategoryName.trim()
+        if (clean.isBlank()) return null
+        val exactKey = "CUSTOM_$clean"
+        categoryDefaultUserMap[exactKey]?.takeIf { it.isNotBlank() }?.let { return it }
+        return categoryDefaultUserMap.entries
+            .firstOrNull { it.key.equals(exactKey, ignoreCase = true) }
+            ?.value
+            ?.takeIf { it.isNotBlank() }
+    }
+
     private fun refreshFlows() {
         val managed = mutableListOf<ManagedCategoryItem>()
         for (cat in ExpenseCategory.values()) {
             if (cat == ExpenseCategory.ETC) continue
             if (cat.name in deletedDefaultCategories) continue
             val label = renamedDefaultCategories[cat.name] ?: cat.displayName
+            val builtInDefaultUser = categoryDefaultUserMap["BUILTIN_${cat.name}"]?.takeIf { it.isNotBlank() }
             managed.add(
                 ManagedCategoryItem(
                     id = "BUILTIN_${cat.name}",
                     displayName = label,
                     baseCategory = cat,
-                    isBuiltIn = true
+                    isBuiltIn = true,
+                    defaultUserName = builtInDefaultUser
                 )
             )
         }
@@ -565,7 +670,8 @@ class ExpenseCustomMetaPreferences private constructor(
                         id = "CUSTOM_$customName",
                         displayName = customName,
                         baseCategory = ExpenseCategory.ETC,
-                        isBuiltIn = false
+                        isBuiltIn = false,
+                        defaultUserName = lookupCustomCategoryDefaultUserInternal(customName)
                     )
                 )
             }
@@ -573,12 +679,14 @@ class ExpenseCustomMetaPreferences private constructor(
         }
         // '기타'(ExpenseCategory.ETC) 항목은 항상 커스텀 카테고리들보다도 뒤인 제일 하단(마지막)에 배치
         val etcLabel = renamedDefaultCategories[ExpenseCategory.ETC.name] ?: ExpenseCategory.ETC.displayName
+        val etcDefaultUser = categoryDefaultUserMap["BUILTIN_${ExpenseCategory.ETC.name}"]?.takeIf { it.isNotBlank() }
         managed.add(
             ManagedCategoryItem(
                 id = "BUILTIN_${ExpenseCategory.ETC.name}",
                 displayName = etcLabel,
                 baseCategory = ExpenseCategory.ETC,
-                isBuiltIn = true
+                isBuiltIn = true,
+                defaultUserName = etcDefaultUser
             )
         )
         _managedCategoriesFlow.value = managed
@@ -968,9 +1076,27 @@ class ExpenseCustomMetaPreferences private constructor(
     // =========================================================================
 
     @Synchronized
-    fun addCustomCategory(categoryName: String): Boolean {
+    private fun ensureUserClassificationWithoutSave(name: String, preferredColorIndex: Int? = null): UserClassificationItem? {
+        val clean = name.trim()
+        if (clean.isBlank() || clean == EXPLICIT_NONE_USER_SENTINEL) return null
+        val existing = userClassificationList.firstOrNull { it.name.equals(clean, ignoreCase = true) }
+        if (existing != null) return existing
+
+        val usedColors = userClassificationList.map { it.colorIndex }.toSet()
+        val nextColor = preferredColorIndex
+            ?: (0 until BADGE_COLOR_COUNT).firstOrNull { it !in usedColors }
+            ?: (userClassificationList.size % BADGE_COLOR_COUNT)
+        val newItem = UserClassificationItem(clean, nextColor)
+        userClassificationList.add(newItem)
+        return newItem
+    }
+
+    @Synchronized
+    fun addCustomCategory(categoryName: String, defaultUserName: String? = null): Boolean {
         val clean = categoryName.trim()
         if (clean.isBlank()) return false
+        val cleanDefaultUser = defaultUserName?.trim()?.takeIf { it.isNotBlank() && it != EXPLICIT_NONE_USER_SENTINEL }
+
         // 만약 숨겨진 기본 카테고리 이름과 일치하면 복원
         val matchedBuiltIn = ExpenseCategory.values().firstOrNull {
             it.displayName.equals(clean, ignoreCase = true) ||
@@ -978,15 +1104,85 @@ class ExpenseCustomMetaPreferences private constructor(
         }
         if (matchedBuiltIn != null) {
             deletedDefaultCategories.remove(matchedBuiltIn.name)
+            if (cleanDefaultUser != null) {
+                ensureUserClassificationWithoutSave(cleanDefaultUser)
+                categoryDefaultUserMap["BUILTIN_${matchedBuiltIn.name}"] = cleanDefaultUser
+            }
             saveToPrefs()
             return true
         }
-        if (customCategoryList.any { it.equals(clean, ignoreCase = true) }) {
+        val existingCustom = customCategoryList.firstOrNull { it.equals(clean, ignoreCase = true) }
+        if (existingCustom != null) {
+            if (cleanDefaultUser != null) {
+                ensureUserClassificationWithoutSave(cleanDefaultUser)
+                categoryDefaultUserMap.entries.removeIf { it.key.equals("CUSTOM_$existingCustom", ignoreCase = true) }
+                categoryDefaultUserMap["CUSTOM_$existingCustom"] = cleanDefaultUser
+                saveToPrefs()
+                return true
+            }
             return false
         }
         customCategoryList.add(clean)
+        if (cleanDefaultUser != null) {
+            ensureUserClassificationWithoutSave(cleanDefaultUser)
+            categoryDefaultUserMap["CUSTOM_$clean"] = cleanDefaultUser
+        }
         saveToPrefs()
         return true
+    }
+
+    /**
+     * 카테고리 항목(기본 카테고리 또는 커스텀 카테고리)에 대한 기본 사용자를 지정하거나 해제(null/빈 문자열)합니다.
+     * 카테고리에 기본 사용자가 지정되어 있더라도 개별 내역이나 가맹점 규칙에서 다른 사용자(또는 미지정)로 자유롭게 변경할 수 있습니다.
+     */
+    @Synchronized
+    fun setCategoryDefaultUser(item: ManagedCategoryItem, defaultUserName: String?) {
+        setCategoryDefaultUserByCategory(
+            baseCategory = item.baseCategory,
+            customCategoryName = if (item.isBuiltIn) null else item.displayName,
+            defaultUserName = defaultUserName
+        )
+    }
+
+    @Synchronized
+    fun setCategoryDefaultUserByCategory(
+        baseCategory: ExpenseCategory,
+        customCategoryName: String? = null,
+        defaultUserName: String?
+    ) {
+        val cleanUser = defaultUserName?.trim()?.takeIf { it.isNotBlank() && it != EXPLICIT_NONE_USER_SENTINEL }
+        val cleanCustom = customCategoryName?.trim().orEmpty()
+        if (cleanCustom.isNotBlank()) {
+            val canonicalCustom = customCategoryList.firstOrNull { it.equals(cleanCustom, ignoreCase = true) } ?: cleanCustom
+            categoryDefaultUserMap.entries.removeIf { it.key.equals("CUSTOM_$canonicalCustom", ignoreCase = true) }
+            if (cleanUser != null) {
+                val matchedUc = ensureUserClassificationWithoutSave(cleanUser)
+                categoryDefaultUserMap["CUSTOM_$canonicalCustom"] = matchedUc?.name ?: cleanUser
+            }
+        } else {
+            val builtInKey = "BUILTIN_${baseCategory.name}"
+            if (cleanUser != null) {
+                val matchedUc = ensureUserClassificationWithoutSave(cleanUser)
+                categoryDefaultUserMap[builtInKey] = matchedUc?.name ?: cleanUser
+            } else {
+                categoryDefaultUserMap.remove(builtInKey)
+            }
+        }
+        saveToPrefs()
+    }
+
+    /**
+     * 주어진 카테고리(기본 카테고리 또는 커스텀 카테고리)에 설정된 기본 사용자명을 반환합니다.
+     */
+    fun resolveCategoryDefaultUser(
+        baseCategory: ExpenseCategory,
+        customCategoryName: String? = null
+    ): String? {
+        val cleanCustom = customCategoryName?.trim().orEmpty()
+        if (cleanCustom.isNotBlank()) {
+            return lookupCustomCategoryDefaultUserInternal(cleanCustom)
+        }
+        return categoryDefaultUserMap["BUILTIN_${baseCategory.name}"]?.takeIf { it.isNotBlank() }
     }
 
     @Synchronized
@@ -1000,6 +1196,11 @@ class ExpenseCustomMetaPreferences private constructor(
             val idx = customCategoryList.indexOfFirst { it.equals(oldName, ignoreCase = true) }
             if (idx >= 0) {
                 customCategoryList[idx] = cleanNew
+            }
+            val existingDefaultUser = lookupCustomCategoryDefaultUserInternal(oldName)
+            categoryDefaultUserMap.entries.removeIf { it.key.equals("CUSTOM_$oldName", ignoreCase = true) }
+            if (!existingDefaultUser.isNullOrBlank()) {
+                categoryDefaultUserMap["CUSTOM_$cleanNew"] = existingDefaultUser
             }
             for ((txId, catName) in txCustomCategoryMap.entries) {
                 if (catName.equals(oldName, ignoreCase = true)) {
@@ -1025,6 +1226,7 @@ class ExpenseCustomMetaPreferences private constructor(
         } else {
             val target = item.displayName
             customCategoryList.removeAll { it.equals(target, ignoreCase = true) }
+            categoryDefaultUserMap.entries.removeIf { it.key.equals("CUSTOM_$target", ignoreCase = true) }
             txCustomCategoryMap.entries.removeIf { it.value.equals(target, ignoreCase = true) }
             merchantCustomCategoryMap.entries.removeIf { it.value.equals(target, ignoreCase = true) }
         }
@@ -1036,6 +1238,7 @@ class ExpenseCustomMetaPreferences private constructor(
     fun restoreDefaultCategories() {
         deletedDefaultCategories.clear()
         renamedDefaultCategories.clear()
+        ensurePresetCategoryDefaultUsersInternal()
         saveToPrefs()
     }
 
@@ -1164,16 +1367,11 @@ class ExpenseCustomMetaPreferences private constructor(
     @Synchronized
     fun addOrGetUserClassification(name: String, preferredColorIndex: Int? = null): UserClassificationItem? {
         val clean = name.trim()
-        if (clean.isBlank()) return null
+        if (clean.isBlank() || clean == EXPLICIT_NONE_USER_SENTINEL) return null
         val existing = userClassificationList.firstOrNull { it.name.equals(clean, ignoreCase = true) }
         if (existing != null) return existing
 
-        val usedColors = userClassificationList.map { it.colorIndex }.toSet()
-        val nextColor = preferredColorIndex
-            ?: (0 until BADGE_COLOR_COUNT).firstOrNull { it !in usedColors }
-            ?: (userClassificationList.size % BADGE_COLOR_COUNT)
-        val newItem = UserClassificationItem(clean, nextColor)
-        userClassificationList.add(newItem)
+        val newItem = ensureUserClassificationWithoutSave(clean, preferredColorIndex) ?: return null
         saveToPrefs()
         return newItem
     }
@@ -1182,7 +1380,7 @@ class ExpenseCustomMetaPreferences private constructor(
     fun updateUserClassification(oldName: String, newName: String, newColorIndex: Int): Boolean {
         val cleanOld = oldName.trim()
         val cleanNew = newName.trim()
-        if (cleanOld.isBlank() || cleanNew.isBlank()) return false
+        if (cleanOld.isBlank() || cleanNew.isBlank() || cleanNew == EXPLICIT_NONE_USER_SENTINEL) return false
 
         val idx = userClassificationList.indexOfFirst { it.name.equals(cleanOld, ignoreCase = true) }
         if (idx < 0) return false
@@ -1199,6 +1397,11 @@ class ExpenseCustomMetaPreferences private constructor(
                 merchantUserClassMap[merKey] = cleanNew
             }
         }
+        for ((catKey, uName) in categoryDefaultUserMap.entries) {
+            if (uName.equals(cleanOld, ignoreCase = true)) {
+                categoryDefaultUserMap[catKey] = cleanNew
+            }
+        }
         saveToPrefs()
         return true
     }
@@ -1206,10 +1409,11 @@ class ExpenseCustomMetaPreferences private constructor(
     @Synchronized
     fun deleteUserClassification(name: String): Boolean {
         val clean = name.trim()
-        if (clean.isBlank()) return false
+        if (clean.isBlank() || clean == EXPLICIT_NONE_USER_SENTINEL) return false
         val removed = userClassificationList.removeAll { it.name.equals(clean, ignoreCase = true) }
         txUserClassMap.entries.removeIf { it.value.equals(clean, ignoreCase = true) }
         merchantUserClassMap.entries.removeIf { it.value.equals(clean, ignoreCase = true) }
+        categoryDefaultUserMap.entries.removeIf { it.value.equals(clean, ignoreCase = true) }
         if (removed) saveToPrefs()
         return removed
     }
@@ -1221,11 +1425,12 @@ class ExpenseCustomMetaPreferences private constructor(
         applyToMerchantRule: Boolean,
         isDeposit: Boolean = false,
         vararg extraMerchantNames: String?,
-        targetTxIds: Collection<Long> = emptyList()
+        targetTxIds: Collection<Long> = emptyList(),
+        explicitlyUnassigned: Boolean = false
     ) {
         val cleanName = userClassificationName?.trim().orEmpty()
-        if (cleanName.isNotBlank()) {
-            addOrGetUserClassification(cleanName)
+        if (cleanName.isNotBlank() && cleanName != EXPLICIT_NONE_USER_SENTINEL) {
+            ensureUserClassificationWithoutSave(cleanName)
             if (txId > 0L) {
                 txUserClassMap[txId] = cleanName
             }
@@ -1240,6 +1445,24 @@ class ExpenseCustomMetaPreferences private constructor(
                     merchantName,
                     isDeposit,
                     cleanName,
+                    *extraMerchantNames
+                )
+            }
+        } else if (explicitlyUnassigned || cleanName == EXPLICIT_NONE_USER_SENTINEL) {
+            if (txId > 0L) {
+                txUserClassMap[txId] = EXPLICIT_NONE_USER_SENTINEL
+            }
+            for (targetId in targetTxIds) {
+                if (targetId > 0L) {
+                    txUserClassMap[targetId] = EXPLICIT_NONE_USER_SENTINEL
+                }
+            }
+            if (applyToMerchantRule && merchantName.isNotBlank()) {
+                putDirectionalRule(
+                    merchantUserClassMap,
+                    merchantName,
+                    isDeposit,
+                    EXPLICIT_NONE_USER_SENTINEL,
                     *extraMerchantNames
                 )
             }
@@ -1264,8 +1487,11 @@ class ExpenseCustomMetaPreferences private constructor(
         saveToPrefs()
     }
 
-    fun resolveUserClassification(tx: Transaction): UserClassificationItem? {
-        val assignedName = if (isOneTimeEdited(tx)) {
+    /**
+     * 카테고리 기본값을 제외하고 개별 거래(1회성) 또는 가맹점 영구 규칙으로 명시 지정된 사용자 분류가 존재하는지 반환합니다.
+     */
+    fun hasExplicitUserClassificationRule(tx: Transaction): Boolean {
+        val explicitRaw = if (isOneTimeEdited(tx)) {
             if (tx.id > 0L) txUserClassMap[tx.id] else null
         } else {
             lookupDirectionalRule(
@@ -1273,7 +1499,46 @@ class ExpenseCustomMetaPreferences private constructor(
                 tx.merchantName,
                 tx.isDepositTransaction()
             ) ?: (if (tx.id > 0L) txUserClassMap[tx.id] else null)
-        } ?: return null
+        }
+        return !explicitRaw.isNullOrBlank()
+    }
+
+    /**
+     * 거래 내역의 최종 사용자 분류를 해석합니다.
+     * 우선순위:
+     * 1) 1회성 저장 또는 가맹점 영구 규칙으로 명시 지정된 사용자(또는 명시적 '미지정' 오버라이드)
+     * 2) 해당 거래가 속한 카테고리(커스텀 카테고리 우선, 없으면 기본 카테고리)에 지정된 기본 사용자
+     */
+    fun resolveUserClassification(tx: Transaction): UserClassificationItem? {
+        val explicitAssigned = if (isOneTimeEdited(tx)) {
+            if (tx.id > 0L) txUserClassMap[tx.id] else null
+        } else {
+            lookupDirectionalRule(
+                merchantUserClassMap,
+                tx.merchantName,
+                tx.isDepositTransaction()
+            ) ?: (if (tx.id > 0L) txUserClassMap[tx.id] else null)
+        }
+
+        if (explicitAssigned == EXPLICIT_NONE_USER_SENTINEL) {
+            return null
+        }
+
+        val customCatLabel = resolveCustomCategoryLabel(tx)
+        val effectiveBaseCat = if (isOneTimeEdited(tx)) {
+            tx.category
+        } else {
+            val isDep = tx.isDepositTransaction()
+            resolveMerchantBaseCategory(tx.merchantName, isDep)
+                ?: (if (isDep && tx.category == ExpenseCategory.TRANSFER) ExpenseCategory.INCOME else tx.category)
+        }
+
+        val assignedName = explicitAssigned?.takeIf { it.isNotBlank() }
+            ?: resolveCategoryDefaultUser(
+                baseCategory = effectiveBaseCat,
+                customCategoryName = customCatLabel
+            )
+            ?: return null
 
         return userClassificationList.firstOrNull { it.name.equals(assignedName, ignoreCase = true) }
             ?: UserClassificationItem(assignedName, (assignedName.hashCode().and(0x7fffffff)) % BADGE_COLOR_COUNT)
@@ -1495,7 +1760,8 @@ class ExpenseCustomMetaPreferences private constructor(
             val baseCatRaw = lookupFirstIn(merchantBaseCategoryMap)
             val baseCat = baseCatRaw?.let { runCatching { ExpenseCategory.valueOf(it) }.getOrNull() }
             val customCat = lookupFirstIn(merchantCustomCategoryMap)
-            val userClass = lookupFirstIn(merchantUserClassMap)
+            val rawUserClass = lookupFirstIn(merchantUserClassMap)
+            val userClass = if (rawUserClass == EXPLICIT_NONE_USER_SENTINEL) "미지정" else rawUserClass
             val cardDesig = lookupFirstIn(merchantCardDesignationMap)
             val fixedPrefixMatched = candidateLookupNames.firstNotNullOfOrNull { cand ->
                 resolveFixedExpenseMatchPrefix(cand, isDep)
@@ -1703,6 +1969,21 @@ class ExpenseCustomMetaPreferences private constructor(
         private const val PREFS_NAME = "expense_custom_meta_prefs"
         private const val KEY_META_JSON = "expense_custom_meta_json"
         const val BADGE_COLOR_COUNT = 10
+        const val EXPLICIT_NONE_USER_SENTINEL = "__NONE__"
+        const val PRESET_DEFAULT_USER_NAME = "정선우"
+
+        val PRESET_BUILTIN_DEFAULT_USER_CATEGORIES = listOf(
+            ExpenseCategory.GOLF_FIELD,
+            ExpenseCategory.GOLF_SCREEN,
+            ExpenseCategory.INCOME,
+            ExpenseCategory.TRANSFER
+        )
+
+        val PRESET_CUSTOM_DEFAULT_USER_CATEGORIES = listOf(
+            "담배",
+            "보험",
+            "통신"
+        )
 
         private val TRAILING_VAR_SUFFIX_REGEX = Regex("""[\s\-_()/]*\d[\d\s\-_()/]*$""")
 

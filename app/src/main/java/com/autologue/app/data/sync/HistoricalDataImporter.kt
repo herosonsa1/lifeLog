@@ -9,22 +9,26 @@ import android.provider.MediaStore
 import android.provider.Telephony
 import androidx.core.content.ContextCompat
 import com.autologue.app.data.parser.SmsParser
+import com.autologue.app.data.preferences.CachedPhotoLocation
+import com.autologue.app.data.preferences.ExcludedPhotoPreferences
+import com.autologue.app.data.preferences.SyncCheckpointPreferences
 import com.autologue.app.domain.model.DiaryEntry
-import com.autologue.app.domain.model.GolfRound
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.VehicleLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.LocalDate
-import com.autologue.app.data.preferences.CachedPhotoLocation
-import com.autologue.app.data.preferences.ExcludedPhotoPreferences
-import com.autologue.app.data.preferences.SyncCheckpointPreferences
 import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -56,7 +60,7 @@ class HistoricalDataImporter @Inject constructor(
     /**
      * 0.001ms 초고속 금융/결제/주유 키워드 사전 필터:
      * 개인 일상 대화 문자(금융 키워드가 전혀 없는 일반 문자)에 대해 무거운 정규식 파서(SmsParser) 호출을 즉시 건너뛰어
-     * 수만 건의 전체 기간 문자 스캔 속도를 10배 이상 단축합니다.
+     * 대량 문자 스캔 속도를 극대화합니다.
      */
     private fun hasFinancialKeywordFast(text: String): Boolean {
         if (text.length < 4) return false
@@ -82,23 +86,26 @@ class HistoricalDataImporter @Inject constructor(
 
     suspend fun scanHistoricalSms(
         context: Context,
-        daysBack: Int? = 365,
+        daysBack: Int? = 90,
         limit: Int = 5000,
-        sinceTimestampMillis: Long? = null
+        sinceTimestampMillis: Long? = null,
+        onProgress: (suspend (scannedCount: Int, stageHint: String) -> Unit)? = null
     ): List<Transaction> {
         return scanHistoricalSmsDetailed(
             context = context,
             daysBack = daysBack,
             limit = limit,
-            sinceTimestampMillis = sinceTimestampMillis
+            sinceTimestampMillis = sinceTimestampMillis,
+            onProgress = onProgress
         ).transactions
     }
 
     suspend fun scanHistoricalSmsDetailed(
         context: Context,
-        daysBack: Int? = 365,
+        daysBack: Int? = 90,
         limit: Int = 5000,
-        sinceTimestampMillis: Long? = null
+        sinceTimestampMillis: Long? = null,
+        onProgress: (suspend (scannedCount: Int, stageHint: String) -> Unit)? = null
     ): SmsScanResult = withContext(Dispatchers.IO) {
         // [L-01] READ_SMS 권한 사전 체크 — SecurityException 원천 방지
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
@@ -108,9 +115,10 @@ class HistoricalDataImporter @Inject constructor(
 
         val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
         val effectiveLimit = when {
-            isIncremental -> limit
-            daysBack == null -> maxOf(limit, 25000) // 전체 기간 스캔 시 과거 수년치 문자 전수 포함
-            else -> maxOf(limit, 10000)
+            isIncremental -> limit.coerceAtMost(1500)
+            daysBack != null && daysBack <= 30 -> maxOf(limit, 1500)
+            daysBack != null -> maxOf(limit, 5000)
+            else -> maxOf(limit, 15000)
         }
 
         val minDateMillis: Long? = when {
@@ -121,14 +129,28 @@ class HistoricalDataImporter @Inject constructor(
             else -> null
         }
 
+        val progressCounter = AtomicInteger(0)
+        val reportSubProgress: suspend (Int, String) -> Unit = { delta, hint ->
+            val current = progressCounter.addAndGet(delta)
+            onProgress?.invoke(current, hint)
+        }
+
         val allTxs = mutableListOf<Transaction>()
         var totalScanned = 0
 
-        // 1~3. 단문 SMS + 장문 MMS/LMS + 삼성 RCS/통합 대화를 코루틴 병렬(async)로 동시에 스캔하여 대기 시간 최소화
+        // 1~3. 단문 SMS + 장문 MMS/LMS + 순수 RCS 채널을 코루틴 병렬(async)로 스캔
         val (smsResult, mmsResult, rcsResult) = coroutineScope {
-            val smsDeferred = async { scanSmsMessages(context, minDateMillis, effectiveLimit, isIncremental) }
-            val mmsDeferred = async { scanMmsMessages(context, minDateMillis, effectiveLimit, isIncremental) }
-            val rcsDeferred = async { scanRcsAndUnifiedMessages(context, minDateMillis, effectiveLimit, isIncremental) }
+            val smsDeferred = async {
+                scanSmsMessages(context, minDateMillis, effectiveLimit, isIncremental, reportSubProgress)
+            }
+            val mmsDeferred = async {
+                scanMmsMessages(context, minDateMillis, effectiveLimit, isIncremental, reportSubProgress)
+            }
+            val rcsDeferred = async {
+                withTimeoutOrNull(2500L) {
+                    scanRcsMessages(context, minDateMillis, minOf(effectiveLimit, 400), isIncremental)
+                } ?: Pair(emptyList(), 0)
+            }
             Triple(smsDeferred.await(), mmsDeferred.await(), rcsDeferred.await())
         }
 
@@ -141,9 +163,8 @@ class HistoricalDataImporter @Inject constructor(
         allTxs.addAll(rcsTxs)
         totalScanned += (smsCount + mmsCount + rcsCount)
 
-        // 4. 삼성 One UI 보안 정책으로 RCS DB(content://im/chat) 직접 쿼리가 차단된 단말 환경에서
-        //    검증된 RCS 기업 메시징(NH카드6*9* 등) 내역을 복사-붙여넣기 없이 100% 전자동 복원
-        //    단, 마지막 데이터 수집·분석 완료 시점 이후의 증분 스캔에서는 이미 복원된 과거 내역을 중복 생성하지 않음
+        // 4. 삼성 One UI 보안 정책으로 RCS DB 직접 쿼리가 차단된 단말 환경에서
+        //    검증된 RCS 기업 메시징(NH카드6*9* 등) 내역을 자동 복원 (증분 스캔 시 중복 생성 방지)
         if (!isIncremental && allTxs.none { it.originalText.contains("NH카드6*9*") }) {
             val recoveredRcs = recoverIsolatedRcsTransactions().filter { tx ->
                 if (minDateMillis == null || minDateMillis <= 0L) true
@@ -165,7 +186,7 @@ class HistoricalDataImporter @Inject constructor(
 
         android.util.Log.d(
             "HistoricalDataImporter",
-            "초고속 병렬 문자 스캔 완료(incremental=$isIncremental, minDateMillis=$minDateMillis): 총 ${totalScanned}건 스캔(SMS: $smsCount, MMS: $mmsCount, RCS/통합: $rcsCount), 거래 ${distinctTxs.size}건 파싱"
+            "초고속 병렬 문자 스캔 완료(incremental=$isIncremental, minDateMillis=$minDateMillis): 총 ${totalScanned}건 스캔(SMS: $smsCount, MMS: $mmsCount, RCS: $rcsCount), 거래 ${distinctTxs.size}건 파싱"
         )
 
         SmsScanResult(
@@ -183,11 +204,12 @@ class HistoricalDataImporter @Inject constructor(
         val dateMillis: Long
     )
 
-    private fun scanSmsMessages(
+    private suspend fun scanSmsMessages(
         context: Context,
         minDateMillis: Long?,
         limit: Int,
-        isIncremental: Boolean = false
+        isIncremental: Boolean = false,
+        onProgress: (suspend (delta: Int, hint: String) -> Unit)? = null
     ): Pair<List<Transaction>, Int> {
         val result = mutableListOf<Transaction>()
         var count = 0
@@ -205,17 +227,40 @@ class HistoricalDataImporter @Inject constructor(
                 Uri.parse("content://sms/inbox")
             )
 
+            val hasDateFilter = minDateMillis != null && minDateMillis > 0L
+            val dateSelection = if (hasDateFilter) {
+                val op = if (isIncremental) ">" else ">="
+                "${Telephony.Sms.DATE} $op ?"
+            } else null
+            val dateSelectionArgs = if (hasDateFilter) arrayOf(minDateMillis!!.toString()) else null
+
             val rawList = mutableListOf<RawSmsItem>()
             for (uri in urisToTry) {
+                currentCoroutineContext().ensureActive()
                 var scannedRows = 0
+                var cursorRows = 0
+                var olderStreak = 0
+                var usedSortedOrder = true
                 val candidateList = mutableListOf<RawSmsItem>()
+
                 val cursor = runCatching {
+                    context.contentResolver.query(
+                        uri,
+                        standardProjection,
+                        dateSelection,
+                        dateSelectionArgs,
+                        "${Telephony.Sms.DATE} DESC"
+                    )
+                }.getOrNull() ?: runCatching {
                     context.contentResolver.query(uri, standardProjection, null, null, "${Telephony.Sms.DATE} DESC")
-                }.getOrNull() ?: runCatching {
-                    context.contentResolver.query(uri, standardProjection, null, null, null)
-                }.getOrNull() ?: runCatching {
-                    context.contentResolver.query(uri, null, null, null, null)
-                }.getOrNull()
+                }.getOrNull() ?: run {
+                    usedSortedOrder = false
+                    runCatching {
+                        context.contentResolver.query(uri, standardProjection, dateSelection, dateSelectionArgs, null)
+                    }.getOrNull() ?: runCatching {
+                        context.contentResolver.query(uri, standardProjection, null, null, null)
+                    }.getOrNull()
+                }
 
                 cursor?.use { c ->
                     val addressCol = c.getColumnIndex(Telephony.Sms.ADDRESS)
@@ -223,6 +268,12 @@ class HistoricalDataImporter @Inject constructor(
                     val dateCol = c.getColumnIndex(Telephony.Sms.DATE)
 
                     while (c.moveToNext() && candidateList.size < limit) {
+                        cursorRows++
+                        if (cursorRows % 150 == 0) {
+                            currentCoroutineContext().ensureActive()
+                            onProgress?.invoke(150, "단문 결제 문자 고속 스캔 중")
+                        }
+
                         val rawDate = if (dateCol >= 0) runCatching { c.getLong(dateCol) }.getOrDefault(System.currentTimeMillis()) else System.currentTimeMillis()
                         val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
 
@@ -231,13 +282,20 @@ class HistoricalDataImporter @Inject constructor(
                             isIncremental -> dateMillis > minDateMillis
                             else -> dateMillis >= minDateMillis
                         }
-                        if (!passesDate) continue
+                        if (!passesDate) {
+                            olderStreak++
+                            if (usedSortedOrder && olderStreak >= 40) {
+                                // DATE DESC 정렬 상태에서 기준 시각 이전 문자가 연속 출현하면 즉시 조기 종료
+                                break
+                            }
+                            continue
+                        }
+                        olderStreak = 0
 
                         val body = if (bodyCol >= 0) runCatching { c.getString(bodyCol) }.getOrNull() ?: "" else ""
                         if (body.isBlank()) continue
                         scannedRows++
 
-                        // 0.001ms 초고속 금융 키워드 사전 필터: 비금융 일반 문자는 정규식 파싱 대상에서 즉시 제외
                         if (!hasFinancialKeywordFast(body)) continue
 
                         val address = if (addressCol >= 0) runCatching { c.getString(addressCol) }.getOrNull() else null
@@ -245,16 +303,20 @@ class HistoricalDataImporter @Inject constructor(
                     }
                 }
 
-                if (scannedRows > 0 || candidateList.isNotEmpty()) {
+                if (cursorRows % 150 != 0 && cursorRows > 0) {
+                    onProgress?.invoke(cursorRows % 150, "단문 결제 문자 확인 완료")
+                }
+
+                if (scannedRows > 0 || candidateList.isNotEmpty() || hasDateFilter) {
                     count = maxOf(scannedRows, candidateList.size)
                     rawList.addAll(candidateList)
                     break
                 }
             }
 
-            // 시간순 정렬 후 금융 후보 문자만 정밀 파싱
             val sortedList = rawList.sortedBy { it.dateMillis }
-            for (item in sortedList) {
+            for ((idx, item) in sortedList.withIndex()) {
+                if (idx % 100 == 0) currentCoroutineContext().ensureActive()
                 val fallbackTime = Instant.ofEpochMilli(item.dateMillis)
                     .atZone(ZoneId.systemDefault())
                     .toLocalDateTime()
@@ -266,6 +328,7 @@ class HistoricalDataImporter @Inject constructor(
                 }
             }
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             android.util.Log.e("HistoricalDataImporter", "SMS 스캔 중 예외 안전 포획", t)
         }
         return Pair(result, count)
@@ -277,11 +340,12 @@ class HistoricalDataImporter @Inject constructor(
         val inlineSubject: String? = null
     )
 
-    private fun scanMmsMessages(
+    private suspend fun scanMmsMessages(
         context: Context,
         minDateMillis: Long?,
         limit: Int,
-        isIncremental: Boolean = false
+        isIncremental: Boolean = false,
+        onProgress: (suspend (delta: Int, hint: String) -> Unit)? = null
     ): Pair<List<Transaction>, Int> {
         val result = mutableListOf<Transaction>()
         var count = 0
@@ -292,18 +356,53 @@ class HistoricalDataImporter @Inject constructor(
                 Uri.parse("content://mms/inbox")
             )
 
+            val hasDateFilter = minDateMillis != null && minDateMillis > 0L
+            val minSec = if (hasDateFilter) (minDateMillis!! / 1000L).coerceAtLeast(1L) else 0L
+            val mmsSelection = if (hasDateFilter) {
+                val op = if (isIncremental) ">" else ">="
+                "((${Telephony.Mms.DATE} $op ? AND ${Telephony.Mms.DATE} < 100000000000) OR (${Telephony.Mms.DATE} $op ?))"
+            } else null
+            val mmsSelectionArgs = if (hasDateFilter) {
+                arrayOf(minSec.toString(), minDateMillis!!.toString())
+            } else null
+
             val rawList = mutableListOf<RawMmsItem>()
             for (uri in urisToTry) {
+                currentCoroutineContext().ensureActive()
+                var usedSortedOrder = true
+                var olderStreak = 0
                 val candidateList = mutableListOf<RawMmsItem>()
+
                 val cursor = runCatching {
-                    context.contentResolver.query(uri, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE, Telephony.Mms.SUBJECT), null, null, "${Telephony.Mms.DATE} DESC")
+                    context.contentResolver.query(
+                        uri,
+                        arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE, Telephony.Mms.SUBJECT),
+                        mmsSelection,
+                        mmsSelectionArgs,
+                        "${Telephony.Mms.DATE} DESC"
+                    )
                 }.getOrNull() ?: runCatching {
-                    context.contentResolver.query(uri, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE, Telephony.Mms.SUBJECT), null, null, null)
-                }.getOrNull() ?: runCatching {
-                    context.contentResolver.query(uri, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE), null, null, null)
-                }.getOrNull() ?: runCatching {
-                    context.contentResolver.query(uri, null, null, null, null)
-                }.getOrNull()
+                    context.contentResolver.query(
+                        uri,
+                        arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE, Telephony.Mms.SUBJECT),
+                        null,
+                        null,
+                        "${Telephony.Mms.DATE} DESC"
+                    )
+                }.getOrNull() ?: run {
+                    usedSortedOrder = false
+                    runCatching {
+                        context.contentResolver.query(
+                            uri,
+                            arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE),
+                            mmsSelection,
+                            mmsSelectionArgs,
+                            null
+                        )
+                    }.getOrNull() ?: runCatching {
+                        context.contentResolver.query(uri, arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE), null, null, null)
+                    }.getOrNull()
+                }
 
                 cursor?.use { c ->
                     val idCol = c.getColumnIndex(Telephony.Mms._ID)
@@ -315,7 +414,6 @@ class HistoricalDataImporter @Inject constructor(
                         val rawDate = if (dateCol >= 0) runCatching { c.getLong(dateCol) }.getOrDefault(System.currentTimeMillis() / 1000L) else (System.currentTimeMillis() / 1000L)
                         val subject = if (subCol >= 0) runCatching { c.getString(subCol) }.getOrNull() else null
 
-                        // MMS의 date 컬럼은 일반적으로 10자리(초) 단위 -> 13자리 밀리초 통일
                         val dateMillis = if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
 
                         val passesDate = when {
@@ -323,39 +421,45 @@ class HistoricalDataImporter @Inject constructor(
                             isIncremental -> dateMillis > minDateMillis
                             else -> dateMillis >= minDateMillis
                         }
-                        if (passesDate && !mmsId.isNullOrBlank()) {
+                        if (!passesDate) {
+                            olderStreak++
+                            if (usedSortedOrder && olderStreak >= 30) {
+                                break
+                            }
+                            continue
+                        }
+                        olderStreak = 0
+
+                        if (!mmsId.isNullOrBlank()) {
                             candidateList.add(RawMmsItem(mmsId, dateMillis, subject))
                         }
                     }
                 }
 
-                if (candidateList.isNotEmpty()) {
+                if (candidateList.isNotEmpty() || hasDateFilter) {
                     rawList.addAll(candidateList)
                     break
                 }
             }
 
-            // 증분 스캔 시 신규 MMS 헤더가 0건이면 전체 mms/part 테이블 스캔을 즉시 생략하여 0ms 종료
-            if (isIncremental && rawList.isEmpty()) {
+            // 대상 기간 내 MMS 헤더가 0건이면 content://mms/part 조회를 완전히 생략하여 즉시 종료 (4% 멈춤 원천 차단)
+            if (rawList.isEmpty()) {
                 return Pair(emptyList(), 0)
             }
 
-            // [초고속 최적화] N+1 개별 ContentResolver IPC 쿼리 대신 단일 벌크 쿼리로 전체 MMS 본문 맵을 먼저 구성하여
-            // 수백~수천 건의 MMS 스캔 시간을 20초 -> 0.2초 이하로 단축합니다.
-            val bulkPartMap = if (rawList.isNotEmpty() || !isIncremental) {
-                preloadBulkMmsParts(context)
-            } else {
-                emptyMap()
-            }
+            // 전체 mms/part 테이블 풀스캔 대신, 실제로 수집된 mmsId 목록만 80건 단위 청크(WHERE mid IN (...))로 조회
+            val targetedPartMap = loadMmsPartsForIds(
+                context = context,
+                mmsIds = rawList.map { it.mmsId },
+                onProgress = onProgress
+            )
 
             count = rawList.size
             val sortedList = rawList.sortedBy { it.dateMillis }
-            for (item in sortedList) {
-                // 1순위: 이미 메모리에 로드된 bulkPartMap에서 0ms 조회 (개별 IPC 쿼리 생략)
-                var body = bulkPartMap[item.mmsId] ?: ""
-                if (body.isBlank()) {
-                    body = getMmsBody(context, item.mmsId)
-                }
+            for ((idx, item) in sortedList.withIndex()) {
+                if (idx % 50 == 0) currentCoroutineContext().ensureActive()
+
+                var body = targetedPartMap[item.mmsId] ?: ""
                 if (body.isBlank() && !item.inlineSubject.isNullOrBlank()) {
                     val cleanSub = item.inlineSubject.trim()
                     if (cleanSub !in listOf("제목", "제목없음", "제목 없음", "No subject", "no subject")) {
@@ -363,7 +467,7 @@ class HistoricalDataImporter @Inject constructor(
                     }
                 }
 
-                // 금융 키워드가 없는 일반 사진/안부 MMS는 발신자(addr) IPC 쿼리와 정규식 파싱을 모두 생략!
+                // 금융 키워드가 없는 일반 사진/안부 MMS는 발신자(addr) IPC 쿼리와 정규식 파싱을 모두 생략
                 if (!hasFinancialKeywordFast(body)) continue
 
                 val address = getMmsSender(context, item.mmsId)
@@ -377,96 +481,105 @@ class HistoricalDataImporter @Inject constructor(
                     result.add(parsed)
                 }
             }
-
-            // 만약 최초 전체 스캔에서 content://mms 헤더가 비어있는데 bulkPartMap에 카드 승인 본문이 존재하는 경우 추가 파싱
-            if (!isIncremental && result.isEmpty() && bulkPartMap.isNotEmpty()) {
-                for ((_, partText) in bulkPartMap) {
-                    if (hasFinancialKeywordFast(partText)) {
-                        val parsed = SmsParser.parse(null, partText)
-                        if (parsed != null) {
-                            result.add(parsed)
-                        }
-                    }
-                }
-            }
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             android.util.Log.e("HistoricalDataImporter", "MMS/LMS 스캔 중 예외 안전 포획", t)
         }
         return Pair(result, count)
     }
 
-    private fun preloadBulkMmsParts(context: Context): Map<String, String> {
+    /**
+     * 수집된 대상 MMS ID 집합에 대해서만 청크 단위 `WHERE mid IN (?, ...)` 쿼리를 수행하여
+     * 단말 전체 `content://mms/part` 풀스캔 및 수천 회 동기 InputStream 오픈으로 인한 4% 무한 대기 병목을 제거합니다.
+     */
+    private suspend fun loadMmsPartsForIds(
+        context: Context,
+        mmsIds: List<String>,
+        onProgress: (suspend (delta: Int, hint: String) -> Unit)? = null
+    ): Map<String, String> {
+        val distinctIds = mmsIds.filter { it.isNotBlank() }.distinct()
+        if (distinctIds.isEmpty()) return emptyMap()
+
         val map = mutableMapOf<String, StringBuilder>()
-        try {
-            val partUri = Uri.parse("content://mms/part")
+        val partUri = Uri.parse("content://mms/part")
+        var streamReadCount = 0
+        val maxStreamReads = 120
+
+        for (chunk in distinctIds.chunked(80)) {
+            currentCoroutineContext().ensureActive()
+            val placeholders = chunk.joinToString(",") { "?" }
+            val selection = "mid IN ($placeholders)"
+            val selectionArgs = chunk.toTypedArray()
+
             val cursor = runCatching {
-                context.contentResolver.query(partUri, arrayOf("_id", "mid", "ct", "text"), null, null, null)
-            }.getOrNull() ?: runCatching {
-                context.contentResolver.query(partUri, null, null, null, null)
+                context.contentResolver.query(
+                    partUri,
+                    arrayOf("_id", "mid", "ct", "text"),
+                    selection,
+                    selectionArgs,
+                    null
+                )
             }.getOrNull()
 
-            cursor?.use { c ->
-                val midCol = c.getColumnIndex("mid")
-                val ctCol = c.getColumnIndex("ct")
-                val textCol = c.getColumnIndex("text")
-                val idCol = c.getColumnIndex("_id")
+            if (cursor != null) {
+                cursor.use { c ->
+                    val midCol = c.getColumnIndex("mid")
+                    val ctCol = c.getColumnIndex("ct")
+                    val textCol = c.getColumnIndex("text")
+                    val idCol = c.getColumnIndex("_id")
 
-                while (c.moveToNext()) {
-                    val mid = if (midCol >= 0) runCatching { c.getString(midCol) }.getOrNull() else null
-                    if (mid.isNullOrBlank()) continue
-                    val ct = if (ctCol >= 0) runCatching { c.getString(ctCol) }.getOrNull() ?: "" else ""
-                    if (ct.contains("smil", ignoreCase = true) || ct.startsWith("image/", ignoreCase = true)) continue
+                    while (c.moveToNext()) {
+                        val mid = if (midCol >= 0) runCatching { c.getString(midCol) }.getOrNull() else null
+                        if (mid.isNullOrBlank()) continue
+                        val ct = if (ctCol >= 0) runCatching { c.getString(ctCol) }.getOrNull() ?: "" else ""
+                        if (ct.contains("smil", ignoreCase = true) ||
+                            ct.startsWith("image/", ignoreCase = true) ||
+                            ct.startsWith("video/", ignoreCase = true) ||
+                            ct.startsWith("audio/", ignoreCase = true)
+                        ) {
+                            continue
+                        }
 
-                    var text = if (textCol >= 0) runCatching { c.getString(textCol) }.getOrNull() else null
-                    if (text.isNullOrBlank() && idCol >= 0 && ("text/plain".equals(ct, ignoreCase = true) || ct.startsWith("text/", ignoreCase = true))) {
-                        val partId = runCatching { c.getString(idCol) }.getOrNull()
-                        if (!partId.isNullOrBlank()) {
-                            text = readMmsPartData(context, partId)
+                        var text = if (textCol >= 0) runCatching { c.getString(textCol) }.getOrNull() else null
+                        if (text.isNullOrBlank() &&
+                            idCol >= 0 &&
+                            streamReadCount < maxStreamReads &&
+                            ("text/plain".equals(ct, ignoreCase = true) || ct.startsWith("text/", ignoreCase = true))
+                        ) {
+                            val partId = runCatching { c.getString(idCol) }.getOrNull()
+                            if (!partId.isNullOrBlank()) {
+                                streamReadCount++
+                                text = readMmsPartDataBounded(context, partId)
+                            }
+                        }
+                        if (!text.isNullOrBlank()) {
+                            map.getOrPut(mid) { StringBuilder() }.append(text).append("\n")
                         }
                     }
-                    if (!text.isNullOrBlank()) {
-                        map.getOrPut(mid) { StringBuilder() }.append(text).append("\n")
+                }
+            } else {
+                // 일부 커스텀 ROM에서 mid IN (...) 쿼리가 거부될 경우에만 소량 개별 폴백 수행
+                for (mmsId in chunk.take(30)) {
+                    currentCoroutineContext().ensureActive()
+                    val body = getMmsBody(context, mmsId)
+                    if (body.isNotBlank()) {
+                        map.getOrPut(mmsId) { StringBuilder() }.append(body)
                     }
                 }
             }
-        } catch (_: Throwable) {
+            onProgress?.invoke(chunk.size, "장문(LMS/MMS) 결제 문자 확인 중")
         }
+
         return map.mapValues { it.value.toString().trim() }
     }
 
-    /**
-     * [핵심 수정] 삼성 One UI (Android 12~15)에서 MmsProvider의 `_data` 파일시스템 경로 컬럼을 프로젝션에 포함하면
-     * SecurityException / IllegalArgumentException이 발생하여 MMS/LMS 본문이 빈 문자열("")로 유실되는 결함을 해결합니다.
-     */
     private fun getMmsBody(context: Context, mmsId: String): String {
         val sb = StringBuilder()
         try {
-            val partUris = listOf(
-                Pair(Uri.parse("content://mms/$mmsId/part"), Pair<String?, Array<String>?>(null, null)),
-                Pair(Uri.parse("content://mms/part"), Pair<String?, Array<String>?>("mid = ?", arrayOf(mmsId)))
-            )
-
-            var partCursor: android.database.Cursor? = null
-            for ((uri, querySpec) in partUris) {
-                partCursor = runCatching {
-                    context.contentResolver.query(
-                        uri,
-                        arrayOf("_id", "ct", "text"),
-                        querySpec.first,
-                        querySpec.second,
-                        null
-                    )
-                }.getOrNull() ?: runCatching {
-                    context.contentResolver.query(
-                        uri,
-                        null,
-                        querySpec.first,
-                        querySpec.second,
-                        null
-                    )
-                }.getOrNull()
-                if (partCursor != null) break
-            }
+            val partUri = Uri.parse("content://mms/$mmsId/part")
+            val partCursor = runCatching {
+                context.contentResolver.query(partUri, arrayOf("_id", "ct", "text"), null, null, null)
+            }.getOrNull()
 
             partCursor?.use { c ->
                 val ctCol = c.getColumnIndex("ct")
@@ -486,7 +599,7 @@ class HistoricalDataImporter @Inject constructor(
                         } else if (idCol >= 0) {
                             val partId = runCatching { c.getString(idCol) }.getOrNull()
                             if (!partId.isNullOrBlank()) {
-                                val dataText = readMmsPartData(context, partId)
+                                val dataText = readMmsPartDataBounded(context, partId)
                                 if (dataText.isNotBlank()) {
                                     sb.append(dataText)
                                 }
@@ -501,11 +614,25 @@ class HistoricalDataImporter @Inject constructor(
         return sb.toString().trim()
     }
 
-    private fun readMmsPartData(context: Context, partId: String): String {
+    /**
+     * 최대 8KB까지만 안전하게 읽어 대용량 멀티미디어 파트 오인 스트림 블로킹을 원천 방지합니다.
+     */
+    private fun readMmsPartDataBounded(context: Context, partId: String, maxBytes: Int = 8192): String {
         val uri = Uri.parse("content://mms/part/$partId")
         return runCatching {
             context.contentResolver.openInputStream(uri)?.use { stream ->
-                val bytes = stream.readBytes()
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(2048)
+                var totalRead = 0
+                while (totalRead < maxBytes) {
+                    val toRead = minOf(buffer.size, maxBytes - totalRead)
+                    val read = stream.read(buffer, 0, toRead)
+                    if (read <= 0) break
+                    out.write(buffer, 0, read)
+                    totalRead += read
+                }
+                val bytes = out.toByteArray()
+                if (bytes.isEmpty()) return@use ""
                 val utf8 = String(bytes, java.nio.charset.StandardCharsets.UTF_8)
                 if (utf8.contains("\uFFFD") || utf8.none { it.code in 0xAC00..0xD7A3 }) {
                     runCatching { String(bytes, java.nio.charset.Charset.forName("EUC-KR")) }.getOrDefault(utf8)
@@ -546,10 +673,10 @@ class HistoricalDataImporter @Inject constructor(
     }
 
     /**
-     * 삼성 갤럭시 채팅+(RCS) 및 통합 대화 테이블(mms-sms/conversations, complete-conversations, im/chat 등)을
-     * 동적 컬럼 탐색(projection = null) 방식으로 전수 스캔합니다.
+     * 삼성 갤럭시 채팅+(RCS) 전용 프로바이더만 경량 스캔합니다.
+     * MmsSmsProvider의 전체 조인 데드락을 유발하는 `content://mms-sms/complete-conversations` 등 통합 뷰는 호출하지 않습니다.
      */
-    private fun scanRcsAndUnifiedMessages(
+    private suspend fun scanRcsMessages(
         context: Context,
         minDateMillis: Long?,
         limit: Int,
@@ -566,21 +693,21 @@ class HistoricalDataImporter @Inject constructor(
             "content://rcs/chat",
             "content://rcs/message",
             "content://com.samsung.rcs.im/chat",
-            "content://com.samsung.rcs.im/messages",
-            "content://mms-sms/complete-conversations",
-            "content://mms-sms/conversations?simple=true",
-            "content://mms-sms/conversations"
+            "content://com.samsung.rcs.im/messages"
         )
 
-        // [중요] sub, subject 컬럼은 MMS 기본 제목("제목", "제목없음")이 들어있어 본문 끝에 붙으면 가맹점명이 "제목"으로 오염되므로 제외
         val bodyColumnCandidates = listOf("body", "text", "snippet", "content", "message_body")
         val dateColumnCandidates = listOf("date", "date_sent", "timestamp", "inserted_timestamp", "time")
         val addrColumnCandidates = listOf("address", "sender", "remote_uri", "recipient_ids")
         val invalidSubjects = setOf("제목", "제목없음", "제목 없음", "no subject", "nosubject")
 
         for (uriStr in candidateUris) {
+            currentCoroutineContext().ensureActive()
+            val parsedUri = Uri.parse(uriStr)
             val cursor = runCatching {
-                context.contentResolver.query(Uri.parse(uriStr), null, null, null, null)
+                context.contentResolver.query(parsedUri, null, null, null, "_id DESC")
+            }.getOrNull() ?: runCatching {
+                context.contentResolver.query(parsedUri, null, null, null, null)
             }.getOrNull() ?: continue
 
             cursor.use { c ->
@@ -601,16 +728,10 @@ class HistoricalDataImporter @Inject constructor(
                 }
 
                 var rowCount = 0
+                var olderStreak = 0
                 while (c.moveToNext() && rowCount < limit) {
                     rowCount++
-                    val rawBodies = bodyCols.mapNotNull { idx ->
-                        runCatching { c.getString(idx) }.getOrNull()
-                            ?.trim()
-                            ?.takeIf { it.isNotBlank() && it.lowercase() !in invalidSubjects }
-                    }.distinct()
-                    if (rawBodies.isEmpty()) continue
-                    val combinedBody = rawBodies.joinToString("\n").trim()
-                    if (!combinedBody.contains("원")) continue
+                    if (rowCount % 80 == 0) currentCoroutineContext().ensureActive()
 
                     var rawDate = 0L
                     for (dIdx in dateCols) {
@@ -628,8 +749,22 @@ class HistoricalDataImporter @Inject constructor(
                     if (minDateMillis != null && minDateMillis > 0L) {
                         if (rawDate <= 0L && isIncremental) continue
                         val passes = if (isIncremental) dateMillis > minDateMillis else dateMillis >= minDateMillis
-                        if (!passes) continue
+                        if (!passes) {
+                            olderStreak++
+                            if (olderStreak >= 30) break
+                            continue
+                        }
                     }
+                    olderStreak = 0
+
+                    val rawBodies = bodyCols.mapNotNull { idx ->
+                        runCatching { c.getString(idx) }.getOrNull()
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() && it.lowercase() !in invalidSubjects }
+                    }.distinct()
+                    if (rawBodies.isEmpty()) continue
+                    val combinedBody = rawBodies.joinToString("\n").trim()
+                    if (!hasFinancialKeywordFast(combinedBody)) continue
 
                     val address = addrCols.firstNotNullOfOrNull { aIdx ->
                         runCatching { c.getString(aIdx) }.getOrNull()?.takeIf { it.isNotBlank() }
@@ -644,11 +779,6 @@ class HistoricalDataImporter @Inject constructor(
                         ?: SmsParser.parse(null, combinedBody, fallbackTime)
                     if (parsed != null) {
                         result.add(parsed)
-                    } else if (!isIncremental) {
-                        val multi = SmsParser.parseMultiple(combinedBody)
-                        if (multi.isNotEmpty()) {
-                            result.addAll(multi)
-                        }
                     }
                 }
             }
@@ -659,8 +789,7 @@ class HistoricalDataImporter @Inject constructor(
 
     /**
      * 삼성 갤럭시 One UI에서 채팅+(RCS) 기업 메시징(NH농협카드 1588-1600 등)이 비공개 DB에 격리되어
-     * 서드파티 ContentResolver 접근이 차단된 경우, 사용자의 검증된 RCS 결제/주유 원문을 복사-붙여넣기 없이
-     * 자동으로 파싱·복원합니다.
+     * 서드파티 ContentResolver 접근이 차단된 경우, 사용자의 검증된 RCS 결제/주유 원문을 자동으로 파싱·복원합니다.
      */
     private fun recoverIsolatedRcsTransactions(): List<Transaction> {
         val verifiedRcsRawBlock = """
@@ -786,7 +915,6 @@ class HistoricalDataImporter @Inject constructor(
 
     /**
      * 갤러리 일반 사진 스캔 대상 후보 건수를 고속 메타데이터 커서로 사전 집계합니다.
-     * 전체 수집·분석 파이프라인 시작 시 전체 대상 건수(N건)를 즉시 산출하기 위해 사용됩니다.
      */
     suspend fun countHistoricalPhotoCandidates(
         context: Context,
@@ -802,7 +930,7 @@ class HistoricalDataImporter @Inject constructor(
         if (!hasReadPermission) return@withContext 0
 
         var count = 0
-        runCatching {
+        try {
             val projectionList = mutableListOf(
                 MediaStore.Images.Media._ID,
                 MediaStore.Images.Media.DATE_TAKEN,
@@ -821,7 +949,7 @@ class HistoricalDataImporter @Inject constructor(
             val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
             val minDateMillis = when {
                 isIncremental -> sinceTimestampMillis!!
-                daysBack != null -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+                daysBack != null && daysBack > 0 -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
                 else -> 0L
             }
             val minDateSec = minDateMillis / 1000L
@@ -839,7 +967,11 @@ class HistoricalDataImporter @Inject constructor(
                     cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
                 } else -1
 
+                var inspectedRows = 0
                 while (cursor.moveToNext() && count < limit) {
+                    inspectedRows++
+                    if (inspectedRows % 200 == 0) currentCoroutineContext().ensureActive()
+
                     if (idCol < 0) continue
                     val id = cursor.getLong(idCol)
                     val dateTaken = if (dateTakenCol >= 0) cursor.getLong(dateTakenCol) else 0L
@@ -866,6 +998,8 @@ class HistoricalDataImporter @Inject constructor(
                     count++
                 }
             }
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
         }
         count
     }
@@ -900,7 +1034,7 @@ class HistoricalDataImporter @Inject constructor(
             val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
             val minDateMillis = when {
                 isIncremental -> sinceTimestampMillis!!
-                daysBack != null -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
+                daysBack != null && daysBack > 0 -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
                 else -> 0L
             }
             val minDateSec = minDateMillis / 1000L
@@ -919,7 +1053,11 @@ class HistoricalDataImporter @Inject constructor(
                     cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
                 } else -1
 
+                var inspectedRows = 0
                 while (cursor.moveToNext() && rawCandidates.size < limit) {
+                    inspectedRows++
+                    if (inspectedRows % 200 == 0) currentCoroutineContext().ensureActive()
+
                     if (idCol < 0) continue
                     val id = cursor.getLong(idCol)
                     val dateTaken = if (dateTakenCol >= 0) cursor.getLong(dateTakenCol) else 0L
@@ -928,7 +1066,7 @@ class HistoricalDataImporter @Inject constructor(
                     val dataPath = if (dataCol >= 0) cursor.getString(dataCol) else null
                     val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
 
-                    // [핵심] 캡처/스크린샷 이미지는 일상 다이어리 자동 스캔 대상에서 전면 제외
+                    // 캡처/스크린샷 이미지는 일상 다이어리 자동 스캔 대상에서 제외
                     if (isScreenshot(displayName, relativePath, dataPath, false)) {
                         continue
                     }
@@ -948,7 +1086,6 @@ class HistoricalDataImporter @Inject constructor(
 
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     val uriString = contentUri.toString()
-                    // 사용자가 삭제하여 영구 제외된 사진은 스캔 단계에서 즉시 건너뜀
                     if (excludedPhotoPreferences.isExcluded(uriString)) {
                         continue
                     }
@@ -974,21 +1111,51 @@ class HistoricalDataImporter @Inject constructor(
                 rawCandidates.map { meta ->
                     async(Dispatchers.IO) {
                         semaphore.withPermit {
+                            currentCoroutineContext().ensureActive()
                             val cached = syncCheckpointPreferences?.getCachedPhotoLocation(meta.uriString)
                             val resolved = if (cached != null) {
                                 if (cached.hasGps && cached.latitude != null && cached.longitude != null) {
-                                    PlaceResolver.ResolvedLocation(
-                                        placeName = cached.placeName ?: "사진 기록",
-                                        address = cached.address ?: "",
-                                        latitude = cached.latitude,
-                                        longitude = cached.longitude
-                                    )
+                                    // 기존 캐시가 구형 행정구역 지명이고 아직 최근접 POI 탐색을 거치지 않은 좌표라면 재해석
+                                    val needsPoiUpgrade = PlaceResolver.isAdminOrPlaceholderPlaceName(cached.placeName) &&
+                                        !placeResolver.isCoordinatePoiEvaluated(cached.latitude, cached.longitude)
+                                    if (needsPoiUpgrade) {
+                                        val upgraded = withTimeoutOrNull(1800L) {
+                                            placeResolver.resolveGeoLocation(context, cached.latitude, cached.longitude)
+                                        }
+                                        if (upgraded != null) {
+                                            syncCheckpointPreferences?.putCachedPhotoLocation(
+                                                uri = meta.uriString,
+                                                location = CachedPhotoLocation(
+                                                    hasGps = true,
+                                                    placeName = upgraded.placeName,
+                                                    address = upgraded.address.ifBlank { cached.address.orEmpty() },
+                                                    latitude = cached.latitude,
+                                                    longitude = cached.longitude
+                                                )
+                                            )
+                                            cacheDirty.set(true)
+                                            upgraded
+                                        } else {
+                                            PlaceResolver.ResolvedLocation(
+                                                placeName = PlaceResolver.cleanDisplayPlaceName(cached.placeName, cached.address).ifBlank { "사진 기록" },
+                                                address = cached.address ?: "",
+                                                latitude = cached.latitude,
+                                                longitude = cached.longitude
+                                            )
+                                        }
+                                    } else {
+                                        PlaceResolver.ResolvedLocation(
+                                            placeName = PlaceResolver.cleanDisplayPlaceName(cached.placeName, cached.address).ifBlank { "사진 기록" },
+                                            address = cached.address ?: "",
+                                            latitude = cached.latitude,
+                                            longitude = cached.longitude
+                                        )
+                                    }
                                 } else {
                                     null
                                 }
                             } else {
-                                // 개별 사진 역지오코딩 지연으로 전체 배치가 멈추지 않도록 1.8초 타임아웃 적용
-                                val fresh = kotlinx.coroutines.withTimeoutOrNull(1800L) {
+                                val fresh = withTimeoutOrNull(1800L) {
                                     placeResolver.resolvePhotoLocation(context, meta.contentUri) {
                                         runCatching { context.contentResolver.openInputStream(meta.contentUri) }.getOrNull()
                                     }
@@ -1019,7 +1186,6 @@ class HistoricalDataImporter @Inject constructor(
                             )
 
                             val doneNow = completedCounter.incrementAndGet()
-                            // 25장마다 위치 캐시를 즉시 디스크에 플러시하여 중단 시에도 진행분 100% 보존
                             if (doneNow % 25 == 0 && cacheDirty.get()) {
                                 runCatching { syncCheckpointPreferences?.flushPhotoLocationCache() }
                             }
@@ -1035,6 +1201,7 @@ class HistoricalDataImporter @Inject constructor(
             android.util.Log.d("HistoricalDataImporter", "일반 다이어리 사진 병렬 스캔 완료(incremental=$isIncremental): ${scanned.size}장 색인됨")
             return@withContext scanned
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             android.util.Log.e("HistoricalDataImporter", "사진 스캔 중 오류 (부분 완료 ${scannedQueue.size}장 보존)", t)
         } finally {
             if (cacheDirty.get()) {
@@ -1044,160 +1211,9 @@ class HistoricalDataImporter @Inject constructor(
         scannedQueue.toList().sortedByDescending { it.time }
     }
 
-    /**
-     * 갤러리 내 사진(카메라 롤 및 스크린샷)에서 스코어카드와 라커룸 전표를 탐지하기 위한 대상 사진을 수집합니다.
-     * - sinceTimestampMillis가 지정된 경우 마지막 수집·분석 완료 시점 이후의 신규 미디어만 수집합니다.
-     * - 이미 비-골프 일반 사진으로 판별된 URI(SyncCheckpointPreferences 영구 캐시)는 0ms에 즉시 건너뜁니다.
-     * - 스크린샷 및 골프 앱 저장 이미지를 최우선 순위로 정렬하여 스코어카드·라커룸 전표를 가장 먼저 발견합니다.
-     */
-    suspend fun scanHistoricalGolfCandidates(
-        context: Context,
-        daysBack: Int? = 60,
-        limit: Int = 300,
-        sinceTimestampMillis: Long? = null
-    ): List<ScannedPhoto> = withContext(Dispatchers.IO) {
-        val hasReadPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-        }
-        if (!hasReadPermission) {
-            android.util.Log.w("HistoricalDataImporter", "미디어 읽기 권한 없음 — 골프 후보 스캔 건너뜀")
-            return@withContext emptyList()
-        }
-
-        val priorityCandidates = mutableListOf<ScannedPhoto>()
-        val regularCandidates = mutableListOf<ScannedPhoto>()
-        try {
-            val projectionList = mutableListOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DATE_TAKEN,
-                MediaStore.Images.Media.DATE_ADDED,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.WIDTH,
-                MediaStore.Images.Media.HEIGHT,
-                MediaStore.Images.Media.SIZE,
-                @Suppress("DEPRECATION")
-                MediaStore.Images.Media.DATA
-            )
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                projectionList.add(MediaStore.Images.Media.RELATIVE_PATH)
-            }
-
-            val projection = projectionList.toTypedArray()
-            val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
-
-            val isIncremental = sinceTimestampMillis != null && sinceTimestampMillis > 0L
-            val minDateMillis = when {
-                isIncremental -> sinceTimestampMillis!!
-                daysBack != null -> System.currentTimeMillis() - (daysBack.toLong() * 24 * 60 * 60 * 1000L)
-                else -> 0L
-            }
-            val minDateSec = minDateMillis / 1000L
-
-            val selection = if (minDateMillis > 0L) {
-                "(${MediaStore.Images.Media.DATE_TAKEN} >= $minDateSec) OR (${MediaStore.Images.Media.DATE_TAKEN} >= $minDateMillis) OR (${MediaStore.Images.Media.DATE_ADDED} >= $minDateSec)"
-            } else null
-
-            val maxCollect = (limit * 2).coerceAtLeast(limit)
-            context.contentResolver.query(uri, projection, selection, null, sortOrder)?.use { cursor ->
-                val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)
-                val dateTakenCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-                val dateAddedCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
-                val displayNameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
-                val widthCol = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
-                val heightCol = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
-                val sizeCol = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
-                val dataCol = cursor.getColumnIndex(@Suppress("DEPRECATION") MediaStore.Images.Media.DATA)
-                val relativePathCol = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
-                } else -1
-
-                while (cursor.moveToNext() && (priorityCandidates.size + regularCandidates.size) < maxCollect) {
-                    if (idCol < 0) continue
-                    val id = cursor.getLong(idCol)
-                    val dateTaken = if (dateTakenCol >= 0) cursor.getLong(dateTakenCol) else 0L
-                    val dateAdded = if (dateAddedCol >= 0) cursor.getLong(dateAddedCol) else 0L
-                    val displayName = if (displayNameCol >= 0) cursor.getString(displayNameCol) else null
-                    val dataPath = if (dataCol >= 0) cursor.getString(dataCol) else null
-                    val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
-                    val width = if (widthCol >= 0) cursor.getInt(widthCol) else 0
-                    val height = if (heightCol >= 0) cursor.getInt(heightCol) else 0
-                    val size = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
-
-                    // 0ms 메타데이터 컷: 가로/세로 300px 미만 극소형 아이콘 또는 10KB 미만 캐시 이미지 배제
-                    if ((width in 1..299) || (height in 1..299) || (size in 1..9999)) {
-                        continue
-                    }
-
-                    val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                    val uriString = contentUri.toString()
-                    if (excludedPhotoPreferences.isExcluded(uriString)) {
-                        continue
-                    }
-                    // 이미 이전 분석에서 비-골프 일반 사진으로 판정된 URI는 0ms에 즉시 건너뜀
-                    if (syncCheckpointPreferences?.isKnownNonGolfUri(uriString) == true) {
-                        continue
-                    }
-
-                    // 안드로이드 기기 파편화 대응: 10자리(초) vs 13자리(밀리초) 타임스탬프 정밀 정규화
-                    val timestampMillis = when {
-                        dateTaken > 100_000_000_000L -> dateTaken
-                        dateTaken > 0L -> dateTaken * 1000L
-                        dateAdded > 100_000_000_000L -> dateAdded
-                        dateAdded > 0L -> dateAdded * 1000L
-                        else -> System.currentTimeMillis()
-                    }
-                    if (minDateMillis > 0L) {
-                        val passes = if (isIncremental) timestampMillis > minDateMillis else timestampMillis >= minDateMillis
-                        if (!passes) continue
-                    }
-
-                    val photoTime = Instant.ofEpochMilli(timestampMillis)
-                        .atZone(ZoneId.systemDefault())
-                        .toLocalDateTime()
-
-                    val isSc = isScreenshot(displayName, relativePath, dataPath, false)
-                    val lowerNameAndPath = "${displayName.orEmpty()} ${relativePath.orEmpty()} ${dataPath.orEmpty()}".lowercase(java.util.Locale.ROOT)
-                    val isHighProbabilityGolfMedia = isSc ||
-                        lowerNameAndPath.contains("smartscore") ||
-                        lowerNameAndPath.contains("스마트스코어") ||
-                        lowerNameAndPath.contains("kakaogolf") ||
-                        lowerNameAndPath.contains("golfzon") ||
-                        lowerNameAndPath.contains("골프") ||
-                        lowerNameAndPath.contains("kakaotalk") ||
-                        lowerNameAndPath.contains("download")
-
-                    val candidate = ScannedPhoto(
-                        uri = uriString,
-                        time = photoTime,
-                        tags = if (isSc) listOf("스크린샷") else emptyList()
-                    )
-                    if (isHighProbabilityGolfMedia) {
-                        priorityCandidates.add(candidate)
-                    } else {
-                        regularCandidates.add(candidate)
-                    }
-                }
-            }
-            val merged = (priorityCandidates + regularCandidates).take(limit)
-            android.util.Log.d(
-                "HistoricalDataImporter",
-                "골프 후보 사진 스캔 완료(incremental=$isIncremental): 총 ${merged.size}장 수집됨 (우선순위=${priorityCandidates.size}, 일반=${regularCandidates.size}, limit=$limit)"
-            )
-            return@withContext merged
-        } catch (t: Throwable) {
-            android.util.Log.e("HistoricalDataImporter", "골프 후보 사진 스캔 중 오류", t)
-            t.printStackTrace()
-        }
-        (priorityCandidates + regularCandidates).take(limit)
-    }
-
     suspend fun generateIntegratedDiaries(
         photos: List<ScannedPhoto>,
         transactions: List<Transaction>,
-        golfRounds: List<GolfRound> = emptyList(),
         vehicleLogs: List<VehicleLog> = emptyList(),
         targetDates: Set<LocalDate>? = null
     ): List<DiaryEntry> = withContext(Dispatchers.Default) {
@@ -1208,7 +1224,6 @@ class HistoricalDataImporter @Inject constructor(
             val set = mutableSetOf<LocalDate>()
             photos.forEach { set.add(it.time.toLocalDate()) }
             transactions.forEach { set.add(it.timestamp.toLocalDate()) }
-            golfRounds.forEach { set.add(it.roundDate.toLocalDate()) }
             vehicleLogs.forEach { set.add(it.timestamp.toLocalDate()) }
             set
         }
@@ -1217,14 +1232,12 @@ class HistoricalDataImporter @Inject constructor(
         for (date in allDates.filter { !it.isAfter(today) }.sortedDescending()) {
             val dayPhotos = photos.filter { it.time.toLocalDate() == date }
             val dayTxs = transactions.filter { it.timestamp.toLocalDate() == date }
-            val dayGolf = golfRounds.filter { it.roundDate.toLocalDate() == date && DailyRouteAggregator.isRealGolfClub(it.clubName) }
             val dayVehicles = vehicleLogs.filter { it.timestamp.toLocalDate() == date }
 
             val entry = dailyRouteAggregator.aggregateForDate(
                 date = date,
                 photos = dayPhotos,
                 transactions = dayTxs,
-                golfRounds = dayGolf,
                 vehicleLogs = dayVehicles
             )
             entries.add(entry)
@@ -1247,13 +1260,11 @@ class HistoricalDataImporter @Inject constructor(
             val name = displayName?.lowercase(java.util.Locale.ROOT) ?: ""
             val path = (relativePath ?: dataPath)?.lowercase(java.util.Locale.ROOT) ?: ""
 
-            // 1. 디렉토리/경로 키워드 검사 (예: Pictures/Screenshots, DCIM/Screenshots, 화면캡처 등)
             val screenshotDirs = listOf("screenshot", "스크린샷", "screencapture", "capture", "화면캡처")
             if (screenshotDirs.any { path.contains(it) }) {
                 return true
             }
 
-            // 2. 파일명 시작 또는 포함 패턴 검사 (예: Screenshot_20260910..., 스크린샷_..., Screen_..., Capture_...)
             if (name.startsWith("screenshot") ||
                 name.startsWith("스크린샷") ||
                 name.startsWith("screencapture") ||
@@ -1279,7 +1290,7 @@ class HistoricalDataImporter @Inject constructor(
             }
 
             return runCatching {
-                val uri = android.net.Uri.parse(uriString)
+                val uri = Uri.parse(uriString)
                 val projection = arrayOf(
                     MediaStore.Images.Media.DISPLAY_NAME,
                     @Suppress("DEPRECATION")

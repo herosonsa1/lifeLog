@@ -30,12 +30,10 @@ object NotificationParser {
         Pattern.compile("""(?<bank>\S+은행|\S+카드)?\s*(?:출금|결제)\s*(?<amount>[\d,]+)원\s*(?<merchant>.+)""")
     )
 
-    private val GOLFZON_PATTERN = Pattern.compile("""\[골프존\]\s*(?<store>.+?)\s*예약\s*완료|\[골프존\]\s*(?<store2>.+?)\s*라운드\s*(?<score>\d+)타""")
     private val TMAP_DRIVING_PATTERN = Pattern.compile("""주행거리\s*(?<distance>[\d.]+)\s*km\s*운행\s*완료""")
 
     sealed class ParsedNotificationResult {
         data class TxResult(val transaction: Transaction) : ParsedNotificationResult()
-        data class GolfzonResult(val storeName: String, val score: Int?) : ParsedNotificationResult()
         data class TmapResult(val distanceKm: Double) : ParsedNotificationResult()
     }
 
@@ -74,17 +72,7 @@ object NotificationParser {
             }
         }
 
-        // 4. 골프존 예약/스코어 푸시 (비금융 알림이므로 금액 여부와 무관하게 우선 처리)
-        if (packageName.contains("golfzon") || combined.contains("골프존")) {
-            val golfMatcher = GOLFZON_PATTERN.matcher(combined)
-            if (golfMatcher.find()) {
-                val store = golfMatcher.group("store") ?: golfMatcher.group("store2") ?: "골프존파크"
-                val score = golfMatcher.group("score")?.toIntOrNull()
-                return ParsedNotificationResult.GolfzonResult(store.trim(), score)
-            }
-        }
-
-        // 5. TMAP 주행 완료 푸시 (비금융 알림이므로 금액 여부와 무관하게 우선 처리)
+        // 4. TMAP 주행 완료 푸시 (비금융 알림이므로 금액 여부와 무관하게 우선 처리)
         if (packageName.contains("skt.tmap") || combined.contains("TMAP") || combined.contains("티맵")) {
             val tmapMatcher = TMAP_DRIVING_PATTERN.matcher(combined)
             if (tmapMatcher.find()) {

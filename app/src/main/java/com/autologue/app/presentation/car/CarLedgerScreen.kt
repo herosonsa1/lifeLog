@@ -332,6 +332,7 @@ fun CarLedgerScreen(
                                 text = "스마트 차계부",
                                 style = AppTypography.h2,
                                 maxLines = 1,
+                                softWrap = false,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                             Text(
@@ -342,28 +343,23 @@ fun CarLedgerScreen(
                                     fontSize = 11.sp
                                 ),
                                 maxLines = 1,
+                                softWrap = false,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                         }
                     },
                     actions = {
-                        StandardTopBarSettingsTrigger(
-                            accentColor = MenuColors.carLedger,
-                            containerColor = MenuColors.carLedgerBg,
-                            borderColor = MenuColors.carLedgerBorder
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
                         AutoLogueOutlinedButton(
-                            text = "주유 등록",
+                            text = "주유",
                             icon = Icons.Default.Add,
                             onClick = { viewModel.openAddRefuelDialog() },
                             contentColor = MenuColors.carLedger,
                             containerColor = MenuColors.carLedgerBg,
                             borderColor = MenuColors.carLedgerBorder
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         AutoLogueOutlinedButton(
-                            text = "주유 동기화",
+                            text = "동기화",
                             icon = Icons.Default.Sync,
                             onClick = triggerSmsSync,
                             contentColor = MenuColors.carLedger,
@@ -371,6 +367,12 @@ fun CarLedgerScreen(
                             borderColor = MenuColors.carLedgerBorder
                         )
                         Spacer(modifier = Modifier.width(4.dp))
+                        StandardTopBarSettingsTrigger(
+                            accentColor = MenuColors.carLedger,
+                            containerColor = MenuColors.carLedgerBg,
+                            borderColor = MenuColors.carLedgerBorder
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
                         Box {
                             Surface(
                                 onClick = { isMoreMenuExpanded = true },
@@ -1151,7 +1153,7 @@ fun CarLedgerScreen(
                     ) {
                         val emptyMsg = when (uiState.logFilterMode) {
                             LogFilterMode.ALL -> "기록된 차량 운행 및 주유·정비 내역이 없습니다."
-                            LogFilterMode.NON_COMMUTE_DRIVING -> "출퇴근을 제외한 외출·일반·골프 운행 내역이 없습니다."
+                            LogFilterMode.NON_COMMUTE_DRIVING -> "출퇴근을 제외한 외출·일반 운행 내역이 없습니다."
                             LogFilterMode.REFUEL_ONLY -> "기록된 주유·정비 내역이 없습니다.\n상단의 [주유 등록] 버튼이나 가계부 카테고리 연동으로 등록할 수 있습니다."
                             LogFilterMode.DRIVING_ONLY -> "기록된 차량 주행 내역이 없습니다."
                         }
@@ -1234,7 +1236,6 @@ fun SaaSCarLogRow(
         val isToWork = log.isToWorkCommuteLog()
         val isToHome = log.isToHomeCommuteLog()
         val isCommuteRound = log.isCommuteDrivingLog() && !isToWork && !isToHome
-        val isGolf = log.isGolfDrivingLog()
         val isCustom = log.isCustomFuel()
         val isOneTimeEdited = log.note?.contains("[one_time_edit:true]") == true
         val explicitUnitPrice = log.getExplicitUnitPrice()
@@ -1274,7 +1275,6 @@ fun SaaSCarLogRow(
                         isToWork -> "출근"
                         isToHome -> "퇴근"
                         isCommuteRound -> "출퇴근"
-                        isGolf -> "골프주행"
                         else -> "일반주행"
                     },
                     textColor = when {
@@ -1282,7 +1282,6 @@ fun SaaSCarLogRow(
                         log.logType == VehicleLogType.REFUELING -> Amber700
                         log.logType == VehicleLogType.MAINTENANCE -> Indigo700
                         isToWork || isToHome || isCommuteRound -> Emerald700
-                        isGolf -> Indigo700
                         else -> Slate700
                     },
                     backgroundColor = when {
@@ -1290,7 +1289,6 @@ fun SaaSCarLogRow(
                         log.logType == VehicleLogType.REFUELING -> Amber50
                         log.logType == VehicleLogType.MAINTENANCE -> Indigo50
                         isToWork || isToHome || isCommuteRound -> Emerald50
-                        isGolf -> Indigo50
                         else -> Slate100
                     }
                 )
@@ -1343,7 +1341,7 @@ fun SaaSCarLogRow(
                 drivingSubtitle?.takeIf { it.isNotBlank() }?.let { sub ->
                     Text("·", style = AppTypography.captionMuted)
                     Text(
-                        text = sub,
+                        text = buildHighlightedDurationText(sub),
                         style = AppTypography.captionMuted
                     )
                 }
@@ -1481,7 +1479,6 @@ fun SaaSCarLogRow(
                             isToWork -> "출근 편도"
                             isToHome -> "퇴근 편도"
                             isCommuteRound -> "출퇴근 왕복"
-                            isGolf -> "골프장 이동"
                             else -> "일반 주행"
                         },
                         style = AppTypography.captionMuted
@@ -1639,9 +1636,7 @@ fun RefuelDetailEditDialog(
     var stationNameText by remember(log.id) {
         val initialTitle = if (log.logType == VehicleLogType.TRIP_DRIVING) {
             log.getUserCustomRouteTitle()
-                ?: log.getDrivingRouteTitle()
-                    ?.replace(Regex("\\s*\\([0-9.]+\\s*km\\)", RegexOption.IGNORE_CASE), "")
-                    ?.trim()
+                ?: log.getDrivingRouteBaseTitle()
                 ?: ""
         } else {
             log.gasStationName ?: "주유소"
@@ -1743,7 +1738,7 @@ fun RefuelDetailEditDialog(
 
                     Spacer(modifier = Modifier.height(Spacing.md))
 
-                    // 1. 기록 항목(유형) 선택 (운행 항목 4종 + 지출 항목 3종)
+                    // 1. 기록 항목(유형) 선택 (운행 항목 3종 + 지출 항목 3종)
                     Text(
                         text = "차계부 기록 항목 선택",
                         style = AppTypography.caption.copy(
@@ -1756,8 +1751,7 @@ fun RefuelDetailEditDialog(
                     val drivingCategories = listOf(
                         CarLogItemCategory.COMMUTE_TO_WORK,
                         CarLogItemCategory.COMMUTE_FROM_WORK,
-                        CarLogItemCategory.GENERAL_DRIVING,
-                        CarLogItemCategory.GOLF_DRIVING
+                        CarLogItemCategory.GENERAL_DRIVING
                     )
                     val costCategories = listOf(
                         CarLogItemCategory.REFUELING,
@@ -1929,7 +1923,7 @@ fun RefuelDetailEditDialog(
                         OutlinedTextField(
                             value = stationNameText,
                             onValueChange = { stationNameText = it },
-                            placeholder = { Text("예: 집 ➔ 회사, 위례동 ➔ 역삼동, 레이크사이드CC", style = AppTypography.captionMuted) },
+                            placeholder = { Text("예: 집 ➔ 회사, 위례동 ➔ 역삼동, 스타필드 하남", style = AppTypography.captionMuted) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             shape = easyFieldShape,

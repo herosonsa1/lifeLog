@@ -1,11 +1,15 @@
 package com.autologue.app.presentation.common
 
+import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -16,25 +20,68 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autologue.app.presentation.theme.*
+
+private val DURATION_HIGHLIGHT_REGEX = Regex(
+    "(?<!\\d)(?:(?:\\d+\\s*시간\\s*\\d+\\s*분|\\d+\\s*시간|\\d+\\s*분)(?!\\s*주기)(?:\\s*(?:운행|소요|이동))?|경유\\s*체류\\s*\\d+\\s*분)"
+)
+
+/**
+ * 하단 회색 설명(힌트) 문자열 내에서 운행 소요시간('13분 운행', '1시간 15분 운행', '경유 체류 15분' 등)만
+ * 선명한 검정색(#111827, SemiBold)으로 강조한 AnnotatedString을 생성합니다.
+ */
+fun buildHighlightedDurationText(
+    text: String,
+    highlightColor: Color = Color(0xFF111827)
+): AnnotatedString {
+    if (text.isEmpty()) return AnnotatedString("")
+    val matches = DURATION_HIGHLIGHT_REGEX.findAll(text).toList()
+    if (matches.isEmpty()) return AnnotatedString(text)
+
+    return buildAnnotatedString {
+        var cursor = 0
+        for (match in matches) {
+            val start = match.range.first
+            val endExclusive = match.range.last + 1
+            if (start > cursor) {
+                append(text.substring(cursor, start))
+            }
+            pushStyle(SpanStyle(color = highlightColor, fontWeight = FontWeight.SemiBold))
+            append(text.substring(start, endExclusive))
+            pop()
+            cursor = endExclusive
+        }
+        if (cursor < text.length) {
+            append(text.substring(cursor))
+        }
+    }
+}
 
 @Composable
 fun HairlineDivider(
@@ -170,8 +217,42 @@ private fun normalizeSingleLineFieldText(raw: String): String {
 }
 
 /**
+ * 주어진 문자열 전체(0..length)를 선택 상태로 만든 TextFieldValue를 생성합니다.
+ */
+fun createSelectAllTextFieldValue(text: String): TextFieldValue {
+    return TextFieldValue(
+        text = text,
+        selection = TextRange(0, text.length),
+        composition = null
+    )
+}
+
+/**
+ * selectAllOnTap 활성화 시 탭 직후 발생하는 CoreTextField의 커서 위치 초기화(단일 오프셋 이동)를 방어하고,
+ * 실제 키보드 문자 입력(또는 한글 자모 조합 시작)이 감지되면 즉시 가드를 해제하여 정상 입력을 보장합니다.
+ *
+ * @return Pair(반영할 TextFieldValue, 가드 유지 여부)
+ */
+fun resolveSelectAllOnTapValueChange(
+    previousValue: TextFieldValue,
+    incomingValue: TextFieldValue,
+    isSelectAllGuardActive: Boolean
+): Pair<TextFieldValue, Boolean> {
+    val textChanged = incomingValue.text != previousValue.text
+    val startedImeComposition = incomingValue.composition != null && previousValue.composition == null
+    if (textChanged || startedImeComposition) {
+        return incomingValue to false
+    }
+    if (isSelectAllGuardActive && incomingValue.text.isNotEmpty()) {
+        return createSelectAllTextFieldValue(incomingValue.text) to true
+    }
+    return incomingValue to false
+}
+
+/**
  * 표준 Input 텍스트필드 (쉬운 모드: 토스·애플 스타일 무테두리 소프트 그레이 입력 필드 / 고급모드: 기존 슬레이트 테두리 + 그림자)
  * isCompact = true 설정 시 입력필드 높이를 컴팩트하게 줄여 다이얼로그나 그리드 내에서 깔끔하게 표출합니다.
+ * selectAllOnTap = true 설정 시 입력란이나 라벨을 클릭할 때마다 기존 문구 전체를 자동 선택하여 바로 새 내용을 덮어쓸 수 있습니다.
  */
 @Composable
 fun AutoLogueTextField(
@@ -188,7 +269,8 @@ fun AutoLogueTextField(
     leadingIcon: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
     isCompact: Boolean = false,
-    visualTransformation: VisualTransformation = VisualTransformation.None
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    selectAllOnTap: Boolean = false
 ) {
     val isEasyMode = LocalEasyMode.current
     val displayValue = if (singleLine) normalizeSingleLineFieldText(value) else value
@@ -203,9 +285,154 @@ fun AutoLogueTextField(
         onValueChange
     }
 
+    val focusRequester = remember { FocusRequester() }
+    var textFieldValueState by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = displayValue,
+                selection = TextRange(displayValue.length)
+            )
+        )
+    }
+    var lastDispatchedText by remember(displayValue) { mutableStateOf(displayValue) }
+    var wasFocused by remember { mutableStateOf(false) }
+    var selectAllGuardUntilMs by remember { mutableLongStateOf(0L) }
+    var selectAllTriggerToken by remember { mutableIntStateOf(0) }
+
+    if (selectAllOnTap && textFieldValueState.text != displayValue) {
+        textFieldValueState = textFieldValueState.copy(
+            text = displayValue,
+            selection = TextRange(
+                textFieldValueState.selection.start.coerceIn(0, displayValue.length),
+                textFieldValueState.selection.end.coerceIn(0, displayValue.length)
+            )
+        )
+    }
+
+    val triggerSelectAll: () -> Unit = {
+        val currentText = if (selectAllOnTap) textFieldValueState.text else displayValue
+        if (selectAllOnTap && currentText.isNotEmpty()) {
+            selectAllGuardUntilMs = SystemClock.uptimeMillis() + 240L
+            val fullRange = TextRange(0, currentText.length)
+            textFieldValueState = if (textFieldValueState.selection == fullRange && textFieldValueState.composition == null) {
+                TextFieldValue(
+                    text = currentText,
+                    selection = TextRange(currentText.length),
+                    composition = null
+                )
+            } else {
+                createSelectAllTextFieldValue(currentText)
+            }
+            selectAllTriggerToken++
+        }
+    }
+
+    if (selectAllOnTap) {
+        LaunchedEffect(selectAllTriggerToken) {
+            if (selectAllTriggerToken > 0) {
+                withFrameNanos { }
+                if (SystemClock.uptimeMillis() <= selectAllGuardUntilMs && textFieldValueState.text.isNotEmpty()) {
+                    val full = createSelectAllTextFieldValue(textFieldValueState.text)
+                    if (textFieldValueState.selection != full.selection || textFieldValueState.composition != null) {
+                        textFieldValueState = full
+                    }
+                }
+                kotlinx.coroutines.delay(45)
+                if (SystemClock.uptimeMillis() <= selectAllGuardUntilMs && textFieldValueState.text.isNotEmpty()) {
+                    val full = createSelectAllTextFieldValue(textFieldValueState.text)
+                    if (textFieldValueState.selection != full.selection || textFieldValueState.composition != null) {
+                        textFieldValueState = full
+                    }
+                }
+            }
+        }
+    }
+
+    val handleTextFieldValueChange: (TextFieldValue) -> Unit = { incoming ->
+        val normalizedIncoming = if (singleLine) {
+            val cleanText = normalizeSingleLineFieldText(incoming.text)
+            if (cleanText != incoming.text) {
+                incoming.copy(
+                    text = cleanText,
+                    selection = TextRange(
+                        incoming.selection.start.coerceIn(0, cleanText.length),
+                        incoming.selection.end.coerceIn(0, cleanText.length)
+                    )
+                )
+            } else {
+                incoming
+            }
+        } else {
+            incoming
+        }
+        val guardActive = SystemClock.uptimeMillis() <= selectAllGuardUntilMs
+        val (resolvedValue, keepGuard) = resolveSelectAllOnTapValueChange(
+            previousValue = textFieldValueState,
+            incomingValue = normalizedIncoming,
+            isSelectAllGuardActive = guardActive
+        )
+        if (!keepGuard) {
+            selectAllGuardUntilMs = 0L
+        }
+        textFieldValueState = resolvedValue
+        if (lastDispatchedText != resolvedValue.text) {
+            lastDispatchedText = resolvedValue.text
+            effectiveOnValueChange(resolvedValue.text)
+        }
+    }
+
+    val focusAndSelectModifier = if (selectAllOnTap) {
+        Modifier
+            .focusRequester(focusRequester)
+            .onFocusChanged { focusState ->
+                if (!wasFocused && focusState.isFocused) {
+                    wasFocused = true
+                    triggerSelectAll()
+                } else if (!focusState.isFocused) {
+                    wasFocused = false
+                }
+            }
+    } else {
+        Modifier
+    }
+
+    val surfaceTapSelectModifier = if (selectAllOnTap) {
+        Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                val downTime = down.uptimeMillis
+                val downPos = down.position
+                val touchSlop = viewConfiguration.touchSlop
+                val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                var exceededSlop = false
+                var upEvent: PointerInputChange? = null
+
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if ((change.position - downPos).getDistance() > touchSlop) {
+                        exceededSlop = true
+                        break
+                    }
+                    if (!change.pressed) {
+                        upEvent = change
+                        break
+                    }
+                }
+
+                if (!exceededSlop && upEvent != null && (upEvent.uptimeMillis - downTime) < longPressTimeout) {
+                    triggerSelectAll()
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
+
     Column(modifier = modifier) {
         if (label != null) {
             val cleanedLabel = cleanEasyLabelText(label, isEasyMode)
+            val labelInteractionSource = remember { MutableInteractionSource() }
             Text(
                 text = cleanedLabel,
                 style = if (isEasyMode) {
@@ -220,7 +447,21 @@ fun AutoLogueTextField(
                     AppTypography.caption.copy(color = Slate700, fontWeight = FontWeight.SemiBold)
                 },
                 maxLines = 1,
-                modifier = Modifier.padding(bottom = if (isEasyMode) 5.dp else if (isCompact) 2.dp else 4.dp, start = 2.dp)
+                modifier = Modifier
+                    .padding(bottom = if (isEasyMode) 5.dp else if (isCompact) 2.dp else 4.dp, start = 2.dp)
+                    .then(
+                        if (selectAllOnTap) {
+                            Modifier.clickable(
+                                interactionSource = labelInteractionSource,
+                                indication = null
+                            ) {
+                                focusRequester.requestFocus()
+                                triggerSelectAll()
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
             )
         }
         val fieldShape = RoundedCornerShape(
@@ -232,91 +473,184 @@ fun AutoLogueTextField(
             color = if (isEasyMode) EasyTheme.chipBg else Slate50,
             shadowElevation = if (isEasyMode) 0.dp else if (isCompact) 0.5.dp else 1.5.dp,
             border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(surfaceTapSelectModifier)
         ) {
             if (isCompact) {
-                BasicTextField(
-                    value = displayValue,
-                    onValueChange = effectiveOnValueChange,
-                    singleLine = singleLine,
-                    maxLines = maxLines,
-                    minLines = minLines,
-                    keyboardOptions = effectiveKeyboardOptions,
-                    keyboardActions = keyboardActions,
-                    visualTransformation = visualTransformation,
-                    textStyle = AppTypography.body.copy(
-                        fontSize = if (isEasyMode) 14.sp else 13.sp,
-                        fontWeight = if (isEasyMode) FontWeight.SemiBold else FontWeight.Medium,
-                        color = if (isEasyMode) EasyTheme.textPrimary else Slate900
-                    ),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)),
-                    decorationBox = { innerTextField ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    horizontal = if (isEasyMode) 12.dp else 8.dp,
-                                    vertical = if (isEasyMode) 9.dp else 6.dp
-                                ),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (leadingIcon != null) {
-                                leadingIcon()
-                                Spacer(modifier = Modifier.width(4.dp))
-                            }
-                            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                                if (displayValue.isEmpty() && placeholder != null) {
-                                    Text(
-                                        text = placeholder,
-                                        fontSize = if (isEasyMode) 13.sp else 12.sp,
-                                        color = if (isEasyMode) EasyTheme.textMuted else Slate400,
-                                        maxLines = 1
-                                    )
+                if (selectAllOnTap) {
+                    BasicTextField(
+                        value = textFieldValueState,
+                        onValueChange = handleTextFieldValueChange,
+                        singleLine = singleLine,
+                        maxLines = maxLines,
+                        minLines = minLines,
+                        keyboardOptions = effectiveKeyboardOptions,
+                        keyboardActions = keyboardActions,
+                        visualTransformation = visualTransformation,
+                        textStyle = AppTypography.body.copy(
+                            fontSize = if (isEasyMode) 14.sp else 13.sp,
+                            fontWeight = if (isEasyMode) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate900
+                        ),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)),
+                        decorationBox = { innerTextField ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        horizontal = if (isEasyMode) 12.dp else 8.dp,
+                                        vertical = if (isEasyMode) 9.dp else 6.dp
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (leadingIcon != null) {
+                                    leadingIcon()
+                                    Spacer(modifier = Modifier.width(4.dp))
                                 }
-                                innerTextField()
+                                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                    if (textFieldValueState.text.isEmpty() && placeholder != null) {
+                                        Text(
+                                            text = placeholder,
+                                            fontSize = if (isEasyMode) 13.sp else 12.sp,
+                                            color = if (isEasyMode) EasyTheme.textMuted else Slate400,
+                                            maxLines = 1
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                                if (trailingIcon != null) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    trailingIcon()
+                                }
                             }
-                            if (trailingIcon != null) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                trailingIcon()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(focusAndSelectModifier)
+                    )
+                } else {
+                    BasicTextField(
+                        value = displayValue,
+                        onValueChange = effectiveOnValueChange,
+                        singleLine = singleLine,
+                        maxLines = maxLines,
+                        minLines = minLines,
+                        keyboardOptions = effectiveKeyboardOptions,
+                        keyboardActions = keyboardActions,
+                        visualTransformation = visualTransformation,
+                        textStyle = AppTypography.body.copy(
+                            fontSize = if (isEasyMode) 14.sp else 13.sp,
+                            fontWeight = if (isEasyMode) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (isEasyMode) EasyTheme.textPrimary else Slate900
+                        ),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)),
+                        decorationBox = { innerTextField ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        horizontal = if (isEasyMode) 12.dp else 8.dp,
+                                        vertical = if (isEasyMode) 9.dp else 6.dp
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (leadingIcon != null) {
+                                    leadingIcon()
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                }
+                                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                    if (displayValue.isEmpty() && placeholder != null) {
+                                        Text(
+                                            text = placeholder,
+                                            fontSize = if (isEasyMode) 13.sp else 12.sp,
+                                            color = if (isEasyMode) EasyTheme.textMuted else Slate400,
+                                            maxLines = 1
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                                if (trailingIcon != null) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    trailingIcon()
+                                }
                             }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             } else {
-                OutlinedTextField(
-                    value = displayValue,
-                    onValueChange = effectiveOnValueChange,
-                    placeholder = if (placeholder != null) {
-                        {
-                            Text(
-                                placeholder,
-                                fontSize = if (isEasyMode) 13.5.sp else 13.sp,
-                                color = if (isEasyMode) EasyTheme.textMuted else Slate400
-                            )
-                        }
-                    } else null,
-                    singleLine = singleLine,
-                    maxLines = maxLines,
-                    minLines = minLines,
-                    keyboardOptions = effectiveKeyboardOptions,
-                    keyboardActions = keyboardActions,
-                    leadingIcon = leadingIcon,
-                    trailingIcon = trailingIcon,
-                    visualTransformation = visualTransformation,
-                    shape = fieldShape,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
-                        unfocusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
-                        disabledContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
-                        focusedBorderColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB),
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
-                        unfocusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
-                        cursorColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (selectAllOnTap) {
+                    OutlinedTextField(
+                        value = textFieldValueState,
+                        onValueChange = handleTextFieldValueChange,
+                        placeholder = if (placeholder != null) {
+                            {
+                                Text(
+                                    placeholder,
+                                    fontSize = if (isEasyMode) 13.5.sp else 13.sp,
+                                    color = if (isEasyMode) EasyTheme.textMuted else Slate400
+                                )
+                            }
+                        } else null,
+                        singleLine = singleLine,
+                        maxLines = maxLines,
+                        minLines = minLines,
+                        keyboardOptions = effectiveKeyboardOptions,
+                        keyboardActions = keyboardActions,
+                        leadingIcon = leadingIcon,
+                        trailingIcon = trailingIcon,
+                        visualTransformation = visualTransformation,
+                        shape = fieldShape,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                            unfocusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                            disabledContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
+                            focusedBorderColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB),
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                            unfocusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                            cursorColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(focusAndSelectModifier)
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = displayValue,
+                        onValueChange = effectiveOnValueChange,
+                        placeholder = if (placeholder != null) {
+                            {
+                                Text(
+                                    placeholder,
+                                    fontSize = if (isEasyMode) 13.5.sp else 13.sp,
+                                    color = if (isEasyMode) EasyTheme.textMuted else Slate400
+                                )
+                            }
+                        } else null,
+                        singleLine = singleLine,
+                        maxLines = maxLines,
+                        minLines = minLines,
+                        keyboardOptions = effectiveKeyboardOptions,
+                        keyboardActions = keyboardActions,
+                        leadingIcon = leadingIcon,
+                        trailingIcon = trailingIcon,
+                        visualTransformation = visualTransformation,
+                        shape = fieldShape,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                            unfocusedContainerColor = if (isEasyMode) EasyTheme.chipBg else Slate50,
+                            disabledContainerColor = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100,
+                            focusedBorderColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB),
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                            unfocusedTextColor = if (isEasyMode) EasyTheme.textPrimary else Slate900,
+                            cursorColor = if (isEasyMode) EasyTheme.tossBlue else Color(0xFF2563EB)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }
@@ -726,28 +1060,33 @@ fun <T> UnderlineTabBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.xl),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xxl)
+            .padding(horizontal = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         tabs.forEach { (tabKey, title) ->
             val isSelected = tabKey == selectedTab
             Column(
                 modifier = Modifier
+                    .weight(1f)
                     .clickable { onTabSelected(tabKey) }
-                    .padding(vertical = 10.dp),
+                    .padding(top = 9.dp, start = 4.dp, end = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
                     text = title,
-                    style = AppTypography.body,
+                    style = AppTypography.body.copy(fontSize = 13.5.sp),
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isSelected) AppColors.primary else AppColors.textMuted
+                    color = if (isSelected) AppColors.primary else AppColors.textMuted,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(7.dp))
                 Box(
                     modifier = Modifier
-                        .height(2.dp)
-                        .width(if (isSelected) 24.dp else 0.dp)
+                        .height(2.5.dp)
+                        .width(if (isSelected) 32.dp else 0.dp)
+                        .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp))
                         .background(if (isSelected) AppColors.primary else Color.Transparent)
                 )
             }

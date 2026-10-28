@@ -1,25 +1,26 @@
 package com.autologue.app.domain.usecase.expense
 
 import com.autologue.app.data.preferences.MerchantAliasPreferences
-import com.autologue.app.domain.model.*
-import com.autologue.app.domain.repository.*
+import com.autologue.app.domain.model.ExpenseCategory
+import com.autologue.app.domain.model.PaymentMethod
+import com.autologue.app.domain.model.Transaction
+import com.autologue.app.domain.repository.TransactionRepository
+import com.autologue.app.domain.repository.TransactionRuleRepository
+import com.autologue.app.domain.repository.VehicleRepository
 import kotlinx.coroutines.flow.first
-import java.time.LocalDate
 import javax.inject.Inject
 
 class ProcessTransactionUseCase @Inject constructor(
     private val transactionRepository: TransactionRepository,
     private val ruleRepository: TransactionRuleRepository,
     private val vehicleRepository: VehicleRepository,
-    private val golfRepository: GolfRepository,
     private val merchantAliasPreferences: MerchantAliasPreferences
 ) {
     constructor(
         transactionRepository: TransactionRepository,
         ruleRepository: TransactionRuleRepository,
-        vehicleRepository: VehicleRepository,
-        golfRepository: GolfRepository
-    ) : this(transactionRepository, ruleRepository, vehicleRepository, golfRepository, MerchantAliasPreferences())
+        vehicleRepository: VehicleRepository
+    ) : this(transactionRepository, ruleRepository, vehicleRepository, MerchantAliasPreferences())
 
     suspend operator fun invoke(transaction: Transaction): Long {
         val rawMerchant = transaction.merchantName.trim()
@@ -89,31 +90,13 @@ class ProcessTransactionUseCase @Inject constructor(
             }
 
             if (isCancellation) {
-                // 승인취소 시 해당 금액의 차계부 가승인 주유 로그 즉시 삭제
                 val cancelAmt = Math.abs(enrichedTx.amount)
                 vehicleRepository.deleteRefuelingLogByTransaction(cancelAmt, enrichedTx.timestamp.toLocalDate(), enrichedTx.merchantName)
             }
 
-            // 순서 무관(과거 스캔 시 역순 처리 포함) 가승인 15만원 상쇄 및 실주유 내역 정합성 보장을 위해 전체 트랜잭션 기준 동기화 수행
             runCatching {
                 val allTxs = transactionRepository.getAllTransactionsFlow().first()
                 vehicleRepository.syncRefuelingFromTransactions(allTxs)
-            }
-        }
-
-        if (finalCategory == ExpenseCategory.GOLF_FIELD || finalCategory == ExpenseCategory.GOLF_SCREEN) {
-            val golfType = if (finalCategory == ExpenseCategory.GOLF_FIELD) GolfType.FIELD else GolfType.SCREEN
-            val existingRound = golfRepository.getGolfRoundByDate(enrichedTx.timestamp.toLocalDate())
-
-            if (existingRound == null) {
-                val round = GolfRound(
-                    clubName = enrichedTx.merchantName,
-                    roundDate = enrichedTx.timestamp,
-                    golfType = golfType,
-                    greenFeeExpense = enrichedTx.amount,
-                    memo = "결제 자동 감지: ${enrichedTx.merchantName}"
-                )
-                golfRepository.insertGolfRound(round)
             }
         }
 

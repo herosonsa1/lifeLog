@@ -3,11 +3,8 @@ package com.autologue.app.service
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.autologue.app.data.parser.NotificationParser
-import com.autologue.app.domain.model.GolfRound
-import com.autologue.app.domain.model.GolfType
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
-import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
 import dagger.hilt.android.AndroidEntryPoint
@@ -28,13 +25,9 @@ class LifelogNotificationListenerService : NotificationListenerService() {
     @Inject
     lateinit var vehicleRepository: VehicleRepository
 
-    @Inject
-    lateinit var golfRepository: GolfRepository
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
-        // [중복 방어] 안드로이드 시스템 알림 업데이트로 인한 10초 이내 동일 알림 중복 처리 원천 차단
         private val recentNotificationCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
 
@@ -67,7 +60,6 @@ class LifelogNotificationListenerService : NotificationListenerService() {
         val now = System.currentTimeMillis()
         val lastTime = recentNotificationCache[cacheKey]
         if (lastTime != null && (now - lastTime) < 10_000L) {
-            // 10초 이내 동일 알림 재호출은 즉시 스킵
             return
         }
         recentNotificationCache[cacheKey] = now
@@ -86,16 +78,6 @@ class LifelogNotificationListenerService : NotificationListenerService() {
                             vehicleRepository.syncRefuelingFromTransactions(listOf(result.transaction))
                         }
                     }
-                    is NotificationParser.ParsedNotificationResult.GolfzonResult -> {
-                        val round = GolfRound(
-                            clubName = result.storeName,
-                            roundDate = LocalDateTime.now(),
-                            golfType = GolfType.SCREEN,
-                            totalScore = result.score,
-                            memo = "골프존 알림 연동 자동 기록"
-                        )
-                        golfRepository.insertGolfRound(round)
-                    }
                     is NotificationParser.ParsedNotificationResult.TmapResult -> {
                         val vehicleLog = VehicleLog(
                             timestamp = LocalDateTime.now(),
@@ -112,10 +94,6 @@ class LifelogNotificationListenerService : NotificationListenerService() {
         }
     }
 
-    /**
-     * 삼성 메시지(채팅+ RCS), 구글 메시지, 카드사 앱의 멀티라인 알림(bigText, textLines, MessagingStyle messages) 본문을
-     * 누락 없이 전수 추출합니다.
-     */
     private fun extractFullNotificationText(extras: android.os.Bundle): String {
         val parts = mutableListOf<String>()
 
@@ -128,7 +106,6 @@ class LifelogNotificationListenerService : NotificationListenerService() {
             parts.add(text)
         }
 
-        // InboxStyle textLines 추출
         runCatching {
             val textLines = extras.getCharSequenceArray("android.textLines")
             if (!textLines.isNullOrEmpty()) {
@@ -141,7 +118,6 @@ class LifelogNotificationListenerService : NotificationListenerService() {
             }
         }
 
-        // MessagingStyle (RCS 채팅+ 등) android.messages 배열 추출
         runCatching {
             @Suppress("DEPRECATION")
             val messages = extras.getParcelableArray("android.messages")
@@ -161,10 +137,6 @@ class LifelogNotificationListenerService : NotificationListenerService() {
         return parts.joinToString("\n").trim()
     }
 
-    /**
-     * [M-05] 서비스 종료 시 코루틴 스코프를 명시적으로 취소하여 잔존 코루틴 누수 방지.
-     * 미호출 시 서비스 종료 후에도 scope 내 코루틴이 계속 실행되어 메모리가 해제되지 않습니다.
-     */
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()

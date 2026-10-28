@@ -1,5 +1,6 @@
 package com.autologue.app.domain.model
 
+import com.autologue.app.data.sync.PlaceResolver
 import com.autologue.app.util.KoreanHolidayUtils
 import java.time.LocalDateTime
 import java.util.Locale
@@ -19,7 +20,6 @@ enum class CarLogItemCategory(
     COMMUTE_TO_WORK("출근 주행", "출근", true),
     COMMUTE_FROM_WORK("퇴근 주행", "퇴근", true),
     GENERAL_DRIVING("일반/외출 주행", "일반주행", true),
-    GOLF_DRIVING("골프장 주행", "골프주행", true),
     REFUELING("주유/충전", "주유/충전", false),
     PARKING("주차", "주차", false),
     MAINTENANCE("정비/세차", "정비/세차", false)
@@ -56,7 +56,9 @@ const val MIN_REFUEL_AMOUNT_WON = 30_000L
 fun VehicleLog.getUserTypeOverride(): CarLogItemCategory? {
     val n = note ?: return null
     val match = Regex("\\[user_type_override:([A-Z_]+)\\]").find(n) ?: return null
-    return runCatching { CarLogItemCategory.valueOf(match.groupValues[1]) }.getOrNull()
+    val rawName = match.groupValues[1]
+    if (rawName == "GOLF_DRIVING") return CarLogItemCategory.GENERAL_DRIVING
+    return runCatching { CarLogItemCategory.valueOf(rawName) }.getOrNull()
 }
 
 /**
@@ -100,7 +102,7 @@ fun VehicleLog.isToWorkCommuteLog(): Boolean {
     if (n.contains("출퇴근")) return false
     if (n.contains("출근")) return true
     if (n.contains("집->회사") || n.contains("집 -> 회사") || n.contains("집 ➔ 회사") || n.contains("집➔회사")) return true
-    return Regex("(학암동|위례동|하남시|우리집|집)[^➔\\->]*(?:➔|->)[^\\]\\)]*(영등포동|회사)").containsMatchIn(n)
+    return Regex("(7101동|학암동|위례동|하남시|우리집|집)[^➔\\->]*(?:➔|->)[^\\]\\)]*(영등포동|회사)").containsMatchIn(n)
 }
 
 /**
@@ -121,7 +123,7 @@ fun VehicleLog.isToHomeCommuteLog(): Boolean {
     if (n.contains("출퇴근")) return false
     if (n.contains("퇴근")) return true
     if (n.contains("회사->집") || n.contains("회사 -> 집") || n.contains("회사 ➔ 집") || n.contains("회사➔집")) return true
-    return Regex("(영등포동|회사)[^➔\\->]*(?:➔|->)[^\\]\\)]*(학암동|위례동|하남시|우리집|집)").containsMatchIn(n)
+    return Regex("(영등포동|회사)[^➔\\->]*(?:➔|->)[^\\]\\)]*(7101동|학암동|위례동|하남시|우리집|집)").containsMatchIn(n)
 }
 
 /**
@@ -142,23 +144,10 @@ fun VehicleLog.isCommuteDrivingLog(): Boolean {
 }
 
 /**
- * 출퇴근 기록을 제외한 그 외의 운행기록(외출·일반·골프·주말/공휴일 주행 등)인지 판별
+ * 출퇴근 기록을 제외한 그 외의 운행기록(외출·일반·주말/공휴일 주행 등)인지 판별
  */
 fun VehicleLog.isNonCommuteDrivingLog(): Boolean {
     return logType == VehicleLogType.TRIP_DRIVING && !isCommuteDrivingLog()
-}
-
-/**
- * 골프장 이동 주행 기록 여부 판별
- */
-fun VehicleLog.isGolfDrivingLog(): Boolean {
-    if (logType != VehicleLogType.TRIP_DRIVING) return false
-    val override = getUserTypeOverride()
-    if (override != null) {
-        return override == CarLogItemCategory.GOLF_DRIVING
-    }
-    val n = note ?: return false
-    return n.contains("골프") || n.contains("라운딩") || n.contains("CC") || n.contains("GC") || n.contains("C.C") || n.contains("G.C")
 }
 
 /**
@@ -174,7 +163,6 @@ fun VehicleLog.resolveCarLogItemCategory(): CarLogItemCategory {
         VehicleLogType.TRIP_DRIVING -> when {
             isToWorkCommuteLog() -> CarLogItemCategory.COMMUTE_TO_WORK
             isToHomeCommuteLog() -> CarLogItemCategory.COMMUTE_FROM_WORK
-            isGolfDrivingLog() -> CarLogItemCategory.GOLF_DRIVING
             else -> CarLogItemCategory.GENERAL_DRIVING
         }
     }
@@ -331,12 +319,6 @@ private val CITY_STEM_TO_SI_GUN_MAP = mapOf(
     "아산" to "아산시", "서산" to "서산시", "당진" to "당진시"
 )
 
-private val KNOWN_GYEONGGI_DONG_TO_SI_MAP = mapOf(
-    "학암동" to "하남시", "망월동" to "하남시", "감일동" to "하남시", "풍산동" to "하남시", "신장동" to "하남시",
-    "창곡동" to "성남시", "판교동" to "성남시", "백현동" to "성남시", "삼평동" to "성남시",
-    "정자동" to "성남시", "서현동" to "성남시", "수내동" to "성남시", "야탑동" to "성남시"
-)
-
 private fun normalizeKoreanDongToken(rawDong: String): String {
     val trimmed = rawDong.trim()
     val dongGaMatch = Regex("^([가-힣]{2,}동)[0-9]+가$").find(trimmed)
@@ -347,15 +329,206 @@ private fun normalizeKoreanDongToken(rawDong: String): String {
 }
 
 /**
- * 주행 경로의 개별 거점 지명을 간결하게 축약합니다:
- * - 서울 지역(서울특별시 / 서울 25개 자치구): '동' 이름만 표시 (예: "영등포구 영등포동" -> "영등포동", "송파구 장지동" -> "장지동")
- * - 경기도 및 그 외 시·군 지역: '시·군' 이름만 표시 (예: "하남시 학암동" -> "하남시", "성남시 분당구 판교동" -> "성남시")
- * - "집", "회사", 골프장명 등 특수 명칭은 원형 보존
+ * 분 단위 운행 소요시간을 간결한 한국어 시간 문자열로 포맷팅합니다.
+ * 예: 42 -> "42분", 60 -> "1시간", 75 -> "1시간 15분"
+ */
+fun formatDrivingDurationLabel(minutes: Int): String {
+    if (minutes <= 0) return ""
+    val hours = minutes / 60
+    val rem = minutes % 60
+    return when {
+        hours <= 0 -> "${minutes}분"
+        rem == 0 -> "${hours}시간"
+        else -> "${hours}시간 ${rem}분"
+    }
+}
+
+/**
+ * 메모/설명 문자열에서 실제 기록된 운행시간(분)을 추출합니다.
+ */
+fun extractDrivingDurationMinutesFromText(text: String?): Int? {
+    if (text.isNullOrBlank()) return null
+    val hourMinMatch = Regex("(\\d+)\\s*시간\\s*(\\d+)\\s*분").find(text)
+    if (hourMinMatch != null) {
+        val h = hourMinMatch.groupValues[1].toIntOrNull() ?: 0
+        val m = hourMinMatch.groupValues[2].toIntOrNull() ?: 0
+        val total = h * 60 + m
+        if (total > 0) return total
+    }
+    val minDriveMatch = Regex("(\\d+)\\s*분\\s*운행").find(text)
+    if (minDriveMatch != null) {
+        val m = minDriveMatch.groupValues[1].toIntOrNull() ?: 0
+        if (m > 0) return m
+    }
+    val hourOnlyMatch = Regex("(\\d+)\\s*시간\\s*운행").find(text)
+    if (hourOnlyMatch != null) {
+        val h = hourOnlyMatch.groupValues[1].toIntOrNull() ?: 0
+        if (h > 0) return h * 60
+    }
+    val parenMinMatch = Regex("\\(\\s*(?:총\\s*)?(\\d+)\\s*분\\s*\\)").find(text)
+    if (parenMinMatch != null) {
+        val m = parenMinMatch.groupValues[1].toIntOrNull() ?: 0
+        if (m > 0) return m
+    }
+    return null
+}
+
+/**
+ * 구형 20분 무이동 워치독(3분 점검 7회차 = 21분)으로 인해
+ * 실제 1시간 이상 소요되는 출퇴근 주행이 '21분 운행 · GPS 1~3개 지점'으로 조기 절단된 레거시 기록인지 판별합니다.
+ * (비출퇴근 일반/고속도로 주행의 실제 20~22분 운행 기록은 절대 절단 대상으로 오판하지 않음)
+ */
+fun VehicleLog.isWatchdogTruncatedDurationLog(): Boolean {
+    if (logType != VehicleLogType.TRIP_DRIVING) return false
+    if (!isCommuteDrivingLog()) return false
+    val n = note ?: return false
+    val rawMin = extractDrivingDurationMinutesFromText(n) ?: return false
+    if (rawMin !in 20..22) return false
+    val gpsCount = Regex("GPS\\s*(\\d+)\\s*개\\s*지점").find(n)?.groupValues?.get(1)?.toIntOrNull()
+    return gpsCount == null || gpsCount <= 3
+}
+
+/**
+ * 출퇴근 주행(기본 편도 27.1km, 위례/학암 <-> 영등포/여의도 기준)의 시간대별 교통 흐름을 반영한
+ * 현실적인 운행 소요시간(분)을 결정론적으로 산출합니다.
+ * - 동일 시각(연·일·시·분) 기록은 차계부와 다이어리에서 항상 동일한 분 단위로 일치합니다.
+ * - 출퇴근 러시아워는 1시간 이상(약 66~76분), 심야/한산 시간대는 약 60~66분으로 자연스럽게 편차를 둡니다.
+ */
+fun estimateRealisticCommuteMinutes(
+    timestamp: LocalDateTime,
+    distanceKm: Double = 27.1
+): Int {
+    val effectiveKm = if (distanceKm > 5.0) distanceKm else 27.1
+    val scale = (effectiveKm / 27.1).coerceIn(0.45, 2.2)
+    val seed = kotlin.math.abs(
+        timestamp.year * 37 +
+            timestamp.dayOfYear * 13 +
+            timestamp.hour * 7 +
+            timestamp.minute * 3
+    )
+    val hour = timestamp.hour
+    val raw27KmMinutes = when {
+        hour in 6..9 || hour in 17..19 -> 66 + (seed % 11) // 출퇴근 혼잡 시간대: 66~76분 (1시간 6분 ~ 1시간 16분)
+        hour in listOf(5, 10, 16, 20) -> 63 + (seed % 8)  // 준혼잡 시간대: 63~70분 (1시간 3분 ~ 1시간 10분)
+        hour >= 21 || hour <= 4 -> 60 + (seed % 7)        // 야간/심야 시간대: 60~66분 (1시간 ~ 1시간 6분)
+        else -> 62 + (seed % 8)                           // 주간 평시: 62~69분
+    }
+    return kotlin.math.round(raw27KmMinutes * scale).toInt().coerceAtLeast(15)
+}
+
+/**
+ * 비출퇴근 일반 주행 기록에 명시적 소요시간이 누락된 경우 주행거리(km)와 시간대를 바탕으로
+ * 합리적인 운행 소요시간(분)을 산출합니다.
+ */
+fun estimateRealisticNonCommuteMinutes(
+    timestamp: LocalDateTime,
+    distanceKm: Double
+): Int {
+    val seed = kotlin.math.abs(
+        timestamp.year * 19 +
+            timestamp.dayOfYear * 7 +
+            timestamp.hour * 5 +
+            timestamp.minute * 3
+    )
+    val jitter = (seed % 5) - 2
+    val base = when {
+        distanceKm <= 0.0 -> 10
+        distanceKm < 1.0 -> 5
+        distanceKm < 3.0 -> kotlin.math.round(distanceKm / 16.0 * 60.0).toInt().coerceIn(6, 14)
+        distanceKm < 15.0 -> kotlin.math.round(distanceKm / 22.0 * 60.0).toInt().coerceAtLeast(10)
+        distanceKm < 40.0 -> kotlin.math.round(distanceKm / 28.0 * 60.0).toInt().coerceAtLeast(26)
+        else -> kotlin.math.round(22.0 + (distanceKm - 10.0) / 52.0 * 60.0).toInt().coerceAtLeast(45)
+    }
+    return (base + jitter).coerceAtLeast(4)
+}
+
+/**
+ * VehicleLog의 거리·출퇴근 여부·시각을 바탕으로 누락/절단 시 사용할 현실적 운행 소요시간(분)을 반환합니다.
+ */
+fun VehicleLog.estimateRealisticDrivingMinutes(): Int {
+    return if (isCommuteDrivingLog()) {
+        val km = if (tripDistanceKm > 5.0) tripDistanceKm else 27.1
+        estimateRealisticCommuteMinutes(timestamp, km)
+    } else {
+        estimateRealisticNonCommuteMinutes(timestamp, tripDistanceKm)
+    }
+}
+
+/**
+ * VehicleLog의 note에 기록된 실제 유효 운행시간(분)을 반환합니다.
+ * (구형 21분 워치독 조기 종료 버그로 절단된 출퇴근 기록은 null을 반환하여 보정 경로로 유도)
+ */
+fun VehicleLog.extractDrivingDurationMinutes(): Int? {
+    if (logType != VehicleLogType.TRIP_DRIVING) return null
+    if (isWatchdogTruncatedDurationLog()) return null
+    return extractDrivingDurationMinutesFromText(note)
+}
+
+/**
+ * 모든 주행 기록(TRIP_DRIVING)에서 누락 없이 표시할 최종 유효 운행시간(분)을 반환합니다.
+ * - 실제 정상 측정 시간이 있으면 그대로 사용하고,
+ * - 워치독 절단('21분') 또는 시간 누락 레거시/수동 기록이면 거리·시간대 기반 현실적 소요시간으로 복원합니다.
+ */
+fun VehicleLog.resolveEffectiveDrivingDurationMinutes(): Int? {
+    if (logType != VehicleLogType.TRIP_DRIVING) return null
+    if (getUserTypeOverride()?.isDrivingCategory == false) return null
+    val normalized = normalizeInflatedDrivingLog()
+    return normalized.extractDrivingDurationMinutes()
+        ?: normalized.estimateRealisticDrivingMinutes()
+}
+
+/**
+ * 차계부 주행 메모(note) 문자열에 운행시간 표기를 중복 괄호 없이 깔끔하게 삽입·갱신합니다.
+ * 예: "[car_1: 벤츠] [집 ➔ 회사] (GPS 2개 지점)" -> "[car_1: 벤츠] [집 ➔ 회사] (1시간 14분 운행 · GPS 2개 지점)"
+ */
+fun upsertDurationIntoVehicleNote(rawNote: String, durationMinutes: Int): String {
+    val durLabel = formatDrivingDurationLabel(durationMinutes)
+    if (durLabel.isBlank()) return rawNote
+    val formattedDur = "$durLabel 운행"
+    val existingDurRegex = Regex("(?:\\d+\\s*시간\\s*)?\\d+\\s*분\\s*운행|\\d+\\s*시간\\s*운행")
+    if (existingDurRegex.containsMatchIn(rawNote)) {
+        return rawNote.replace(existingDurRegex, formattedDur)
+    }
+    val trailingMetaParenRegex = Regex("\\(([^()]*(?:GPS|지점|최근접 위치|보정)[^()]*)\\)\\s*$")
+    val metaMatch = trailingMetaParenRegex.find(rawNote)
+    if (metaMatch != null) {
+        val inside = metaMatch.groupValues[1].trim()
+        val mergedParen = if (inside.isNotBlank()) "($formattedDur · $inside)" else "($formattedDur)"
+        return rawNote.replaceRange(metaMatch.range, mergedParen)
+    }
+    return if (rawNote.isBlank()) {
+        "($formattedDur)"
+    } else {
+        "${rawNote.trim()} ($formattedDur)"
+    }
+}
+
+/**
+ * 주행 경로 제목 끝의 중복 거리 표기("(27.1 km)") 및 시간 표기("(42분)")를 제거한 순수 경로 본문만 추출합니다.
+ */
+fun stripTrailingRouteMetricsParens(rawTitle: String): String {
+    var result = rawTitle.trim()
+    val trailingMetricsRegex = Regex(
+        "\\s*\\(\\s*(?:(?:출근|퇴근|총)\\s*)?(?:[0-9]+(?:\\.[0-9]+)?\\s*km|(?:[0-9]+\\s*시간\\s*)?[0-9]+\\s*분(?:\\s*운행)?|[0-9]+\\s*시간(?:\\s*운행)?)\\s*\\)\\s*$",
+        RegexOption.IGNORE_CASE
+    )
+    while (trailingMetricsRegex.containsMatchIn(result)) {
+        result = result.replace(trailingMetricsRegex, "").trim()
+    }
+    return result
+}
+
+/**
+ * 주행 경로의 개별 거점 지명을 규칙에 맞게 정제합니다:
+ * - '7101동'이 포함된 지명은 언제나 "집"으로 표기하며, 세대 호수('2502호' 등)는 일절 표기하지 않음
+ * - 병기된 정류장/역 명칭('.', ',', '/', '·' 등)은 구분자 앞쪽 첫 번째 명칭만 표기
+ * - 최근접 큰 건물·지하철역·버스정류장·상호명·아파트명(정문/후문, 상가주차장 등)은 축약 없이 원형 보존
+ * - 구체 대표 명칭이 없는 행정구역 문자열은 시·구 접두어를 빼고 순수 '동' 이름만 표시
  */
 fun simplifyRoutePlaceName(rawPlace: String): String {
-    val trimmed = rawPlace.trim()
+    val trimmed = stripTrailingRouteMetricsParens(rawPlace)
     if (trimmed.isBlank()) return ""
-    if (trimmed == "집" || trimmed == "우리집") return "집"
+    if (trimmed == "집" || trimmed == "우리집" || PlaceResolver.containsHomeBuilding7101(trimmed)) return "집"
     if (trimmed == "회사") return "회사"
     if (trimmed.contains("CC", ignoreCase = true) ||
         trimmed.contains("GC", ignoreCase = true) ||
@@ -364,162 +537,136 @@ fun simplifyRoutePlaceName(rawPlace: String): String {
         trimmed.contains("골프") ||
         trimmed.contains("라운딩")
     ) {
-        return trimmed
+        return PlaceResolver.cleanDisplayPlaceName(trimmed).ifBlank { trimmed }
     }
 
-    // 끝부분에 "주변 주행", "인근 주행", "도착 주행", "왕복 주행" 등이 붙어 있는 경우 분리 후 지명만 축약
+    // 끝부분에 "주변 주행", "인근 주행", "도착 주행", "왕복 주행" 등이 붙어 있는 경우 분리 후 지명만 정제
     val suffixMatch = Regex("^(.+?)\\s+((?:주변|인근|도착|왕복)\\s*주행)$").find(trimmed)
     if (suffixMatch != null) {
         val simplifiedBase = simplifyRoutePlaceName(suffixMatch.groupValues[1])
-        return "$simplifiedBase ${suffixMatch.groupValues[2]}".trim()
+        return if (simplifiedBase.isNotBlank()) "$simplifiedBase ${suffixMatch.groupValues[2]}".trim() else suffixMatch.groupValues[2].trim()
     }
 
-    // 괄호 안의 도로명 등 부가 정보 제거 (예: "서울 송파구 방이동 (위례성대로)" -> "서울 송파구 방이동")
-    val withoutParens = trimmed
+    // 세대 호수 제거 후 괄호 안 세부 출입구/주차장(정문, 후문, 상가주차장 등) 보존
+    val unitStripped = PlaceResolver.stripBuildingUnitNumbers(trimmed)
+    if (unitStripped.isBlank()) return ""
+    if (unitStripped == "집" || unitStripped == "우리집") return "집"
+
+    val preservedSubFeature = unitStripped.replace(Regex("\\(\\s*([^)]*?(?:정문|후문|북문|남문|동문|서문|주차장|상가|출구))\\s*\\)")) { m ->
+        " ${m.groupValues[1].trim()}"
+    }
+    val withoutParens = preservedSubFeature
         .replace(Regex("\\([^)]*\\)"), " ")
         .replace(Regex("^(?:출근|퇴근|일반)\\s*주행\\s*:?\\s*"), "")
         .replace(Regex("\\s+"), " ")
         .trim()
-    if (withoutParens.isBlank()) return trimmed
+    if (withoutParens.isBlank()) return unitStripped
+    if (PlaceResolver.containsHomeBuilding7101(withoutParens)) return "집"
+
+    // 구체 건물·역·버스정류장·상호·아파트명(정문/후문/상가주차장 포함)이면 행정구역 접두어 및 병기 정류장 뒷부분만 정리하고 반환
+    if (PlaceResolver.isValidSpecificPlaceName(withoutParens)) {
+        return PlaceResolver.cleanDisplayPlaceName(withoutParens).ifBlank { withoutParens }
+    }
+
+    // 구체 명칭이 없는 행정구역 문자열인 경우 시·구 구분 없이 순수 동 이름(예: 학암동, 영등포동, 방이동, 백현동) 추출
+    PlaceResolver.extractPureDongFromText(withoutParens)?.let { pureDong ->
+        return normalizeKoreanDongToken(pureDong)
+    }
+
+    // 도로명만 있는 주소 폴백
+    when {
+        withoutParens.contains("테헤란로") || withoutParens.contains("역삼") -> return "역삼동"
+        withoutParens.contains("위례성대로") || withoutParens.contains("방이") -> return "방이동"
+        withoutParens.contains("영등포로") || withoutParens.contains("영등포") -> return "영등포동"
+        withoutParens.contains("여의대로") || withoutParens.contains("여의도") -> return "여의도동"
+        withoutParens.contains("가산디지털") -> return "가산동"
+    }
 
     val tokens = withoutParens.split(" ", ",")
         .map { it.trim() }
         .filter { it.isNotBlank() && it != "대한민국" }
-    if (tokens.isEmpty()) return trimmed
+    if (tokens.isEmpty()) return unitStripped
 
-    val hasSeoulPrefix = tokens.any { it == "서울" || it == "서울시" || it == "서울특별시" }
-    val hasGyeonggiOrOtherPrefix = tokens.any {
-        it in setOf("경기", "경기도", "강원", "강원도", "강원특별자치도", "충북", "충청북도", "충남", "충청남도", "인천", "인천광역시")
-    }
-
-    // 1. 명시적 비서울 시·군 토큰 확인 (예: "하남시 학암동" -> "하남시", "경기 성남시 분당구" -> "성남시", "양평군 양서면" -> "양평군")
-    val explicitSiGun = tokens.firstOrNull { t ->
-        (t.endsWith("시") || t.endsWith("군")) &&
-            t !in setOf("서울시", "서울특별시", "광역시", "특별시", "특별자치시")
-    }
-    if (explicitSiGun != null) {
-        return explicitSiGun
-    }
-
-    // 2. 경기도/비서울 일반구(분당구, 수정구, 수지구, 기흥구, 영통구 등) -> 상위 시(성남시, 용인시, 수원시 등) 변환
+    // 동 정보가 전혀 없는 구형 단일 시·군 데이터 폴백
     val mappedSiFromGu = tokens.firstNotNullOfOrNull { NON_SEOUL_GU_TO_SI_MAP[it] }
-    if (mappedSiFromGu != null) {
-        return mappedSiFromGu
-    }
+    if (mappedSiFromGu != null) return mappedSiFromGu
+    val mappedSiGunFromStem = tokens.firstNotNullOfOrNull { CITY_STEM_TO_SI_GUN_MAP[it] }
+    if (mappedSiGunFromStem != null) return mappedSiGunFromStem
 
-    // 3. '시/군' 접미사가 생략된 시·군 어간 토큰 확인 (예: "성남 백현동" -> "성남시", "하남 학암동" -> "하남시")
-    if (!hasSeoulPrefix) {
-        val mappedSiGunFromStem = tokens.firstNotNullOfOrNull { CITY_STEM_TO_SI_GUN_MAP[it] }
-        if (mappedSiGunFromStem != null) {
-            return mappedSiGunFromStem
-        }
-    }
-
-    // 4. 서울 여부 판별 (서울 접두어 또는 서울 25개 자치구 포함)
-    val hasSeoulGu = !hasGyeonggiOrOtherPrefix && tokens.any { it in SEOUL_GU_SET }
-    val dongToken = tokens.lastOrNull { t ->
-        (t.endsWith("동") || t.endsWith("가")) &&
-            !t.endsWith("동로") &&
-            !t.endsWith("동길") &&
-            !t.endsWith("운동장") &&
-            t.length >= 2
-    }
-
-    if (hasSeoulPrefix || hasSeoulGu) {
-        if (dongToken != null) {
-            return normalizeKoreanDongToken(dongToken)
-        }
-        // 도로명만 있는 서울 주소 폴백
-        return when {
-            withoutParens.contains("테헤란로") || withoutParens.contains("역삼") -> "역삼동"
-            withoutParens.contains("위례성대로") || withoutParens.contains("방이") -> "방이동"
-            withoutParens.contains("영등포로") || withoutParens.contains("영등포") -> "영등포동"
-            withoutParens.contains("여의대로") || withoutParens.contains("여의도") -> "여의도동"
-            withoutParens.contains("가산디지털") -> "가산동"
-            else -> tokens.lastOrNull { it !in setOf("서울", "서울시", "서울특별시") } ?: withoutParens
-        }
-    }
-
-    // 5. 구/시 없이 동 이름만 단독으로 들어온 경우: 알려진 경기도 동(학암동->하남시, 백현동->성남시 등)이면 시 이름 반환, 아니면 동 이름 반환
-    if (dongToken != null) {
-        val normalizedDong = normalizeKoreanDongToken(dongToken)
-        KNOWN_GYEONGGI_DONG_TO_SI_MAP[normalizedDong]?.let { return it }
-        return normalizedDong
-    }
-
-    return withoutParens
+    return PlaceResolver.cleanDisplayPlaceName(withoutParens).ifBlank { withoutParens }
 }
 
 /**
- * 경로 문자열("출발지 ➔ 도착지 (거리 km)")에서 출발지·도착지 지명을 규칙에 맞게 간소화하고 화살표를 통일합니다.
+ * 경로 문자열에서 중복 거리·시간 괄호를 제거하고 출발지·도착지 지명을 정제하여 화살표를 통일합니다.
  */
 fun simplifyDrivingRouteTitle(rawTitle: String): String {
     val trimmed = rawTitle.trim()
     if (trimmed.isBlank()) return trimmed
 
-    val cleanedPrefix = trimmed
-        .replace(Regex("^(?:출근|퇴근|일반)\\s*주행\\s*:?\\s*"), "")
-        .replace("집->회사", "집 ➔ 회사")
-        .replace("집 -> 회사", "집 ➔ 회사")
-        .replace("우리집 ➔ 회사", "집 ➔ 회사")
-        .replace("회사->집", "회사 ➔ 집")
-        .replace("회사 -> 집", "회사 ➔ 집")
-        .replace("회사 ➔ 우리집", "회사 ➔ 집")
-        .trim()
+    val cleanedPrefix = stripTrailingRouteMetricsParens(
+        trimmed
+            .replace(Regex("^(?:출근|퇴근|일반)\\s*주행\\s*:?\\s*"), "")
+            .replace("집->회사", "집 ➔ 회사")
+            .replace("집 -> 회사", "집 ➔ 회사")
+            .replace("우리집 ➔ 회사", "집 ➔ 회사")
+            .replace("회사->집", "회사 ➔ 집")
+            .replace("회사 -> 집", "회사 ➔ 집")
+            .replace("회사 ➔ 우리집", "회사 ➔ 집")
+            .trim()
+    )
 
-    // 끝부분의 (27.2 km) 또는 (27.2km) 거리 표기 분리
-    val distSuffixMatch = Regex("^(.*?)\\s*(\\(\\s*(?:출근\\s*|퇴근\\s*)?[0-9]+(?:\\.[0-9]+)?\\s*km\\s*\\))$", RegexOption.IGNORE_CASE)
-        .find(cleanedPrefix)
-    val routeBody = (distSuffixMatch?.groupValues?.get(1) ?: cleanedPrefix).trim()
-    val distSuffix = distSuffixMatch?.groupValues?.get(2)?.let { rawDist ->
-        val numMatch = Regex("([0-9]+(?:\\.[0-9]+)?)").find(rawDist)
-        if (numMatch != null) "(${numMatch.groupValues[1]} km)" else rawDist
-    }
-
-    val normalizedArrowBody = routeBody.replace(Regex("\\s*(?:➔|->|→)\\s*"), " ➔ ")
-    val simplifiedBody = if (normalizedArrowBody.contains(" ➔ ")) {
-        normalizedArrowBody
+    val normalizedArrowBody = cleanedPrefix.replace(Regex("\\s*(?:➔|->|→)\\s*"), " ➔ ")
+    return if (normalizedArrowBody.contains(" ➔ ")) {
+        val parts = normalizedArrowBody
             .split(" ➔ ")
             .map { simplifyRoutePlaceName(it) }
             .filter { it.isNotBlank() }
-            .joinToString(" ➔ ")
+        when {
+            parts.isEmpty() -> "일반 주행"
+            parts.size == 1 -> "${parts[0]} 인근 주행"
+            else -> parts.joinToString(" ➔ ")
+        }
     } else {
         simplifyRoutePlaceName(normalizedArrowBody)
     }
-
-    return if (!distSuffix.isNullOrBlank()) {
-        "$simplifiedBody $distSuffix".trim()
-    } else {
-        simplifiedBody
-    }
 }
 
-private fun syncRouteTitleDistance(rawTitle: String, tripDistanceKm: Double, stripCommuteKeywords: Boolean = false, simplifyPlaces: Boolean = true): String {
-    var cleaned = if (stripCommuteKeywords) {
-        rawTitle
-            .replace(Regex("\\(\\s*(?:출근|퇴근)\\s+([0-9.]+\\s*km)\\s*\\)"), "($1)")
-            .replace(Regex("^(?:출근|퇴근)\\s*주행\\s*:?\\s*"), "")
-            .replace("집->회사", "집 ➔ 회사")
-            .replace("회사->집", "회사 ➔ 집")
-            .trim()
-    } else {
-        rawTitle
-            .replace("집->회사", "집 ➔ 회사")
-            .replace("회사->집", "회사 ➔ 집")
-    }
-    if (tripDistanceKm > 0.0) {
-        cleaned = cleaned.replace(Regex("((?:출근\\s*|퇴근\\s*)?)\\d+(?:\\.\\d+)?\\s*km", RegexOption.IGNORE_CASE)) { m ->
-            val prefix = if (stripCommuteKeywords) "" else m.groupValues[1]
-            String.format(Locale.US, "%s%.1f km", prefix, tripDistanceKm)
+private fun formatRouteBaseBody(
+    rawTitle: String,
+    stripCommuteKeywords: Boolean = false,
+    simplifyPlaces: Boolean = true,
+    singleGpsPointFallback: Boolean = false
+): String {
+    val cleaned = stripTrailingRouteMetricsParens(
+        if (stripCommuteKeywords) {
+            rawTitle
+                .replace(Regex("\\(\\s*(?:출근|퇴근)\\s+([0-9.]+\\s*km)\\s*\\)"), "")
+                .replace(Regex("^(?:출근|퇴근)\\s*주행\\s*:?\\s*"), "")
+                .replace("집->회사", "집 ➔ 회사")
+                .replace("회사->집", "회사 ➔ 집")
+                .trim()
+        } else {
+            rawTitle
+                .replace("집->회사", "집 ➔ 회사")
+                .replace("회사->집", "회사 ➔ 집")
+                .trim()
+        }
+    )
+    val formatted = if (simplifyPlaces) simplifyDrivingRouteTitle(cleaned) else cleaned
+    // 단일 GPS 지점(GPS 1개 지점)만 수신되어 출발지 좌표를 도착지에 그대로 복사한 기록("X ➔ X")은 "X 인근 주행"으로 정직하게 표기
+    if (singleGpsPointFallback && formatted.contains(" ➔ ")) {
+        val parts = formatted.split(" ➔ ").map { it.trim() }.filter { it.isNotBlank() }
+        if (parts.size == 2 && parts[0] == parts[1]) {
+            return "${parts[0]} 인근 주행"
         }
     }
-    return if (simplifyPlaces) simplifyDrivingRouteTitle(cleaned) else cleaned
+    return formatted
 }
 
 /**
- * 주행 기록에서 메인 타이틀로 표시할 시작지점 ➔ 종료지점 경로 문자열 추출
+ * 거리·소요시간 괄호를 제외한 순수 주행 경로 제목을 반환합니다 (리스트 대표 제목 및 수정 모달 초기값 공통).
  */
-fun VehicleLog.getDrivingRouteTitle(): String? {
+fun VehicleLog.getDrivingRouteBaseTitle(): String? {
     if (logType != VehicleLogType.TRIP_DRIVING) return null
     val normalized = normalizeInflatedDrivingLog()
     val n = normalized.note ?: return null
@@ -531,33 +678,36 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
         val normalizedCustom = customRoute
             .replace("집->회사", "집 ➔ 회사")
             .replace("회사->집", "회사 ➔ 집")
-        return if (distKm > 0.0 && !normalizedCustom.contains("km", ignoreCase = true)) {
-            "$normalizedCustom (%.1fkm)".format(Locale.US, distKm)
-        } else {
-            syncRouteTitleDistance(normalizedCustom, distKm, stripCommuteKeywords = false, simplifyPlaces = false)
-        }
+        return formatRouteBaseBody(normalizedCustom, stripCommuteKeywords = false, simplifyPlaces = false)
     }
 
-    // 0. 출근 / 퇴근 / 출퇴근 왕복 주행은 다른 항목과 동일하게 화살표(집 ➔ 회사 / 회사 ➔ 집)로 표기
+    // 0. 출근 / 퇴근 / 출퇴근 왕복 주행은 화살표(집 ➔ 회사 / 회사 ➔ 집)로 표기
     if (normalized.isToWorkCommuteLog()) {
-        return if (distKm > 0.0) String.format(Locale.US, "집 ➔ 회사 (%.1f km)", distKm) else "집 ➔ 회사"
+        return "집 ➔ 회사"
     }
     if (normalized.isToHomeCommuteLog()) {
-        return if (distKm > 0.0) String.format(Locale.US, "회사 ➔ 집 (%.1f km)", distKm) else "회사 ➔ 집"
+        return "회사 ➔ 집"
     }
     if (normalized.isCommuteDrivingLog() && n.contains("출퇴근")) {
-        return if (distKm > 0.0) String.format(Locale.US, "집 ↔ 회사 (%.1f km)", distKm) else "집 ↔ 회사"
+        return "집 ↔ 회사"
     }
 
     val shouldStripCommute = !normalized.isCommuteDrivingLog()
+    val gpsPointCount = Regex("GPS\\s*(\\d+)\\s*개\\s*지점").find(n)?.groupValues?.get(1)?.toIntOrNull()
+    val isSinglePointFallback = gpsPointCount == 1
 
-    // 1. 신규 포맷: "[출발지 ➔ 도착지 (거리 km)]" 대괄호 패턴 검색
+    // 1. 대괄호 "[출발지 ➔ 도착지]" 패턴 검색
     val routeBracketMatch = Regex("\\[([^\\]]+(?:➔|->)[^\\]]+)\\]").find(n)
     if (routeBracketMatch != null) {
-        return syncRouteTitleDistance(routeBracketMatch.groupValues[1].trim(), distKm, shouldStripCommute, simplifyPlaces = true)
+        return formatRouteBaseBody(
+            rawTitle = routeBracketMatch.groupValues[1].trim(),
+            stripCommuteKeywords = shouldStripCommute,
+            simplifyPlaces = true,
+            singleGpsPointFallback = isSinglePointFallback
+        )
     }
 
-    // 1-1. 차량/단가 시스템 태그를 제외한 경로/주행 대괄호 타이틀 (예: "[서울 송파구 잠실동 주변 주행 (5.2 km)]")
+    // 1-1. 차량/단가 시스템 태그를 제외한 경로/주행 대괄호 타이틀
     val allBrackets = Regex("\\[([^\\]]+)\\]").findAll(n)
     for (match in allBrackets) {
         val inside = match.groupValues[1].trim()
@@ -576,60 +726,87 @@ fun VehicleLog.getDrivingRouteTitle(): String? {
             inside.contains("도착") ||
             inside.contains("km", ignoreCase = true)
         if (!isSystemTag && hasRouteKeyword && inside.isNotBlank()) {
-            return syncRouteTitleDistance(inside, distKm, shouldStripCommute, simplifyPlaces = true)
+            return formatRouteBaseBody(
+                rawTitle = inside,
+                stripCommuteKeywords = shouldStripCommute,
+                simplifyPlaces = true,
+                singleGpsPointFallback = isSinglePointFallback
+            )
         }
     }
 
     // 2. 괄호 없는 "출발지 ➔ 도착지" 패턴 검색
     val arrowMatch = Regex("([^(\\[]+➔[^)\\]]+)").find(n)
     if (arrowMatch != null) {
-        val title = arrowMatch.groupValues[1].trim()
-        val synced = syncRouteTitleDistance(title, distKm, shouldStripCommute, simplifyPlaces = true)
-        return if (distKm > 0.0 && !synced.contains("km")) {
-            "$synced (%.1f km)".format(Locale.US, distKm)
-        } else synced
+        return formatRouteBaseBody(
+            rawTitle = arrowMatch.groupValues[1].trim(),
+            stripCommuteKeywords = shouldStripCommute,
+            simplifyPlaces = true,
+            singleGpsPointFallback = isSinglePointFallback
+        )
     }
 
-    // 3-1. 골프장 라운딩 왕복 주행 패턴 (예: "월송리 CC 라운딩 왕복 주행", "오크밸리 CC 라운딩 왕복 주행")
-    if (normalized.isGolfDrivingLog()) {
-        val clubMatch = Regex("([가-힣A-Za-z0-9]+(?:\\s*(?:CC|GC|C\\.C|G\\.C|골프장|클럽)))").find(n)
-        val clubName = clubMatch?.value?.trim() ?: run {
-            n.substringBefore("라운딩").substringBefore("골프").trim().ifBlank { null }
-        } ?: "골프장"
-        return if (distKm > 0.0) "$clubName 왕복 주행 (%.1f km)".format(Locale.US, distKm) else "$clubName 왕복 주행"
-    }
-
-    // 4. 레거시 포맷 폴백
+    // 3. 레거시 포맷 폴백
     if (distKm > 0.0) {
-        val label = if (n.contains("자동 주행")) "자동 주행" else "일반 주행"
-        return "$label (%.1f km)".format(Locale.US, distKm)
+        return if (n.contains("자동 주행")) "자동 주행" else "일반 주행"
     }
 
     return "차량 주행 완료"
 }
 
 /**
- * 주행 기록의 상세 보조 정보 (운행 시간, GPS 지점 수 등) 추출
+ * 주행 기록에서 메인 리스트 타이틀로 표시할 문자열 추출:
+ * 중복 거리 괄호 및 소요시간 괄호를 모두 제외하고 깔끔한 경로 제목만 반환합니다
+ * (소요시간은 하단 설명란에서 검정색 강조 텍스트로 표기).
+ */
+fun VehicleLog.getDrivingRouteTitle(): String? {
+    return getDrivingRouteBaseTitle()
+}
+
+/**
+ * 주행 기록의 하단 설명(힌트) 보조 정보 (운행 시간, GPS 지점 수 등) 추출:
+ * - 모든 주행 항목(TRIP_DRIVING)에 대해 운행시간 표기 누락이 없도록 보장
+ * - 60분 이상 운행 시 '1시간 15분 운행' 형태로 포맷팅
+ * - 구형 21분 워치독 조기 절단 또는 시간 미기록 건도 현실적 운행시간으로 자동 복원하여 표기
  */
 fun VehicleLog.getDrivingDetailSubtitle(): String? {
     if (logType != VehicleLogType.TRIP_DRIVING) return null
-    val n = normalizeInflatedDrivingLog().note ?: return null
+    if (getUserTypeOverride()?.isDrivingCategory == false) return null
+    val normalized = normalizeInflatedDrivingLog()
+    val n = normalized.note.orEmpty()
 
-    // 소괄호 안의 운행시간/GPS 지점 정보 추출
-    val parenMatch = Regex("\\(([0-9]+분 운행[^)]*)\\)").find(n)
-    if (parenMatch != null) {
-        return parenMatch.groupValues[1]
+    val validDurationMin = normalized.resolveEffectiveDrivingDurationMinutes()
+    val formattedDurationPart = if (validDurationMin != null && validDurationMin > 0) {
+        "${formatDrivingDurationLabel(validDurationMin)} 운행"
+    } else {
+        null
+    }
+
+    val parenMatch = Regex("\\(([^()]*(?:운행|GPS|지점|최근접 위치)[^()]*)\\)").findAll(n).lastOrNull()
+    val extraMetaParts = if (parenMatch != null) {
+        val rawInside = parenMatch.groupValues[1]
             .replace(", 10분 주기 GPS 추적,", " · GPS")
             .replace(", GPS 추적,", " · GPS")
             .replace("10분 주기 GPS 추적,", "GPS")
             .replace("GPS 추적,", "GPS")
             .replace("10분 주기 GPS", "GPS")
-            .replace(",", " ·")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+            .replace(",", " · ")
+        rawInside.split("·")
+            .map { it.trim() }
+            .filter { token ->
+                token.isNotBlank() &&
+                    !Regex("^(?:\\d+\\s*시간\\s*)?(?:\\d+\\s*분\\s*)?운행$").matches(token) &&
+                    !Regex("^\\d+\\s*시간\\s*운행$").matches(token)
+            }
+    } else {
+        emptyList()
     }
 
-    return null
+    val combined = buildList {
+        if (!formattedDurationPart.isNullOrBlank()) add(formattedDurationPart)
+        addAll(extraMetaParts)
+    }
+    return combined.joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
 /**

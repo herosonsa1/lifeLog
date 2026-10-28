@@ -1,15 +1,12 @@
 package com.autologue.app.presentation.expense
 
 import com.autologue.app.domain.model.ExpenseCategory
-import com.autologue.app.domain.model.GolfRound
-import com.autologue.app.domain.model.GolfType
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.presentation.car.CarCostCategoryType
 import com.autologue.app.presentation.car.CarLedgerAnalyticsEngine
-import com.autologue.app.presentation.golf.GolfAnalyticsEngine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -169,7 +166,7 @@ class PeriodAnalyticsEngineTest {
                 timestamp = LocalDateTime.of(2026, 9, 12, 7, 0),
                 logType = VehicleLogType.TRIP_DRIVING,
                 tripDistanceKm = 400.0,
-                note = "골프 라운딩 이동"
+                note = "주말 교외 일반 이동"
             ),
             VehicleLog(
                 id = 3L,
@@ -231,157 +228,15 @@ class PeriodAnalyticsEngineTest {
     }
 
     @Test
-    fun `GolfAnalyticsEngine compares field rounds, screen golf, scores and YoY period accurately`() {
-        val rounds = listOf(
-            // 2025년 하반기(전년 동기): 필드 1회(92타, 퍼트 35, 벌타 3), 스크린 1회(88타)
-            GolfRound(
-                id = 1L,
-                clubName = "남서울 CC",
-                roundDate = LocalDateTime.of(2025, 9, 14, 8, 0),
-                golfType = GolfType.FIELD,
-                totalScore = 92,
-                totalPutts = 35,
-                penaltyCount = 3,
-                greenFeeExpense = 240_000L,
-                averageDriveDistance = 200.0,
-                girPercentage = 27.8,
-                memo = "[통계: 버디 0, 파 5, 보기 9, 더블+ 4]"
-            ),
-            GolfRound(
-                id = 2L,
-                clubName = "골프존파크 판교점",
-                roundDate = LocalDateTime.of(2025, 10, 5, 19, 30),
-                golfType = GolfType.SCREEN,
-                totalScore = 88,
-                totalPutts = 32,
-                penaltyCount = 1,
-                greenFeeExpense = 25_000L,
-                averageDriveDistance = 205.0,
-                girPercentage = 38.9,
-                memo = "[통계: 버디 1, 파 7, 보기 7, 더블+ 3]"
-            ),
-            // 2026년 상반기(직전 반기): 필드 1회(89타, 퍼트 34, 벌타 2)
-            GolfRound(
-                id = 3L,
-                clubName = "레이크사이드 CC",
-                roundDate = LocalDateTime.of(2026, 5, 10, 7, 30),
-                golfType = GolfType.FIELD,
-                totalScore = 89,
-                totalPutts = 34,
-                penaltyCount = 2,
-                greenFeeExpense = 250_000L,
-                averageDriveDistance = 204.0,
-                girPercentage = 33.3,
-                memo = "[통계: 버디 1, 파 6, 보기 8, 더블+ 3]"
-            ),
-            // 2026년 하반기(현재 대상): 필드 2회(84타, 82타 -> 평균 83타), 스크린 라운드 1회(80타)
-            GolfRound(
-                id = 4L,
-                clubName = "남서울 CC",
-                roundDate = LocalDateTime.of(2026, 9, 20, 8, 0),
-                golfType = GolfType.FIELD,
-                totalScore = 84,
-                totalPutts = 31,
-                penaltyCount = 1,
-                greenFeeExpense = 240_000L,
-                averageDriveDistance = 212.0,
-                girPercentage = 44.4,
-                memo = "[통계: 버디 2, 파 8, 보기 7, 더블+ 1]"
-            ),
-            GolfRound(
-                id = 5L,
-                clubName = "스카이72 CC",
-                roundDate = LocalDateTime.of(2026, 10, 11, 9, 0),
-                golfType = GolfType.FIELD,
-                totalScore = 82,
-                totalPutts = 30,
-                penaltyCount = 0,
-                greenFeeExpense = 230_000L,
-                averageDriveDistance = 216.0,
-                girPercentage = 50.0,
-                memo = "[통계: 버디 2, 파 9, 보기 6, 더블+ 1]"
-            ),
-            GolfRound(
-                id = 6L,
-                clubName = "프렌즈스크린 분당점",
-                roundDate = LocalDateTime.of(2026, 10, 3, 20, 0),
-                golfType = GolfType.SCREEN,
-                totalScore = 80,
-                totalPutts = 29,
-                penaltyCount = 0,
-                greenFeeExpense = 22_000L,
-                averageDriveDistance = 218.0,
-                girPercentage = 55.6,
-                memo = "[통계: 버디 3, 파 9, 보기 5, 더블+ 1]"
-            )
-        )
-
-        // 가계부 내 스크린골프 추가 결제 1건 (10월 15일 — 라운드 기록과 다른 날짜이므로 추가 1회로 합산되어야 함)
-        val transactions = listOf(
-            Transaction(
-                id = 101L,
-                timestamp = LocalDateTime.of(2026, 10, 15, 21, 0),
-                amount = 25_000L,
-                merchantName = "골프존파크 정자점",
-                originalText = "승인 25,000원 골프존파크 정자점",
-                paymentMethod = PaymentMethod.CREDIT_CARD,
-                category = ExpenseCategory.GOLF_SCREEN,
-                cardOrBankName = "신한카드"
-            )
-        )
-
-        val h2Period = PeriodSpec(AnalyticsPeriodUnit.HALF_YEARLY, 2026, 2)
-
-        // 1) 직전 반기(2026년 상반기) 대비 비교 검증
-        val prevReport = GolfAnalyticsEngine.buildReport(
-            allRounds = rounds,
-            allTransactions = transactions,
-            unit = AnalyticsPeriodUnit.HALF_YEARLY,
-            targetPeriod = h2Period,
-            requestedBasis = AnalyticsComparisonBasis.PREVIOUS_PERIOD
-        )
-
-        assertEquals(2, prevReport.currentSnapshot.fieldRoundCount)
-        assertEquals(2, prevReport.currentSnapshot.screenGolfCount) // SCREEN 라운드 1회 + 다른 날짜 결제 1회
-        assertEquals(4, prevReport.currentSnapshot.totalActivityCount)
-        assertEquals(1, prevReport.activeComparisonSnapshot.fieldRoundCount)
-        assertEquals(0, prevReport.activeComparisonSnapshot.screenGolfCount)
-
-        // 평균 스코어: 현재 (84+82+80)/3 = 82.0타 vs 직전 반기 89.0타 -> -7.0타 단축
-        assertEquals(82.0, prevReport.currentSnapshot.averageScore ?: 0.0, 0.1)
-        assertEquals(89.0, prevReport.activeComparisonSnapshot.averageScore ?: 0.0, 0.1)
-        assertEquals(-7.0, prevReport.seqAvgScoreDelta ?: 0.0, 0.1)
-        assertTrue(prevReport.scoreAnalysisInsight.contains("단축"))
-
-        // 2) 전년 동반기(2025년 하반기) 대비 비교 검증
-        val yoyReport = GolfAnalyticsEngine.buildReport(
-            allRounds = rounds,
-            allTransactions = transactions,
-            unit = AnalyticsPeriodUnit.HALF_YEARLY,
-            targetPeriod = h2Period,
-            requestedBasis = AnalyticsComparisonBasis.YEAR_OVER_YEAR
-        )
-
-        assertEquals(PeriodSpec(AnalyticsPeriodUnit.HALF_YEARLY, 2025, 2), yoyReport.activeComparisonPeriod)
-        assertEquals(1, yoyReport.activeComparisonSnapshot.fieldRoundCount)
-        assertEquals(1, yoyReport.activeComparisonSnapshot.screenGolfCount)
-        assertEquals(2, yoyReport.activeComparisonSnapshot.totalActivityCount)
-        assertEquals(90.0, yoyReport.activeComparisonSnapshot.averageScore ?: 0.0, 0.1) // (92+88)/2 = 90.0타
-        assertEquals(-8.0, yoyReport.yoyAvgScoreDelta ?: 0.0, 0.1) // 82.0 - 90.0 = -8.0타 단축
-        assertTrue(yoyReport.yoyComparisonInsight.contains("전년 동반기"))
-    }
-
-    @Test
     fun `SyncProgress formats quantitative count and completion percentage accurately`() {
         val runningProgress = com.autologue.app.domain.usecase.sync.SyncProgress(
             isRunning = true,
-            stage = "[2/4단계] 과거 전체 갤러리 사진·위치 분석 중 (310/600장)",
+            stage = "[2/3단계] 과거 갤러리 사진·위치 분석 중 (310/600장)",
             syncedTxCount = 480,
             syncedPhotoCount = 310,
-            syncedGolfCount = 0,
             isDone = false,
             stepNumber = 2,
-            totalSteps = 4,
+            totalSteps = 3,
             stepProcessedCount = 310,
             stepTotalCount = 600,
             overallProcessedCount = 790,

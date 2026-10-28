@@ -23,7 +23,6 @@ data class SyncCheckpointState(
     val lastSyncCompletedAtMillis: Long = 0L,
     val lastSmsSyncCompletedAtMillis: Long = 0L,
     val lastPhotoSyncCompletedAtMillis: Long = 0L,
-    val lastGolfSyncCompletedAtMillis: Long = 0L,
     val lastDiarySyncCompletedAtMillis: Long = 0L,
     val lastLegacyCleanupVersion: Int = 0
 ) {
@@ -58,15 +57,11 @@ class SyncCheckpointPreferences @Inject constructor(
             lastSyncCompletedAtMillis = prefs.getLong(KEY_LAST_SYNC_COMPLETED_AT, 0L),
             lastSmsSyncCompletedAtMillis = prefs.getLong(KEY_LAST_SMS_SYNC_COMPLETED_AT, 0L),
             lastPhotoSyncCompletedAtMillis = prefs.getLong(KEY_LAST_PHOTO_SYNC_COMPLETED_AT, 0L),
-            lastGolfSyncCompletedAtMillis = prefs.getLong(KEY_LAST_GOLF_SYNC_COMPLETED_AT, 0L),
             lastDiarySyncCompletedAtMillis = prefs.getLong(KEY_LAST_DIARY_SYNC_COMPLETED_AT, 0L),
             lastLegacyCleanupVersion = prefs.getInt(KEY_LAST_LEGACY_CLEANUP_VERSION, 0)
         )
     }
 
-    /**
-     * 앱 구동 시 호출하여 마지막 앱 구동 시점을 기록합니다.
-     */
     @Synchronized
     fun recordAppLaunch(timestampMillis: Long = System.currentTimeMillis()) {
         val currentLastLaunch = prefs.getLong(KEY_LAST_APP_LAUNCHED_AT, 0L)
@@ -77,16 +72,12 @@ class SyncCheckpointPreferences @Inject constructor(
         _state.value = loadState()
     }
 
-    /**
-     * 전체 데이터 수집 및 분석 파이프라인이 완료된 시점을 기록합니다.
-     */
     @Synchronized
     fun recordSyncCompleted(timestampMillis: Long = System.currentTimeMillis()) {
         prefs.edit()
             .putLong(KEY_LAST_SYNC_COMPLETED_AT, timestampMillis)
             .putLong(KEY_LAST_SMS_SYNC_COMPLETED_AT, timestampMillis)
             .putLong(KEY_LAST_PHOTO_SYNC_COMPLETED_AT, timestampMillis)
-            .putLong(KEY_LAST_GOLF_SYNC_COMPLETED_AT, timestampMillis)
             .putLong(KEY_LAST_DIARY_SYNC_COMPLETED_AT, timestampMillis)
             .apply()
         _state.value = loadState()
@@ -119,19 +110,6 @@ class SyncCheckpointPreferences @Inject constructor(
     }
 
     @Synchronized
-    fun recordGolfSyncCompleted(
-        timestampMillis: Long = System.currentTimeMillis(),
-        updateGlobalCheckpoint: Boolean = false
-    ) {
-        val editor = prefs.edit().putLong(KEY_LAST_GOLF_SYNC_COMPLETED_AT, timestampMillis)
-        if (updateGlobalCheckpoint) {
-            editor.putLong(KEY_LAST_SYNC_COMPLETED_AT, timestampMillis)
-        }
-        editor.apply()
-        _state.value = loadState()
-    }
-
-    @Synchronized
     fun recordDiarySyncCompleted(
         timestampMillis: Long = System.currentTimeMillis(),
         updateGlobalCheckpoint: Boolean = true
@@ -144,10 +122,6 @@ class SyncCheckpointPreferences @Inject constructor(
         _state.value = loadState()
     }
 
-    /**
-     * 기존 버전에서 업데이트된 단말기의 경우, DB에 이미 수집·분석된 데이터가 존재하면
-     * 가장 최근 데이터의 타임스탬프를 초기 기준점으로 설정하여 불필요한 과거 전체 재스캔을 방지합니다.
-     */
     @Synchronized
     fun ensureBaselineCheckpointFromExistingData(latestDataTimestampMillis: Long) {
         if (latestDataTimestampMillis <= 0L) return
@@ -158,7 +132,6 @@ class SyncCheckpointPreferences @Inject constructor(
                 .putLong(KEY_LAST_SYNC_COMPLETED_AT, safeMillis)
                 .putLong(KEY_LAST_SMS_SYNC_COMPLETED_AT, safeMillis)
                 .putLong(KEY_LAST_PHOTO_SYNC_COMPLETED_AT, safeMillis)
-                .putLong(KEY_LAST_GOLF_SYNC_COMPLETED_AT, safeMillis)
                 .putLong(KEY_LAST_DIARY_SYNC_COMPLETED_AT, safeMillis)
                 .apply()
             _state.value = loadState()
@@ -179,11 +152,6 @@ class SyncCheckpointPreferences @Inject constructor(
         return if (photo > 0L) photo else getLastSyncCompletedAtMillis()
     }
 
-    fun getLastGolfSyncCompletedAtMillis(): Long {
-        val golf = prefs.getLong(KEY_LAST_GOLF_SYNC_COMPLETED_AT, 0L)
-        return if (golf > 0L) golf else getLastSyncCompletedAtMillis()
-    }
-
     fun getLastDiarySyncCompletedAtMillis(): Long {
         val diary = prefs.getLong(KEY_LAST_DIARY_SYNC_COMPLETED_AT, 0L)
         return if (diary > 0L) diary else getLastSyncCompletedAtMillis()
@@ -199,13 +167,6 @@ class SyncCheckpointPreferences @Inject constructor(
         _state.value = loadState()
     }
 
-    // --- 초고속 갤러리 분석을 위한 영구 캐시 (비-골프 OCR 판정 URI & 사진 EXIF 위치 캐시) ---
-
-    private val nonGolfUriMemCache: MutableSet<String> by lazy {
-        val saved = prefs.getStringSet(KEY_NON_GOLF_CHECKED_URIS, emptySet()) ?: emptySet()
-        java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply { addAll(saved) }
-    }
-
     private val photoMetaMemCache: java.util.concurrent.ConcurrentHashMap<String, CachedPhotoLocation> by lazy {
         val map = java.util.concurrent.ConcurrentHashMap<String, CachedPhotoLocation>()
         val rawSet = prefs.getStringSet(KEY_PHOTO_LOCATION_CACHE, emptySet()) ?: emptySet()
@@ -215,44 +176,6 @@ class SyncCheckpointPreferences @Inject constructor(
             }
         }
         map
-    }
-
-    fun isKnownNonGolfUri(uri: String): Boolean = nonGolfUriMemCache.contains(uri)
-
-    fun markNonGolfUri(uri: String) {
-        if (uri.isBlank()) return
-        if (nonGolfUriMemCache.add(uri)) {
-            persistNonGolfUrisIfNeeded()
-        }
-    }
-
-    fun markNonGolfUris(uris: Collection<String>) {
-        var changed = false
-        for (u in uris) {
-            if (u.isNotBlank() && nonGolfUriMemCache.add(u)) {
-                changed = true
-            }
-        }
-        if (changed) {
-            persistNonGolfUris()
-        }
-    }
-
-    @Synchronized
-    private fun persistNonGolfUrisIfNeeded() {
-        if (nonGolfUriMemCache.size % 15 == 0) {
-            persistNonGolfUris()
-        }
-    }
-
-    @Synchronized
-    fun persistNonGolfUris() {
-        val snapshot = if (nonGolfUriMemCache.size > MAX_CACHED_URIS) {
-            nonGolfUriMemCache.take(MAX_CACHED_URIS).toSet()
-        } else {
-            HashSet(nonGolfUriMemCache)
-        }
-        prefs.edit().putStringSet(KEY_NON_GOLF_CHECKED_URIS, snapshot).apply()
     }
 
     fun getCachedPhotoLocation(uri: String): CachedPhotoLocation? = photoMetaMemCache[uri]
@@ -278,14 +201,12 @@ class SyncCheckpointPreferences @Inject constructor(
         private const val KEY_LAST_SYNC_COMPLETED_AT = "last_sync_completed_at_millis"
         private const val KEY_LAST_SMS_SYNC_COMPLETED_AT = "last_sms_sync_completed_at_millis"
         private const val KEY_LAST_PHOTO_SYNC_COMPLETED_AT = "last_photo_sync_completed_at_millis"
-        private const val KEY_LAST_GOLF_SYNC_COMPLETED_AT = "last_golf_sync_completed_at_millis"
         private const val KEY_LAST_DIARY_SYNC_COMPLETED_AT = "last_diary_sync_completed_at_millis"
         private const val KEY_LAST_LEGACY_CLEANUP_VERSION = "last_legacy_cleanup_version"
-        private const val KEY_NON_GOLF_CHECKED_URIS = "non_golf_checked_uris_v1"
         private const val KEY_PHOTO_LOCATION_CACHE = "photo_location_cache_v1"
         private const val MAX_CACHED_URIS = 4000
 
-        const val CURRENT_CLEANUP_VERSION = 28
+        const val CURRENT_CLEANUP_VERSION = 29
 
         private val DISPLAY_FORMATTER = DateTimeFormatter.ofPattern("MM/dd HH:mm", Locale.KOREA)
         private val FULL_DISPLAY_FORMATTER = DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm", Locale.KOREA)
@@ -303,7 +224,6 @@ class SyncCheckpointPreferences @Inject constructor(
 
 /**
  * 갤러리 사진 1장의 EXIF GPS 및 역지오코딩 결과 영구 캐시 엔트리
- * hasGps == false 이면 EXIF에 위치 정보가 없는 사진이므로 재스캔 시 InputStream을 다시 열지 않고 0ms로 통과합니다.
  */
 data class CachedPhotoLocation(
     val hasGps: Boolean,
@@ -341,4 +261,3 @@ data class CachedPhotoLocation(
         }
     }
 }
-

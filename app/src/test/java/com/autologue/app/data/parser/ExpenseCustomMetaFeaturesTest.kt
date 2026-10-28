@@ -166,7 +166,6 @@ class ExpenseCustomMetaFeaturesTest {
             diaryEntries = emptyList(),
             transactions = listOf(tx1, tx2),
             vehicleLogs = emptyList(),
-            golfRounds = emptyList(),
             outputStream = out,
             expenseCustomMetaPreferences = metaPrefs
         )

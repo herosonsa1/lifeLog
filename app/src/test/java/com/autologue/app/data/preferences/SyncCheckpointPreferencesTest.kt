@@ -31,7 +31,6 @@ class SyncCheckpointPreferencesTest {
         assertEquals(0L, initialState.lastSyncCompletedAtMillis)
         assertEquals(0L, initialState.lastSmsSyncCompletedAtMillis)
         assertEquals(0L, initialState.lastPhotoSyncCompletedAtMillis)
-        assertEquals(0L, initialState.lastGolfSyncCompletedAtMillis)
         assertEquals(0L, initialState.lastDiarySyncCompletedAtMillis)
         assertEquals(0, initialState.lastLegacyCleanupVersion)
         assertFalse(initialState.hasCompletedInitialSync)

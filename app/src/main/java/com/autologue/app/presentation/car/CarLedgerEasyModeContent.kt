@@ -888,7 +888,6 @@ private fun EasyCarLogCard(
         log.isToWorkCommuteLog() -> "출근"
         log.isToHomeCommuteLog() -> "퇴근"
         log.isCommuteDrivingLog() -> "출퇴근"
-        log.isGolfDrivingLog() -> "골프장 이동"
         else -> "일반 주행"
     }
 
@@ -986,11 +985,16 @@ private fun EasyCarLogCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val drivingSubtitle = remember(log) { log.getDrivingDetailSubtitle() }
+                    val dateStr = log.timestamp.format(DateTimeFormatter.ofPattern("M월 d일(E) HH:mm", Locale.KOREA))
+                    val captionText = if (!drivingSubtitle.isNullOrBlank()) "$dateStr · $drivingSubtitle" else dateStr
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = log.timestamp.format(DateTimeFormatter.ofPattern("M월 d일(E) HH:mm", Locale.KOREA)),
+                        text = buildHighlightedDurationText(captionText),
                         fontSize = 12.sp,
-                        color = EasyTheme.textSecondary
+                        color = EasyTheme.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }

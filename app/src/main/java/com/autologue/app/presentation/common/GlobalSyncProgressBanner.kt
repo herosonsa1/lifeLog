@@ -71,7 +71,7 @@ class GlobalSyncBannerViewModel @Inject constructor(
 }
 
 /**
- * 앱 내 어느 메뉴(다이어리, 가계부, 차계부, 스마트 골프, 라이프 궤도)에 있더라도
+ * 앱 내 어느 메뉴(다이어리, 가계부, 차계부, 라이프 궤도)에 있더라도
  * 최상단에 고정되어 백그라운드 데이터 수집·분석의 전체 건수 대비 진행 건수와 완료율(%)을 실시간 표시하는 전역 배너.
  */
 @Composable
@@ -268,14 +268,11 @@ fun GlobalSyncProgressBannerContent(
                     modifier = Modifier.weight(1f)
                 )
 
-                val hasCounts = progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0
+                val hasCounts = progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0
                 if (hasCounts) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = buildString {
-                            append("결제 ${progress.syncedTxCount}건 · 사진 ${progress.syncedPhotoCount}장")
-                            if (progress.syncedGolfCount > 0) append(" · 골프 ${progress.syncedGolfCount}건")
-                        },
+                        text = "결제 ${progress.syncedTxCount}건 · 사진 ${progress.syncedPhotoCount}장",
                         style = AppTypography.caption.copy(
                             fontSize = 10.5.sp,
                             fontWeight = FontWeight.Bold,

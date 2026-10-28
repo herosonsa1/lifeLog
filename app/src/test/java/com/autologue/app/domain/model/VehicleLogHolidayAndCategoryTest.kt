@@ -26,7 +26,13 @@ class VehicleLogHolidayAndCategoryTest {
         assertTrue(toWorkLog.isCommuteDrivingLog())
         assertFalse(toWorkLog.isNonCommuteDrivingLog())
         assertEquals(CarLogItemCategory.COMMUTE_TO_WORK, toWorkLog.resolveCarLogItemCategory())
-        assertEquals("집 ➔ 회사 (27.1 km)", toWorkLog.displayTitle())
+        assertEquals("집 ➔ 회사", toWorkLog.displayTitle())
+
+        val toWorkLogWithDuration = toWorkLog.copy(
+            note = "[car_1: G80] [출근 주행: 송파구 위례동 ➔ 영등포구 영등포동 (27.1 km)] (45분 운행)"
+        )
+        assertEquals("집 ➔ 회사", toWorkLogWithDuration.displayTitle())
+        assertEquals("45분 운행", toWorkLogWithDuration.getDrivingDetailSubtitle())
     }
 
     @Test
@@ -88,7 +94,7 @@ class VehicleLogHolidayAndCategoryTest {
         assertTrue(overriddenHolidayLog.isCommuteDrivingLog())
         assertFalse(overriddenHolidayLog.isNonCommuteDrivingLog())
         assertEquals(CarLogItemCategory.COMMUTE_TO_WORK, overriddenHolidayLog.resolveCarLogItemCategory())
-        assertEquals("집 ➔ 회사 (27.1 km)", overriddenHolidayLog.displayTitle())
+        assertEquals("집 ➔ 회사", overriddenHolidayLog.displayTitle())
 
         // 평일 출근 기록을 사용자가 '일반/외출 주행' 및 커스텀 경로로 수정한 경우
         val weekdayCommuteLog = VehicleLog(
@@ -112,6 +118,6 @@ class VehicleLogHolidayAndCategoryTest {
         assertFalse(overriddenGeneralLog.isCommuteDrivingLog())
         assertTrue(overriddenGeneralLog.isNonCommuteDrivingLog())
         assertEquals(CarLogItemCategory.GENERAL_DRIVING, overriddenGeneralLog.resolveCarLogItemCategory())
-        assertEquals("송파구 위례동 ➔ 강남구 역삼동 외출 (18.5km)", overriddenGeneralLog.displayTitle())
+        assertEquals("송파구 위례동 ➔ 강남구 역삼동 외출", overriddenGeneralLog.displayTitle())
     }
 }

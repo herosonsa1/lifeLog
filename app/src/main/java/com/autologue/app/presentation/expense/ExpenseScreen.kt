@@ -375,7 +375,10 @@ fun ExpenseScreen(
                             Column {
                                 Text(
                                     text = "스마트 가계부",
-                                    style = AppTypography.h2
+                                    style = AppTypography.h2,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = "소비·지출 관리",
@@ -383,31 +386,34 @@ fun ExpenseScreen(
                                         color = MenuColors.expense,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 11.sp
-                                    )
+                                    ),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
                             }
                         },
                         actions = {
                             AutoLogueOutlinedButton(
-                                text = "문자 동기화",
+                                text = "동기화",
                                 icon = Icons.Default.Sync,
                                 onClick = triggerSmsSyncAction,
                                 contentColor = MenuColors.expense,
                                 containerColor = MenuColors.expenseBg,
                                 borderColor = MenuColors.expenseBorder
                             )
-                            Spacer(modifier = Modifier.width(Spacing.xxs))
+                            Spacer(modifier = Modifier.width(4.dp))
                             AutoLogueOutlinedButton(
-                                text = "지출 추가",
+                                text = "지출",
                                 icon = Icons.Default.Add,
                                 onClick = { viewModel.openAddDialog() },
                                 contentColor = MenuColors.expense,
                                 containerColor = MenuColors.expenseBg,
                                 borderColor = MenuColors.expenseBorder
                             )
-                            Spacer(modifier = Modifier.width(Spacing.xxs))
+                            Spacer(modifier = Modifier.width(4.dp))
                             StandardTopBarSettingsTrigger(accentColor = MenuColors.expense)
-                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            Spacer(modifier = Modifier.width(Spacing.xxs))
                         },
                         containerColor = AppColors.background
                     )
@@ -2341,6 +2347,7 @@ fun ExpenseScreen(
                 viewModel.expenseCustomMetaPreferences.resolveCardCorporateByCardName(cardName)
             },
             onAddPermanentCategory = { newCat -> viewModel.addCustomCategoryPermanent(newCat) },
+            onSetCategoryDefaultUser = { item, defUser -> viewModel.setCategoryDefaultUser(item, defUser) },
             onOpenCategoryManage = { viewModel.openCategoryManageDialog() },
             onOpenUserClassificationManage = { viewModel.openUserClassificationManageDialog() },
             onUpdateUserClassification = { oldName, newName, colorIdx ->
@@ -2476,6 +2483,7 @@ fun ExpenseScreen(
             userClassifications = uiState.userClassifications,
             initialCustomCategoryName = uiState.customCategoryByTxId[editingTx.id],
             initialUserClassificationName = uiState.userClassByTxId[editingTx.id]?.name,
+            initialHasExplicitUserRule = viewModel.expenseCustomMetaPreferences.hasExplicitUserClassificationRule(editingTx),
             initialIsCorporate = uiState.corporateByTxId[editingTx.id] == true || editingTx.cardOrBankName.contains("법인"),
             initialBaseCardName = resolvedBaseCardOrBank,
             initialIsOneTimeSave = true,
@@ -2495,6 +2503,7 @@ fun ExpenseScreen(
                 )
             },
             onAddPermanentCategory = { newCat -> viewModel.addCustomCategoryPermanent(newCat) },
+            onSetCategoryDefaultUser = { item, defUser -> viewModel.setCategoryDefaultUser(item, defUser) },
             onUpdateCategoryName = { item, newName -> viewModel.updateManagedCategoryName(item, newName) },
             onDeleteCategory = { item -> viewModel.deleteManagedCategory(item) },
             onOpenCategoryManage = { viewModel.openCategoryManageDialog() },
@@ -2531,12 +2540,15 @@ fun ExpenseScreen(
         )
     }
 
-    // Category Manage Dialog (5. 등록된 카테고리들 관리기능: 추가, 삭제, 수정)
+    // Category Manage Dialog (5. 등록된 카테고리들 관리기능: 추가, 삭제, 수정 및 기본 사용자 지정)
     if (uiState.isCategoryManageDialogOpen) {
         CategoryManageDialog(
             managedCategories = uiState.managedCategories,
+            userClassifications = uiState.userClassifications,
             onDismiss = { viewModel.closeCategoryManageDialog() },
             onAddCategory = { name -> viewModel.addCustomCategoryPermanent(name) },
+            onAddCategoryWithDefaultUser = { name, defUser -> viewModel.addCustomCategoryPermanent(name, defUser) },
+            onSetCategoryDefaultUser = { item, defUser -> viewModel.setCategoryDefaultUser(item, defUser) },
             onUpdateCategoryName = { item, newName -> viewModel.updateManagedCategoryName(item, newName) },
             onDeleteCategory = { item -> viewModel.deleteManagedCategory(item) },
             onRestoreDefaults = { viewModel.restoreDefaultCategories() }
@@ -3967,6 +3979,7 @@ fun AddManualExpenseDialog(
     isSaving: Boolean = false,
     onResolveCardCorporate: (String) -> Boolean? = { null },
     onAddPermanentCategory: (String) -> Boolean,
+    onSetCategoryDefaultUser: (com.autologue.app.data.preferences.ManagedCategoryItem, String?) -> Unit = { _, _ -> },
     onOpenCategoryManage: () -> Unit = {},
     onOpenUserClassificationManage: () -> Unit = {},
     onUpdateUserClassification: (oldName: String, newName: String, colorIdx: Int) -> Unit = { _, _, _ -> },
@@ -4001,7 +4014,14 @@ fun AddManualExpenseDialog(
     var newPermanentCategoryInput by remember { mutableStateOf("") }
     var cardOrBankName by remember { mutableStateOf("신한카드") }
     var isCorporate by remember { mutableStateOf(onResolveCardCorporate("신한카드") ?: false) }
-    var userClassificationInput by remember { mutableStateOf("") }
+    var userClassificationInput by remember {
+        val initDefaultUser = managedCategories
+            .firstOrNull { it.isBuiltIn && it.baseCategory == ExpenseCategory.FOOD }
+            ?.defaultUserName.orEmpty()
+        mutableStateOf(initDefaultUser)
+    }
+    var userManuallyEdited by remember { mutableStateOf(false) }
+    var showAddCategoryDefaultUserPicker by remember { mutableStateOf(false) }
     var isFixedExpense by remember { mutableStateOf(false) }
     var memo by remember { mutableStateOf("") }
 
@@ -4216,7 +4236,16 @@ fun AddManualExpenseDialog(
                     )
                 }
 
-                // 5. 카테고리 선택 + 관리
+                // 5. 카테고리 선택 + 관리 + 카테고리별 기본 사용자 연동
+                val currentAddManagedCat = managedCategories.firstOrNull { item ->
+                    if (!selectedCustomCategoryName.isNullOrBlank()) {
+                        !item.isBuiltIn && item.displayName.equals(selectedCustomCategoryName?.trim(), ignoreCase = true)
+                    } else {
+                        item.isBuiltIn && item.baseCategory == selectedCategory
+                    }
+                }
+                val currentAddCatDefaultUser = currentAddManagedCat?.defaultUserName?.takeIf { it.isNotBlank() }
+
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -4260,6 +4289,14 @@ fun AddManualExpenseDialog(
                                 val willBeBank = nextCat == ExpenseCategory.TRANSFER || nextCat == ExpenseCategory.INCOME
                                 selectedCategory = nextCat
                                 selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
+                                showAddCategoryDefaultUserPicker = false
+                                if (!userManuallyEdited) {
+                                    val nextDefUser = item.defaultUserName?.takeIf { it.isNotBlank() }.orEmpty()
+                                    userClassificationInput = nextDefUser
+                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(nextDefUser)) {
+                                        isCorporate = true
+                                    }
+                                }
                                 if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
                                     isCorporate = true
                                 }
@@ -4279,6 +4316,100 @@ fun AddManualExpenseDialog(
                         itemHeight = 34.dp,
                         fontSize = 11.5.sp
                     )
+
+                    if (currentAddManagedCat != null) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "선택됨: ${currentAddManagedCat.displayName} · 기본 사용자: ${currentAddCatDefaultUser ?: "미지정"}",
+                                fontSize = 10.sp,
+                                color = Slate500,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .height(22.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (showAddCategoryDefaultUserPicker) Slate800 else Color(0xFFF1F5F9))
+                                    .border(1.dp, if (showAddCategoryDefaultUserPicker) Slate900 else Slate300, RoundedCornerShape(4.dp))
+                                    .clickable { showAddCategoryDefaultUserPicker = !showAddCategoryDefaultUserPicker }
+                                    .padding(horizontal = 6.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (showAddCategoryDefaultUserPicker) "기본 사용자 닫기" else "기본 사용자 설정",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (showAddCategoryDefaultUserPicker) PureWhite else Slate700
+                                )
+                            }
+                        }
+
+                        if (showAddCategoryDefaultUserPicker) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Slate50,
+                                border = BorderStroke(1.dp, Slate200),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "'${currentAddManagedCat.displayName}' 카테고리 기본 사용자 지정",
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Slate800
+                                    )
+                                    val defUserPickerOpts = buildList {
+                                        add(
+                                            ExpenseGridOptionItem(
+                                                label = "미지정 (해제)",
+                                                isSelected = currentAddCatDefaultUser == null,
+                                                selectedContainerColor = Slate800,
+                                                selectedBorderColor = Slate900,
+                                                unselectedContainerColor = PureWhite,
+                                                onClick = {
+                                                    onSetCategoryDefaultUser(currentAddManagedCat, null)
+                                                    if (!userManuallyEdited) userClassificationInput = ""
+                                                    showAddCategoryDefaultUserPicker = false
+                                                }
+                                            )
+                                        )
+                                        userClassifications.forEach { uc ->
+                                            val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
+                                            val isSel = currentAddCatDefaultUser?.equals(uc.name, ignoreCase = true) == true
+                                            add(
+                                                ExpenseGridOptionItem(
+                                                    label = uc.name,
+                                                    isSelected = isSel,
+                                                    dotColor = fg,
+                                                    selectedContainerColor = fg,
+                                                    selectedBorderColor = fg,
+                                                    unselectedContainerColor = PureWhite,
+                                                    onClick = {
+                                                        onSetCategoryDefaultUser(currentAddManagedCat, uc.name)
+                                                        if (!userManuallyEdited) userClassificationInput = uc.name
+                                                        showAddCategoryDefaultUserPicker = false
+                                                    }
+                                                )
+                                            )
+                                        }
+                                    }
+                                    ExpenseUniformFilterGrid(
+                                        options = defUserPickerOpts,
+                                        columns = 3,
+                                        itemHeight = 28.dp,
+                                        fontSize = 10.5.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     if (selectedCategory == ExpenseCategory.FUEL || selectedCategory == ExpenseCategory.CAR_MAINTENANCE) {
                         Surface(
@@ -4335,6 +4466,12 @@ fun AddManualExpenseDialog(
                                             if (trimmed.isNotEmpty()) {
                                                 onAddPermanentCategory(trimmed)
                                                 selectedCustomCategoryName = trimmed
+                                                if (!userManuallyEdited) {
+                                                    val matchedDef = managedCategories
+                                                        .firstOrNull { !it.isBuiltIn && it.displayName.equals(trimmed, ignoreCase = true) }
+                                                        ?.defaultUserName.orEmpty()
+                                                    userClassificationInput = matchedDef
+                                                }
                                                 if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(trimmed)) {
                                                     isCorporate = true
                                                 }
@@ -4354,7 +4491,7 @@ fun AddManualExpenseDialog(
                     }
                 }
 
-                // 6. 카테고리와 별개인 '사용자 분류' 지정 (직접 입력 + 배지 선택 + 수정/삭제/색상 변경)
+                // 6. 카테고리와 별개인 '사용자 분류' 지정 (카테고리 기본 사용자 자동 반영 + 언제든 변경 가능)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -4383,6 +4520,48 @@ fun AddManualExpenseDialog(
                             )
                         }
                     }
+                    if (currentAddCatDefaultUser != null) {
+                        val isOverridden = !userClassificationInput.trim().equals(currentAddCatDefaultUser, ignoreCase = true)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (!isOverridden) {
+                                    "카테고리 기본 사용자('$currentAddCatDefaultUser') 자동 지정됨 · 다른 사용자로 변경 가능"
+                                } else {
+                                    "카테고리 기본 사용자: $currentAddCatDefaultUser (현재 개별 변경됨)"
+                                },
+                                fontSize = 10.sp,
+                                color = if (!isOverridden) Color(0xFF047857) else Slate600,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (isOverridden) {
+                                Box(
+                                    modifier = Modifier
+                                        .height(20.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color(0xFFECFDF5))
+                                        .border(1.dp, Color(0xFF6EE7B7), RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            userClassificationInput = currentAddCatDefaultUser
+                                            userManuallyEdited = false
+                                        }
+                                        .padding(horizontal = 6.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "기본값 적용",
+                                        fontSize = 9.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF047857)
+                                    )
+                                }
+                            }
+                        }
+                    }
                     val userAddOptions = buildList {
                         add(
                             ExpenseGridOptionItem(
@@ -4390,7 +4569,10 @@ fun AddManualExpenseDialog(
                                 isSelected = userClassificationInput.isBlank(),
                                 selectedContainerColor = Slate800,
                                 selectedBorderColor = Slate900,
-                                onClick = { userClassificationInput = "" }
+                                onClick = {
+                                    userClassificationInput = ""
+                                    userManuallyEdited = true
+                                }
                             )
                         )
                         userClassifications.forEach { uc ->
@@ -4405,6 +4587,7 @@ fun AddManualExpenseDialog(
                                     selectedBorderColor = fg,
                                     onClick = {
                                         userClassificationInput = uc.name
+                                        userManuallyEdited = true
                                         if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
                                             isCorporate = true
                                         }
@@ -4423,6 +4606,7 @@ fun AddManualExpenseDialog(
                         value = userClassificationInput,
                         onValueChange = {
                             userClassificationInput = it
+                            userManuallyEdited = true
                             if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(it)) {
                                 isCorporate = true
                             }
@@ -4507,6 +4691,7 @@ fun EditTransactionDialog(
     userClassifications: List<com.autologue.app.data.preferences.UserClassificationItem>,
     initialCustomCategoryName: String?,
     initialUserClassificationName: String?,
+    initialHasExplicitUserRule: Boolean = false,
     initialIsCorporate: Boolean,
     initialBaseCardName: String,
     initialIsOneTimeSave: Boolean = true,
@@ -4520,6 +4705,7 @@ fun EditTransactionDialog(
     activePermanentRule: com.autologue.app.data.preferences.PermanentMerchantRuleSummary? = null,
     onResolveCardCorporate: (String) -> Boolean? = { null },
     onAddPermanentCategory: (String) -> Boolean,
+    onSetCategoryDefaultUser: (com.autologue.app.data.preferences.ManagedCategoryItem, String?) -> Unit = { _, _ -> },
     onUpdateCategoryName: (com.autologue.app.data.preferences.ManagedCategoryItem, String) -> Unit = { _, _ -> },
     onDeleteCategory: (com.autologue.app.data.preferences.ManagedCategoryItem) -> Unit = {},
     onOpenCategoryManage: () -> Unit = {},
@@ -4639,11 +4825,13 @@ fun EditTransactionDialog(
     var showExistingTxSelector by remember(transaction.id) { mutableStateOf(false) }
     var showOtherExistingTxs by remember(transaction.id) { mutableStateOf(false) }
 
-    // 인라인 수정 상태 (사용자 분류명 수정 / 카테고리명 수정)
+    // 인라인 수정 상태 (사용자 분류명 수정 / 카테고리명 수정 / 카테고리 기본 사용자 지정)
     var editingUcNameTarget by remember { mutableStateOf<String?>(null) }
     var editingUcNewName by remember { mutableStateOf("") }
     var editingCatItemTarget by remember { mutableStateOf<com.autologue.app.data.preferences.ManagedCategoryItem?>(null) }
     var editingCatNewName by remember { mutableStateOf("") }
+    var userManuallyEdited by remember(transaction.id) { mutableStateOf(false) }
+    var editingCatDefaultUserOpen by remember(transaction.id) { mutableStateOf(false) }
 
     val isEasyMode = LocalEasyMode.current
     val isEffectiveIncome = isDeposit || selectedCategory == ExpenseCategory.INCOME
@@ -5189,7 +5377,16 @@ fun EditTransactionDialog(
                         }
                     }
 
-                    // 4. 카테고리 변경 + 수정/삭제 + '기타' 선택 시 추가 카테고리 영구 등록
+                    // 4. 카테고리 변경 + 수정/삭제 + 카테고리별 기본 사용자 연동 + '기타' 선택 시 추가 카테고리 영구 등록
+                    val currentSelectedManagedCat = managedCategories.firstOrNull { item ->
+                        if (item.isBuiltIn) {
+                            selectedCustomCategoryName == null && selectedCategory == item.baseCategory
+                        } else {
+                            selectedCustomCategoryName == item.displayName
+                        }
+                    }
+                    val currentEditCatDefaultUser = currentSelectedManagedCat?.defaultUserName?.takeIf { it.isNotBlank() }
+
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -5233,6 +5430,18 @@ fun EditTransactionDialog(
                                     val willBeBank = transaction.isBankAccountTransaction(nextCat)
                                     selectedCategory = nextCat
                                     selectedCustomCategoryName = if (item.isBuiltIn) null else item.displayName
+                                    editingCatDefaultUserOpen = false
+                                    if (!userManuallyEdited) {
+                                        val nextDefUser = item.defaultUserName?.takeIf { it.isNotBlank() }
+                                        if (nextDefUser != null) {
+                                            userClassificationInput = nextDefUser
+                                            if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(nextDefUser)) {
+                                                isCorporate = true
+                                            }
+                                        } else if (!initialHasExplicitUserRule) {
+                                            userClassificationInput = ""
+                                        }
+                                    }
                                     if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(item.displayName)) {
                                         isCorporate = true
                                     }
@@ -5259,16 +5468,9 @@ fun EditTransactionDialog(
                             fontSize = 11.5.sp
                         )
 
-                        // 현재 선택된 카테고리에 대한 빠른 이름 수정 / 삭제 바
-                        val currentSelectedManagedCat = managedCategories.firstOrNull { item ->
-                            if (item.isBuiltIn) {
-                                selectedCustomCategoryName == null && selectedCategory == item.baseCategory
-                            } else {
-                                selectedCustomCategoryName == item.displayName
-                            }
-                        }
-                        if (currentSelectedManagedCat != null && currentSelectedManagedCat.baseCategory != ExpenseCategory.ETC || !currentSelectedManagedCat?.displayName.isNullOrBlank()) {
-                            if (editingCatItemTarget != null && editingCatItemTarget?.id == currentSelectedManagedCat?.id) {
+                        // 현재 선택된 카테고리에 대한 빠른 기본 사용자 설정 / 이름 수정 / 삭제 바
+                        if (currentSelectedManagedCat != null) {
+                            if (editingCatItemTarget != null && editingCatItemTarget?.id == currentSelectedManagedCat.id) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -5305,59 +5507,174 @@ fun EditTransactionDialog(
                                         Text("취소", fontSize = 11.sp, color = Slate600)
                                     }
                                 }
-                            } else if (currentSelectedManagedCat != null && (!currentSelectedManagedCat.isBuiltIn || currentSelectedManagedCat.baseCategory != ExpenseCategory.ETC)) {
+                            } else {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.End,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "선택됨: ${currentSelectedManagedCat.displayName}",
+                                        text = "선택됨: ${currentSelectedManagedCat.displayName} (기본: ${currentEditCatDefaultUser ?: "미지정"})",
                                         fontSize = 10.sp,
                                         color = Slate500,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
                                     )
                                     Box(
                                         modifier = Modifier
                                             .height(22.dp)
                                             .clip(RoundedCornerShape(4.dp))
-                                            .background(Color(0xFFEFF6FF))
-                                            .border(1.dp, Color(0xFFBFDBFE), RoundedCornerShape(4.dp))
-                                            .clickable {
-                                                editingCatItemTarget = currentSelectedManagedCat
-                                                editingCatNewName = currentSelectedManagedCat.displayName
-                                            }
+                                            .background(if (editingCatDefaultUserOpen) Slate800 else Color(0xFFF1F5F9))
+                                            .border(1.dp, if (editingCatDefaultUserOpen) Slate900 else Slate300, RoundedCornerShape(4.dp))
+                                            .clickable { editingCatDefaultUserOpen = !editingCatDefaultUserOpen }
                                             .padding(horizontal = 6.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
-                                            text = "이름 수정",
+                                            text = "기본 사용자",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF2563EB)
+                                            color = if (editingCatDefaultUserOpen) PureWhite else Slate700
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .height(22.dp)
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(Color(0xFFFEF2F2))
-                                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(4.dp))
-                                            .clickable {
-                                                onDeleteCategory(currentSelectedManagedCat)
-                                                selectedCategory = ExpenseCategory.ETC
-                                                selectedCustomCategoryName = null
-                                            }
-                                            .padding(horizontal = 6.dp),
-                                        contentAlignment = Alignment.Center
+                                    if (!currentSelectedManagedCat.isBuiltIn || currentSelectedManagedCat.baseCategory != ExpenseCategory.ETC) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .height(22.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color(0xFFEFF6FF))
+                                                .border(1.dp, Color(0xFFBFDBFE), RoundedCornerShape(4.dp))
+                                                .clickable {
+                                                    editingCatItemTarget = currentSelectedManagedCat
+                                                    editingCatNewName = currentSelectedManagedCat.displayName
+                                                    editingCatDefaultUserOpen = false
+                                                }
+                                                .padding(horizontal = 6.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "이름 수정",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF2563EB)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .height(22.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color(0xFFFEF2F2))
+                                                .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(4.dp))
+                                                .clickable {
+                                                    onDeleteCategory(currentSelectedManagedCat)
+                                                    selectedCategory = ExpenseCategory.ETC
+                                                    selectedCustomCategoryName = null
+                                                    editingCatDefaultUserOpen = false
+                                                }
+                                                .padding(horizontal = 6.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "항목 삭제",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFDC2626)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (editingCatDefaultUserOpen) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Slate50,
+                                        border = BorderStroke(1.dp, Slate200),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text(
-                                            text = "항목 삭제",
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFDC2626)
-                                        )
+                                        Column(
+                                            modifier = Modifier.padding(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "'${currentSelectedManagedCat.displayName}' 카테고리 기본 사용자 지정",
+                                                    fontSize = 10.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Slate800
+                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .height(20.dp)
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                        .background(Slate100)
+                                                        .clickable { editingCatDefaultUserOpen = false }
+                                                        .padding(horizontal = 6.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Text("닫기", fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = Slate600)
+                                                }
+                                            }
+                                            Text(
+                                                text = "이 카테고리의 기본 사용자를 지정합니다. 지정 후에도 개별 내역에서 다른 사용자로 변경할 수 있습니다.",
+                                                fontSize = 9.5.sp,
+                                                color = Slate500
+                                            )
+                                            val inlineCatDefOpts = buildList {
+                                                add(
+                                                    ExpenseGridOptionItem(
+                                                        label = "미지정 (해제)",
+                                                        isSelected = currentEditCatDefaultUser == null,
+                                                        selectedContainerColor = Slate800,
+                                                        selectedBorderColor = Slate900,
+                                                        unselectedContainerColor = PureWhite,
+                                                        onClick = {
+                                                            onSetCategoryDefaultUser(currentSelectedManagedCat, null)
+                                                            if (!userManuallyEdited && !initialHasExplicitUserRule) {
+                                                                userClassificationInput = ""
+                                                            }
+                                                            editingCatDefaultUserOpen = false
+                                                        }
+                                                    )
+                                                )
+                                                userClassifications.forEach { uc ->
+                                                    val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
+                                                    val isSel = currentEditCatDefaultUser?.equals(uc.name, ignoreCase = true) == true
+                                                    add(
+                                                        ExpenseGridOptionItem(
+                                                            label = uc.name,
+                                                            isSelected = isSel,
+                                                            dotColor = fg,
+                                                            selectedContainerColor = fg,
+                                                            selectedBorderColor = fg,
+                                                            unselectedContainerColor = PureWhite,
+                                                            onClick = {
+                                                                onSetCategoryDefaultUser(currentSelectedManagedCat, uc.name)
+                                                                if (!userManuallyEdited) {
+                                                                    userClassificationInput = uc.name
+                                                                    if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
+                                                                        isCorporate = true
+                                                                    }
+                                                                }
+                                                                editingCatDefaultUserOpen = false
+                                                            }
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                            ExpenseUniformFilterGrid(
+                                                options = inlineCatDefOpts,
+                                                columns = 3,
+                                                itemHeight = 28.dp,
+                                                fontSize = 10.5.sp
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -5418,6 +5735,14 @@ fun EditTransactionDialog(
                                                 if (trimmed.isNotEmpty()) {
                                                     onAddPermanentCategory(trimmed)
                                                     selectedCustomCategoryName = trimmed
+                                                    if (!userManuallyEdited) {
+                                                        val matchedDef = managedCategories
+                                                            .firstOrNull { !it.isBuiltIn && it.displayName.equals(trimmed, ignoreCase = true) }
+                                                            ?.defaultUserName
+                                                        if (!matchedDef.isNullOrBlank()) {
+                                                            userClassificationInput = matchedDef
+                                                        }
+                                                    }
                                                     if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(trimmed)) {
                                                         isCorporate = true
                                                     }
@@ -5437,7 +5762,7 @@ fun EditTransactionDialog(
                         }
                     }
 
-                    // 5. 카테고리와 별개인 '사용자 분류' 지정 (삭제/수정 및 배지 색상 변경 지원)
+                    // 5. 카테고리와 별개인 '사용자 분류' 지정 (카테고리 기본 사용자 자동 지정 + 자유 변경 지원)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -5466,6 +5791,49 @@ fun EditTransactionDialog(
                                 )
                             }
                         }
+                        if (currentEditCatDefaultUser != null) {
+                            val isOverridden = !userClassificationInput.trim().equals(currentEditCatDefaultUser, ignoreCase = true)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (!isOverridden) {
+                                        "카테고리 기본 사용자('$currentEditCatDefaultUser') 적용됨 · 다른 사용자로 변경 가능"
+                                    } else {
+                                        "카테고리 기본 사용자: $currentEditCatDefaultUser (현재 다른 사용자로 변경됨)"
+                                    },
+                                    fontSize = 10.sp,
+                                    color = if (!isOverridden) Color(0xFF047857) else Slate600,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (isOverridden) {
+                                    Box(
+                                        modifier = Modifier
+                                            .height(20.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color(0xFFECFDF5))
+                                            .border(1.dp, Color(0xFF6EE7B7), RoundedCornerShape(4.dp))
+                                            .clickable {
+                                                userClassificationInput = currentEditCatDefaultUser
+                                                userManuallyEdited = false
+                                                editingUcNameTarget = null
+                                            }
+                                            .padding(horizontal = 6.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "기본값 적용",
+                                            fontSize = 9.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF047857)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         val editUserOptions = buildList {
                             add(
                                 ExpenseGridOptionItem(
@@ -5475,6 +5843,7 @@ fun EditTransactionDialog(
                                     selectedBorderColor = Slate900,
                                     onClick = {
                                         userClassificationInput = ""
+                                        userManuallyEdited = true
                                         editingUcNameTarget = null
                                     }
                                 )
@@ -5491,6 +5860,7 @@ fun EditTransactionDialog(
                                         selectedBorderColor = fg,
                                         onClick = {
                                             userClassificationInput = uc.name
+                                            userManuallyEdited = true
                                             if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(uc.name)) {
                                                 isCorporate = true
                                             }
@@ -5541,6 +5911,7 @@ fun EditTransactionDialog(
                                                     if (trimmed.isNotEmpty()) {
                                                         onUpdateUserClassification(selectedUcItem.name, trimmed, selectedUcItem.colorIndex)
                                                         userClassificationInput = trimmed
+                                                        userManuallyEdited = true
                                                         if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(trimmed)) {
                                                             isCorporate = true
                                                         }
@@ -5590,6 +5961,7 @@ fun EditTransactionDialog(
                                                     onClick = {
                                                         onDeleteUserClassification(selectedUcItem.name)
                                                         userClassificationInput = ""
+                                                        userManuallyEdited = true
                                                     },
                                                     shape = RoundedCornerShape(4.dp),
                                                     color = Color(0xFFFEF2F2),
@@ -5654,6 +6026,7 @@ fun EditTransactionDialog(
                             value = userClassificationInput,
                             onValueChange = {
                                 userClassificationInput = it
+                                userManuallyEdited = true
                                 if (com.autologue.app.data.preferences.ExpenseCustomMetaPreferences.isCorporateCategoryOrClassification(it)) {
                                     isCorporate = true
                                 }
@@ -5665,7 +6038,7 @@ fun EditTransactionDialog(
                         )
                     }
 
-                    // 6. 메모 작성
+                    // 6. 메모 작성 (클릭 시 항상 기존 메시지 전체 선택하여 즉시 새 내용 입력 가능)
                     AutoLogueTextField(
                         value = memo,
                         onValueChange = { memo = it },
@@ -5674,6 +6047,7 @@ fun EditTransactionDialog(
                         singleLine = false,
                         minLines = 2,
                         maxLines = 3,
+                        selectAllOnTap = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }

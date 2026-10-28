@@ -66,21 +66,28 @@ fun getUserClassificationBadgeColors(colorIndex: Int): Pair<Color, Color> {
 }
 
 /**
- * 5) 등록된 카테고리들 관리 다이얼로그 (추가, 삭제, 수정 - 기타 항목은 항상 최하단 고정)
+ * 5) 등록된 카테고리들 관리 다이얼로그 (추가, 삭제, 수정 및 카테고리별 기본 사용자 지정 - 기타 항목은 항상 최하단 고정)
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CategoryManageDialog(
     managedCategories: List<ManagedCategoryItem>,
+    userClassifications: List<UserClassificationItem> = emptyList(),
     onDismiss: () -> Unit,
     onAddCategory: (String) -> Unit,
+    onAddCategoryWithDefaultUser: ((String, String?) -> Unit)? = null,
+    onSetCategoryDefaultUser: (ManagedCategoryItem, String?) -> Unit = { _, _ -> },
     onUpdateCategoryName: (ManagedCategoryItem, String) -> Unit,
     onDeleteCategory: (ManagedCategoryItem) -> Unit,
     onRestoreDefaults: () -> Unit
 ) {
     val isEasyMode = LocalEasyMode.current
     var newCategoryName by remember { mutableStateOf("") }
+    var newCategoryDefaultUser by remember { mutableStateOf<String?>(null) }
     var editingItemId by remember { mutableStateOf<String?>(null) }
     var editingNameText by remember { mutableStateOf("") }
+    var defaultUserTargetId by remember { mutableStateOf<String?>(null) }
+    var customDefaultUserInput by remember { mutableStateOf("") }
     val orderedCategories = remember(managedCategories) {
         managedCategories.withEtcAlwaysAtBottom()
     }
@@ -132,44 +139,101 @@ fun CategoryManageDialog(
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
                 Text(
-                    text = "새 카테고리를 영구 추가하거나 기존 카테고리 이름을 수정·삭제할 수 있습니다. ('기타' 항목은 항상 제일 하단에 배치됩니다)",
+                    text = "카테고리 추가·수정·삭제 및 카테고리별 기본 사용자를 지정할 수 있습니다. 기본 사용자가 지정된 카테고리라도 개별 내역에서 언제든 다른 사용자로 변경할 수 있습니다.",
                     style = AppTypography.captionMuted
                 )
 
-                // 새 카테고리 추가 영역
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                // 새 카테고리 추가 영역 (기본 사용자 동시 지정 지원)
+                Surface(
+                    shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
+                    color = if (isEasyMode) EasyTheme.surface else Slate50,
+                    border = if (isEasyMode) null else BorderStroke(1.dp, Slate200),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(modifier = Modifier.weight(1f)) {
-                        AutoLogueTextField(
-                            value = newCategoryName,
-                            onValueChange = { newCategoryName = it },
-                            label = "새 카테고리 이름",
-                            placeholder = "예: 교육/육아, 반려동물",
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    Button(
-                        onClick = {
-                            val trimmed = newCategoryName.trim()
-                            if (trimmed.isNotBlank()) {
-                                onAddCategory(trimmed)
-                                newCategoryName = ""
-                            }
-                        },
-                        enabled = newCategoryName.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isEasyMode) EasyTheme.blue else AppColors.primary
-                        ),
-                        shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "추가", modifier = Modifier.size(16.dp), tint = PureWhite)
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text("추가", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                AutoLogueTextField(
+                                    value = newCategoryName,
+                                    onValueChange = { newCategoryName = it },
+                                    label = "새 카테고리 이름",
+                                    placeholder = "예: 교육/육아, 반려동물",
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    val trimmed = newCategoryName.trim()
+                                    if (trimmed.isNotBlank()) {
+                                        if (onAddCategoryWithDefaultUser != null) {
+                                            onAddCategoryWithDefaultUser(trimmed, newCategoryDefaultUser)
+                                        } else {
+                                            onAddCategory(trimmed)
+                                        }
+                                        newCategoryName = ""
+                                        newCategoryDefaultUser = null
+                                    }
+                                },
+                                enabled = newCategoryName.isNotBlank(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isEasyMode) EasyTheme.blue else AppColors.primary
+                                ),
+                                shape = RoundedCornerShape(if (isEasyMode) 12.dp else 8.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "추가", modifier = Modifier.size(16.dp), tint = PureWhite)
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("추가", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (userClassifications.isNotEmpty()) {
+                            Text(
+                                text = "새 카테고리 기본 사용자 (선택)",
+                                style = AppTypography.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = Slate600)
+                            )
+                            val newCatUserOptions = buildList {
+                                add(
+                                    ExpenseGridOptionItem(
+                                        label = "미지정",
+                                        isSelected = newCategoryDefaultUser.isNullOrBlank(),
+                                        selectedContainerColor = Slate800,
+                                        selectedBorderColor = Slate900,
+                                        unselectedContainerColor = PureWhite,
+                                        onClick = { newCategoryDefaultUser = null }
+                                    )
+                                )
+                                userClassifications.forEach { uc ->
+                                    val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
+                                    val isSel = newCategoryDefaultUser?.equals(uc.name, ignoreCase = true) == true
+                                    add(
+                                        ExpenseGridOptionItem(
+                                            label = uc.name,
+                                            isSelected = isSel,
+                                            dotColor = fg,
+                                            selectedContainerColor = fg,
+                                            selectedBorderColor = fg,
+                                            unselectedContainerColor = PureWhite,
+                                            onClick = { newCategoryDefaultUser = uc.name }
+                                        )
+                                    )
+                                }
+                            }
+                            ExpenseUniformFilterGrid(
+                                options = newCatUserOptions,
+                                columns = 3,
+                                itemHeight = 28.dp,
+                                fontSize = 10.5.sp
+                            )
+                        }
                     }
                 }
 
@@ -178,13 +242,20 @@ fun CategoryManageDialog(
                 }
 
                 Text(
-                    text = "등록된 카테고리 목록 (${orderedCategories.size}개)",
+                    text = "등록된 카테고리 목록 (${orderedCategories.size}개 · 배지를 눌러 기본 사용자 지정)",
                     style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = Slate700)
                 )
 
                 orderedCategories.forEach { item ->
                     val isEditing = editingItemId == item.id
+                    val isDefaultUserOpen = defaultUserTargetId == item.id
                     val isEtcBuiltIn = item.isBuiltIn && item.baseCategory == ExpenseCategory.ETC
+                    val currentDefaultUser = item.defaultUserName?.takeIf { it.isNotBlank() }
+                    val matchedDefaultUc = remember(currentDefaultUser, userClassifications) {
+                        if (currentDefaultUser == null) null
+                        else userClassifications.firstOrNull { it.name.equals(currentDefaultUser, ignoreCase = true) }
+                    }
+
                     Surface(
                         shape = RoundedCornerShape(if (isEasyMode) 14.dp else 8.dp),
                         color = if (isEasyMode) {
@@ -201,84 +272,251 @@ fun CategoryManageDialog(
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        if (isEditing) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                OutlinedTextField(
-                                    value = editingNameText,
-                                    onValueChange = { editingNameText = it },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Button(
-                                    onClick = {
-                                        val clean = editingNameText.trim()
-                                        if (clean.isNotBlank()) {
-                                            onUpdateCategoryName(item, clean)
-                                            editingItemId = null
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text("저장", fontSize = 11.sp, color = PureWhite, fontWeight = FontWeight.Bold)
-                                }
-                                TextButton(
-                                    onClick = { editingItemId = null },
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
-                                ) {
-                                    Text("취소", fontSize = 11.sp, color = Slate600)
-                                }
-                            }
-                        } else {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            if (isEditing) {
                                 Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.weight(1f)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Text(
-                                        text = item.displayName,
-                                        style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold, color = Slate900)
+                                    OutlinedTextField(
+                                        value = editingNameText,
+                                        onValueChange = { editingNameText = it },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
                                     )
-                                    MetricBadge(
-                                        text = when {
-                                            isEtcBuiltIn -> "기본 · 최하단 고정"
-                                            item.isBuiltIn -> "기본"
-                                            else -> "추가됨"
-                                        },
-                                        textColor = if (item.isBuiltIn) Slate600 else Color(0xFF1D4ED8),
-                                        backgroundColor = if (item.isBuiltIn) Slate200 else Color(0xFFDBEAFE)
-                                    )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    IconButton(
+                                    Button(
                                         onClick = {
-                                            editingItemId = item.id
-                                            editingNameText = item.displayName
+                                            val clean = editingNameText.trim()
+                                            if (clean.isNotBlank()) {
+                                                onUpdateCategoryName(item, clean)
+                                                editingItemId = null
+                                            }
                                         },
-                                        modifier = Modifier.size(30.dp)
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                        shape = RoundedCornerShape(6.dp)
                                     ) {
-                                        Icon(Icons.Default.Edit, contentDescription = "수정", tint = Slate600, modifier = Modifier.size(16.dp))
+                                        Text("저장", fontSize = 11.sp, color = PureWhite, fontWeight = FontWeight.Bold)
                                     }
-                                    if (!isEtcBuiltIn) {
+                                    TextButton(
+                                        onClick = { editingItemId = null },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("취소", fontSize = 11.sp, color = Slate600)
+                                    }
+                                }
+                            } else {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = item.displayName,
+                                            style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold, color = Slate900),
+                                            modifier = Modifier.align(Alignment.CenterVertically)
+                                        )
+                                        Box(modifier = Modifier.align(Alignment.CenterVertically)) {
+                                            MetricBadge(
+                                                text = when {
+                                                    isEtcBuiltIn -> "기본 · 최하단 고정"
+                                                    item.isBuiltIn -> "기본"
+                                                    else -> "추가됨"
+                                                },
+                                                textColor = if (item.isBuiltIn) Slate600 else Color(0xFF1D4ED8),
+                                                backgroundColor = if (item.isBuiltIn) Slate200 else Color(0xFFDBEAFE)
+                                            )
+                                        }
+                                        val (uFg, uBg) = if (currentDefaultUser != null) {
+                                            getUserClassificationBadgeColors(matchedDefaultUc?.colorIndex ?: 0)
+                                        } else {
+                                            Slate600 to PureWhite
+                                        }
+                                        Row(
+                                            modifier = Modifier
+                                                .align(Alignment.CenterVertically)
+                                                .height(22.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(if (isDefaultUserOpen) Slate800 else uBg)
+                                                .border(
+                                                    width = 1.dp,
+                                                    color = if (isDefaultUserOpen) {
+                                                        Slate900
+                                                    } else if (currentDefaultUser != null) {
+                                                        uFg.copy(alpha = 0.4f)
+                                                    } else {
+                                                        Slate300
+                                                    },
+                                                    shape = RoundedCornerShape(6.dp)
+                                                )
+                                                .clickable {
+                                                    if (isDefaultUserOpen) {
+                                                        defaultUserTargetId = null
+                                                    } else {
+                                                        defaultUserTargetId = item.id
+                                                        customDefaultUserInput = currentDefaultUser.orEmpty()
+                                                    }
+                                                }
+                                                .padding(horizontal = 7.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            if (currentDefaultUser != null && !isDefaultUserOpen) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(5.dp)
+                                                        .background(uFg, CircleShape)
+                                                )
+                                            }
+                                            Text(
+                                                text = if (currentDefaultUser != null) {
+                                                    "기본: $currentDefaultUser"
+                                                } else {
+                                                    "기본 사용자 지정"
+                                                },
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isDefaultUserOpen) PureWhite else uFg
+                                            )
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                         IconButton(
-                                            onClick = { onDeleteCategory(item) },
+                                            onClick = {
+                                                editingItemId = item.id
+                                                editingNameText = item.displayName
+                                                defaultUserTargetId = null
+                                            },
                                             modifier = Modifier.size(30.dp)
                                         ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "삭제", tint = Color(0xFFDC2626), modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Edit, contentDescription = "수정", tint = Slate600, modifier = Modifier.size(16.dp))
+                                        }
+                                        if (!isEtcBuiltIn) {
+                                            IconButton(
+                                                onClick = { onDeleteCategory(item) },
+                                                modifier = Modifier.size(30.dp)
+                                            ) {
+                                                Icon(Icons.Default.Delete, contentDescription = "삭제", tint = Color(0xFFDC2626), modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (isDefaultUserOpen && !isEditing) {
+                                HairlineDivider()
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(PureWhite)
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "'${item.displayName}' 기본 사용자 선택",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Slate800
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .height(22.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Slate100)
+                                                .clickable { defaultUserTargetId = null }
+                                                .padding(horizontal = 7.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("닫기", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Slate600)
+                                        }
+                                    }
+
+                                    val itemUserOptions = buildList {
+                                        add(
+                                            ExpenseGridOptionItem(
+                                                label = "미지정 (해제)",
+                                                isSelected = currentDefaultUser == null,
+                                                selectedContainerColor = Slate800,
+                                                selectedBorderColor = Slate900,
+                                                onClick = {
+                                                    onSetCategoryDefaultUser(item, null)
+                                                    customDefaultUserInput = ""
+                                                }
+                                            )
+                                        )
+                                        userClassifications.forEach { uc ->
+                                            val (fg, _) = getUserClassificationBadgeColors(uc.colorIndex)
+                                            val isSel = currentDefaultUser?.equals(uc.name, ignoreCase = true) == true
+                                            add(
+                                                ExpenseGridOptionItem(
+                                                    label = uc.name,
+                                                    isSelected = isSel,
+                                                    dotColor = fg,
+                                                    selectedContainerColor = fg,
+                                                    selectedBorderColor = fg,
+                                                    onClick = {
+                                                        onSetCategoryDefaultUser(item, uc.name)
+                                                        customDefaultUserInput = uc.name
+                                                    }
+                                                )
+                                            )
+                                        }
+                                    }
+                                    ExpenseUniformFilterGrid(
+                                        options = itemUserOptions,
+                                        columns = 3,
+                                        itemHeight = 30.dp,
+                                        fontSize = 11.sp
+                                    )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            AutoLogueTextField(
+                                                value = customDefaultUserInput,
+                                                onValueChange = { customDefaultUserInput = it },
+                                                label = "기본 사용자명 직접 입력",
+                                                placeholder = "예: 정선우, 본인, 가족",
+                                                singleLine = true,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val clean = customDefaultUserInput.trim()
+                                                onSetCategoryDefaultUser(item, clean.ifBlank { null })
+                                                defaultUserTargetId = null
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (isEasyMode) EasyTheme.blue else AppColors.primary
+                                            ),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                                        ) {
+                                            Text(
+                                                text = if (customDefaultUserInput.isBlank()) "해제" else "지정",
+                                                fontSize = 11.sp,
+                                                color = PureWhite,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
                                     }
                                 }

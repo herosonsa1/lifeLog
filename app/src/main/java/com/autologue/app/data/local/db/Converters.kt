@@ -2,7 +2,6 @@ package com.autologue.app.data.local.db
 
 import androidx.room.TypeConverter
 import com.autologue.app.domain.model.ExpenseCategory
-import com.autologue.app.domain.model.GolfType
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.VehicleLogType
 import java.time.Instant
@@ -72,12 +71,6 @@ class Converters {
     fun toVehicleLogType(type: VehicleLogType?): String = type?.name ?: VehicleLogType.TRIP_DRIVING.name
 
     @TypeConverter
-    fun fromGolfType(value: String?): GolfType = value?.let { runCatching { enumValueOf<GolfType>(it) }.getOrDefault(GolfType.FIELD) } ?: GolfType.FIELD
-
-    @TypeConverter
-    fun toGolfType(type: GolfType?): String = type?.name ?: GolfType.FIELD.name
-
-    @TypeConverter
     fun fromRouteStepList(value: String?): List<com.autologue.app.domain.model.RouteStep> {
         if (value.isNullOrEmpty()) return emptyList()
         val list = mutableListOf<com.autologue.app.domain.model.RouteStep>()
@@ -85,13 +78,18 @@ class Converters {
             val arr = org.json.JSONArray(value)
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
+                val stepTypeStr = obj.optString("stepType", "PHOTO")
+                // 레거시 골프 라운딩 스텝은 역직렬화 시 안전하게 건너뛰어 자동 정제
+                if (stepTypeStr.equals("GOLF", ignoreCase = true)) {
+                    continue
+                }
+
                 val timeMillis = obj.optLong("timeMillis", 0L)
                 val dt = if (timeMillis > 0) {
                     Instant.ofEpochMilli(timeMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
                 } else {
                     LocalDateTime.now()
                 }
-                val stepTypeStr = obj.optString("stepType", "PHOTO")
                 val stepType = runCatching {
                     com.autologue.app.domain.model.RouteStepType.valueOf(stepTypeStr)
                 }.getOrDefault(com.autologue.app.domain.model.RouteStepType.PHOTO)

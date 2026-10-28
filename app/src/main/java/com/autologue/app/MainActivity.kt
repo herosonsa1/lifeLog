@@ -3,7 +3,6 @@ package com.autologue.app
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -11,24 +10,25 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.autologue.app.data.ocr.GolfLockerSlipOcrAnalyzer
 import com.autologue.app.data.sync.HistoricalDataImporter
-import com.autologue.app.domain.model.ExpenseCategory
-import com.autologue.app.domain.model.PaymentMethod
-import com.autologue.app.domain.model.Transaction
-import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
-import com.autologue.app.domain.usecase.golf.ProcessGolfLockerSlipUseCase
 import com.autologue.app.presentation.common.CrashReportDialog
 import com.autologue.app.presentation.common.WelcomeSplashScreen
 import com.autologue.app.presentation.navigation.AppNavigation
@@ -40,21 +40,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.time.LocalDateTime
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @Inject lateinit var golfLockerSlipOcrAnalyzer: GolfLockerSlipOcrAnalyzer
-    @Inject lateinit var processGolfLockerSlipUseCase: ProcessGolfLockerSlipUseCase
     @Inject lateinit var vehicleRepository: VehicleRepository
     @Inject lateinit var transactionRepository: TransactionRepository
-    @Inject lateinit var golfRepository: GolfRepository
     @Inject lateinit var diaryRepository: com.autologue.app.domain.repository.DiaryRepository
     @Inject lateinit var historicalDataImporter: HistoricalDataImporter
-    @Inject lateinit var scorecardOcrAnalyzer: com.autologue.app.data.ocr.ScorecardOcrAnalyzer
     @Inject lateinit var processTransactionUseCase: com.autologue.app.domain.usecase.expense.ProcessTransactionUseCase
     @Inject lateinit var userLocationPreferences: com.autologue.app.data.preferences.UserLocationPreferences
     @Inject lateinit var placeResolver: com.autologue.app.data.sync.PlaceResolver
@@ -76,7 +72,12 @@ class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grantResults ->
-        if (grantResults[Manifest.permission.READ_SMS] == true) {
+        val mediaGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            grantResults[Manifest.permission.READ_MEDIA_IMAGES] == true
+        } else {
+            grantResults[Manifest.permission.READ_EXTERNAL_STORAGE] == true
+        }
+        if (grantResults[Manifest.permission.READ_SMS] == true || mediaGranted) {
             syncInitialData(forceSync = true)
         }
         if (grantResults[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
@@ -88,7 +89,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 앱이 가장 마지막으로 구동된 시점 즉시 기록
         runCatching { syncCheckpointPreferences.recordAppLaunch() }
 
         try {
@@ -97,7 +97,6 @@ class MainActivity : ComponentActivity() {
             Log.e("AUTOLOGUE_INIT", "enableEdgeToEdge warning", e)
         }
 
-        // 이전 실행 중 강제 종료 로그 검사
         checkPreviousCrashLog()
 
         try {
@@ -114,15 +113,12 @@ class MainActivity : ComponentActivity() {
                 var showWelcomeSplash by rememberSaveable { mutableStateOf(true) }
 
                 LaunchedEffect(Unit) {
-                    // 화면 렌더링이 시작된 후 안전하게 권한 요청 수행 (Window Token 안정화)
                     requestAppPermissions()
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // 본 화면 네비게이션
                     AppNavigation()
 
-                    // 앱 구동 시 백그라운드 동기화와 연동되는 웰컴 애니메이션 오버레이
                     AnimatedVisibility(
                         visible = showWelcomeSplash,
                         enter = fadeIn(),
@@ -137,7 +133,6 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // 🚨 이전 강제 종료(Crash) 발생 시 원클릭 복사 가능한 리포트 다이얼로그 노출
                     if (crashLog != null) {
                         CrashReportDialog(
                             crashLog = crashLog!!,
@@ -155,7 +150,6 @@ class MainActivity : ComponentActivity() {
             val logFile = File(filesDir, "crash_log.txt")
             if (logFile.exists() && logFile.length() > 0) {
                 val fullText = logFile.readText()
-                // 가장 최근 에러 섹션 추출 (또는 전체 로그 최대 3000자)
                 val displayText = if (fullText.length > 3500) {
                     "..." + fullText.takeLast(3500)
                 } else fullText
@@ -190,57 +184,35 @@ class MainActivity : ComponentActivity() {
                     "Starting incremental syncInitialData (lastLaunch=$lastLaunch, lastSyncCompleted=$lastSync)..."
                 )
 
-                // 0. 최초 1회 레거시 데이터 자가 치유 (이미 완료된 버전이면 매 구동마다 중복 실행하지 않음)
                 if (!syncCheckpointPreferences.isLegacyCleanupDone()) {
-                    runCatching {
-                        val today = java.time.LocalDate.now()
-                        val allRounds = golfRepository.getAllGolfRoundsList()
-                        for (r in allRounds) {
-                            val rDay = (r.startTime ?: r.roundDate).toLocalDate()
-                            val isFakeNine = r.clubName.contains("나인CC", ignoreCase = true) ||
-                                r.clubName.contains("나인 CC", ignoreCase = true) ||
-                                r.clubName == "나인"
-                            val isFutureFalseOcr = rDay.isAfter(today) && (
-                                r.totalScore != null ||
-                                r.holeScores.isNotEmpty() ||
-                                !r.scorecardPhotoUri.isNullOrBlank() ||
-                                r.matchingPhotoUris.isNotEmpty() ||
-                                isFakeNine ||
-                                rDay == java.time.LocalDate.of(2026, 10, 24)
-                            )
-                            if (isFakeNine || isFutureFalseOcr) {
-                                golfRepository.deleteGolfRound(r.id)
-                            }
-                        }
-                        val validRounds = golfRepository.getAllGolfRoundsList()
-                        vehicleRepository.syncAndCleanWithGolfRounds(validRounds)
-                        diaryRepository.cleanDuplicates()
-                    }
+                    runCatching { diaryRepository.cleanDuplicates() }
                     runCatching {
                         val cfg = userLocationPreferences.config.value
                         val homeHint = cfg.homeAddress.ifBlank { cfg.homeName }
                         val compHint = cfg.companyAddress.ifBlank { cfg.companyName }
-                        val homeDong = placeResolver.resolveNeighborhoodName(
-                            this@MainActivity, cfg.homeLat, cfg.homeLng, homeHint
-                        ).ifBlank { cfg.homeName.ifBlank { "송파구 위례동" } }
-                        val compDong = placeResolver.resolveNeighborhoodName(
-                            this@MainActivity, cfg.companyLat, cfg.companyLng, compHint
-                        ).ifBlank { cfg.companyName.ifBlank { "영등포구 영등포동" } }
+                        val homeDong = (withTimeoutOrNull(1200L) {
+                            placeResolver.resolveNeighborhoodName(
+                                this@MainActivity, cfg.homeLat, cfg.homeLng, homeHint
+                            )
+                        } ?: "").ifBlank { cfg.homeName.ifBlank { "송파구 위례동" } }
+                        val compDong = (withTimeoutOrNull(1200L) {
+                            placeResolver.resolveNeighborhoodName(
+                                this@MainActivity, cfg.companyLat, cfg.companyLng, compHint
+                            )
+                        } ?: "").ifBlank { cfg.companyName.ifBlank { "영등포구 영등포동" } }
                         val dist = if (cfg.commuteRoundTripKm > 0.0) cfg.commuteRoundTripKm else 54.2
                         vehicleRepository.cleanDuplicatesAndCorruptedLogs(homeDong, compDong, dist)
                     }
                     runCatching { transactionRepository.cleanDuplicates() }
                 }
 
-                // 1. 통합 증분 동기화 엔진(SyncHistoricalDataUseCase) 실행:
-                //    마지막 수집·분석 완료 시점(lastSyncCompletedAtMillis) 이후의 신규 데이터만 수집 및 분석
                 syncHistoricalDataUseCase.startAutoSync(
                     context = applicationContext,
                     daysBack = 7,
                     force = forceSync
                 )
 
-                kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                withTimeoutOrNull(2500L) {
                     syncHistoricalDataUseCase.syncState.first { it != null && it.isDone }
                 }
             } catch (e: Exception) {
@@ -267,12 +239,10 @@ class MainActivity : ComponentActivity() {
                 permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
 
-            // Android 12 (API 31) 이상 블루투스 연결 권한 (차량 블루투스 연동용)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
             }
 
-            // SMS 권한 추가 (실제 단말기 정책에 따라 예외 없이 안전 요청)
             permissions.add(Manifest.permission.READ_SMS)
             permissions.add(Manifest.permission.RECEIVE_SMS)
 

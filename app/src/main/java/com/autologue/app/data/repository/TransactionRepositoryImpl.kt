@@ -87,7 +87,7 @@ class TransactionRepositoryImpl @Inject constructor(
             expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMer, isDep) != null ||
             expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDep) != null ||
             expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx) != null ||
-            expenseCustomMetaPreferences.resolveUserClassification(tx) != null
+            expenseCustomMetaPreferences.hasExplicitUserClassificationRule(tx)
     }
 
     private fun deduplicateDomainList(list: List<Transaction>): List<Transaction> {

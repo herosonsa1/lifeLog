@@ -129,7 +129,7 @@ fun CarLedgerAnalyticsSection(
             }
 
             CarLedgerAnalyticsSubTab.DRIVING_BREAKDOWN_TABLE -> {
-                // (E) 주행 목적별(출퇴근 · 골프 · 일반) 주행거리 증감 비교 도표
+                // (E) 주행 목적별(출퇴근 · 일반) 주행거리 증감 비교 도표
                 CarDrivingPurposeDeltaCard(
                     report = report,
                     onNavigateToDrivingLogs = {
@@ -1073,7 +1073,7 @@ private fun CarDrivingPurposeDeltaCard(
         ) {
             Column {
                 Text(
-                    text = "주행 목적별(출퇴근 · 골프 · 일반) 주행거리 비교 도표",
+                    text = "주행 목적별(출퇴근 · 일반) 주행거리 비교 도표",
                     fontSize = if (isEasyMode) 15.sp else 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (isEasyMode) EasyTheme.textPrimary else Slate900

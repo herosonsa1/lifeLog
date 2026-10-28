@@ -423,7 +423,7 @@ fun CommuteMapPickerDialog(
                     TabButton(
                         text = if (isEasyMode) "3. 경로·거리" else "3. 경로·거리 (🚗)",
                         selected = activeTab == CommutePickerTab.ROUTE,
-                        color = if (isEasyMode) EasyTheme.blue else MenuColors.golf,
+                        color = if (isEasyMode) EasyTheme.blue else MenuColors.carLedger,
                         modifier = Modifier.weight(1f),
                         onClick = {
                             activeTab = CommutePickerTab.ROUTE
@@ -687,7 +687,7 @@ fun CommuteMapPickerDialog(
                             }
                         }
                         CommutePickerTab.ROUTE -> {
-                            Text("🚗 출퇴근 경로 거리 및 자동 감지 옵션", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.golf))
+                            Text("🚗 출퇴근 경로 거리 및 자동 감지 옵션", style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = MenuColors.carLedger))
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                                 AutoLogueTextField(

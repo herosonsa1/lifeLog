@@ -684,7 +684,7 @@ class ExpenseViewModel @Inject constructor(
             expenseCustomMetaPreferences.resolveMerchantBaseCategory(resolvedMer, isDep) != null ||
             expenseCustomMetaPreferences.resolveMerchantBaseCategory(tx.merchantName, isDep) != null ||
             expenseCustomMetaPreferences.resolveCustomCategoryLabel(tx) != null ||
-            expenseCustomMetaPreferences.resolveUserClassification(tx) != null
+            expenseCustomMetaPreferences.hasExplicitUserClassificationRule(tx)
     }
 
     private fun computeFilteredUiState(baseState: ExpenseUiState): ExpenseUiState {
@@ -1103,6 +1103,10 @@ class ExpenseViewModel @Inject constructor(
                             isDeposit = isIncomeEntry
                         )
                     }
+                    val manualCatDefaultUser = expenseCustomMetaPreferences.resolveCategoryDefaultUser(
+                        baseCategory = finalCategory,
+                        customCategoryName = customCategoryName
+                    )
                     if (!userClassificationName.isNullOrBlank()) {
                         expenseCustomMetaPreferences.assignUserClassification(
                             txId = insertedId,
@@ -1110,6 +1114,16 @@ class ExpenseViewModel @Inject constructor(
                             userClassificationName = userClassificationName,
                             applyToMerchantRule = false,
                             isDeposit = isIncomeEntry
+                        )
+                    } else if (!manualCatDefaultUser.isNullOrBlank()) {
+                        // 기본 사용자가 있는 카테고리에서 사용자가 직접 '미지정'을 선택하여 추가한 경우 미지정 상태 보존
+                        expenseCustomMetaPreferences.assignUserClassification(
+                            txId = insertedId,
+                            merchantName = merchantName,
+                            userClassificationName = null,
+                            applyToMerchantRule = false,
+                            isDeposit = isIncomeEntry,
+                            explicitlyUnassigned = true
                         )
                     }
                     if (isFixedExpense) {
@@ -1564,6 +1578,12 @@ class ExpenseViewModel @Inject constructor(
                         )
                     }
 
+                    val categoryDefaultUser = expenseCustomMetaPreferences.resolveCategoryDefaultUser(
+                        baseCategory = resolvedCategory,
+                        customCategoryName = sanitizedCustomCat
+                    )
+                    val isExplicitlyUnassigned = sanitizedUserClass.isNullOrBlank() && !categoryDefaultUser.isNullOrBlank()
+
                     expenseCustomMetaPreferences.assignUserClassification(
                         txId = transactionId,
                         merchantName = finalMerchantName,
@@ -1571,7 +1591,8 @@ class ExpenseViewModel @Inject constructor(
                         applyToMerchantRule = applyUserClassRule,
                         isDeposit = isDeposit,
                         extraMerchantNames = extraRuleKeysArray,
-                        targetTxIds = if (applyUserClassRule) targetExistingIds else emptySet()
+                        targetTxIds = if (applyUserClassRule) targetExistingIds else emptySet(),
+                        explicitlyUnassigned = isExplicitlyUnassigned
                     )
                     if (effectiveIsDeposit != isDeposit) {
                         expenseCustomMetaPreferences.assignUserClassification(
@@ -1581,7 +1602,8 @@ class ExpenseViewModel @Inject constructor(
                             applyToMerchantRule = applyUserClassRule,
                             isDeposit = effectiveIsDeposit,
                             extraMerchantNames = extraRuleKeysArray,
-                            targetTxIds = if (applyUserClassRule) targetExistingIds else emptySet()
+                            targetTxIds = if (applyUserClassRule) targetExistingIds else emptySet(),
+                            explicitlyUnassigned = isExplicitlyUnassigned
                         )
                     }
 
@@ -2034,8 +2056,21 @@ class ExpenseViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isCategoryManageDialogOpen = false)
     }
 
-    fun addCustomCategoryPermanent(name: String): Boolean {
-        return expenseCustomMetaPreferences.addCustomCategory(name)
+    fun addCustomCategoryPermanent(name: String, defaultUserName: String? = null): Boolean {
+        return expenseCustomMetaPreferences.addCustomCategory(name, defaultUserName)
+    }
+
+    fun setCategoryDefaultUser(item: ManagedCategoryItem, defaultUserName: String?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            expenseCustomMetaPreferences.setCategoryDefaultUser(item, defaultUserName)
+            val cleanUser = defaultUserName?.trim().orEmpty()
+            val msg = if (cleanUser.isNotBlank()) {
+                "'${item.displayName}' 카테고리의 기본 사용자를 '$cleanUser'(으)로 지정했습니다."
+            } else {
+                "'${item.displayName}' 카테고리의 기본 사용자 지정을 해제했습니다."
+            }
+            _uiState.update { it.copy(syncResultMessage = msg) }
+        }
     }
 
     fun updateManagedCategoryName(item: ManagedCategoryItem, newName: String) {

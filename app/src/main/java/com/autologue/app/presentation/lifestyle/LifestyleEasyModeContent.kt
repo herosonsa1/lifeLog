@@ -3,7 +3,6 @@ package com.autologue.app.presentation.lifestyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -43,7 +42,7 @@ fun LifestyleEasyModeContent(
         topBar = {
             EasyModeTopBar(
                 title = "리포트",
-                subtitle = "일상·소비·이동·골프를 한눈에 정리했어요",
+                subtitle = "일상·소비·이동을 한눈에 정리했어요",
                 accentColor = EasyTheme.tossBlue,
                 onOpenSettings = { EasyModeManager.openSettingsSheet() },
                 onQuickSwitchToStandard = { EasyModeManager.setEasyMode(context, false) }
@@ -185,7 +184,7 @@ fun LifestyleEasyModeContent(
                                 color = EasyTheme.WarningAmber
                             )
                             EasyBalanceBarRow(
-                                label = "골프 · 성취도",
+                                label = "기록 · 성취도",
                                 score = metrics.balanceScores.achievementScore,
                                 color = EasyTheme.AppleIndigo
                             )
@@ -205,7 +204,7 @@ fun LifestyleEasyModeContent(
                 }
             }
 
-            // 3. 4대 영역 핵심 요약 카드 (소비 / 내 차 / 골프 / 일상 발자취)
+            // 3. 3대 영역 핵심 요약 카드 (소비 / 내 차 / 일상 발자취)
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     EasyDomainSummaryCard(
@@ -232,23 +231,6 @@ fun LifestyleEasyModeContent(
                         subValue1 = if (metrics.mobilityOrbit.averageFuelEconomy > 0) "${metrics.mobilityOrbit.averageFuelEconomy} km/L" else "산출 대기",
                         subLabel2 = "주행 일수 · 주유비",
                         subValue2 = "${metrics.mobilityOrbit.drivingDaysCount}일 · %,d원".format(metrics.mobilityOrbit.totalFuelCost)
-                    )
-
-                    EasyDomainSummaryCard(
-                        icon = Icons.Default.SportsGolf,
-                        iconTint = EasyTheme.PositiveGreen,
-                        iconBg = EasyTheme.PositiveGreenBg,
-                        title = "골프 · 액티브",
-                        primaryLabel = "라운드 횟수",
-                        primaryValue = "${metrics.golfTrajectory.roundCount}회",
-                        subLabel1 = "평균 · 베스트 타수",
-                        subValue1 = if (metrics.golfTrajectory.averageScore > 0) {
-                            "${metrics.golfTrajectory.averageScore}타 · 최고 ${metrics.golfTrajectory.bestScore ?: "-"}타"
-                        } else {
-                            "기록 대기"
-                        },
-                        subLabel2 = "평균 퍼트 · 걸음수",
-                        subValue2 = "${metrics.golfTrajectory.averagePutts?.let { "${it}퍼트" } ?: "-"} · ${if (metrics.golfTrajectory.totalFieldSteps > 0) "%,d보".format(metrics.golfTrajectory.totalFieldSteps) else "걸음 기록 없음"}"
                     )
 
                     EasyDomainSummaryCard(

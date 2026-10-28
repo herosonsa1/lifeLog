@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autologue.app.data.sync.DailyRouteAggregator
 import com.autologue.app.domain.model.RouteStep
 import com.autologue.app.domain.model.RouteStepType
 import com.autologue.app.presentation.theme.AppShapes
@@ -821,14 +822,16 @@ fun MidKoreaStaticMapView(
 
                 val isFocus = step.id == selectedStep?.id || step.id == focusedStep?.id
                 val isManuallySelected = step.id == selectedStep?.id || (zoomToFocusedStep && step.id == focusedStep?.id)
-                val isStart = index == 0
-                val isEnd = index == placements.lastIndex && placements.size > 1
+                val isStopover = DailyRouteAggregator.isStopoverWaypointStep(step)
+                val isStart = isDepartureStep(step) || (index == 0 && !isStopover && !isArrivalStep(step))
+                val isEnd = isArrivalStep(step) || (index == placements.lastIndex && placements.size > 1 && !isStart && !isStopover)
 
                 val pinColor = when {
                     isFocus -> Color(0xFFEA580C)
                     isStart -> Color(0xFF16A34A)
+                    isStopover -> Color(0xFF2563EB)
                     isEnd -> Color(0xFFDC2626)
-                    else -> Color(0xFF2563EB)
+                    else -> Color(0xFF475569)
                 }
 
                 // 동일 좌표에서 분리된 마커인 경우 실제 GPS 위치(rawPt)와 마커(pt) 사이에 지시선 표시
@@ -929,23 +932,19 @@ fun MidKoreaStaticMapView(
                 // 네모 텍스트 박스는 FULL(기본) 모드이거나 사용자가 직접 터치/선택한 지점일 때만 표시
                 val shouldDrawLabelBox = effectiveDisplayMode == MapPointDisplayMode.FULL || isManuallySelected
                 if (shouldDrawLabelBox) {
-                    val rawLabel = step.locationName ?: step.title
-                    val cleanPlace = rawLabel
-                        .replace(Regex("\\[.*?\\]"), "")
-                        .replace("승차 (출발)", "")
-                        .replace("하차", "")
-                        .trim()
-                        .ifBlank { rawLabel.take(10) }
+                    val cleanPlace = DailyRouteAggregator.resolveStepDisplayPlaceName(step)
                     val rolePrefix = when {
                         isStart -> "출발·"
+                        isStopover -> "경유·"
                         isEnd -> "도착·"
                         else -> ""
                     }
-                    val placeLabel = (rolePrefix + cleanPlace).take(14)
+                    val placeLabel = (rolePrefix + cleanPlace).take(16)
 
                     val labelTextColor = when {
                         isFocus -> Color(0xFF9A3412)
                         isStart -> Color(0xFF14532D)
+                        isStopover -> Color(0xFF1E3A8A)
                         isEnd -> Color(0xFF991B1B)
                         else -> Color(0xFF0F172A)
                     }
@@ -1151,7 +1150,7 @@ fun MidKoreaStaticMapView(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = step.locationName ?: step.title,
+                                text = DailyRouteAggregator.resolveStepDisplayPlaceName(step),
                                 color = Color(0xFF0F172A),
                                 fontSize = 12.5.sp,
                                 fontWeight = FontWeight.Bold,

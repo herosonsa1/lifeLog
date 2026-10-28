@@ -43,7 +43,7 @@ class MapRouteFilterTest {
     }
 
     @Test
-    fun `filterOutCommuteSteps excludes home-office commute and preserves outing and golf steps`() {
+    fun `filterOutCommuteSteps excludes home-office commute and preserves outing and photo steps`() {
         val morningDep = RouteStep(
             id = "c1",
             time = LocalDateTime.of(2026, 10, 20, 6, 26),
@@ -90,25 +90,25 @@ class MapRouteFilterTest {
             longitude = 127.0365,
             tags = listOf("차량주행", "하차")
         )
-        val golfStep = RouteStep(
-            id = "g1",
-            time = LocalDateTime.of(2026, 10, 18, 8, 30),
-            stepType = RouteStepType.GOLF,
-            title = "라데나CC 라운딩",
-            locationName = "춘천 라데나CC",
+        val photoStep = RouteStep(
+            id = "p1",
+            time = LocalDateTime.of(2026, 10, 18, 14, 30),
+            stepType = RouteStepType.PHOTO,
+            title = "춘천 나들이 사진",
+            locationName = "강원 춘천시",
             latitude = 37.8813,
             longitude = 127.7298
         )
 
-        val allSteps = listOf(morningDep, morningArr, outingDep, outingArr, golfStep)
+        val allSteps = listOf(morningDep, morningArr, outingDep, outingArr, photoStep)
 
         assertTrue(isCommuteStep(morningDep, allSteps))
         assertTrue(isCommuteStep(morningArr, allSteps))
         assertFalse(isCommuteStep(outingDep, allSteps))
         assertFalse(isCommuteStep(outingArr, allSteps))
-        assertFalse(isCommuteStep(golfStep, allSteps))
+        assertFalse(isCommuteStep(photoStep, allSteps))
 
         val filtered = filterOutCommuteSteps(allSteps)
-        assertEquals(listOf("o1", "o2", "g1"), filtered.map { it.id })
+        assertEquals(listOf("o1", "o2", "p1"), filtered.map { it.id })
     }
 }

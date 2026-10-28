@@ -183,8 +183,9 @@ fun DiaryScreen(
         containerColor = if (isEasyMode) com.autologue.app.presentation.common.EasyTheme.bg else AppColors.background,
         topBar = {
             if (!isEasyMode) {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxWidth().background(AppColors.background)) {
                     TopMenuAccentBar(color = MenuColors.diary)
+                    // 1단: 브랜드 타이틀 + 주요 유틸리티 액션 (날짜 캡슐과 분리하여 세로 1글자 줄바꿈 깨짐 원천 해소)
                     com.autologue.app.presentation.common.AutoLogueCompactTopBar(
                         title = {
                             Row(
@@ -194,88 +195,38 @@ fun DiaryScreen(
                                     painter = androidx.compose.ui.res.painterResource(id = com.autologue.app.R.drawable.app_logo),
                                     contentDescription = "나의일상다이어리",
                                     modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .size(28.dp)
+                                        .clip(RoundedCornerShape(7.dp))
                                 )
-                                Spacer(modifier = Modifier.width(Spacing.sm))
-                                Column(
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Text(
-                                        text = "나의일상",
-                                        style = AppTypography.h2.copy(
-                                            fontSize = 15.5.sp,
-                                            lineHeight = 17.sp,
-                                            fontWeight = FontWeight.Black,
-                                            letterSpacing = (-0.3).sp,
-                                            color = AppColors.textPrimary
-                                        )
-                                    )
-                                    Text(
-                                        text = "다이어리",
-                                        style = AppTypography.caption.copy(
-                                            color = MenuColors.diary,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 11.5.sp,
-                                            lineHeight = 13.sp,
-                                            letterSpacing = 0.8.sp
-                                        )
-                                    )
-                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "나의일상",
+                                    style = AppTypography.h2.copy(
+                                        fontSize = 16.sp,
+                                        lineHeight = 18.sp,
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = (-0.3).sp,
+                                        color = AppColors.textPrimary
+                                    ),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "다이어리",
+                                    style = AppTypography.caption.copy(
+                                        color = MenuColors.diary,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 13.sp,
+                                        lineHeight = 16.sp
+                                    ),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
                             }
                         },
                         actions = {
-                            // Pill Date Capsule
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clip(AppShapes.pill)
-                                    .background(AppColors.surfaceVariant)
-                                    .padding(horizontal = Spacing.xs, vertical = Spacing.xxs)
-                            ) {
-                                IconButton(
-                                    onClick = { viewModel.navigatePrevious() },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Default.ChevronLeft, contentDescription = "이전", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
-                                }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { showDateAndMonthPickerDialog = true }
-                                        .padding(horizontal = Spacing.xs, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = when (uiState.viewMode) {
-                                            TimelineViewMode.MONTHLY -> uiState.currentYearMonth.format(DateTimeFormatter.ofPattern("yy년 M월", Locale.KOREA))
-                                            TimelineViewMode.WEEKLY -> {
-                                                val start = uiState.selectedDate.minusDays(6)
-                                                "${start.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))} ~ ${uiState.selectedDate.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))}"
-                                            }
-                                            else -> uiState.selectedDate.format(DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA))
-                                        },
-                                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary)
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "일자 및 월 선택",
-                                        tint = AppColors.secondary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { viewModel.navigateNext() },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Default.ChevronRight, contentDescription = "다음", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(Spacing.xs))
-
                             IconButton(onClick = onExportExcelClick, modifier = Modifier.size(30.dp)) {
                                 if (uiState.isExportingExcel) {
                                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.primary)
@@ -290,10 +241,107 @@ fun DiaryScreen(
 
                             com.autologue.app.presentation.common.StandardTopBarSettingsTrigger(accentColor = MenuColors.diary)
 
-                            Spacer(modifier = Modifier.width(Spacing.xs))
+                            Spacer(modifier = Modifier.width(Spacing.xxs))
                         },
                         containerColor = AppColors.background
                     )
+
+                    // 2단: 슬림 날짜 네비게이터 바 (좌측 날짜 선택 캡슐 + 오늘 빠른 복귀 + 우측 현재 보기 요약)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(AppShapes.pill)
+                                    .background(AppColors.surfaceVariant)
+                                    .border(0.5.dp, AppColors.border, AppShapes.pill)
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                IconButton(
+                                    onClick = { viewModel.navigatePrevious() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.ChevronLeft, contentDescription = "이전", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { showDateAndMonthPickerDialog = true }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = when (uiState.viewMode) {
+                                            TimelineViewMode.MONTHLY -> uiState.currentYearMonth.format(DateTimeFormatter.ofPattern("yyyy년 M월", Locale.KOREA))
+                                            TimelineViewMode.WEEKLY -> {
+                                                val start = uiState.selectedDate.minusDays(6)
+                                                "${start.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))} ~ ${uiState.selectedDate.format(DateTimeFormatter.ofPattern("M.d", Locale.KOREA))}"
+                                            }
+                                            else -> uiState.selectedDate.format(DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREA))
+                                        },
+                                        style = AppTypography.caption.copy(fontWeight = FontWeight.Bold, color = AppColors.textPrimary),
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = "일자 및 월 선택",
+                                        tint = AppColors.secondary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.navigateNext() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.ChevronRight, contentDescription = "다음", tint = AppColors.secondary, modifier = Modifier.size(16.dp))
+                                }
+                            }
+
+                            if (uiState.selectedDate != LocalDate.now()) {
+                                Surface(
+                                    onClick = { viewModel.selectDate(LocalDate.now()) },
+                                    shape = AppShapes.pill,
+                                    color = Color(0xFFEFF6FF),
+                                    border = BorderStroke(0.5.dp, Color(0xFFBFDBFE))
+                                ) {
+                                    Text(
+                                        text = "오늘",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AppColors.primary,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        val rightSummaryText = when (uiState.viewMode) {
+                            TimelineViewMode.MAP_ROUTE -> "이동 지점 ${uiState.mapRouteSteps.size}건"
+                            TimelineViewMode.MONTHLY -> "월간 일정 현황"
+                            TimelineViewMode.WEEKLY -> "주간 기록 ${uiState.entries.size}건"
+                            TimelineViewMode.DAILY -> "일상 기록 ${uiState.entries.size}건"
+                        }
+                        Text(
+                            text = rightSummaryText,
+                            style = AppTypography.captionMuted,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                     HairlineDivider()
                 }
             }
@@ -673,9 +721,15 @@ fun NaturalSummaryHeader(
     }
     val totalPlaces = remember(entries) {
         entries.flatMap { entry ->
-            val validSteps = entry.routeSteps.filterNot { com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it) }
+            val validSteps = entry.routeSteps.filterNot {
+                it.stepType == RouteStepType.TRANSACTION ||
+                    com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it)
+            }
             if (validSteps.isNotEmpty()) {
-                validSteps.mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
+                validSteps.mapNotNull {
+                    com.autologue.app.data.sync.DailyRouteAggregator.resolveStepDisplayPlaceName(it)
+                        .takeIf { p -> p.isNotBlank() && p != "사진 기록" && p != "출발 인근" && p != "도착 인근" }
+                }
             } else {
                 listOfNotNull(entry.placeName)
             }
@@ -758,8 +812,6 @@ fun SaaSTimelineRow(
                     text = "-%,d원".format(displayExpense),
                     style = AppTypography.h3
                 )
-            } else if (entry.hasGolfRound) {
-                MetricBadge(text = "골프 라운드", textColor = AppColors.successText, backgroundColor = AppColors.successBg)
             }
         }
 
@@ -872,7 +924,7 @@ fun SaaSTimelineRow(
         if (entry.summary.isNotBlank()) {
             Spacer(modifier = Modifier.height(Spacing.xs))
             Text(
-                text = entry.summary,
+                text = buildHighlightedDurationText(entry.summary),
                 style = AppTypography.bodySecondary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -993,9 +1045,14 @@ fun DiaryDetailDialog(
                             Text("방문 장소", style = AppTypography.caption)
                             val distinctPlaceCount = remember(entry.routeSteps, entry.placeName) {
                                 val places = entry.routeSteps
-                                    .filterNot { com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it) }
-                                    .mapNotNull { it.locationName ?: it.title.takeIf { t -> !t.contains("주행") && !t.contains("촬영") } }
-                                    .filter { !it.contains("촬영") }
+                                    .filterNot {
+                                        it.stepType == RouteStepType.TRANSACTION ||
+                                            com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it)
+                                    }
+                                    .mapNotNull {
+                                        com.autologue.app.data.sync.DailyRouteAggregator.resolveStepDisplayPlaceName(it)
+                                            .takeIf { p -> p.isNotBlank() && p != "사진 기록" && p != "출발 인근" && p != "도착 인근" }
+                                    }
                                     .distinct()
                                 if (places.isNotEmpty()) places.size else if (!entry.placeName.isNullOrBlank()) 1 else 0
                             }
@@ -1032,7 +1089,9 @@ fun DiaryDetailDialog(
                     val visibleRouteSteps = remember(entry.routeSteps) {
                         entry.routeSteps
                             .filterNot { com.autologue.app.data.sync.DailyRouteAggregator.isIntermediateDrivingStep(it) }
-                            .map { com.autologue.app.data.sync.DailyRouteAggregator.normalizeDrivingStep(it) }
+                            .map { com.autologue.app.data.sync.DailyRouteAggregator.normalizeStepForDisplay(it) }
+                            .let { com.autologue.app.data.sync.DailyRouteAggregator.consolidateGpsDrivingSteps(it) }
+                            .let { com.autologue.app.data.sync.DailyRouteAggregator.enrichStepPairDurations(it) }
                     }
 
                     if (visibleRouteSteps.isEmpty()) {
@@ -1083,7 +1142,11 @@ fun DiaryDetailDialog(
                         )
                     } else {
                         Text(
-                            text = entry.summary.ifBlank { "작성된 다이어리 메모가 없습니다." },
+                            text = if (entry.summary.isNotBlank()) {
+                                buildHighlightedDurationText(entry.summary)
+                            } else {
+                                androidx.compose.ui.text.AnnotatedString("작성된 다이어리 메모가 없습니다.")
+                            },
                             style = AppTypography.bodySecondary
                         )
                     }
@@ -1119,7 +1182,6 @@ fun VerticalTimelineStepItem(
                         when (step.stepType) {
                             RouteStepType.TRANSACTION -> AppColors.primary
                             RouteStepType.PHOTO -> Emerald500
-                            RouteStepType.GOLF -> Emerald600
                             RouteStepType.DRIVING -> Slate600
                             RouteStepType.MEMO -> Color(0xFFF59E0B)
                         }
@@ -1152,24 +1214,28 @@ fun VerticalTimelineStepItem(
             ) {
                 Text(
                     text = step.title,
-                    style = AppTypography.body.copy(fontWeight = FontWeight.Bold)
+                    style = AppTypography.body.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.weight(1f).padding(end = 8.dp)
                 )
                 Text(
                     text = step.time.format(DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA)),
-                    style = AppTypography.captionMuted
+                    style = AppTypography.captionMuted,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
 
             if (!step.description.isNullOrBlank()) {
                 Text(
-                    text = step.description,
+                    text = buildHighlightedDurationText(step.description),
                     style = AppTypography.bodySecondary.copy(fontSize = 12.sp)
                 )
             }
 
-            if (!step.address.isNullOrBlank()) {
+            val cleanStepAddr = com.autologue.app.data.sync.PlaceResolver.sanitizeAddressForDisplay(step.address)
+            if (!cleanStepAddr.isNullOrBlank()) {
                 Text(
-                    text = "📍 ${step.address}",
+                    text = "📍 $cleanStepAddr",
                     style = AppTypography.captionMuted.copy(fontSize = 11.sp)
                 )
             }
@@ -1536,8 +1602,9 @@ fun AddCompanionDialog(
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                         val prefix = if (isEasyMode) "" else "📍 "
+                        val stepPlaceLabel = com.autologue.app.data.sync.DailyRouteAggregator.resolveStepDisplayPlaceName(step)
                         Text(
-                            text = "$prefix${step.locationName ?: step.title} (${step.time.format(DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA))})",
+                            text = "$prefix$stepPlaceLabel (${step.time.format(DateTimeFormatter.ofPattern("HH:mm", Locale.KOREA))})",
                             style = AppTypography.caption.copy(
                                 color = if (isEasyMode) EasyTheme.blue else AppColors.primary,
                                 fontWeight = FontWeight.Bold
@@ -1719,10 +1786,6 @@ fun MonthlyCalendarView(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.lg)) {
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("라운드", style = AppTypography.caption)
-                    Text("${monthlySummary.totalGolfRounds}회", style = AppTypography.h2)
-                }
-                Column(horizontalAlignment = Alignment.End) {
                     Text("주행 거리", style = AppTypography.caption)
                     Text("%.1f km".format(monthlySummary.totalDistanceKm), style = AppTypography.h2)
                 }
@@ -1840,7 +1903,6 @@ fun MonthlyCalendarView(
                                         horizontalArrangement = Arrangement.Center,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        if (summary?.hasGolfRound == true) Text("⛳", fontSize = 9.sp)
                                         if (summary?.hasRefueling == true) Text("⛽", fontSize = 9.sp)
                                     }
                                 }
@@ -1969,10 +2031,9 @@ fun SyncProgressDialog(
                     trackColor = if (isEasyMode) EasyTheme.surfaceSubtle else Slate100
                 )
                 Text(progress.stage, style = AppTypography.bodySecondary)
-                if (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0 || progress.syncedGolfCount > 0) {
-                    val golfSummary = if (progress.syncedGolfCount > 0) " · 골프 ${progress.syncedGolfCount}건" else ""
+                if (progress.syncedTxCount > 0 || progress.syncedPhotoCount > 0) {
                     Text(
-                        "결제 ${progress.syncedTxCount}건 · 사진 ${progress.syncedPhotoCount}장 색인됨$golfSummary",
+                        "결제 ${progress.syncedTxCount}건 · 사진 ${progress.syncedPhotoCount}장 색인됨",
                         style = AppTypography.body.copy(fontWeight = FontWeight.SemiBold)
                     )
                 }
@@ -2048,7 +2109,7 @@ fun ManualSyncPeriodDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    text = "결제 문자(SMS/MMS/RCS), 일반 갤러리 사진(EXIF 위치), 골프 스코어카드·라커룸 전표 OCR 모두 마지막 분석 완료 시점이 기록됩니다.\n전체 기간 스캔도 병렬 엔진을 통해 백그라운드에서 빠르게 수행되며, 분석 중 다른 메뉴를 자유롭게 이용하실 수 있습니다.",
+                    text = "결제 문자(SMS/MMS/RCS)와 일반 갤러리 사진(EXIF 위치) 모두 마지막 분석 완료 시점이 기록됩니다.\n전체 기간 스캔도 병렬 엔진을 통해 백그라운드에서 빠르게 수행되며, 분석 중 다른 메뉴를 자유롭게 이용하실 수 있습니다.",
                     style = AppTypography.bodySecondary
                 )
 
@@ -2058,7 +2119,7 @@ fun ManualSyncPeriodDialog(
                 ) {
                     val periods: List<Pair<Int?, String>> = listOf(
                         0 to "마지막 분석 이후 신규 데이터만 (추천 · 초고속 증분 분석)",
-                        30 to "최근 30일 (사진/골프/결제 백그라운드 복원)",
+                        30 to "최근 30일 (사진/결제/동선 백그라운드 복원)",
                         60 to "최근 60일 (2달치 집중 백그라운드 분석)",
                         90 to "최근 90일 (3개월 내역 집중 백그라운드 복원)",
                         null to "전체 기간 (모든 결제 내역 + 갤러리 병렬 백그라운드 스캔)"

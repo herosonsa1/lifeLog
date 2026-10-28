@@ -3,7 +3,7 @@
 - **프로젝트명**: LifeLog (스마트 라이프로그 & 통합 가계·차계·골프 플랫폼)
 - **프로젝트 위치**: `C:\myWork\workspace\scratch\lifeLog`
 - **GitHub 저장소**: [https://github.com/herosonsa1/lifeLog.git](https://github.com/herosonsa1/lifeLog.git)
-- **문서 최종 갱신일**: 2026-10-22
+- **문서 최종 갱신일**: 2026-10-29
 
 ---
 
@@ -3084,3 +3084,109 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - **차계부 모달 ([`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt), [`ConsumableMaintenanceDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/ConsumableMaintenanceDialog.kt), [`VehicleManageDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/VehicleManageDialog.kt), [`CommuteMapPickerDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CommuteMapPickerDialog.kt))**: 주유·운행 등록 및 수정, 소모품 교체 주기 설정, 차량 프로필 관리, 출퇴근 거점 지도 설정 모달에 쉬운 모드 직관 레이아웃 및 전환 칩 적용.
    - **내 소비·다이어리·공통 모달 ([`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt), [`ExpenseMetaDialogs.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseMetaDialogs.kt), [`AccountManageDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/AccountManageDialog.kt), [`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt), [`PasteSmsDialog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/PasteSmsDialog.kt))**: 수기 내역 추가, 거래 상세 수정, 월간 예산 설정, 상세 필터, 카테고리·결제수단·사용자·영구 규칙 관리, 계좌/카드 별칭 관리, 다이어리 타임라인 추가/수정 및 문자 붙여넣기 모달까지 전수 토스·애플 쉬운 모드 카드 디자인 적용.
 - **산출물 및 배포**: `나의일상다이어리_v1.0.52.apk` (`versionCode = 53`), GitHub 커밋 `5e9ef91`.
+
+---
+
+## 97. 7종 핵심 카테고리 기본 사용자 `'정선우'` 자동 배정 및 결제 상세 메모 터치 시 전체 선택·즉시 덮어쓰기 구현 (2026-10-25, `v1.0.53` ~ `v1.0.54`)
+
+### 97.1. 사용자 핵심 요청 사항
+- 내 소비 카테고리 중 `'필드 라운드'`, `'스크린 골프'`, `'수입/입금'`, `'이체/출금'`(기본 내장 4종)과 `'담배'`, `'보험'`, `'통신'`(커스텀 3종) 등 총 7종 카테고리는 별도 설정 없이도 기본 사용자가 항상 `'정선우'`로 자동 분류되도록 개선.
+- 결제 내역 상세 설정 팝업에서 `'메모 작성'` 입력란을 터치하면 기존 자동 생성 문구가 한 번에 전체 선택되어, 백스페이스를 여러 번 누르지 않고 첫 글자만 입력해도 즉시 새 메모로 덮어써지도록 개선.
+
+### 97.2. 주요 개선 및 구현 내역
+1. **7종 카테고리 프리셋 및 기본 사용자 `'정선우'` 자동 매핑 ([`ExpenseCustomMetaPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/ExpenseCustomMetaPreferences.kt), [`ExpenseMetaDialogs.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseMetaDialogs.kt), [`CategoryDefaultUserTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/data/preferences/CategoryDefaultUserTest.kt))**:
+   - 앱 초기화 시 사용자 분류 목록에 `'정선우'`를 자동 등록하고 내장 4종(`GOLF_FIELD`, `GOLF_SCREEN`, `INCOME`, `TRANSFER`) 및 커스텀 3종(`담배`, `보험`, `통신`) 카테고리의 `defaultUserName`을 `'정선우'`로 기본 연결.
+   - 개별 거래나 가맹점에 수동 지정된 사용자 규칙이 있으면 수동 규칙을 우선 유지하고 별도 규칙이 없는 거래에만 카테고리 기본 사용자(`정선우`)를 자동 적용.
+2. **메모 입력란 원탭 전체 선택 및 한글 IME 조합 보존 가드 ([`CommonComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/CommonComponents.kt), [`ExpenseScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/expense/ExpenseScreen.kt), [`SelectAllOnTapTextFieldTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/presentation/common/SelectAllOnTapTextFieldTest.kt))**:
+   - `createSelectAllTextFieldValue()`와 `resolveSelectAllOnTapValueChange()`를 구현해 입력란 터치 직후 Compose `CoreTextField`가 단일 커서 오프셋으로 선택 영역을 풀어버리는 현상을 방어하고 전체 범위(`0..length`) 선택을 유지.
+   - 전체 선택 상태에서 첫 한글 자모를 입력하는 즉시 기존 문구 전체가 새 글자로 치환되고 가드가 해제되어 이후 한글 조합(`composition`)이 끊김 없이 이어지도록 구현.
+- **산출물**: `나의일상다이어리_v1.0.53.apk`, `나의일상다이어리_v1.0.54.apk` (`versionCode = 54 ~ 55`).
+
+---
+
+## 98. 골프 전용 모듈 전면 제거(4탭 경량화), 동기화 3단계 사전 스캔 진행률 정체 해소 및 Google Maps 동선 고도화 (2026-10-26 ~ 2026-10-27, `v1.0.55` ~ `v1.0.57`)
+
+### 98.1. 사용자 핵심 요청 사항
+- 사용하지 않는 골프 전용 탭과 무거운 스코어카드·라커룸 OCR 분석 모듈을 전면 제거하여 일상·소비·차계부·라이프 4탭 중심의 빠르고 가벼운 앱으로 재편.
+- 데이터 동기화 시작 직후 사전 스캔 구간에서 진행률이 `4%`에 머물러 멈춘 것처럼 보이는 현상을 해소.
+- 다이어리 이동 경로 지도를 실제 도로망 기반 Google Maps 뷰로 고도화하고 GPS 좌표가 비어 있는 기록도 행정구 기준으로 지도에 표시.
+
+### 98.2. 주요 개선 및 구현 내역
+1. **골프 모듈 전면 제거 및 레거시 데이터 무손실 호환 처리 ([`Screen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/navigation/Screen.kt), [`AppDatabase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/local/db/AppDatabase.kt), [`XlsxExporter.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/export/XlsxExporter.kt), [`SyncProgressAndLegacyCleanupTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/domain/usecase/sync/SyncProgressAndLegacyCleanupTest.kt))**:
+   - 하단 네비게이션을 **`다이어리` · `내 소비` · `차계부` · `라이프` 4탭** 체제로 개편하고 `GolfScreen`, `GolfViewModel`, `GolfRepository`, `ScorecardOcrAnalyzer`, `GolfLockerSlipOcrAnalyzer` 등 골프 전용 클래스와 테스트를 일괄 정리.
+   - 차계부의 기존 `[user_type_override:GOLF_DRIVING]` 기록은 `GENERAL_DRIVING`(일반 주행)으로 자동 폴백하고 가계부 소비 통계를 위한 `ExpenseCategory`(`필드 라운드`, `스크린 골프`, `골프 용품`)는 그대로 유지.
+2. **동기화 3단계 파이프라인 단축 및 사전 스캔 실시간 진행률 표시 ([`SyncHistoricalDataUseCase.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/usecase/sync/SyncHistoricalDataUseCase.kt), [`GlobalSyncProgressBanner.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/GlobalSyncProgressBanner.kt), [`SyncCheckpointPreferences.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/preferences/SyncCheckpointPreferences.kt))**:
+   - 골프 미디어 OCR 단계를 제거해 전체 동기화를 3단계 파이프라인으로 단축하고 사전 스캔 중에도 `"대상 건수 집계 중 (XX%)"` 진행률이 실시간으로 올라가도록 개선.
+3. **Google Maps 동선 뷰 지오코딩 폴백 및 왕복 트립 세그먼트 분리 ([`GoogleMapRouteView.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/map/GoogleMapRouteView.kt), [`GoogleMapRouteViewTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/presentation/diary/map/GoogleMapRouteViewTest.kt))**:
+   - `ensureStepCoordinates()`로 GPS 좌표가 없는 스텝도 주소·지명 기반 행정구 대표 좌표를 추론해 지도에서 누락되지 않도록 보완하고 `segmentRouteIntoTrips()`로 출근·퇴근 등 개별 주행 세션을 깔끔하게 분리.
+- **산출물**: `나의일상다이어리_v1.0.55.apk` ~ `v1.0.57.apk` (`versionCode = 56 ~ 58`).
+
+---
+
+## 99. 주행 제목 중복 거리 표기 제거 및 최근접 주요 건물·역·버스정류장·상호·아파트 세부 명칭 우선 표기 (2026-10-28, `v1.0.58`)
+
+### 99.1. 사용자 핵심 요청 사항
+- 주행 내역 제목에 이미 카드 우측이나 하단에 나오는 주행거리 `(XX.X km)`가 중복 표시되는 문제를 없애고 운행 정보를 깔끔하게 정리.
+- GPS 위치로 장소를 표기할 때 막연한 행정동 이름 대신 가장 가까운 주요 건물, 지하철역, 버스정류장, 상가·상호, 아파트 세부 명칭(정문·후문·상가주차장·동)을 우선 표기하고 주변에 특정할 만한 시설이 없을 때만 순수 동 이름으로 표기.
+- 차계부뿐 아니라 다이어리의 하루 기록, 시간대별 상세, 지도 화면 전체에 동일한 지명 규칙 적용.
+
+### 99.2. 주요 개선 및 구현 내역
+1. **주행 제목 내 중복 거리 문구 제거 ([`VehicleLog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/VehicleLog.kt), [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt), [`CarLedgerEasyModeContent.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerEasyModeContent.kt))**:
+   - 차계부와 다이어리 주행 카드 제목에서 `(37.0 km)` 등 중복 거리 꼬리표를 제거하여 한 줄 가독성을 확보.
+2. **Geocoder + OpenStreetMap Overpass 기반 최근접 POI 지명 해석기 구현 ([`PlaceResolver.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/PlaceResolver.kt), [`DailyRouteAggregator.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/DailyRouteAggregator.kt), [`PlaceResolverPoiTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/data/sync/PlaceResolverPoiTest.kt))**:
+   - Android `Geocoder`의 `featureName`·건물명 추출과 Overpass API 반경 POI 탐색을 결합해 지하철역·기차역, 버스정류장, 주요 빌딩·공공기관, 매장·상호, 아파트 단지 세부 명칭(정문, 후문, 상가주차장 등)을 거리순 우선순위로 선택.
+   - 도로명이나 지번 숫자만 있는 모호한 결과는 걸러내고 주변에 유효한 랜드마크가 없을 때만 깔끔한 순수 행정동 이름(예: `수서동`, `여의도동`)으로 폴백하도록 구현한 뒤 차계부와 다이어리 전 화면에 일괄 연동.
+
+---
+
+## 100. 고급모드 화면 정렬 보정, 고급·쉬운모드 공통 지도·이동 지점 목록 적응형 분할 뷰 및 GPS 1시간 이내 재출발 `'경유지'` 통합 (2026-10-28, `v1.0.59`)
+
+### 100.1. 사용자 핵심 요청 사항
+- 다이어리 고급모드에서 상단 화면 정렬이 어긋나는 부분을 바로잡고 지도 화면이 고정되어 하단 이동 지점 리스트를 보기 어렵던 문제(쉬운모드에서는 하단 리스트 자체가 보이지 않던 문제 포함)를 가장 편리한 방식으로 해결.
+- GPS 주행 기록에서 중간 통과 지점들이 모두 나열되지 않도록 최초 출발지와 최종 도착지만 표시하되, 실제 하차한 동일 위치에서 1시간 이내에 다시 출발한 경우에만 두 기록을 합쳐 `'경유지'` 하나로 표기.
+
+### 100.2. 주요 개선 및 구현 내역
+1. **고급모드 상단 바·컨트롤 정렬 보정 및 고급·쉬운모드 공통 지도·목록 적응형 분할 뷰 구현 ([`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt), [`DiaryEasyModeContent.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryEasyModeContent.kt), [`GoogleMapRouteView.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/map/GoogleMapRouteView.kt))**:
+   - 고급모드 헤더와 모드·필터 바의 수평 패딩 및 수직 중앙 정렬을 일관되게 맞췄다.
+   - 고급모드와 쉬운모드 지도 뷰 모두에 **`목록 크게` / `반반` / `지도 크게` 원탭 전환 칩**과 상하 **드래그 핸들**을 탑재하고 하단 이동 지점 카드를 탭하면 해당 마커로 지도 카메라가 즉시 이동하도록 연결.
+2. **최초 출발지·최종 도착지 보존 및 1시간 이내 재출발 단일 `'경유지'` 병합 ([`DailyRouteAggregator.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/DailyRouteAggregator.kt), [`GpsStopoverConsolidationTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/data/sync/GpsStopoverConsolidationTest.kt))**:
+   - `consolidateGpsDrivingSteps()`를 구현해 단순 주행 중 찍힌 중간 GPS 포인트는 제거하고 최초 승차(출발지)와 최종 하차(도착지)만 남겼다.
+   - 하차 지점과 다음 재출발 지점이 동일 위치(반경 350m 이내 또는 정규화 지명 일치)이고 체류 시간이 **1시간(`3,600초`) 이내**이면 하차 스텝과 재출발 스텝을 하나로 합쳐 **`경유지`** 배지로 표기하고 1시간을 초과해 머문 뒤 출발한 경우에는 별도 도착·새 출발 동선으로 분리.
+- **산출물**: `나의일상다이어리_v1.0.59.apk` (`versionCode = 60`).
+
+---
+
+## 101. `7101동` `'집'` 단일 표기·세대 호수 차단, 낮 주행 자택 좌표 오주입·출퇴근 `'21분 운행'` 절단 버그 해결, 설명란 검정색 소요시간 강조 및 병기 정류장 앞쪽 명칭 단독 표기 (2026-10-29, `v1.0.60`)
+
+### 101.1. 사용자 핵심 요청 사항
+- `7101동`은 우리집이므로 동 번호나 호수 없이 항상 `'집'`으로만 표기하고 엉뚱하게 반복 노출되던 `'2502호'` 등 세대 호수 표기와 위치 오인식을 바로잡기.
+- 실제로는 1시간 이상 걸리는 출퇴근 이동시간이 매번 동일한 짧은 시간(`21분 운행`)으로 찍히는 원인을 해결.
+- 제목에서는 소요시간을 빼고 하단 설명란에 회색으로 작게 적혀 있던 소요시간을 진한 검정색 글씨로 바꿔 눈에 잘 띄게 표현.
+- 정거장 이름에 두 곳이 함께 적힌 경우 구분자(`.` `,` `/` 등) 앞쪽 명칭만 표기.
+
+### 101.2. 주요 개선 및 구현 내역
+1. **`7101동` `'집'` 단일 매핑, 세대 호수 전면 제거 및 낮 주행 자택 좌표 오주입 차단 ([`PlaceResolver.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/PlaceResolver.kt), [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt), [`CarDrivingTrackingService.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/service/CarDrivingTrackingService.kt))**:
+   - 지명·주소·상세 메모 어디서든 `7101동`이 감지되면 즉시 **`집`**으로 치환하고 정규식으로 `2502호`, `B102호`, `제301호` 등 모든 세대 호수 문자열을 제거하며 캐시 버전을 `place_poi_cache_v4`로 올려 기존 오염 캐시를 무효화.
+   - 오전 4~11시 단건 GPS 포인트에 자택 좌표를 강제로 끼워 넣던 로직과 최대 24시간 지난 `getLastKnownLocation` 캐시 허용을 제거(최근 **3분 이내** 신선 좌표만 채택, 단건 기록은 `'인근 주행'` 처리)해 낮 시간대 외근·이동에 집 근처 호수가 섞이던 현상을 차단.
+2. **Android 14 `dataSync` 20분 워치독 조기 종료 버그 해결 ([`CarDrivingTrackingService.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/service/CarDrivingTrackingService.kt), [`CarBluetoothReceiver.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/receiver/CarBluetoothReceiver.kt))**:
+   - 1시간 이상 걸리는 출퇴근이 매번 `'21분 운행'`으로 고정 절단되던 원인이 서비스의 20분 워치독 강제 종료였음을 확인하고 차량 블루투스가 실제 연결된 동안에는 유예 한도를 **180분(3시간)**으로 늘리는 한편 `ACL_DISCONNECTED` 시점에 승차 시각부터의 실측 경과 시간을 복원하도록 수정.
+3. **제목 소요시간 제거, 설명란 검정색(`#111827`) 강조 및 병기 정류장 앞쪽 명칭 단독 추출 ([`CommonComponents.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/common/CommonComponents.kt), [`CarLedgerScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerScreen.kt), [`CarLedgerEasyModeContent.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerEasyModeContent.kt), [`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt), [`DiaryEasyModeContent.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryEasyModeContent.kt))**:
+   - 모든 주행·이동 카드 제목에서 소요시간 꼬리표를 제거하고 하단 보조 설명란에서 `buildHighlightedDurationText()`(`AnnotatedString`)로 소요시간 구간만 **`#111827` 진한 검정색 + `FontWeight.SemiBold`**로 강조 렌더링.
+   - 정류장·역 명칭에 `.`, `,`, `/`, `·`, `|` 등 구분자로 두 명칭이 병기된 경우 앞쪽 첫 명칭만 남기도록 정제(단, `7.8호선` 등 노선 번호 숫자 표기는 보존).
+- **산출물**: `나의일상다이어리_v1.0.60.apk` (`versionCode = 61`).
+
+---
+
+## 102. 주행·이동 항목 운행시간(소요시간) 누락 전수 복원 및 일일 총 운행시간 요약 보강 (2026-10-29, `v1.0.61`)
+
+### 102.1. 사용자 핵심 요청 사항
+- `v1.0.60` 적용 후 차계부와 다이어리를 확인했을 때 운행시간(소요시간)이 빠져 있는 항목들이 존재하여, 누락되는 항목 없이 모든 주행·이동 기록에 운행시간이 정상 표기되도록 보완.
+
+### 102.2. 주요 개선 및 구현 내역
+1. **차계부 `(GPS 2개 지점)` 공백 행 및 수동·레거시 주행 기록 소요시간 자동 복원 ([`VehicleLog.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/domain/model/VehicleLog.kt), [`CarLedgerViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/car/CarLedgerViewModel.kt), [`VehicleRepositoryImpl.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/repository/VehicleRepositoryImpl.kt), [`VehicleLogTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/domain/model/VehicleLogTest.kt))**:
+   - 직전 `v1.0.60` 마이그레이션이 워치독에 잘린 출퇴근 `(GPS 2개 지점)` 항목의 `21분 운행` 문구만 지우고 대체 시간을 채우지 않아 생겼던 공백 행과, 메모에 소요시간이 없던 수동·레거시 `TRIP_DRIVING` 행에 시간대별 현실적인 소요시간(출퇴근 시간대 `1시간 4분~1시간 16분 운행`, 일반 주행은 도심 평균 속도 기반 추정 시간)을 자동 산출·DB 영구 보정(`DURATION_RESTORE_PREF_KEY_V2`).
+   - 출퇴근이 아닌 일반 주행에서 실제로 20~22분 동안 운행한 정상 기록은 삭제나 덮어쓰기 없이 원형 그대로 보존.
+2. **다이어리 하루 기록·주간 요약문 및 예외 스텝·지도 하단 리스트 소요시간 전수 보강 ([`DailyRouteAggregator.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/data/sync/DailyRouteAggregator.kt), [`DiaryViewModel.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryViewModel.kt), [`DiaryScreen.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/DiaryScreen.kt), [`GoogleMapRouteView.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/main/java/com/autologue/app/presentation/diary/map/GoogleMapRouteView.kt), [`DailyRouteAggregatorTest.kt`](file:///c:/myWork/workspace/scratch/lifeLog/app/src/test/java/com/autologue/app/DailyRouteAggregatorTest.kt))**:
+   - `buildSummaryNarrative()`와 `ensureSummaryIncludesDrivingDuration()`을 통해 다이어리 쉬운모드 상단 `'하루 기록'` 카드와 주간 요약 텍스트에 일일 총 운행시간(`운행 X시간 Y분` / `운행 Y분`)이 빠짐없이 표시되도록 보강.
+   - 단독 `DRIVING` 스텝, 직전 승차 기록이 없는 고아 `하차` 스텝, 자정을 넘기는 심야 주행(`23:50 승차 ➔ 00:15 하차`, `+1,440분` 보정), 그리고 지도 하단 이동 지점 리스트 카드까지 전 구간에서 검정색 강조 소요시간이 표시되도록 완성.
+- **산출물**: `나의일상다이어리_v1.0.61.apk` (`versionCode = 62`).

@@ -2,15 +2,12 @@ package com.autologue.app
 
 import com.autologue.app.domain.model.DiaryEntry
 import com.autologue.app.domain.model.ExpenseCategory
-import com.autologue.app.domain.model.GolfRound
-import com.autologue.app.domain.model.GolfType
 import com.autologue.app.domain.model.LifeOrbitPeriod
 import com.autologue.app.domain.model.PaymentMethod
 import com.autologue.app.domain.model.Transaction
 import com.autologue.app.domain.model.VehicleLog
 import com.autologue.app.domain.model.VehicleLogType
 import com.autologue.app.domain.repository.DiaryRepository
-import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.domain.usecase.lifestyle.CalculateLifestyleMetricsUseCase
@@ -53,22 +50,11 @@ class CalculateLifestyleMetricsUseCaseTest {
         override suspend fun syncDrivingLogsFromDiary(diaryEntries: List<DiaryEntry>) = 0
         override suspend fun clearTripDrivingLogs() = 0
         override suspend fun recordCommuteTrip(isToWork: Boolean, homeName: String, companyName: String, distanceKm: Double) = 1L
-        override suspend fun syncAndCleanWithGolfRounds(validRounds: List<GolfRound>) = 0
-    }
-
-    private class FakeGolfRepo(private val rounds: List<GolfRound>) : GolfRepository {
-        override fun getAllGolfRoundsFlow(): Flow<List<GolfRound>> = flowOf(rounds)
-        override suspend fun getAllGolfRoundsList(): List<GolfRound> = rounds
-        override suspend fun getGolfRoundById(id: Long) = null
-        override suspend fun insertGolfRound(round: GolfRound) = 1L
-        override suspend fun updateGolfRound(round: GolfRound) {}
-        override suspend fun deleteGolfRound(id: Long) {}
-        override suspend fun getGolfRoundByDate(date: LocalDate) = null
     }
 
     private class FakeDiaryRepo(private val entries: List<DiaryEntry>) : DiaryRepository {
         override fun getDiaryEntriesFlow(): Flow<List<DiaryEntry>> = flowOf(entries)
-        override fun getDiaryEntriesByDateRange(startDate: LocalDate, endDate: LocalDate) = flowOf(entries)
+        override fun getDiaryEntriesByDateRange(start: LocalDate, end: LocalDate) = flowOf(entries)
         override suspend fun getDiaryEntryById(id: Long) = null
         override suspend fun insertDiaryEntry(entry: DiaryEntry) = 1L
         override suspend fun updateDiaryEntry(entry: DiaryEntry) {}
@@ -79,11 +65,10 @@ class CalculateLifestyleMetricsUseCaseTest {
 
     @Test
     fun testCalculateLifestyleMetrics_emptyDataReturnsZeroScoresAndStandbyStatus() = runBlocking {
-        // [테스트 1] 데이터가 아예 없는 초기 설치 상태: 더미 점수(50점)가 아닌 완벽한 0점과 대기 상태 반환 검증
+        // 데이터가 아예 없는 초기 설치 상태: 더미 점수(50점)가 아닌 0점과 대기 상태 반환 검증
         val useCase = CalculateLifestyleMetricsUseCase(
             transactionRepository = FakeTransactionRepo(emptyList()),
             vehicleRepository = FakeVehicleRepo(emptyList()),
-            golfRepository = FakeGolfRepo(emptyList()),
             diaryRepository = FakeDiaryRepo(emptyList())
         )
 
@@ -97,7 +82,6 @@ class CalculateLifestyleMetricsUseCaseTest {
         assertEquals("일상 데이터 수집 대기 중", result.archetype)
         assertEquals(0L, result.financialVelocity.totalExpense)
         assertEquals(0.0, result.mobilityOrbit.totalDrivingKm, 0.01)
-        assertEquals(0, result.golfTrajectory.roundCount)
         assertEquals(0, result.spatialFootprint.recordedDays)
     }
 
@@ -110,8 +94,8 @@ class CalculateLifestyleMetricsUseCaseTest {
             Transaction(
                 id = 1,
                 amount = 150000L,
-                merchantName = "스카이밸리CC",
-                originalText = "스카이밸리CC 150,000원",
+                merchantName = "남서울CC",
+                originalText = "남서울CC 150,000원",
                 timestamp = now.minusDays(3),
                 paymentMethod = PaymentMethod.CREDIT_CARD,
                 category = ExpenseCategory.GOLF_FIELD,
@@ -167,28 +151,15 @@ class CalculateLifestyleMetricsUseCaseTest {
             )
         )
 
-        // 3. 골프 라운드 내역
-        val golfRounds = listOf(
-            GolfRound(
-                id = 1,
-                clubName = "스카이밸리 CC",
-                roundDate = now.minusDays(3),
-                golfType = GolfType.FIELD,
-                totalScore = 86,
-                totalPutts = 32,
-                steps = 12500
-            )
-        )
-
-        // 4. 다이어리 내역
+        // 3. 다이어리 내역
         val diaryEntries = listOf(
             DiaryEntry(
                 id = 1,
                 date = now.minusDays(3),
-                title = "골프 라운드",
-                summary = "스카이밸리 CC 라운드",
-                placeName = "스카이밸리 CC",
-                address = "경기도 여주시 북내면 운촌길 254",
+                title = "주말 외출 일상",
+                summary = "하남 스타필드 방문",
+                placeName = "스타필드 하남",
+                address = "경기도 하남시 미사대로 750",
                 photoUris = listOf("uri1", "uri2"),
                 drivingDistanceKm = 60.0
             )
@@ -197,7 +168,6 @@ class CalculateLifestyleMetricsUseCaseTest {
         val useCase = CalculateLifestyleMetricsUseCase(
             transactionRepository = FakeTransactionRepo(transactions),
             vehicleRepository = FakeVehicleRepo(vehicleLogs),
-            golfRepository = FakeGolfRepo(golfRounds),
             diaryRepository = FakeDiaryRepo(diaryEntries)
         )
 
@@ -214,11 +184,9 @@ class CalculateLifestyleMetricsUseCaseTest {
         assertEquals(80000L, result.mobilityOrbit.totalFuelCost)
         assertEquals(13.5, result.mobilityOrbit.averageFuelEconomy, 0.1)
 
-        // 골프 검증: 1회, 86타, 퍼트 32개, 걸음수 12,500보
-        assertEquals(1, result.golfTrajectory.roundCount)
-        assertEquals(86.0, result.golfTrajectory.averageScore, 0.1)
-        assertEquals(32.0, result.golfTrajectory.averagePutts ?: 0.0, 0.1)
-        assertEquals(12500, result.golfTrajectory.totalFieldSteps)
+        // 공간 발자취 검증
+        assertEquals(1, result.spatialFootprint.recordedDays)
+        assertEquals(2, result.spatialFootprint.totalPhotosArchived)
 
         // 밸런스 점수 범위 검증 (10~100)
         assertTrue(result.balanceScores.overallScore in 10..100)

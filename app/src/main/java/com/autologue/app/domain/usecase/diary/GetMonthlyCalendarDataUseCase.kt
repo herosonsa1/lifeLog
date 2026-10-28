@@ -3,7 +3,6 @@ package com.autologue.app.domain.usecase.diary
 import com.autologue.app.domain.model.DaySummary
 import com.autologue.app.domain.model.MonthlySummary
 import com.autologue.app.domain.repository.DiaryRepository
-import com.autologue.app.domain.repository.GolfRepository
 import com.autologue.app.domain.repository.TransactionRepository
 import com.autologue.app.domain.repository.VehicleRepository
 import com.autologue.app.util.LocationDistanceUtils
@@ -18,7 +17,6 @@ import javax.inject.Inject
 class GetMonthlyCalendarDataUseCase @Inject constructor(
     private val diaryRepository: DiaryRepository,
     private val transactionRepository: TransactionRepository,
-    private val golfRepository: GolfRepository,
     private val vehicleRepository: VehicleRepository
 ) {
     operator fun invoke(yearMonth: YearMonth): Flow<MonthlySummary> {
@@ -28,9 +26,8 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
         return combine(
             diaryRepository.getDiaryEntriesByDateRange(startDate, endDate),
             transactionRepository.getAllTransactionsFlow(),
-            golfRepository.getAllGolfRoundsFlow(),
             vehicleRepository.getAllVehicleLogsFlow()
-        ) { entries, transactions, golfRounds, vehicleLogs ->
+        ) { entries, transactions, vehicleLogs ->
             val daysMap = mutableMapOf<LocalDate, DaySummary>()
 
             val monthTxsByDay = transactions.asSequence()
@@ -39,13 +36,6 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
                     !d.isBefore(startDate) && !d.isAfter(endDate)
                 }
                 .groupBy { it.timestamp.toLocalDate() }
-
-            val monthGolfByDay = golfRounds.asSequence()
-                .filter {
-                    val d = it.roundDate.toLocalDate()
-                    !d.isBefore(startDate) && !d.isAfter(endDate)
-                }
-                .groupBy { it.roundDate.toLocalDate() }
 
             val monthVehiclesByDay = vehicleLogs.asSequence()
                 .filter {
@@ -59,7 +49,6 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
             var curr = startDate
             while (!curr.isAfter(endDate)) {
                 val dayTxs = monthTxsByDay[curr].orEmpty()
-                val dayGolf = !monthGolfByDay[curr].isNullOrEmpty()
                 val dayVehicles = monthVehiclesByDay[curr].orEmpty()
                 val dayRefuel = dayVehicles.any { it.logType == com.autologue.app.domain.model.VehicleLogType.REFUELING }
                 val dayEntries = entriesByDay[curr].orEmpty()
@@ -84,7 +73,6 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
                 daysMap[curr] = DaySummary(
                     date = curr,
                     totalExpense = expenseSum,
-                    hasGolfRound = dayGolf,
                     hasRefueling = dayRefuel,
                     photoCount = photoCount,
                     entryCount = dayEntries.size,
@@ -103,7 +91,6 @@ class GetMonthlyCalendarDataUseCase @Inject constructor(
             MonthlySummary(
                 yearMonth = yearMonth,
                 totalExpense = daysMap.values.sumOf { it.totalExpense },
-                totalGolfRounds = monthGolfByDay.values.sumOf { it.size },
                 totalDistanceKm = Math.round(totalMonthDistance * 10.0) / 10.0,
                 days = daysMap
             )

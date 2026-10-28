@@ -5,7 +5,6 @@ import java.time.LocalDateTime
 enum class RouteStepType(val displayName: String, val iconEmoji: String) {
     PHOTO("사진 촬영", "📷"),
     TRANSACTION("결제 / 방문", "💳"),
-    GOLF("골프 라운드", "⛳"),
     DRIVING("차량 주행", "🚗"),
     MEMO("체크인 / 메모", "📝")
 }
