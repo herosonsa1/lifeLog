@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>나의일상다이어리 (LifeLog) 사용방법 매뉴얼</title>
+  <style>
+    :root {
+      --bg-page: #F8FAFC;
+      --bg-card: #FFFFFF;
+      --bg-subtle: #F1F5F9;
+      --border-subtle: #E2E8F0;
+      --text-primary: #0F172A;
+      --text-secondary: #475569;
+      --accent-blue: #2563EB;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 40px 20px;
+      background-color: var(--bg-page);
+      color: var(--text-primary);
+      font-family: "Malgun Gothic", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.7;
+    }
+    .container {
+      max-width: 880px;
+      margin: 0 auto;
+    }
+    .header-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-left: 5px solid var(--accent-blue);
+      border-radius: 10px;
+      padding: 28px 32px;
+      margin-bottom: 24px;
+    }
+    .header-card h1 {
+      margin: 0 0 8px 0;
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header-card p {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+    .section-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 26px 32px;
+      margin-bottom: 20px;
+    }
+    h2 {
+      margin: 0 0 16px 0;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    h3 {
+      margin: 20px 0 8px 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    ol, ul {
+      margin: 8px 0 0 0;
+      padding-left: 22px;
+    }
+    li {
+      margin-bottom: 8px;
+      color: var(--text-secondary);
+    }
+    li strong {
+      color: var(--text-primary);
+    }
+    code {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: Consolas, monospace;
+      font-size: 13.5px;
+      color: var(--text-primary);
+    }
+    .sub-box {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-top: 14px;
+      font-size: 14.5px;
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-card">
+      <h1>나의일상다이어리 (LifeLog) 사용방법 매뉴얼</h1>
+      <p>결제 알림·문자(SMS/MMS), 사진 위치 정보, 차량 블루투스 주행 기록을 단말기 내부에서 자동으로 정리하는 온디바이스 일상 다이어리·가계부·차계부 가이드입니다.</p>
+    </div>
+
+    <div class="section-card">
+      <h2>1. 설치 방법</h2>
+      <h3>1.1. 스마트폰에서 직접 설치 (APK 파일)</h3>
+      <ol>
+        <li><code>.\dist</code> 폴더에 있는 최신 설치 파일(<code>나의일상다이어리_v1.0.62.apk</code> 등 가장 높은 버전 파일)을 파일 전송이나 USB 케이블로 스마트폰에 복사합니다.</li>
+        <li>스마트폰 <code>내 파일</code> 앱에서 복사한 APK 파일을 터치해 설치합니다.</li>
+        <li>최초 설치 시 <code>출처를 알 수 없는 앱 설치</code> 안내가 나타나면 허용을 켠 뒤 설치를 마칩니다.</li>
+        <li>Google Play 프로텍트 안내 창이 뜨면 <code>세부정보 더보기</code> 선택 후 <code>무시하고 설치</code>를 눌러 진행합니다.</li>
+      </ol>
+
+      <h3>1.2. PC에서 원클릭 설치 (통합관리런처 실행파일 또는 배치 스크립트)</h3>
+      <ol>
+        <li>스마트폰 <code>개발자 옵션</code>에서 <code>USB 디버깅</code>을 켜고 PC와 USB 케이블로 연결합니다.</li>
+        <li><code>.\dist\나의일상다이어리_통합관리런처.exe</code>를 더블클릭해 실행합니다(또는 <code>.\dist\나의일상다이어리_빌드_및_설치.bat</code> 실행).</li>
+        <li><strong>스마트폰에 최신 APK 설치 및 실행</strong> 버튼을 클릭하면 기존 데이터를 유지한 채 최신 버전으로 업데이트 설치되고 앱이 실행됩니다.</li>
+        <li>이어서 <strong>스마트폰 필수 권한 일괄 허용 (ADB)</strong> 버튼을 누르면 문자·위치·사진·블루투스 권한과 배터리 제한 해제가 한 번에 적용됩니다.</li>
+      </ol>
+    </div>
+
+    <div class="section-card">
+      <h2>2. 최초 실행 시 필수 권한 설정</h2>
+      <ul>
+        <li><strong>알림 접근 허용</strong>: 실시간 카드 결제 푸시와 입출금 알림을 자동으로 기록하려면 안드로이드 설정의 <code>알림 접근</code> 목록에서 <code>나의일상다이어리 알림 리더</code>를 켜 줍니다.</li>
+        <li><strong>문자(SMS/MMS) 및 사진 권한</strong>: 과거 카드 결제 문자와 사진 촬영 위치를 불러와 일자별 타임라인을 구성하는 데 사용됩니다.</li>
+        <li><strong>위치 권한 (항상 허용) 및 블루투스(근처 기기) 권한</strong>: 차량 시동(블루투스 연결) 시 앱을 직접 열지 않아도 출퇴근·일반 주행 경로와 운행시간을 자동으로 기록하기 위해 필요합니다.</li>
+        <li><strong>배터리 사용량 제한 없음 권장</strong>: 스마트폰 설정 &rarr; 애플리케이션 &rarr; 나의일상다이어리 &rarr; 배터리 항목을 <code>제한 없음</code>으로 지정하면 1시간 이상 장거리 출퇴근 시에도 주행 기록이 끊기지 않습니다.</li>
+      </ul>
+      <div class="sub-box">
+        모든 개인 기록은 외부 서버 전송 없이 스마트폰 내부 데이터베이스(Room DB)에만 안전하게 보관됩니다.
+      </div>
+    </div>
+
+    <div class="section-card">
+      <h2>3. 화면별 주요 사용방법</h2>
+      <h3>3.1. 쉬운 모드와 고급 모드 전환</h3>
+      <ul>
+        <li>앱을 처음 실행하면 큰 글씨와 핵심 요약 중심의 <strong>쉬운 모드</strong>가 기본으로 열립니다.</li>
+        <li>상단 우측 전환 버튼이나 팝업 모달 상단의 <code>쉬운 모드 / 고급 상세</code> 칩을 누르면 세부 필터와 상세 차트를 제공하는 <strong>고급 모드</strong>로 즉시 바뀝니다.</li>
+      </ul>
+
+      <h3>3.2. 다이어리 탭 (하루 동선 · 시간대별 상세 · 이동 지도)</h3>
+      <ul>
+        <li><strong>하루 기록 카드</strong>: 선택한 날짜의 총 운행시간, 주행거리, 지출 합계, 방문 장소를 한눈에 요약해 보여줍니다. 날짜 옆 텍스트를 터치하면 연·월·일 달력 팝업으로 원하는 날짜로 바로 이동합니다.</li>
+        <li><strong>최근접 지명 및 경유지 자동 정리</strong>: GPS 좌표를 바탕으로 가장 가까운 지하철역, 버스정류장, 주요 건물, 아파트 단지 명칭을 우선 표시하며 우리집(<code>7101동</code>)은 항상 <code>집</code>으로 표기합니다. 하차 후 같은 위치에서 1시간 이내에 다시 출발한 기록은 <code>경유지</code> 하나로 묶어 보여줍니다.</li>
+        <li><strong>적응형 지도·목록 분할 뷰</strong>: 지도 화면 상단 우측의 <code>목록 크게</code> · <code>반반</code> · <code>지도 크게</code> 칩이나 중앙 드래그 핸들을 움직여 하단 이동 지점 리스트를 편하게 확인할 수 있습니다.</li>
+      </ul>
+
+      <h3>3.3. 내 소비 탭 (자동 가계부 · 사용자별 분류 · 기간 통계)</h3>
+      <ul>
+        <li><strong>자동 승인 파싱 및 수기 등록</strong>: 카드·은행 문자와 앱 푸시 알림을 자동으로 읽어 카테고리별 지출·수입으로 정리하며 우측 하단 <code>+</code> 버튼으로 수기 내역을 원하는 날짜·시각으로 추가할 수 있습니다.</li>
+        <li><strong>사용자 배지 및 메모 원탭 덮어쓰기</strong>: 거래 내역을 터치해 사용자 배지(예: <code>정선우</code> 등)와 카테고리를 지정할 수 있고 메모 입력란은 한 번 터치하면 기존 문구 전체가 선택되어 바로 새 메모를 입력할 수 있습니다.</li>
+        <li><strong>주기별 비교 통계</strong>: 월간·분기·반기·연간 소비 추이와 고정지출 비중, 직전 기간 대비 증감 내역을 차트로 비교합니다.</li>
+      </ul>
+
+      <h3>3.4. 차계부 탭 (출퇴근 자동 판별 · 운행시간 · 연비 관리)</h3>
+      <ul>
+        <li><strong>집·회사 거점 및 차량 블루투스 설정</strong>: 집과 회사 위치, 등록 차량(예: <code>벤츠</code>, <code>볼보</code>)을 지정하면 평일(공휴일 제외) 출퇴근 주행과 일반 주행을 자동 구분합니다.</li>
+        <li><strong>운행시간 강조 표기</strong>: 각 주행 항목 하단 설명란에 실제 운행 소요시간이 진한 검정색 글씨로 선명하게 표시됩니다.</li>
+        <li><strong>주유·정비 및 소모품 관리</strong>: 주유 기록을 바탕으로 평균 연비를 계산하고 소모품 교체 주기를 알려줍니다.</li>
+      </ul>
+
+      <h3>3.5. 라이프 탭 (데이터 동기화 · 엑셀 백업 · 환경설정)</h3>
+      <ul>
+        <li><strong>증분 데이터 동기화</strong>: 마지막 동기화 이후 새로 쌓인 문자와 사진만 빠르게 스캔하며 상단 진행 배너에서 실시간 진행률(<code>%</code>)을 확인할 수 있습니다.</li>
+        <li><strong>전체 데이터 엑셀(.xlsx) 내보내기</strong>: 다이어리, 소비 내역, 차계부 기록 전체를 표준 엑셀 파일로 내보내 안전하게 백업할 수 있습니다.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

@@ -7,7 +7,10 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-// version.properties 기반 버전 로드 및 APK 빌드 시 자동 버전 증가 (이전 빌드 파일 유지 보장)
+// 모든 빌드 산출물(APK, AAB 등) 통합 저장 경로: .\dist
+val distDir = rootProject.file("dist").apply { mkdirs() }
+
+// version.properties 기반 버전 로드 및 APK/AAB 빌드 시 자동 버전 증가 (이전 빌드 파일 유지 보장)
 val versionPropsFile = rootProject.file("version.properties")
 val versionProps = Properties()
 if (versionPropsFile.exists()) {
@@ -19,21 +22,24 @@ var verPatch = versionProps.getProperty("VERSION_PATCH", "0").toIntOrNull() ?: 0
 var verCode = versionProps.getProperty("VERSION_CODE", "1").toIntOrNull() ?: 1
 
 val requestedTasks = gradle.startParameter.taskNames.map { it.lowercase() }
-val isApkBuildRequested = requestedTasks.any { taskName ->
+val isDistBuildRequested = requestedTasks.any { taskName ->
     taskName.contains("assemble") ||
         taskName.contains("package") ||
+        taskName.contains("bundle") ||
         taskName.contains("install") ||
         taskName == "build" ||
         taskName.endsWith(":build")
 }
 
-if (isApkBuildRequested) {
+if (isDistBuildRequested) {
     verPatch += 1
     verCode += 1
-    // 루트(.\) 폴더에 동일 버전 파일이 이미 존재하면 덮어쓰지 않도록 미사용 버전까지 자동 증가
+    // .\dist 폴더(및 루트)에 동일 버전 산출물이 이미 존재하면 덮어쓰지 않도록 미사용 버전까지 자동 증가
     while (
-        File(rootProject.projectDir, "나의일상다이어리_v${verMajor}.${verMinor}.${verPatch}.apk").exists() ||
-        File(rootProject.projectDir, "lifeLog_v${verMajor}.${verMinor}.${verPatch}.apk").exists()
+        File(distDir, "나의일상다이어리_v${verMajor}.${verMinor}.${verPatch}.apk").exists() ||
+        File(distDir, "나의일상다이어리_v${verMajor}.${verMinor}.${verPatch}.aab").exists() ||
+        File(distDir, "lifeLog_v${verMajor}.${verMinor}.${verPatch}.apk").exists() ||
+        File(rootProject.projectDir, "나의일상다이어리_v${verMajor}.${verMinor}.${verPatch}.apk").exists()
     ) {
         verPatch += 1
         verCode += 1
@@ -43,12 +49,24 @@ if (isApkBuildRequested) {
     versionProps.setProperty("VERSION_PATCH", verPatch.toString())
     versionProps.setProperty("VERSION_CODE", verCode.toString())
     versionPropsFile.outputStream().use {
-        versionProps.store(it, "Auto-incremented on APK build")
+        versionProps.store(it, "Auto-incremented on APK/AAB build (saved to dist)")
     }
 }
 
 val currentVersionName = "${verMajor}.${verMinor}.${verPatch}"
 val versionedApkFileName = "나의일상다이어리_v${currentVersionName}.apk"
+val versionedReleaseApkFileName = "나의일상다이어리_v${currentVersionName}_release.apk"
+val versionedAabFileName = "나의일상다이어리_v${currentVersionName}.aab"
+
+// 로컬 업로드 키스토어(keystore.properties) 로드 — 미존재 시 debug 서명으로 안전 폴백
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties()
+if (keystorePropsFile.exists()) {
+    val rawText = keystorePropsFile.readText(Charsets.UTF_8).removePrefix("\uFEFF")
+    keystoreProps.load(rawText.reader())
+}
+val releaseStoreFile = keystoreProps.getProperty("storeFile")?.let { rootProject.file(it) }
+val hasValidReleaseKeystore = releaseStoreFile != null && releaseStoreFile.exists()
 
 android {
     namespace = "com.autologue.app"
@@ -67,9 +85,25 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasValidReleaseKeystore) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = if (hasValidReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -87,31 +121,58 @@ android {
         kotlinCompilerExtensionVersion = "1.5.8"
     }
 
-    // 모든 빌드(Debug/Release) 시 최종 APK 파일명에 버전을 표시 (예: lifeLog_v1.0.1.apk)
+    // 모든 빌드(Debug/Release) 시 최종 APK 파일명에 버전을 표시
     applicationVariants.all {
+        val isReleaseVariant = buildType.name == "release"
         outputs.all {
             val outputImpl = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            outputImpl?.outputFileName = versionedApkFileName
+            outputImpl?.outputFileName = if (isReleaseVariant) {
+                versionedReleaseApkFileName
+            } else {
+                versionedApkFileName
+            }
         }
     }
 }
 
+// APK 빌드 완료 시 .\dist 폴더로 자동 복사
 tasks.matching { it.name.startsWith("package") || it.name.startsWith("assemble") }.configureEach {
     if (name.startsWith("package")) {
         val variant = name.removePrefix("package")
         dependsOn(tasks.matching { it.name == "write${variant}AppMetadata" })
     }
     doLast {
-        // .\dist 폴더를 사용하지 않고 프로젝트 루트(.\) 폴더로 버전이 명시된 APK를 복사하며 이전 빌드 파일들을 그대로 유지
+        distDir.mkdirs()
         val debugDir = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
         val legacyApk = File(debugDir, "app-debug.apk")
         if (legacyApk.exists()) {
             legacyApk.delete()
         }
-        val builtApk = File(debugDir, versionedApkFileName)
-        if (builtApk.exists()) {
-            val targetRootApk = File(rootProject.projectDir, versionedApkFileName)
-            builtApk.copyTo(targetRootApk, overwrite = true)
+        val builtDebugApk = File(debugDir, versionedApkFileName)
+        if (builtDebugApk.exists()) {
+            builtDebugApk.copyTo(File(distDir, versionedApkFileName), overwrite = true)
+        }
+
+        val releaseDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
+        val builtReleaseApk = File(releaseDir, versionedReleaseApkFileName)
+        if (builtReleaseApk.exists()) {
+            builtReleaseApk.copyTo(File(distDir, versionedReleaseApkFileName), overwrite = true)
+        }
+    }
+}
+
+// AAB(Android App Bundle) 빌드 완료 시 .\dist 폴더로 자동 복사
+tasks.matching { it.name.startsWith("bundle") || it.name.startsWith("sign") && it.name.endsWith("Bundle") }.configureEach {
+    doLast {
+        distDir.mkdirs()
+        val bundleRoot = layout.buildDirectory.dir("outputs/bundle").get().asFile
+        if (bundleRoot.exists()) {
+            val aabCandidates = bundleRoot.walkTopDown().filter { it.isFile && it.extension == "aab" }.toList()
+            val preferredAab = aabCandidates.firstOrNull { it.invariantSeparatorsPath.contains("/release/") }
+                ?: aabCandidates.firstOrNull()
+            if (preferredAab != null && preferredAab.exists()) {
+                preferredAab.copyTo(File(distDir, versionedAabFileName), overwrite = true)
+            }
         }
     }
 }

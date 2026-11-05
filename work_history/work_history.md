@@ -3,7 +3,7 @@
 - **프로젝트명**: LifeLog (스마트 라이프로그 & 통합 가계·차계·골프 플랫폼)
 - **프로젝트 위치**: `C:\myWork\workspace\scratch\lifeLog`
 - **GitHub 저장소**: [https://github.com/herosonsa1/lifeLog.git](https://github.com/herosonsa1/lifeLog.git)
-- **문서 최종 갱신일**: 2026-10-29
+- **문서 최종 갱신일**: 2026-10-30
 
 ---
 
@@ -3190,3 +3190,21 @@ LifeLog는 스마트폰 알림(카드 결제 SMS, 입출금 푸시 등)과 사�
    - `buildSummaryNarrative()`와 `ensureSummaryIncludesDrivingDuration()`을 통해 다이어리 쉬운모드 상단 `'하루 기록'` 카드와 주간 요약 텍스트에 일일 총 운행시간(`운행 X시간 Y분` / `운행 Y분`)이 빠짐없이 표시되도록 보강.
    - 단독 `DRIVING` 스텝, 직전 승차 기록이 없는 고아 `하차` 스텝, 자정을 넘기는 심야 주행(`23:50 승차 ➔ 00:15 하차`, `+1,440분` 보정), 그리고 지도 하단 이동 지점 리스트 카드까지 전 구간에서 검정색 강조 소요시간이 표시되도록 완성.
 - **산출물**: `나의일상다이어리_v1.0.61.apk` (`versionCode = 62`).
+
+---
+
+## 103. 전체 산출물(APK · AAB · 실행파일 · 스크립트 · 사용방법 · 관련 문서 · 에셋등록자료) `.\dist` 폴더 통합 허브 구축 (2026-10-30, `v1.0.62`)
+
+### 103.1. 사용자 핵심 요청 사항
+- 스크립트, 사용방법, 실행파일, 관련 문서, APK, AAB, 에셋등록관련자료 등 프로젝트의 모든 산출물을 `.\dist` 폴더에 통합 저장하고 관리하도록 개편.
+
+### 103.2. 주요 개선 및 구현 내역
+1. **Gradle 빌드 시스템(`app/build.gradle.kts`) `.\dist` 자동 수집 및 AAB 서명 번들 파이프라인 구축 ([`app/build.gradle.kts`](file:///c:/myWork/workspace/scratch/lifeLog/app/build.gradle.kts), [`.gitignore`](file:///c:/myWork/workspace/scratch/lifeLog/.gitignore))**:
+   - 프로젝트 루트에 흩어져 있던 기존 APK 11종, 화면 캡처 24종, 파비콘, 디바이스 프로파일을 `.\dist` 하위 체계로 전수 정리.
+   - `assemble*`, `package*`, `bundle*` 빌드 실행 시 버전 중복 검사 및 자동 증가 후 최신 설치용 APK(`나의일상다이어리_v1.0.62.apk`), Release 서명 APK(`나의일상다이어리_v1.0.62_release.apk`), 스토어 등록용 App Bundle(`나의일상다이어리_v1.0.62.aab`)이 모두 `.\dist` 폴더에 자동 저장되도록 구성.
+2. **무설치 단독 실행 런처(`.exe`) 및 원클릭 배포 스크립트(`.bat` / `.ps1`) 제작**:
+   - 외부 런타임 없이 동작하는 Windows 네이티브 WinForms GUI 실행파일 [`나의일상다이어리_통합관리런처.exe`](file:///c:/myWork/workspace/scratch/lifeLog/dist/나의일상다이어리_통합관리런처.exe)와 원클릭 배치 스크립트 [`나의일상다이어리_빌드_및_설치.bat`](file:///c:/myWork/workspace/scratch/lifeLog/dist/나의일상다이어리_빌드_및_설치.bat), [`build_and_deploy.ps1`](file:///c:/myWork/workspace/scratch/lifeLog/dist/scripts/build_and_deploy.ps1)을 `.\dist`에 배치.
+3. **사용방법 매뉴얼, 기술·이력 문서 및 에셋·스토어 등록 패키지 완비**:
+   - 사용자 설치·권한·기능 안내서인 [`사용방법_매뉴얼.html`](file:///c:/myWork/workspace/scratch/lifeLog/dist/사용방법_매뉴얼.html) · [`사용방법_매뉴얼.md`](file:///c:/myWork/workspace/scratch/lifeLog/dist/사용방법_매뉴얼.md)와 [`산출물_및_아키텍처_명세서.md`](file:///c:/myWork/workspace/scratch/lifeLog/dist/docs/산출물_및_아키텍처_명세서.md), [`작업이력서_work_history.md`](file:///c:/myWork/workspace/scratch/lifeLog/dist/docs/작업이력서_work_history.md)를 `.\dist`에 수록.
+   - 스토어·에셋 포털 등록에 필요한 [`에셋등록_메타데이터_및_심사소명서.md`](file:///c:/myWork/workspace/scratch/lifeLog/dist/에셋등록관련자료/에셋등록_메타데이터_및_심사소명서.md), [`개인정보처리방침.html`](file:///c:/myWork/workspace/scratch/lifeLog/dist/에셋등록관련자료/개인정보처리방침.html), 규격 아이콘 [`app_icon_512x512.png`](file:///c:/myWork/workspace/scratch/lifeLog/dist/에셋등록관련자료/app_icon_512x512.png), 대표 그래픽 [`feature_graphic_1024x500.png`](file:///c:/myWork/workspace/scratch/lifeLog/dist/에셋등록관련자료/feature_graphic_1024x500.png), 스크린샷 24종을 `.\dist\에셋등록관련자료\`에 완비.
+- **산출물**: `.\dist\나의일상다이어리_v1.0.62.apk`, `.\dist\나의일상다이어리_v1.0.62_release.apk`, `.\dist\나의일상다이어리_v1.0.62.aab` (`versionCode = 63`).
